@@ -27,19 +27,23 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make feedback-order` | The feedback run with the engines registered in the other order (`bb run --engine-order analog-first`) must be byte-identical (ADR-003 D3) |
 | `make feedback-determinism` | 10 runs of `examples/feedback`, byte-identical (CI job `feedback`) |
 | `make feedback-open` | The acyclic variant `examples/feedback-open` (ngspice → U1 only, long grants) at `--max-quantum` 10 µs … 500 ms must give the committed one-cell hashes (`tests/golden/feedback-open/partition.sha256`), pass `check_feedback.py --open` and not depend on the registration order (CI job `feedback`) |
+| `make lookahead-inert` | ADR-003 step 5: Renode's lookahead plugin is inert. `examples/feedback` without the plugin (`--lookahead-plugin never`) must give the committed hashes (`tests/golden/feedback/outputs.sha256`), with the plugin armed and `--lookahead off` byte-identical, with `--lookahead on` identical except `grant` records; the spike with the plugin forced on must give its partition hashes (CI job `feedback`) |
+| `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
 | `make golden-update` | Regenerate the golden snapshots and the partition hashes (spike, feedback, feedback-open) from fresh, checked runs. Review the diff before committing it |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
 
-`make firmware` builds the firmware ELFs (spike and feedback) on their own.
+`make firmware` builds the firmware ELFs (spike, feedback and the Renode
+lookahead gate firmware in `engines/cpu-renode/tests/firmware`) on their own.
 
 ## Repo map
 
 ```
 bbcore/                 kernel: Time, PinSignal, Engine trait, Scheduler, EventSink, CsvWriter, VcdWriter
 engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
-engines/cpu-renode/     Renode engine over the External Control API
+engines/cpu-renode/     Renode engine over the External Control API; platforms/bb_lookahead.cs
+                        (the lookahead plugin, ADR-003 D5); tests/firmware (its gate firmware)
 cli/                    `bb` binary (`bb run`, board-file parser)
 examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings)
 examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware
@@ -123,6 +127,13 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
   WSL calls, because it mangles `$` and `/mnt` paths.
 - Use git from WSL (`git -C /mnt/c/...`). `core.autocrlf=false`, and
   `.gitattributes` forces LF. Check with `git ls-files --eol` (expect `i/lf w/lf`).
+- A second checkout or `git worktree` must use its own `CARGO_TARGET_DIR`.
+  Cargo names workspace-member artifacts by their workspace-relative path,
+  so two checkouts sharing `~/.cache/bb-target` overwrite each other's
+  crates and a build can silently link the other checkout's code.
+- The Renode lookahead plugin is compiled once and cached in
+  `~/.cache/bb/renode-plugins` (`$BB_CACHE_DIR` or `$XDG_CACHE_HOME/bb`
+  override it); deleting the directory only costs one compile (about 1.6 s).
 - Renode is installed at `~/.local/opt/renode-1.17.0` (symlink
   `~/.local/bin/renode`). `libngspice.so.0` is in `/usr/lib/x86_64-linux-gnu`.
 

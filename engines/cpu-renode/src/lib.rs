@@ -87,6 +87,35 @@
 //! `emulation SetGlobalAdvanceImmediately true`, an offline platform file (no
 //! SVD download) and a fixed machine name. GPIO events are acknowledged
 //! inline on a single connection, so they are seen in emulation order.
+//!
+//! # Lookahead (ADR-003 D5)
+//!
+//! With [`LookaheadCfg::plugin`] the engine loads `platforms/bb_lookahead.cs`,
+//! a read-only register block mapped at [`LookaheadCfg::address`], and arms
+//! it from the generated script. One `SYSTEM_BUS` read of 8 dwords (a Query)
+//! returns what Renode's own WFI fast-forward uses: whether the CPU is in
+//! WFI, whether the NVIC has a pending exception or a synced-state action is
+//! queued, whether the CPU is halted, the clock source's `NearestLimitIn` and
+//! its time. While the CPU sleeps with nothing pending, nothing executes
+//! before that limit, so [`bbcore::Engine::quiet_until`] returns
+//! `clock + NearestLimitIn` ([`LookaheadCfg::enabled`]); otherwise it returns
+//! `now` (no promise). The block is inert: its reads are pure, the WFI hook
+//! it adds changes no tlib setting (the NVIC registers one of its own), and
+//! firmware accesses to it are ignored and logged.
+//!
+//! The advance that follows a promise is audited: an output change before
+//! the promise, or a WFI exit before it (the plugin latches the time of the
+//! first exit since the previous Query), is [`EngineError::PromiseBroken`].
+//! A startup self-test (one machine, one `TranslationCPU`, one NVIC, both
+//! reflected fields present, no host backends) that fails leaves the engine
+//! without promises: the board falls back to the loop cap.
+//!
+//! Renode 1.17.0's monitor `include` only compiles C# sources (about 1.6 s
+//! per run). The engine therefore compiles the block once with Renode's own
+//! compiler (`AdHocCompiler`, so the assembly matches the installed Renode),
+//! caches the assembly ([`LookaheadCfg::cache_dir`], keyed by a hash of the
+//! source and the Renode install) and loads it with `TypeManager.ScanFile`
+//! from a generated Python snippet in later runs (ADR-003 Amendment 8).
 
 pub mod protocol;
 
@@ -113,6 +142,138 @@ pub const STM32F103_OFFLINE_REPL: &str = include_str!("../platforms/stm32f103-of
 
 /// Renode's virtual-time resolution.
 pub const RENODE_RESOLUTION: Time = Time::from_ns(1);
+
+/// Source of the lookahead register block (ADR-003 D5), loaded when
+/// [`LookaheadCfg::plugin`] is set.
+pub const BB_LOOKAHEAD_CS: &str = include_str!("../platforms/bb_lookahead.cs");
+
+/// Default address of the lookahead block: unused on the STM32F103.
+pub const LOOKAHEAD_ADDRESS: u64 = 0x5FFF_0000;
+
+/// Monitor name of the lookahead block on `sysbus`.
+const LOOKAHEAD_NAME: &str = "bbLookahead";
+
+/// CPU lookahead configuration (ADR-003 D5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LookaheadCfg {
+    /// Load and arm the lookahead block. `bb run` sets it for boards whose
+    /// binding graph has a feedback loop, with `--lookahead off` as well as
+    /// `on`, so reference runs load the same platform.
+    pub plugin: bool,
+    /// Answer [`bbcore::Engine::quiet_until`] with real promises (`bb run
+    /// --lookahead on`). Requires `plugin`. Off: `quiet_until` returns `now`
+    /// and the block is never read after startup.
+    pub enabled: bool,
+    /// Bus address of the block (8 dwords); must be unused on the platform.
+    pub address: u64,
+    /// Where the compiled block is cached. `None`: `$BB_CACHE_DIR`, else
+    /// `$XDG_CACHE_HOME/bb`, else `~/.cache/bb`, each with
+    /// `renode-plugins/` appended.
+    pub cache_dir: Option<PathBuf>,
+}
+
+impl Default for LookaheadCfg {
+    fn default() -> LookaheadCfg {
+        LookaheadCfg {
+            plugin: false,
+            enabled: false,
+            address: LOOKAHEAD_ADDRESS,
+            cache_dir: None,
+        }
+    }
+}
+
+/// One Query of the lookahead block: a snapshot of the register block (see
+/// `platforms/bb_lookahead.cs`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct LookaheadStatus {
+    /// Renode's time (ns, as tracked by the engine) when the snapshot was
+    /// taken.
+    pub at_ns: u64,
+    /// The STATUS register.
+    pub status: u32,
+    /// `NearestLimitIn` in ns, if a limit exists.
+    pub limit_ns: Option<u64>,
+    /// Clock-source time in ns.
+    pub clock_ns: u64,
+    /// WFI exits since arming (wraps).
+    pub wfi_exits: u32,
+    /// Clock time of the first WFI exit since the previous snapshot.
+    pub first_exit_ns: Option<u64>,
+}
+
+impl LookaheadStatus {
+    pub const ARMED: u32 = 1 << 0;
+    pub const SELF_TEST_OK: u32 = 1 << 1;
+    pub const IN_WFI: u32 = 1 << 2;
+    pub const NVIC_PENDING: u32 = 1 << 3;
+    pub const ACTION_QUEUED: u32 = 1 << 4;
+    pub const HALTED: u32 = 1 << 5;
+    pub const HAS_LIMIT: u32 = 1 << 6;
+    pub const FIRMWARE_ACCESS: u32 = 1 << 7;
+    pub const EXITED: u32 = 1 << 8;
+
+    fn from_words(at_ns: u64, w: &[u32]) -> Result<LookaheadStatus, EngineError> {
+        if w.len() != 8 {
+            return Err(EngineError::Protocol(format!(
+                "lookahead block: read {} dwords, expected 8",
+                w.len()
+            )));
+        }
+        let u64_at = |i: usize| u64::from(w[i]) | (u64::from(w[i + 1]) << 32);
+        let opt = |v: u64| (v != u64::MAX).then_some(v);
+        Ok(LookaheadStatus {
+            at_ns,
+            status: w[0],
+            limit_ns: opt(u64_at(1)).filter(|_| w[0] & Self::HAS_LIMIT != 0),
+            clock_ns: u64_at(3),
+            wfi_exits: w[5],
+            first_exit_ns: opt(u64_at(6)),
+        })
+    }
+
+    /// The block was armed by the generated script.
+    pub fn armed(&self) -> bool {
+        self.status & Self::ARMED != 0
+    }
+
+    /// The startup self-test passed.
+    pub fn self_test_ok(&self) -> bool {
+        self.status & Self::SELF_TEST_OK != 0
+    }
+
+    /// Self-test failure reasons (bits 16..23 of STATUS, shifted down; see
+    /// `bb_lookahead.cs`), or 0.
+    pub fn self_test_failures(&self) -> u32 {
+        (self.status >> 16) & 0xFF
+    }
+
+    /// The quiet promise in ns: `clock + NearestLimitIn` when the CPU is in
+    /// WFI with nothing pending or queued, not halted, a limit exists and
+    /// the clock source agrees with Renode's time. Otherwise `None`.
+    pub fn promise_ns(&self) -> Option<u64> {
+        let need = Self::ARMED | Self::SELF_TEST_OK | Self::IN_WFI | Self::HAS_LIMIT;
+        let veto = Self::NVIC_PENDING | Self::ACTION_QUEUED | Self::HALTED;
+        if self.status & need != need || self.status & veto != 0 || self.clock_ns != self.at_ns {
+            return None;
+        }
+        self.clock_ns.checked_add(self.limit_ns?)
+    }
+}
+
+/// Counters of the lookahead machinery (wall-clock-free; for tests and the
+/// run summary).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LookaheadStats {
+    /// `quiet_until` calls answered from a Query (fresh or cached).
+    pub queries: u64,
+    /// SYSTEM_BUS reads of the block (Queries and audits).
+    pub reads: u64,
+    /// Promises given (`quiet_until > now`).
+    pub promises: u64,
+    /// Advances audited against a promise.
+    pub audits: u64,
+}
 
 /// Which platform description to load.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,6 +369,9 @@ pub enum Fault {
     /// The first GPIO event stamped at or after `at` ns is discarded, so the
     /// tracked pin level goes stale (a GPIO mismatch).
     DropGpioEvent { at_ns: u64 },
+    /// The next quiet promise is `ns` nanoseconds longer than the block
+    /// says (an over-long promise: the wake audit must catch it).
+    StretchPromise { ns: u64 },
 }
 
 /// Configuration of a [`RenodeEngine`].
@@ -239,6 +403,13 @@ pub struct RenodeConfig {
     pub startup_timeout: Duration,
     /// Socket I/O timeout for a single request (wall clock).
     pub io_timeout: Duration,
+    /// CPU lookahead (ADR-003 D5): the plugin and `quiet_until`.
+    pub lookahead: LookaheadCfg,
+    /// Extra monitor lines run after the firmware is loaded and before the
+    /// lookahead block is armed (tests: e.g. attach a UART terminal to make
+    /// the self-test fail). Never set by `bb`.
+    #[doc(hidden)]
+    pub extra_monitor: Vec<String>,
 }
 
 impl RenodeConfig {
@@ -257,8 +428,75 @@ impl RenodeConfig {
             verify: Verify::Edges,
             startup_timeout: Duration::from_secs(120),
             io_timeout: Duration::from_secs(120),
+            lookahead: LookaheadCfg::default(),
+            extra_monitor: Vec::new(),
         }
     }
+}
+
+/// Default plugin cache directory (see [`LookaheadCfg::cache_dir`]).
+fn default_cache_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("BB_CACHE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(|d| PathBuf::from(d).join("bb")))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/bb")))?;
+    Some(base.join("renode-plugins"))
+}
+
+/// 64-bit FNV-1a, for the plugin cache key (not a security boundary: the
+/// cache holds what this engine compiled with the same Renode).
+fn fnv1a64(parts: &[&[u8]]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for p in parts {
+        for b in p.iter().chain(std::iter::once(&0xFFu8)) {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// Python run from the generated script: load the cached lookahead
+/// assembly, or compile `src` with Renode's compiler, load it and cache it.
+/// Any failure writes `err` and exits Renode (a failed monitor command would
+/// leave it waiting without a server until the startup timeout).
+fn plugin_loader_py(src: &str, cache: &str, err: &str) -> String {
+    format!(
+        r#"# Generated by bb-cpu-renode: load the lookahead block (ADR-003 D5).
+import System
+from Antmicro.Renode.Utilities import TypeManager, AdHocCompiler
+BB_SRC = r"{src}"
+BB_CACHE = r"{cache}"
+BB_ERR = r"{err}"
+def bb_fail(msg):
+    f = open(BB_ERR, "w")
+    f.write(msg)
+    f.close()
+    System.Environment.Exit(3)
+def bb_load_cached():
+    try:
+        return System.IO.File.Exists(BB_CACHE) and TypeManager.Instance.ScanFile(BB_CACHE)
+    except Exception as e:
+        return False
+try:
+    if not bb_load_cached():
+        dll = AdHocCompiler().Compile(System.Array[System.String]([BB_SRC]))
+        System.Reflection.Assembly.LoadFrom(dll)
+        if not TypeManager.Instance.ScanFile(dll):
+            bb_fail("TypeManager.ScanFile(" + dll + ") failed")
+        try:
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(BB_CACHE))
+            tmp = BB_CACHE + "." + str(System.Environment.ProcessId) + ".tmp"
+            System.IO.File.Copy(dll, tmp, True)
+            System.IO.File.Move(tmp, BB_CACHE, True)
+        except Exception as e:
+            f = open(BB_ERR + ".cache", "w")
+            f.write("caching the compiled block failed: " + str(e))
+            f.close()
+except Exception as e:
+    bb_fail("loading the lookahead block failed: " + str(e))
+"#
+    )
 }
 
 /// Locate the `renode` launcher: `$BB_RENODE`, then `renode` on `PATH`, then
@@ -332,6 +570,26 @@ pub struct RenodeEngine {
     /// An advance or input failed: Drop keeps `workdir` (with `renode.log`)
     /// for diagnosis.
     failed: bool,
+    /// Lookahead (ADR-003 D5).
+    la: Lookahead,
+}
+
+/// Lookahead state of a [`RenodeEngine`].
+struct Lookahead {
+    cfg: LookaheadCfg,
+    /// Startup snapshot (plugin loaded): self-test result.
+    startup: Option<LookaheadStatus>,
+    /// The snapshot of the last read, while it still describes Renode's
+    /// state (no advance or `SET_STATE` since): a Query at the same time
+    /// reuses it.
+    cached: Option<LookaheadStatus>,
+    /// The promise of the last `quiet_until`, `(from, until)`, valid for the
+    /// one advance that starts at `from`.
+    promise: Option<(Time, Time)>,
+    /// A Query failed inside `quiet_until` (which cannot return an error):
+    /// reported by the next advance.
+    deferred: Option<EngineError>,
+    stats: LookaheadStats,
 }
 
 static INSTANCE: AtomicU64 = AtomicU64::new(0);
@@ -411,14 +669,66 @@ impl RenodeEngine {
             Platform::Repl(p) => monitor_path(Path::new(p))?,
         };
         let port = free_port()?;
+        let la = &cfg.lookahead;
+        if la.enabled && !la.plugin {
+            return Err(EngineError::Other(
+                "lookahead enabled without the lookahead plugin".into(),
+            ));
+        }
+        let plugin_err = workdir.join("bb_lookahead.err");
+        let (plugin_load, plugin_arm) = if la.plugin {
+            let src = workdir.join("bb_lookahead.cs");
+            std::fs::write(&src, BB_LOOKAHEAD_CS)?;
+            let cache_dir = la
+                .cache_dir
+                .clone()
+                .or_else(default_cache_dir)
+                .ok_or_else(|| {
+                    EngineError::Other(
+                        "no cache directory for the lookahead plugin (set BB_CACHE_DIR or HOME)"
+                            .into(),
+                    )
+                })?;
+            let renode_id =
+                std::fs::canonicalize(&cfg.renode).unwrap_or_else(|_| cfg.renode.clone());
+            let key = fnv1a64(&[
+                BB_LOOKAHEAD_CS.as_bytes(),
+                renode_id.to_string_lossy().as_bytes(),
+            ]);
+            let cache = cache_dir.join(format!("bb_lookahead-{key:016x}.dll"));
+            let loader = workdir.join("bb_lookahead_load.py");
+            std::fs::write(
+                &loader,
+                plugin_loader_py(
+                    &monitor_path(&src)?,
+                    &monitor_path(&cache)?,
+                    &monitor_path(&plugin_err)?,
+                ),
+            )?;
+            (
+                format!(
+                    "include @{}\n\
+                     machine LoadPlatformDescriptionFromString \"{LOOKAHEAD_NAME}: Miscellaneous.BbLookahead @ sysbus {:#x}\"\n",
+                    monitor_path(&loader)?,
+                    la.address
+                ),
+                format!("sysbus.{LOOKAHEAD_NAME} Arm\n"),
+            )
+        } else {
+            (String::new(), String::new())
+        };
+        let extra: String = cfg.extra_monitor.iter().map(|l| format!("{l}\n")).collect();
         let script = format!(
             "mach create \"{machine}\"\n\
              machine LoadPlatformDescription @{platform}\n\
+             {plugin_load}\
              sysbus LoadELF @{elf}\n\
              emulation SetSeed {seed}\n\
              emulation SetGlobalQuantum \"{quantum}\"\n\
              emulation SetGlobalSerialExecution true\n\
              emulation SetGlobalAdvanceImmediately true\n\
+             {extra}\
+             {plugin_arm}\
              logLevel 2\n\
              emulation CreateExternalControlServer \"bb\" {port}\n",
             machine = cfg.machine,
@@ -448,8 +758,11 @@ impl RenodeEngine {
                 let _ = c.wait();
             }
             let tail = log_tail(&log_path);
+            let plugin = std::fs::read_to_string(&plugin_err)
+                .map(|e| format!("\n--- lookahead plugin ---\n{e}"))
+                .unwrap_or_default();
             let _ = std::fs::remove_dir_all(&workdir);
-            EngineError::Other(format!("{msg}\n--- renode log (tail) ---\n{tail}"))
+            EngineError::Other(format!("{msg}{plugin}\n--- renode log (tail) ---\n{tail}"))
         };
 
         // Wait for the External Control server.
@@ -486,7 +799,8 @@ impl RenodeEngine {
             }
         };
 
-        let setup = || -> Result<(Client, i32, Vec<PinState>, u64), ProtocolError> {
+        type Setup = (Client, i32, Vec<PinState>, u64, Option<(i32, Vec<u32>)>);
+        let setup = || -> Result<Setup, ProtocolError> {
             let mut client = Client::handshake(stream, cfg.io_timeout)?;
             let md = client.get_machine(&cfg.machine)?;
             let mut pins = Vec::new();
@@ -505,9 +819,17 @@ impl RenodeEngine {
                 });
             }
             let t0 = client.get_time()?;
-            Ok((client, md, pins, t0))
+            // The startup snapshot of the lookahead block: armed, self-test.
+            let la = if cfg.lookahead.plugin {
+                let sb = client.get_sysbus(md, "sysbus")?;
+                let w = client.sysbus_read_u32s(sb, cfg.lookahead.address, 8)?;
+                Some((sb, w))
+            } else {
+                None
+            };
+            Ok((client, md, pins, t0, la))
         };
-        let (client, machine, pins, t0) = match setup() {
+        let (client, machine, pins, t0, la_words) = match setup() {
             Ok(v) => v,
             Err(e) => return Err(fail(&mut engine_child, format!("setup failed: {e}"))),
         };
@@ -517,6 +839,39 @@ impl RenodeEngine {
                 format!("Renode virtual time is {t0} ns at start, expected 0"),
             ));
         }
+        let mut sysbus = None;
+        let mut startup = None;
+        if let Some((sb, w)) = la_words {
+            let st = match LookaheadStatus::from_words(0, &w) {
+                Ok(st) if st.armed() => st,
+                Ok(st) => {
+                    return Err(fail(
+                        &mut engine_child,
+                        format!(
+                            "lookahead block at {:#x} is not armed (STATUS {:#x})",
+                            cfg.lookahead.address, st.status
+                        ),
+                    ))
+                }
+                Err(e) => return Err(fail(&mut engine_child, e.to_string())),
+            };
+            if !st.self_test_ok() {
+                eprintln!(
+                    "{}: lookahead self-test failed (reasons {:#04x}, see bb_lookahead.cs): \
+                     no quiet promises, the board keeps the loop cap",
+                    cfg.name,
+                    st.self_test_failures()
+                );
+            }
+            // Caching is best effort: a failure costs the next run the compile.
+            let mut cache_err = plugin_err.clone().into_os_string();
+            cache_err.push(".cache");
+            if let Ok(e) = std::fs::read_to_string(&cache_err) {
+                eprintln!("{}: lookahead plugin: {e}", cfg.name);
+            }
+            sysbus = Some(sb);
+            startup = Some(st);
+        }
         Ok(RenodeEngine {
             name: cfg.name.clone(),
             quantum_ns,
@@ -525,7 +880,7 @@ impl RenodeEngine {
             verifications: 0,
             fault: None,
             machine,
-            sysbus: None,
+            sysbus,
             child: engine_child.take().expect("child present"),
             workdir,
             client,
@@ -540,7 +895,99 @@ impl RenodeEngine {
             boundary_edges: 0,
             carried_edges: 0,
             failed: false,
+            la: Lookahead {
+                cfg: cfg.lookahead.clone(),
+                startup,
+                cached: startup,
+                promise: None,
+                deferred: None,
+                stats: LookaheadStats::default(),
+            },
         })
+    }
+
+    /// The lookahead block's startup snapshot (self-test result), if the
+    /// plugin is loaded.
+    pub fn lookahead_startup(&self) -> Option<LookaheadStatus> {
+        self.la.startup
+    }
+
+    /// Lookahead counters.
+    pub fn lookahead_stats(&self) -> LookaheadStats {
+        self.la.stats
+    }
+
+    /// Read the lookahead block now (a Query: one `SYSTEM_BUS` read of 8
+    /// dwords). A pure read for the emulation; it resets the block's
+    /// first-exit latch. Errors if the plugin is not loaded.
+    pub fn lookahead_query(&mut self) -> Result<LookaheadStatus, EngineError> {
+        if !self.la.cfg.plugin {
+            return Err(EngineError::Other("lookahead plugin not loaded".into()));
+        }
+        let w = self.sysbus_read_u32s(self.la.cfg.address, 8)?;
+        self.la.stats.reads += 1;
+        let st = LookaheadStatus::from_words(self.renode_ns, &w)?;
+        self.la.cached = Some(st);
+        Ok(st)
+    }
+
+    /// `quiet_until` (ADR-003 D5) with errors.
+    fn quiet_inner(&mut self, now: Time) -> Result<Time, EngineError> {
+        // Outputs change right after `now`: an event stamped at the last
+        // grant end is reported at `now + 1 fs` (lattice rule 3).
+        if !self.carried.is_empty() {
+            return Ok(now);
+        }
+        let st = match self.la.cached {
+            Some(st) if st.at_ns == self.renode_ns => st,
+            _ => self.lookahead_query()?,
+        };
+        self.la.stats.queries += 1;
+        let Some(mut p_ns) = st.promise_ns() else {
+            return Ok(now);
+        };
+        if let Some(Fault::StretchPromise { ns }) = self.fault {
+            p_ns = p_ns.saturating_add(ns);
+            self.fault = None;
+        }
+        // The promise assumes constant inputs: an input already queued for
+        // a lattice point inside the window ends it there.
+        if let Some(first) = self.pending.first() {
+            p_ns = p_ns.min(first.at_ns);
+        }
+        let until = Time::from_ns(p_ns);
+        if until <= now {
+            return Ok(now);
+        }
+        self.la.promise = Some((now, until));
+        self.la.stats.promises += 1;
+        Ok(until)
+    }
+
+    /// The audit after an advance from `from` that followed the promise
+    /// `until` (ADR-003 D5.4): no output change and no WFI exit before
+    /// `until`. Leaves the post-advance snapshot cached for the next Query.
+    fn audit(&mut self, from: Time, until: Time) -> Result<(), EngineError> {
+        self.la.stats.audits += 1;
+        let broken = |at: Time| EngineError::PromiseBroken {
+            promised: until,
+            at,
+        };
+        if let Some(tr) = self.trace.iter().find(|tr| tr.t > from && tr.t < until) {
+            return Err(broken(tr.t));
+        }
+        // A change stamped at the grant end executed right after it.
+        let carried_at = Time::from_ns(self.renode_ns) + Time::from_fs(1);
+        if !self.carried.is_empty() && carried_at < until {
+            return Err(broken(carried_at));
+        }
+        let st = self.lookahead_query()?;
+        if let Some(e) = st.first_exit_ns.map(Time::from_ns) {
+            if e < until {
+                return Err(broken(e));
+            }
+        }
+        Ok(())
     }
 
     /// Renode's virtual time as tracked by the engine, in ns. Always
@@ -690,7 +1137,50 @@ impl Engine for RenodeEngine {
                 Time::from_ns(self.quantum_ns)
             )));
         }
-        self.advance_inner(t).map_err(|e| self.failure(e))
+        if let Some(e) = self.la.deferred.take() {
+            return Err(self.failure(e));
+        }
+        // A promise holds for the one advance that starts where it was given.
+        let promise = self.la.promise.take().filter(|(from, _)| *from == self.now);
+        let from = self.now;
+        self.la.cached = None;
+        self.advance_inner(t).map_err(|e| self.failure(e))?;
+        if let Some((_, until)) = promise {
+            if let Err(e) = self.audit(from, until) {
+                return Err(match e {
+                    EngineError::PromiseBroken { .. } => {
+                        self.failed = true;
+                        e
+                    }
+                    e => self.failure(e),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// ADR-003 D5: while the CPU sleeps in WFI with nothing pending or
+    /// queued, it executes nothing (so no output changes) before the clock
+    /// source's nearest limit. Returns `now` (no promise) without the
+    /// plugin, with lookahead off, after a failed self-test, when the
+    /// engine is not at `now`, or when an output change carried over from
+    /// the last grant end is due right after `now`.
+    fn quiet_until(&mut self, now: Time) -> Time {
+        self.la.promise = None;
+        let usable = self.la.cfg.enabled
+            && self.la.startup.is_some_and(|s| s.self_test_ok())
+            && self.la.deferred.is_none()
+            && now == self.now;
+        if !usable {
+            return now;
+        }
+        match self.quiet_inner(now) {
+            Ok(t) => t,
+            Err(e) => {
+                self.la.deferred = Some(e);
+                now
+            }
+        }
     }
 
     fn read_outputs(&mut self) -> Result<PinSignals, EngineError> {
@@ -794,6 +1284,9 @@ impl RenodeEngine {
             .gpio_set_state(p.gpio, p.spec.index, level == Level::High)
             .map_err(proto)?;
         self.input_applied = true;
+        // The input may wake the CPU (EXTI -> NVIC): a cached lookahead
+        // snapshot no longer describes Renode.
+        self.la.cached = None;
         Ok(())
     }
 
@@ -1013,6 +1506,72 @@ mod tests {
             130_000
         );
         assert_eq!(ceil_lattice_ns(Time::ZERO, 10_000), 0);
+    }
+
+    #[test]
+    fn lookahead_promise_needs_every_condition() {
+        let quiet = LookaheadStatus::ARMED
+            | LookaheadStatus::SELF_TEST_OK
+            | LookaheadStatus::IN_WFI
+            | LookaheadStatus::HAS_LIMIT;
+        let words = |status: u32, limit: u64, clock: u64| {
+            vec![
+                status,
+                limit as u32,
+                (limit >> 32) as u32,
+                clock as u32,
+                (clock >> 32) as u32,
+                7,
+                u32::MAX,
+                u32::MAX,
+            ]
+        };
+        let st = LookaheadStatus::from_words(50_000, &words(quiet, 49_950_000, 50_000)).unwrap();
+        assert_eq!(st.promise_ns(), Some(50_000_000));
+        assert_eq!((st.wfi_exits, st.first_exit_ns), (7, None));
+        for veto in [
+            LookaheadStatus::NVIC_PENDING,
+            LookaheadStatus::ACTION_QUEUED,
+            LookaheadStatus::HALTED,
+        ] {
+            let st = LookaheadStatus::from_words(50_000, &words(quiet | veto, 10, 50_000)).unwrap();
+            assert_eq!(st.promise_ns(), None, "veto {veto:#x}");
+        }
+        for need in [
+            LookaheadStatus::ARMED,
+            LookaheadStatus::SELF_TEST_OK,
+            LookaheadStatus::IN_WFI,
+            LookaheadStatus::HAS_LIMIT,
+        ] {
+            let st =
+                LookaheadStatus::from_words(50_000, &words(quiet & !need, 10, 50_000)).unwrap();
+            assert_eq!(st.promise_ns(), None, "missing {need:#x}");
+        }
+        // The clock source must agree with Renode's time.
+        let st = LookaheadStatus::from_words(50_000, &words(quiet, 10, 49_999)).unwrap();
+        assert_eq!(st.promise_ns(), None);
+        // No limit.
+        let st = LookaheadStatus::from_words(0, &words(quiet, u64::MAX, 0)).unwrap();
+        assert_eq!(st.promise_ns(), None);
+        // A latched exit and the self-test reasons.
+        let mut w = words(LookaheadStatus::ARMED | (0x20 << 16), 0, 0);
+        w[6] = 123;
+        w[7] = 0;
+        let st = LookaheadStatus::from_words(0, &w).unwrap();
+        assert_eq!(
+            (st.self_test_failures(), st.first_exit_ns),
+            (0x20, Some(123))
+        );
+        assert!(LookaheadStatus::from_words(0, &w[..7]).is_err());
+    }
+
+    #[test]
+    fn plugin_cache_key_depends_on_source_and_renode() {
+        let a = fnv1a64(&[b"src", b"/opt/renode-1.17.0/renode"]);
+        assert_eq!(a, fnv1a64(&[b"src", b"/opt/renode-1.17.0/renode"]));
+        assert_ne!(a, fnv1a64(&[b"src2", b"/opt/renode-1.17.0/renode"]));
+        assert_ne!(a, fnv1a64(&[b"src", b"/opt/renode-1.18.0/renode"]));
+        assert_ne!(fnv1a64(&[b"ab", b"c"]), fnv1a64(&[b"a", b"bc"]));
     }
 
     #[test]

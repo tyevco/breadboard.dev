@@ -7,6 +7,7 @@
 //!        --probe net:<NET> [--probe net:<NET> ...] --out <dir>
 //!        [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
 //!        [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
+//!        [--lookahead off|on]
 //! ```
 //!
 //! Writes `<out>/events.jsonl`, `<out>/nets.csv` and `<out>/nets.vcd`, and
@@ -22,6 +23,12 @@
 //! `ceil_L(t)`. With both (a feedback loop, `examples/feedback`) the grants
 //! are one Renode quantum. The registration order does not matter
 //! (`--engine-order`).
+//!
+//! A board with a feedback loop loads Renode's lookahead plugin
+//! (ADR-003 D5) whether `--lookahead` is on or off, so both runs have the
+//! same platform. With `--lookahead on` the kernel lifts the loop cap while
+//! the sleeping MCU promises to stay quiet (`quiet_until`); lookahead
+//! changes only the grant partition, never the results.
 
 mod board;
 
@@ -34,7 +41,9 @@ use std::time::Instant;
 use bb_analog_ngspice::{
     DigitalOutputBinding, Drive, InputBinding, NgspiceConfig, NgspiceEngine, OutputBinding,
 };
-use bb_cpu_renode::{find_renode, PinDirection, PinSpec, RenodeConfig, RenodeEngine, Verify};
+use bb_cpu_renode::{
+    find_renode, LookaheadCfg, PinDirection, PinSpec, RenodeConfig, RenodeEngine, Verify,
+};
 use bbcore::{
     CsvWriter, Direction, Engine, EventSink, Level, Probe, Scheduler, SchedulerConfig, Time,
     VcdKind, VcdWriter,
@@ -46,8 +55,9 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
+              [--lookahead off|on]
 
-  --netlist     board file: SPICE body plus *bb directives (examples/spike/board.cir)
+  --netlist    board file: SPICE body plus *bb directives (examples/spike/board.cir)
   --firmware     ELF loaded into the target MCU
   --target       part reference the firmware runs on (e.g. U1)
   --for          simulated duration, e.g. 500ms
@@ -79,7 +89,17 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
   --no-verify    alias for --verify final
   --engine-order registration order: mcu-first (default) or analog-first. The
                  advance order comes from the bindings, so outputs are
-                 identical either way (ADR-003 D3; a test knob)";
+                 identical either way (ADR-003 D3; a test knob)
+  --lookahead    CPU lookahead for boards with a feedback loop (ADR-003 D5):
+                 off (default) or on. With on, grants grow past one Renode
+                 quantum while the MCU sleeps in WFI with nothing pending and
+                 promises to stay quiet until its next timer event; the
+                 promise is audited and a broken one fails the run. Changes
+                 only the grant records, never the results. Such boards load
+                 Renode's lookahead plugin in both modes
+  --lookahead-plugin
+                 auto (default: boards with a feedback loop), always or never.
+                 The plugin is inert, so outputs are identical (a test knob)";
 
 struct RunArgs {
     netlist: PathBuf,
@@ -95,6 +115,38 @@ struct RunArgs {
     renode: Option<PathBuf>,
     verify: Verify,
     engine_order: EngineOrder,
+    lookahead: bool,
+    plugin: PluginMode,
+}
+
+/// When to load Renode's lookahead plugin (`--lookahead-plugin`). The plugin
+/// is inert (ADR-003 step 5), so the choice must not change any output.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum PluginMode {
+    /// Boards whose binding graph has a feedback loop.
+    Auto,
+    Always,
+    Never,
+}
+
+impl std::str::FromStr for PluginMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<PluginMode, String> {
+        match s {
+            "auto" => Ok(PluginMode::Auto),
+            "always" => Ok(PluginMode::Always),
+            "never" => Ok(PluginMode::Never),
+            _ => Err(format!("{s:?}: expected auto, always or never")),
+        }
+    }
+}
+
+fn parse_on_off(s: &str) -> Result<bool, String> {
+    match s {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(format!("{s:?}: expected on or off")),
+    }
 }
 
 /// Registration order of the two engines (`--engine-order`). It must not
@@ -174,6 +226,8 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut renode = None;
     let mut verify = Verify::Edges;
     let mut engine_order = EngineOrder::McuFirst;
+    let mut lookahead = false;
+    let mut plugin = PluginMode::Auto;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -222,6 +276,14 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
                     .parse()
                     .map_err(|e| format!("--engine-order: {e}"))?
             }
+            "--lookahead" => {
+                lookahead = parse_on_off(&val(a)?).map_err(|e| format!("--lookahead: {e}"))?
+            }
+            "--lookahead-plugin" => {
+                plugin = val(a)?
+                    .parse()
+                    .map_err(|e| format!("--lookahead-plugin: {e}"))?
+            }
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -245,6 +307,9 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     if probes.is_empty() {
         return Err("at least one --probe is required".into());
     }
+    if lookahead && plugin == PluginMode::Never {
+        return Err("--lookahead on needs the lookahead plugin (--lookahead-plugin never)".into());
+    }
     Ok(RunArgs {
         netlist: need(netlist, "--netlist")?,
         firmware: need(firmware, "--firmware")?,
@@ -259,6 +324,8 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         renode,
         verify,
         engine_order,
+        lookahead,
+        plugin,
     })
 }
 
@@ -314,6 +381,27 @@ fn run(a: RunArgs) -> Result<(), String> {
         })
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
+    // ADR-003 D5: the binding graph has a feedback loop when the MCU both
+    // drives the circuit and reads it (U1 -> ngspice and ngspice -> U1; one
+    // MCU and one analog engine in Phase 1). Such boards load the lookahead
+    // plugin, with --lookahead off as well, so both modes run the same
+    // platform. Checked against the kernel's plan after the run.
+    let cyclic = mcu_pins
+        .iter()
+        .any(|p| matches!(p.kind, PinKind::In { .. }))
+        && mcu_pins
+            .iter()
+            .any(|p| matches!(p.kind, PinKind::Out { .. }));
+    let plugin = match a.plugin {
+        PluginMode::Auto => cyclic,
+        PluginMode::Always => true,
+        PluginMode::Never => false,
+    };
+    rcfg.lookahead = LookaheadCfg {
+        plugin,
+        enabled: a.lookahead && plugin,
+        ..LookaheadCfg::default()
+    };
 
     // --- Analog engine: the board's SPICE body plus generated pin glue.
     // ADR-003 D2: TMAX is the lattice, not min(max_quantum, sample period),
@@ -365,7 +453,7 @@ fn run(a: RunArgs) -> Result<(), String> {
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: a.max_quantum,
         loop_quantum: None, // one Renode quantum (ADR-003 D4)
-        lookahead: false,
+        lookahead: a.lookahead,
         log_grants: true,
         event_sampling: None,
     })
@@ -451,6 +539,15 @@ fn run(a: RunArgs) -> Result<(), String> {
     };
     sink.flush().map_err(|e| format!("write events: {e}"))?;
     let run_s = t_run.elapsed().as_secs_f64();
+    if let Some(p) = sched.plan() {
+        if p.cyclic != cyclic {
+            return Err(format!(
+                "internal: the board was classified as {} but the kernel's plan is {}",
+                if cyclic { "cyclic" } else { "acyclic" },
+                if p.cyclic { "cyclic" } else { "acyclic" }
+            ));
+        }
+    }
     let plan = match sched.plan() {
         Some(p) => {
             let names = p
@@ -475,8 +572,14 @@ fn run(a: RunArgs) -> Result<(), String> {
     let mut so = std::io::stdout().lock();
     let _ = writeln!(
         so,
-        "bb run: simulated {} in {} grants (max quantum {}, renode quantum {}, plan {plan})",
-        summary.now, summary.grants, a.max_quantum, a.renode_quantum
+        "bb run: simulated {} in {} grants (max quantum {}, renode quantum {}, plan {plan}, \
+         lookahead {}{})",
+        summary.now,
+        summary.grants,
+        a.max_quantum,
+        a.renode_quantum,
+        if a.lookahead { "on" } else { "off" },
+        if plugin { ", plugin loaded" } else { "" }
     );
     let _ = writeln!(
         so,
@@ -572,5 +675,16 @@ mod tests {
         );
         o.extend(["--engine-order".into(), "random".into()]);
         assert!(parse_args(&o).is_err());
+        assert!(!a.lookahead && a.plugin == PluginMode::Auto);
+        let mut la = v.clone();
+        la.extend(["--lookahead".into(), "on".into()]);
+        assert!(parse_args(&la).unwrap().lookahead);
+        la.extend(["--lookahead-plugin".into(), "always".into()]);
+        assert_eq!(parse_args(&la).unwrap().plugin, PluginMode::Always);
+        la.extend(["--lookahead-plugin".into(), "never".into()]);
+        assert!(parse_args(&la).is_err(), "on without the plugin");
+        let mut lb = v.clone();
+        lb.extend(["--lookahead".into(), "maybe".into()]);
+        assert!(parse_args(&lb).is_err());
     }
 }

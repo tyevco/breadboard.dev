@@ -9,7 +9,7 @@ CARGO ?= cargo
 .PHONY: setup doctor build test cargo-test fmt fmt-check clippy check firmware \
         bb spike spike-verify-every lattice-check partition perf determinism golden \
         golden-update feedback-run feedback feedback-order feedback-determinism \
-        feedback-open feedback-open-ref
+        feedback-open feedback-open-ref lookahead-inert lookahead-startup
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -32,6 +32,7 @@ FEEDBACK_ARGS  = --netlist examples/feedback/board.cir --firmware $(FEEDBACK_ELF
                  --target U1 --for $(FEEDBACK_FOR) --probe net:SENSE --probe net:LED_B \
                  --probe net:U1.PA5 --probe net:U1.PB0 --probe net:U1.PA6
 FEEDBACK_GOLDEN := tests/golden/feedback
+FEEDBACK_HASHES := $(FEEDBACK_GOLDEN)/outputs.sha256
 FEEDBACK_OPEN_ARGS = --netlist examples/feedback-open/board.cir --firmware $(FEEDBACK_ELF) \
                  --target U1 --for $(FEEDBACK_FOR) --probe net:SENSE --probe net:U1.PB0 \
                  --probe net:U1.PA6
@@ -50,6 +51,7 @@ doctor:
 firmware:
 	$(MAKE) -C examples/spike/firmware
 	$(MAKE) -C examples/feedback/firmware
+	$(MAKE) -C engines/cpu-renode/tests/firmware
 
 build:
 	$(CARGO) build --workspace --all-targets
@@ -147,6 +149,7 @@ golden-update: spike feedback-run feedback-open-ref
 	$(PYTHON) scripts/golden.py write $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/sense.csv --net SENSE
 	$(PYTHON) scripts/golden.py write $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/led_b.csv --net LED_B
 	grep '"type":"pin_edge"' $(FEEDBACK_OUT)/events.jsonl > $(FEEDBACK_GOLDEN)/pin_edges.jsonl
+	cd $(FEEDBACK_OUT) && sha256sum nets.csv events.jsonl nets.vcd > $(CURDIR)/$(FEEDBACK_HASHES)
 	cd $(FEEDBACK_OPEN_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv nets.vcd non-grant-records > $(CURDIR)/$(FEEDBACK_OPEN_HASHES) \
 	    && rm non-grant-records
@@ -192,6 +195,27 @@ feedback-open: firmware bb
 	$(BB) run $(FEEDBACK_OPEN_ARGS) --engine-order analog-first --out $(FEEDBACK_OPEN_OUT)/swapped
 	set -e; for f in nets.csv events.jsonl nets.vcd; do cmp $(FEEDBACK_OPEN_OUT)/mq-10ms/$$f $(FEEDBACK_OPEN_OUT)/swapped/$$f; done
 	@echo "feedback-open: PASS (partition gate; registration order swapped: identical)"
+
+# ADR-003 step 5: Renode's lookahead plugin is inert. examples/feedback
+# without the plugin (--lookahead-plugin never) must give the committed
+# hashes ($(FEEDBACK_HASHES)); with the plugin loaded and armed (the
+# default for a feedback loop) and --lookahead off it must be byte-identical;
+# with --lookahead on only the grant records may differ. CI job `feedback`.
+LOOKAHEAD_INERT_OUT ?= out/lookahead-inert
+lookahead-inert: firmware bb
+	bash scripts/lookahead_inert.sh $(BB) $(LOOKAHEAD_INERT_OUT) $(FEEDBACK_HASHES) -- $(FEEDBACK_ARGS)
+	$(BB) run $(SPIKE_ARGS) --lookahead-plugin always --out $(LOOKAHEAD_INERT_OUT)/spike
+	cd $(LOOKAHEAD_INERT_OUT)/spike && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum -c $(CURDIR)/$(PARTITION_HASHES)
+	@echo "lookahead-inert: the spike with the plugin loaded gives the committed partition hashes"
+
+# ADR-003 step 5 startup-cost gate: with the cached plugin, Renode engine
+# startup is within 0.3 s of a start without it (interleaved, N =
+# BB_LA_STARTUP_N runs each, default 7, medians). Wall-clock: run it on an
+# otherwise idle host.
+lookahead-startup: firmware
+	BB_REQUIRE_RENODE=1 $(CARGO) test --release -p bb-cpu-renode --test lookahead -- \
+	    --ignored --nocapture --exact plugin_startup_overhead
 
 # The feedback-open one-cell reference (max_quantum = the lattice), for
 # golden-update.

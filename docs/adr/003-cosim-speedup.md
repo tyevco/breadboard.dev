@@ -1582,3 +1582,233 @@ contract (`advance_until`, invariant 1, "Quiet grants") landed with step 6
   `nets.vcd` da42656b…), determinism (10 runs), golden, feedback
   (1f610526…, c4855b92…, 7ad78d8c…, the Amendment 4 hashes) and
   feedback-order.
+
+### Amendment 8: step 5 (Renode lookahead plugin, D5 Renode side) as implemented (2026-11-08)
+
+**Status:** Accepted with step 5. It landed after steps 6 and 7, which were
+built in parallel against the defaulted trait methods. No `spec/` change:
+the contract (`quiet_until`, `EngineError::PromiseBroken`, invariant 8,
+"Quiet grants") landed with step 6 (Amendment 6), and this is its Renode
+implementation. With `--lookahead off`, the default, every output and hash
+is unchanged.
+
+- **What landed.**
+  - `engines/cpu-renode/platforms/bb_lookahead.cs`, the read-only block.
+  - In the engine:
+    - `RenodeConfig::lookahead: LookaheadCfg { plugin, enabled, address,
+      cache_dir }`, with the address defaulting to 0x5FFF0000.
+    - `RenodeEngine` implements `quiet_until` and the wake audit.
+    - `LookaheadStatus` (one decoded Query), `lookahead_query`,
+      `lookahead_stats` and `lookahead_startup`.
+    - Test knobs: `Fault::StretchPromise { ns }` and
+      `RenodeConfig::extra_monitor`. The second takes monitor lines that run
+      before arming; `bb` never sets it.
+  - In `bb run`:
+    - `--lookahead off|on` sets `SchedulerConfig::lookahead` and turns the
+      promises on.
+    - A board with a feedback loop loads the plugin in both modes, as D5
+      requires. The board is cyclic when the MCU has both a `digital_in` pin
+      and a `digital_out` pin connected to the circuit. `bb` decides this
+      from the board, because the engine must start before the kernel builds
+      its plan, and checks it against `Plan::cyclic` after the run.
+    - `--lookahead-plugin auto|always|never` is a test knob for the
+      inertness gate. `on` together with `never` is rejected.
+  - Make targets `lookahead-inert`, which runs in CI job `feedback`, and
+    `lookahead-startup`. `make firmware` also builds
+    `engines/cpu-renode/tests/firmware`.
+- **Plugin delivery (approver decision 9), resolved.** These facts were
+  checked in the Renode 1.17.0 sources and then measured.
+  - **Why not `include` the source.** The monitor's `include`
+    (`IncludeFileCommand.cs`) takes only `.cs`, `.py`, `.repl` and monitor
+    scripts. A `.cs` file goes through `Monitor.TryCompilePlugin` to
+    `AdHocCompiler` (Roslyn) on every run, which costs about 1.6 s
+    (measured: 4.3–4.7 s against 2.7–3.0 s for the same script).
+  - **Why not Renode's own cache.** Renode's compiled-files cache
+    (`EmulationManager.CompiledFilesCache`) is off unless the user's Renode
+    config sets `general.compiler-cache-enabled`. A run must not depend on
+    that.
+  - **How a prebuilt assembly can be loaded.** No monitor command loads one,
+    but `TypeManager.Instance.ScanFile(path)` does, and the monitor's Python
+    can call it.
+  - **Decision.**
+    - The engine writes the source and a generated loader
+      (`bb_lookahead_load.py`) to its workdir, and the script runs `include`
+      on the loader.
+    - The loader loads the cached assembly with `ScanFile`. Without a cache
+      entry, it compiles the source with Renode's own `AdHocCompiler` (so the
+      assembly references the installed Renode), loads it, and caches it.
+    - The cache key is FNV-1a 64 of the source and the canonical Renode
+      launcher path, so each Renode install gets its own entry. The cache
+      lives in `~/.cache/bb/renode-plugins` (`$BB_CACHE_DIR` and
+      `$XDG_CACHE_HOME/bb` override it).
+    - The cache write copies to a temporary file named after the process id
+      and then renames it, so concurrent starts are safe. A failed write is
+      only a warning.
+    - Any load failure writes an error file and exits Renode with code 3.
+      The engine reports the error at once. Without the exit, a failed
+      monitor command would leave Renode waiting with no External Control
+      server until the 120 s startup timeout.
+- **Script order.**
+  1. The loader and `machine LoadPlatformDescriptionFromString
+     "bbLookahead: Miscellaneous.BbLookahead @ sysbus 0x5fff0000"` run
+     right after the platform.
+  2. `sysbus.bbLookahead Arm` runs after the firmware, the emulation
+     settings and any extra monitor lines.
+  3. Both come before `emulation CreateExternalControlServer`, so the
+     self-test's host-backend check sees only the host machine.
+- **Correction to D5, "Hook use".** D5 says that arming the WFI hook
+  changes a tlib setting. In Renode 1.17.0 the NVIC registers a WFI hook of
+  its own when it is constructed (`NVIC.cs:901`,
+  `cpu.AddHookAtWfiStateChange(HandleWfiStateChange)`). So
+  `TlibSetCpuWfiStateChangeHookPresent(1)` is already set in every
+  Cortex-M run, and the plugin only adds a second delegate. It changes no
+  tlib setting. Cyclic boards still load the plugin in `--lookahead off`
+  runs, as D5 asks, and the inertness gate below covers it.
+- **Registers.** One Query reads 8 dwords:
+  - STATUS: armed; self-test passed; in WFI; NVIC pending; synced action
+    queued; halted; a limit exists; firmware access (sticky); a WFI exit
+    since the last snapshot; self-test failure reasons in bits 16–23;
+  - `NearestLimitIn` (ns);
+  - the clock-source time (ns);
+  - the WFI exit counter;
+  - the clock time of the first WFI exit since the previous Query.
+
+  Reading STATUS takes the snapshot and resets the first-exit latch.
+- **Firmware accesses.** The block detects them with
+  `SystemBus.TryGetTransactionInitiator` and `TryGetCurrentCPU`. Firmware
+  reads return 0, firmware writes are dropped, and both are logged once and
+  set the sticky STATUS bit. The External Control `SYSTEM_BUS` read has
+  neither an initiator nor a current CPU. Gate firmware `la_silent` reads
+  and writes the block, and its outputs match a run without the block.
+- **`quiet_until(now)`.** The engine promises `clock + NearestLimitIn`
+  only when all of these hold:
+  - lookahead is enabled and the self-test passed;
+  - the engine is at `now`;
+  - no change is carried over from the last grant end (lattice rule 3: such
+    a change is reported at `now + 1 fs`);
+  - STATUS says armed, in WFI, no NVIC pending, no queued action, not
+    halted, and a limit exists;
+  - the clock equals Renode's time.
+
+  Otherwise it returns `now`. Other details:
+  - **Queued inputs.** The promise is capped at the lattice point of the
+    first queued input. In the kernel's Query nothing is queued yet.
+  - **Errors.** `quiet_until` returns a plain `Time`, so a Query error is
+    held and returned by the next advance.
+  - **Query reuse.** The audit read after a quiet advance is itself a
+    Query. If nothing has happened since (no advance and no `SET_STATE`),
+    the next `quiet_until` reuses it, so a quiet stretch costs one
+    `SYSTEM_BUS` read per grant.
+  - **Purity.** The Query resets only the plugin's own first-exit latch,
+    which is audit bookkeeping, and never emulation state, so `quiet_until`
+    is a pure read in the sense of the spec. A Query skipped by the back-off
+    leaves no promise, and the next advance is not audited.
+- **The wake audit (D5.4), as implemented.** The audit covers the one
+  advance that starts at the promise's `now`, whatever its end. Each of
+  these is `EngineError::PromiseBroken { promised: until, at }`:
+  - an output transition at `t < until`. This is the open interval, the
+    same as the kernel's rule (Amendment 6);
+  - a change carried over at the grant end when `g + 1 fs < until`;
+  - a WFI exit at a clock time before `until`.
+
+  D5.4 writes "a WFI exit at a time `< r`", and `r <= floor_L(until)`. The
+  engine checks the stricter `< until`. An honest promise has no wake
+  before its limit, so a wake in `[r, until)` means the limit was wrong.
+  A wake exactly at a lattice limit `r = until`, which the spike's SysTick
+  makes, is allowed. The wake time is the clock-source time at which tlib
+  reports the exit, and the clock advances with every instruction the CPU
+  reports.
+- **Self-test.** The checks are those D5 lists: exactly one machine, one
+  `TranslationCPU`, one NVIC, `NVIC.pendingIRQs` and
+  `TimeSourceBase.delayedActions` present, and both time sources of type
+  `TimeSourceBase`. A host backend counts as any external other than the
+  host machine, or any host-machine element. If the self-test fails, the
+  engine prints the reason bits once to stderr, never reads the block again,
+  and `quiet_until` returns `now`.
+- **Deviation: how the gate firmware is driven.** The gate firmware runs
+  under an engine-level driver (`engines/cpu-renode/tests/lookahead.rs`),
+  not under the kernel. Step 6 was landing in parallel, and the gate boards
+  have no circuit.
+  - At every boundary the driver asks `quiet_until` and grants
+    `floor_L(min(q, now + 10 ms, t_end))` when that is more than one cell,
+    otherwise one cell. The engine audits each promise.
+  - The reference is a one-cell run without the plugin.
+  - On top of the audit, an honesty check requires that no reference edge
+    falls inside any promised window `(now, q)`.
+- **Gates (measured)** (`L` = 10 µs, 60 ms per firmware; the firmware is in
+  `engines/cpu-renode/tests/firmware`):
+  - **The feedback example with the plugin armed and `off` is
+    byte-identical to step 4 without the plugin** (`make lookahead-inert`).
+    - `--lookahead-plugin never` gives `nets.csv` 1f610526…,
+      `events.jsonl` c4855b92… and `nets.vcd` 7ad78d8c…. These are the
+      Amendment 4 hashes, now committed in
+      `tests/golden/feedback/outputs.sha256`; `make golden-update`
+      regenerates the file.
+    - The default run (plugin loaded and armed, `--lookahead off`) is
+      byte-identical to it. Both runs take 50 000 grants.
+    - The spike with `--lookahead-plugin always` gives its committed
+      partition hashes.
+  - **Gate firmware.** Each is equivalent to the one-cell reference: the
+    same edges, every promise honoured, and no `PromiseBroken`. With the
+    plugin armed and `off`, each is also identical to the reference. The
+    outcome is pinned per firmware.
+
+    | Firmware | What it exercises | Reference edges (6000 grants) | Lookahead grants (longer than one cell) | Promises |
+    | --- | --- | --- | --- | --- |
+    | `la_tim1pwm` | TIM1 CH1 PWM, 1 kHz, 25 %, on PA8 (timer-driven pin, CPU in WFI); SysTick on PA5 | 131 (119 on PA8) | 391 (186) | 360 |
+    | `la_dma` | TIM2 update → DMA1 ch2 → `GPIOA_BSRR` (PA5 every 1 ms; the ISR only clears UIF) | 60 | 183 (61) | 115 |
+    | `la_uart` | interrupt-driven USART1 TX, PA5 per message | 11 | 48 (12) | 24 |
+    | `la_sleeponexit` | `SLEEPONEXIT`: only the SysTick ISR runs | 12 | 32 (12) | 24 |
+    | `la_wfe` | WFE main loop woken by the ISR; SEV + WFE at start | 23 | 48 (12) | 24 |
+    | `la_silent` | silent SysTick wakes every 1 ms, PA5 every 10th; firmware reads and writes the block | 6 | 190 (60) | 120 |
+
+    None of these firmwares falls back or fails. Two facts this rests on:
+    the timers' compare and update events are clock limits, so every
+    promise ends at the next PWM or DMA edge; and Renode models
+    sleep-on-exit and WFE through the same WFI state that the hook reports.
+  - **An injected early wake with no edge raises `PromiseBroken`.** On
+    `la_silent`, `Fault::StretchPromise` adds 3 ms to the first promise.
+    That promise is given at 20 µs and runs to the 1 ms SysTick at
+    0.999987 ms, so the stretched promise ends at 3.999987 ms. The audit
+    reports `PromiseBroken { promised: 3.999987 ms, at: 0.99999 ms }`. The
+    grant has no edge.
+  - **The self-test fallback changes only grant records.** A UART pty
+    terminal on `usart1` makes the self-test fail with reason 0x20 (host
+    backend). That run gives 0 promises and 0 reads, and its edges and
+    grants equal the one-cell reference (3000 grants in 30 ms). The same
+    board with a passing self-test takes 100 grants and gives the same
+    edges.
+  - **Startup within 0.3 s of a run without the plugin**
+    (`make lookahead-startup`, interleaved, N = 7, medians, cached plugin).
+    Medians were 2.849 s without the plugin and 3.042 s with it, a
+    difference of 0.194 s, at load average 2.8–7.4. A first, compiling start
+    took 5.95 s against 3.96 s cached, under load.
+  - The plugin is compiled once and cached (`plugin_is_compiled_once_and_cached`).
+- **Evidence for step 8 (not a step 5 gate).** With steps 6 and 7 in
+  place, `examples/feedback --lookahead on` runs 500 ms in **117 grants** and
+  1.67 s of simulation, against 50 000 grants and 27.5–30.1 s with
+  `--lookahead off`. Its `nets.csv`, `nets.vcd` and non-grant records
+  (09d862d0…) are byte-identical to the one-cell run, with no promise
+  violation. `make lookahead-inert` checks this every run.
+- **Renode model facts found by the gate firmware** (pinned by the tests):
+  - **TIM1 output on PA8.** `STM32F1AFIO` routes a timer's outputs to its
+    pins only when the firmware writes the remap field
+    (`TimRemapCallback`). After reset the pin's active function is 0, so
+    `la_tim1pwm` writes `TIM1_REMAP = 0b00` explicitly. TIM1's `MOE` bit is
+    only a tag, so the model ignores it.
+  - **TIM2 → DMA.** `STM32_Timer` raises its update request line only while
+    `UIF & UIE` hold, so DMA on update needs the update interrupt enabled
+    and an ISR that clears UIF.
+  - **DMA direction.** `STM32G0DMA` copies one unit per request only in the
+    peripheral-to-memory direction. In the memory-to-peripheral direction it
+    copies the whole block, both at enable and on every request. `la_dma`
+    therefore uses the table as the "peripheral" address and `BSRR` as the
+    "memory" address.
+- **Process note.** The default `CARGO_TARGET_DIR` was shared with another
+  agent's `git worktree` (`~/bb-wt-step7`). Cargo names workspace-member
+  artifacts by their workspace-relative path, so builds in the two
+  checkouts overwrote each other's `bb-cpu-renode`. Tests linked the other
+  checkout's code, and the failure looked like stale source. This step was
+  therefore built and checked with a private
+  `CARGO_TARGET_DIR=~/.cache/bb-target-s5`. AGENTS.md now says to use one
+  target directory per checkout.

@@ -503,6 +503,7 @@ fn verify_modes_catch_injected_mismatches() {
                 assert!(at_end, "{now}");
                 assert!(err.contains("verify: PA5: Renode reports true"), "{err}");
             }
+            (_, Fault::StretchPromise { .. }) => unreachable!("not a verify fault"),
         }
     }
 }
