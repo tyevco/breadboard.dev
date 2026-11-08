@@ -11,7 +11,7 @@ CARGO ?= cargo
         golden-update feedback-run feedback feedback-order feedback-determinism \
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
-        adc-equiv adc-renode
+        adc-equiv adc-renode cost-table
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -22,6 +22,9 @@ SPIKE_ARGS   = --netlist examples/spike/board.cir --firmware $(SPIKE_ELF) \
                --target U1 --for $(SPIKE_FOR) --probe net:LED_A --probe net:PA5
 GOLDEN      := tests/golden/spike/led_a.csv
 PARTITION_HASHES := tests/golden/spike/partition.sha256
+# The default spike run's full outputs, grant records included (ADR-003 plan
+# step 10): nets.csv, events.jsonl and nets.vcd of `make spike`.
+SPIKE_HASHES := tests/golden/spike/outputs.sha256
 DET_RUNS    ?= 10
 DET_JOBS    ?= 5
 PYTHON      ?= python3
@@ -153,20 +156,26 @@ perf: firmware bb
 determinism: firmware bb
 	bash scripts/determinism.sh $(BB) out/determinism $(DET_RUNS) $(DET_JOBS) -- $(SPIKE_ARGS)
 
-# Diff LED_A against the committed snapshot (1 mV / 1 sample). Runs the
-# spike first if its output is missing.
+# Diff LED_A against the committed snapshot (1 mV / 1 sample), then check
+# the default run's nets.csv, events.jsonl and nets.vcd against their
+# committed hashes ($(SPIKE_HASHES); the events.jsonl hash pins the grant
+# records of the default 10 ms partition too). Runs the spike first if its
+# output is missing.
 golden:
 	@if [ ! -f $(SPIKE_OUT)/nets.csv ]; then $(MAKE) spike; fi
 	$(PYTHON) scripts/golden.py check $(SPIKE_OUT)/nets.csv $(GOLDEN)
+	cd $(SPIKE_OUT) && sha256sum -c $(CURDIR)/$(SPIKE_HASHES)
 
 # Regenerate the snapshots from fresh, checked runs (review the diff!): the
-# spike waveform and partition hashes, the feedback waveforms and edge list,
-# the hashes of the feedback boards' one-cell references (`--lookahead off`,
-# EXTI and polling firmware), and the feedback-open partition hashes (from
-# its one-cell reference).
+# spike waveform, output hashes and partition hashes; the feedback waveforms
+# and edge list; the hashes of the feedback board's one-cell reference
+# (`--lookahead off`, which the polling firmware shares); the feedback-open
+# partition hashes (from its one-cell reference); and the hashes of the ADC
+# boards' every-lattice-point references.
 golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-open-ref
 	mkdir -p $(dir $(GOLDEN))
 	$(PYTHON) scripts/golden.py write $(SPIKE_OUT)/nets.csv $(GOLDEN)
+	cd $(SPIKE_OUT) && sha256sum nets.csv events.jsonl nets.vcd > $(CURDIR)/$(SPIKE_HASHES)
 	cd $(SPIKE_OUT) && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv nets.vcd non-grant-records > $(CURDIR)/$(PARTITION_HASHES) \
 	    && rm non-grant-records
@@ -286,6 +295,21 @@ lookahead-perf: firmware bb
 	    "--lookahead off --lookahead-plugin never" "" $(LOOKAHEAD_MAX_GRANTS) 10 - -- $(FEEDBACK_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(LOOKAHEAD_PERF_OUT)/poll $(PERF_N) \
 	    "--lookahead off" "" - - 1.10 -- $(FEEDBACK_POLL_ARGS)
+
+# ADR-003 plan step 10: the README cost table, measured with the protocol
+# (scripts/perf_ab.sh: interleaved A/B, PERF_N runs each, medians, startup
+# separate, CPU time and load recorded). B is always bb's defaults; A is the
+# one-cell run (the spike and feedback-open at --max-quantum 10us, the
+# cyclic boards with --lookahead off). Every B run must match A in nets.csv,
+# nets.vcd and the non-grant records. No speed gate (that is `make perf` and
+# `make lookahead-perf`). Wall-clock: run it on an otherwise idle host.
+COST_OUT ?= out/cost-table
+cost-table: firmware bb
+	bash scripts/perf_ab.sh $(BB) $(COST_OUT)/spike $(PERF_N) "--max-quantum 10us" "" - - - -- $(SPIKE_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_OUT)/feedback $(PERF_N) "--lookahead off" "" - - - -- $(FEEDBACK_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_OUT)/feedback-open $(PERF_N) "--max-quantum 10us" "" - - - \
+	    -- $(FEEDBACK_OPEN_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_OUT)/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
 
 # ADR-003 step 5 startup-cost gate: with the cached plugin, Renode engine
 # startup is within 0.3 s of a start without it (interleaved, N =

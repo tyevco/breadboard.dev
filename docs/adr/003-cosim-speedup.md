@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (2026-11-08). Parts A, B and C are approved; see
   "Approver decisions (2026-11-08)" below, which answer the open questions.
-  The plan is implemented in order, step by step, each step behind its gates.
+  The plan is implemented in order, step by step, each step behind its gates;
+  all ten steps have landed (step 10: Amendment 11).
   `spec/` changes only when the matching step of the plan lands (AGENTS.md:
   spec changes ship with their ADR). Deviations found while implementing are
   recorded as amendments at the end of this ADR.
@@ -2147,3 +2148,83 @@ and feedback hashes do not change.
     section and the `make test` item.
   - `make test` grows by `make adc`, one 300 ms run of about 20 s
     simulation.
+
+### Amendment 11: step 10 (docs, cost table, golden hashes) as implemented (2026-11-08)
+
+**Status:** Accepted with step 10, the last step of the plan. No `spec/`
+file changes in this step. `spec/time-grant.md`, `spec/pin-model.md` and
+`spec/event-stream.md` were re-read against the code (the limiter labels
+and tie order in `bbcore::Scheduler`, the back-off cap of 64, the Exchange
+and Done order, the `limited_by` values that `bbcore::event` writes). They
+already match it, because every earlier step updated them in its own
+change. The list in "Other specs and docs" is complete: `digital_in`
+thresholding, the `digital_out` ramp at `edge_time`, `adc_in`, and
+event-stream version 1.
+
+- **What landed.**
+  - **README cost table**, measured with the protocol by a new
+    `make cost-table` (`scripts/perf_ab.sh`: A = the one-cell run, B =
+    `bb`'s defaults, interleaved, N = 5, medians, startup separate, user+sys
+    CPU and load recorded). Every B run matched its first A run in
+    `nets.csv`, `nets.vcd` and the non-grant records. The target reports
+    and has no speed gate; `make perf` and `make lookahead-perf` stay the
+    gates. The old table mixed `make perf`, single runs and step-8 medians;
+    every row is now from this one protocol run. Load average 1.8–2.8 on
+    24 logical CPUs. An orphaned Renode from the earlier profiling harness
+    still held one core; this step did not stop it.
+
+    | Board | A (one cell) | B (defaults) | Grants A / B | Sim A / B (median) | Wall A / B (median) | B startup |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | spike, 500 ms | `--max-quantum 10us` | 10 ms grants | 50 000 / 50 | 21.58 / 1.01 s (21.4×) | 24.07 / 3.57 s | 2.54 s |
+    | `examples/feedback`, 500 ms | `--lookahead off` | lookahead on | 50 000 / 117 | 20.85 / 1.19 s (17.5×) | 23.56 / 3.77 s | 2.64 s |
+    | `examples/feedback-open`, 500 ms | `--max-quantum 10us` | 10 ms grants | 50 000 / 50 | 20.63 / 0.98 s (21.1×) | 23.12 / 3.58 s | 2.54 s |
+    | `examples/adc`, 300 ms | `--lookahead off` | lookahead on | 30 000 / 6 344 | 16.13 / 7.64 s (2.1×) | 18.60 / 10.13 s | 2.44 s |
+
+    Against "Expected speed-up":
+    - The spike takes exactly 50 grants, 1.01 s of simulation (target
+      ≤ 2.0 s) and runs 21.4× faster than one-cell (target ≥ 15×), with
+      3.6 s total wall (target about 3–8 s).
+    - The feedback board takes 117 grants (target ≤ 200 per 500 ms) and
+      17.5× less simulation than `--lookahead off` (target ≥ 10×). The
+      step-8 gate against step 4's exact configuration is in Amendment 9.
+    - The ADC board gains 2.1×, as D6 predicts: grants stay short while
+      ADC_IN moves.
+    - The polling-firmware row is not repeated; Amendment 9 has it.
+    - The one-cell runs are about twice as fast as the Amendment 3 baseline
+      (45.9 s) because the host was far less loaded (1.8–2.8 against
+      3–12). That is why the protocol compares ratios and grant counts.
+  - **`make golden-update` and the `events.jsonl` hash.** Before this step
+    no golden file held the spike's `events.jsonl`. The partition hashes
+    leave out grant records by design, and the step-1 gate hash 83bd875e…
+    lived only in this ADR. A new `tests/golden/spike/outputs.sha256` holds
+    the default run's `nets.csv` 09fed4ac…, `events.jsonl` 95775a08… and
+    `nets.vcd` da42656b…. `make golden-update` writes it and `make golden`
+    (in `make test`) checks it. The `events.jsonl` hash is the one
+    Amendment 3 reported for the 10 ms default, and `nets.csv` and
+    `nets.vcd` are the step-1 baseline, so against step 1 the outputs
+    change only in `grant` records (approver decision 5). `make
+    golden-update` was run in this step and reproduced every other
+    committed golden file byte for byte.
+  - **AGENTS.md.**
+    - The intro names the ADR-003 speed-ups and the STM32F072 ADC board.
+    - Invariant 3 describes the lattice, the loop cap, quiet grants, the
+      early stop and the wake audit. A new paragraph says the partition is
+      never part of the result and how equivalence is gated.
+    - New rules: Renode stays pinned to 1.17.0, and an upgrade needs an ADR
+      plus the lookahead and ADC gates (approver decision 3). A new
+      speed-up needs an equivalence gate and a cost row measured with the
+      protocol.
+    - New bad ideas: an ADC push applied before its lattice point; a
+      `quiet_until` promise that cannot be guaranteed or has side effects,
+      or a weakened wake audit; judging equivalence from `events.jsonl` or
+      `nets.csv` alone.
+    - Already done in earlier steps: the "register producers first" bad
+      idea was removed (step 3), "a `RUN_FOR` that ends off the lattice"
+      was added (step 2), and the README's "cheap config" caveat was
+      removed (step 3).
+- **Deviations.**
+  - The plan does not list a `make cost-table` target. It was added so the
+    table can be measured again with the protocol.
+  - `make golden` gains the spike output-hash check. The plan says only
+    "`make golden-update` for the new `events.jsonl` hash", but no
+    committed file held that hash for `golden-update` to write.

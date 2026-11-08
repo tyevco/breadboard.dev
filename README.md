@@ -63,7 +63,9 @@ The run writes these files to `out/spike/`:
 3. `make determinism`: 10 runs. The sha256 of `nets.csv`, `events.jsonl` and
    `nets.vcd` must be identical across all of them.
 4. `make golden`: LED_A from the spike run is diffed against
-   `tests/golden/spike/led_a.csv` (a 10 kHz snapshot) within 1 mV / 1 sample.
+   `tests/golden/spike/led_a.csv` (a 10 kHz snapshot) within 1 mV / 1 sample,
+   and the run's `nets.csv`, `events.jsonl` and `nets.vcd` must match
+   `tests/golden/spike/outputs.sha256` byte for byte.
 5. `make feedback`: 500 ms of `examples/feedback`, a board with a feedback
    loop (below), then `scripts/check_feedback.py`, the golden snapshot
    `tests/golden/feedback/` and the one-cell reference hashes (lookahead
@@ -157,21 +159,35 @@ with `U1.PA5` (wire) to see this.
 
 ## Measured cost (the "co-sim is slow" risk)
 
-These figures were measured in WSL2 Ubuntu 24.04 on the development machine,
-for 500 ms of simulated time, with `make perf` (ADR-003's measurement
-protocol: interleaved runs, N = 5, medians, startup reported separately; load
-average 3–12 from other work on the host).
+These figures were measured in WSL2 Ubuntu 24.04 on the development machine
+(24 logical CPUs) with `make cost-table`, which follows ADR-003's
+measurement protocol: for each board, the one-cell run (A) and `bb`'s
+defaults (B) interleaved, N = 5 of each, medians, engine startup reported
+separately from simulation, user+sys CPU and the load average recorded. The
+load average was 1.8–2.8. Every B run gave the same `nets.csv`, `nets.vcd`
+and non-grant `events.jsonl` records as A (ADR-003 Amendment 11).
 
-| Run | Grants | Simulation (median) | Total wall (median) |
-| --- | --- | --- | --- |
-| `--max-quantum 10us` (the Phase 0 setting: one-cell lockstep) | 50 000 | 45.9 s | 54.0 s |
-| default `--max-quantum 10ms` (`make spike`) | 50 | **1.42 s** (32×) | 9.2 s, mostly 4.9 s of engine startup |
-| `examples/feedback --lookahead off` (a feedback loop in one-cell grants whatever `--max-quantum` is) | 50 000 | 31.8 s (0.64 ms per grant) | 36.0 s |
-| `examples/feedback` with the default CPU lookahead (`make feedback`) | 117 | **1.20 s** (26× the one-cell run) | 4.2 s |
-| `examples/feedback-open` (the loop opened), default 10 ms grants | 50 | 2.1 s | 7.4 s |
+| Board, run | Simulated | Grants | Simulation (median) | Total wall (median) |
+| --- | --- | --- | --- | --- |
+| spike, `--max-quantum 10us` (the Phase 0 setting: one-cell lockstep) | 500 ms | 50 000 | 21.58 s | 24.07 s |
+| spike, defaults (`make spike`: 10 ms grants) | 500 ms | 50 | **1.01 s** (21×) | 3.57 s, of which 2.54 s engine startup |
+| `examples/feedback --lookahead off` (a feedback loop: one-cell grants whatever `--max-quantum` is) | 500 ms | 50 000 | 20.85 s | 23.56 s |
+| `examples/feedback`, defaults (`make feedback`: CPU lookahead on) | 500 ms | 117 | **1.19 s** (18×) | 3.77 s |
+| `examples/feedback-open` (the loop opened), `--max-quantum 10us` | 500 ms | 50 000 | 20.63 s | 23.12 s |
+| `examples/feedback-open`, defaults (10 ms grants) | 500 ms | 50 | **0.98 s** (21×) | 3.58 s |
+| `examples/adc --lookahead off` (one-cell grants) | 300 ms | 30 000 | 16.13 s | 18.60 s |
+| `examples/adc`, defaults (`make adc`: lookahead on) | 300 ms | 6 344 | **7.64 s** (2.1×) | 10.13 s |
+
+The ADC board gains least: the firmware converts every 999 µs and every
+change of ADC_IN by a whole millivolt stops a quiet grant, so while the RC
+node moves grants stay short (ADR-003 D6, "no gain while the analog side
+moves"). Per-run numbers are in `out/cost-table/*/results.tsv` after a run.
+`make perf` and `make lookahead-perf` are the speed gates of plan steps 3
+and 8; `make cost-table` only reports.
 
 The cost of a co-simulation is almost all fixed cost per grant (Renode's
-pause/resume per `RUN_FOR`), so the lever is fewer grants. Since ADR-003 the
+pause/resume per `RUN_FOR`, 0.4–0.5 ms per grant in the one-cell rows), so the lever
+is fewer grants. Since ADR-003 the
 grant length is a pure cap and changes no output: Renode reports every edge
 of a grant in a trace, its quantum (the lattice) stays 10 µs, and ngspice
 lands on every lattice point. The spike gives byte-identical `nets.csv`,
@@ -179,11 +195,7 @@ lands on every lattice point. The spike gives byte-identical `nets.csv`,
 grants (`make partition`). A board with a feedback loop (an analog net read
 back by the MCU, `examples/feedback`) runs in one-cell grants unless the MCU
 sleeps: CPU lookahead (ADR-003 Part B, on by default) lifts the cap while it
-does, with byte-identical outputs. The `--lookahead off` row is the median of
-5 interleaved runs (ADR-003 Amendment 4), the lookahead row the median of
-`make lookahead-perf` (ADR-003 Amendment 9), and the `examples/feedback-open` row
-is one run of `make feedback-open`. None of them is `make perf`. The full cost table
-is refreshed in ADR-003 plan step 10.
+does, with byte-identical outputs.
 
 **Edge times depend on the Renode quantum, not on the grant partition**
 (ADR-003 D2). Renode's quantum (`--renode-quantum`, default 10 µs) is a grid
