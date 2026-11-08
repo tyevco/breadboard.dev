@@ -1,0 +1,9 @@
+target/
+out/
+build/
+*.elf
+*.bin
+*.map
+.cache/
+.venv/
+__pycache__/
