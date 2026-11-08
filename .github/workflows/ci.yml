@@ -122,3 +122,9 @@ jobs:
       # off, byte for byte; on changes only grant records).
       - name: Lookahead plugin inert
         run: make lookahead-inert
+
+      # ADR-003 step 8: lookahead on (the default) at max_quantum 1 ms and
+      # 10 ms gives the one-cell reference byte for byte (non-grant records),
+      # for the WFI firmware (<= 200 grants) and a polling variant.
+      - name: Lookahead equivalence
+        run: make lookahead-equiv

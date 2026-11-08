@@ -7,7 +7,7 @@
 //!        --probe net:<NET> [--probe net:<NET> ...] --out <dir>
 //!        [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
 //!        [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
-//!        [--lookahead off|on]
+//!        [--lookahead on|off]
 //! ```
 //!
 //! Writes `<out>/events.jsonl`, `<out>/nets.csv` and `<out>/nets.vcd`, and
@@ -26,9 +26,10 @@
 //!
 //! A board with a feedback loop loads Renode's lookahead plugin
 //! (ADR-003 D5) whether `--lookahead` is on or off, so both runs have the
-//! same platform. With `--lookahead on` the kernel lifts the loop cap while
-//! the sleeping MCU promises to stay quiet (`quiet_until`); lookahead
-//! changes only the grant partition, never the results.
+//! same platform. Lookahead is on by default for such boards (ADR-003 plan
+//! step 8): the kernel lifts the loop cap while the sleeping MCU promises to
+//! stay quiet (`quiet_until`); lookahead changes only the grant partition,
+//! never the results. `--lookahead off` gives the one-cell reference.
 
 mod board;
 
@@ -55,7 +56,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
-              [--lookahead off|on]
+              [--lookahead on|off]
 
   --netlist    board file: SPICE body plus *bb directives (examples/spike/board.cir)
   --firmware     ELF loaded into the target MCU
@@ -69,7 +70,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  one Renode RUN_FOR, buffered edges and output latency, and
                  never changes results. It no longer sets Renode's quantum
                  (ADR-003 D2, D4). A board with a feedback loop runs in grants
-                 of one Renode quantum whatever this is
+                 of one Renode quantum, except where --lookahead lifts that
   --renode-quantum
                  Renode's global quantum, the grant lattice L (default 10us):
                  every grant boundary is a multiple of it, firmware timing,
@@ -91,12 +92,13 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  advance order comes from the bindings, so outputs are
                  identical either way (ADR-003 D3; a test knob)
   --lookahead    CPU lookahead for boards with a feedback loop (ADR-003 D5):
-                 off (default) or on. With on, grants grow past one Renode
-                 quantum while the MCU sleeps in WFI with nothing pending and
-                 promises to stay quiet until its next timer event; the
-                 promise is audited and a broken one fails the run. Changes
-                 only the grant records, never the results. Such boards load
-                 Renode's lookahead plugin in both modes
+                 on (the default whenever the lookahead plugin is loaded) or
+                 off. With on, grants grow past one Renode quantum while the
+                 MCU sleeps in WFI with nothing pending and promises to stay
+                 quiet until its next timer event; the promise is audited and
+                 a broken one fails the run. Changes only the grant records,
+                 never the results: off is the one-cell reference. Such
+                 boards load Renode's lookahead plugin in both modes
   --lookahead-plugin
                  auto (default: boards with a feedback loop), always or never.
                  The plugin is inert, so outputs are identical (a test knob)";
@@ -115,7 +117,9 @@ struct RunArgs {
     renode: Option<PathBuf>,
     verify: Verify,
     engine_order: EngineOrder,
-    lookahead: bool,
+    /// `--lookahead`; `None` = the default, on whenever the plugin is
+    /// loaded (ADR-003 plan step 8).
+    lookahead: Option<bool>,
     plugin: PluginMode,
 }
 
@@ -226,7 +230,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut renode = None;
     let mut verify = Verify::Edges;
     let mut engine_order = EngineOrder::McuFirst;
-    let mut lookahead = false;
+    let mut lookahead = None;
     let mut plugin = PluginMode::Auto;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -277,7 +281,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
                     .map_err(|e| format!("--engine-order: {e}"))?
             }
             "--lookahead" => {
-                lookahead = parse_on_off(&val(a)?).map_err(|e| format!("--lookahead: {e}"))?
+                lookahead = Some(parse_on_off(&val(a)?).map_err(|e| format!("--lookahead: {e}"))?)
             }
             "--lookahead-plugin" => {
                 plugin = val(a)?
@@ -307,7 +311,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     if probes.is_empty() {
         return Err("at least one --probe is required".into());
     }
-    if lookahead && plugin == PluginMode::Never {
+    if lookahead == Some(true) && plugin == PluginMode::Never {
         return Err("--lookahead on needs the lookahead plugin (--lookahead-plugin never)".into());
     }
     Ok(RunArgs {
@@ -397,9 +401,13 @@ fn run(a: RunArgs) -> Result<(), String> {
         PluginMode::Always => true,
         PluginMode::Never => false,
     };
+    // ADR-003 plan step 8: lookahead is on by default wherever the plugin
+    // is loaded (boards with a feedback loop); `--lookahead off` gives the
+    // one-cell reference. Without the plugin there is no promise to give.
+    let lookahead = a.lookahead.unwrap_or(plugin);
     rcfg.lookahead = LookaheadCfg {
         plugin,
-        enabled: a.lookahead && plugin,
+        enabled: lookahead && plugin,
         ..LookaheadCfg::default()
     };
 
@@ -453,11 +461,14 @@ fn run(a: RunArgs) -> Result<(), String> {
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: a.max_quantum,
         loop_quantum: None, // one Renode quantum (ADR-003 D4)
-        lookahead: a.lookahead,
+        lookahead,
         log_grants: true,
         event_sampling: None,
     })
     .map_err(|e| e.to_string())?;
+    // Per-grant plans, for the lookahead line of the run summary only
+    // (diagnostics; they never reach the output files).
+    sched.record_plans(lookahead);
     // Registration order only breaks ties (plan order, record order); the
     // advance order comes from the bindings (ADR-003 D3).
     let (cpu_id, an_id) = match a.engine_order {
@@ -566,6 +577,12 @@ fn run(a: RunArgs) -> Result<(), String> {
         }
         None => String::new(),
     };
+    // Lookahead diagnostics (ADR-003 D5): grants with a Query and quiet
+    // grants. Every quiet grant was audited; a broken promise would have
+    // failed the run with PromiseBroken above.
+    let plans = sched.plan_log();
+    let queries = plans.iter().filter(|p| !p.queried.is_empty()).count();
+    let quiet = plans.iter().filter(|p| !p.quiet.is_empty()).count();
     drop(sched); // stops Renode and releases ngspice
     let total_s = wall.elapsed().as_secs_f64();
 
@@ -578,9 +595,16 @@ fn run(a: RunArgs) -> Result<(), String> {
         summary.grants,
         a.max_quantum,
         a.renode_quantum,
-        if a.lookahead { "on" } else { "off" },
+        if lookahead { "on" } else { "off" },
         if plugin { ", plugin loaded" } else { "" }
     );
+    if lookahead {
+        let _ = writeln!(
+            so,
+            "bb run: lookahead: {queries} grants with a Query, {quiet} quiet grants, \
+             0 promises broken"
+        );
+    }
     let _ = writeln!(
         so,
         "bb run: wall time {total_s:.2} s total ({startup_s:.2} s engine startup, {run_s:.2} s simulation); outputs in {}",
@@ -675,14 +699,24 @@ mod tests {
         );
         o.extend(["--engine-order".into(), "random".into()]);
         assert!(parse_args(&o).is_err());
-        assert!(!a.lookahead && a.plugin == PluginMode::Auto);
+        // Default: on wherever the plugin is loaded (decided in run()).
+        assert!(a.lookahead.is_none() && a.plugin == PluginMode::Auto);
         let mut la = v.clone();
         la.extend(["--lookahead".into(), "on".into()]);
-        assert!(parse_args(&la).unwrap().lookahead);
+        assert_eq!(parse_args(&la).unwrap().lookahead, Some(true));
         la.extend(["--lookahead-plugin".into(), "always".into()]);
         assert_eq!(parse_args(&la).unwrap().plugin, PluginMode::Always);
         la.extend(["--lookahead-plugin".into(), "never".into()]);
         assert!(parse_args(&la).is_err(), "on without the plugin");
+        let mut lo = v.clone();
+        lo.extend(["--lookahead".into(), "off".into()]);
+        assert_eq!(parse_args(&lo).unwrap().lookahead, Some(false));
+        let mut ln = v.clone();
+        ln.extend(["--lookahead-plugin".into(), "never".into()]);
+        assert!(
+            parse_args(&ln).unwrap().lookahead.is_none(),
+            "default without the plugin"
+        );
         let mut lb = v.clone();
         lb.extend(["--lookahead".into(), "maybe".into()]);
         assert!(parse_args(&lb).is_err());

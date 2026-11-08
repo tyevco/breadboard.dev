@@ -9,7 +9,8 @@ CARGO ?= cargo
 .PHONY: setup doctor build test cargo-test fmt fmt-check clippy check firmware \
         bb spike spike-verify-every lattice-check partition perf determinism golden \
         golden-update feedback-run feedback feedback-order feedback-determinism \
-        feedback-open feedback-open-ref lookahead-inert lookahead-startup
+        feedback-open feedback-open-ref lookahead-inert lookahead-startup \
+        feedback-ref lookahead-equiv lookahead-perf
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -28,9 +29,14 @@ PYTHON      ?= python3
 FEEDBACK_ELF  := examples/feedback/firmware/build/feedback.elf
 FEEDBACK_FOR  ?= 500ms
 FEEDBACK_OUT  ?= out/feedback
-FEEDBACK_ARGS  = --netlist examples/feedback/board.cir --firmware $(FEEDBACK_ELF) \
+# The feedback board without its firmware: plan step 8 runs it with the
+# EXTI/WFI firmware and with the polling variant (feedback_poll.elf).
+FEEDBACK_BOARD_ARGS = --netlist examples/feedback/board.cir \
                  --target U1 --for $(FEEDBACK_FOR) --probe net:SENSE --probe net:LED_B \
                  --probe net:U1.PA5 --probe net:U1.PB0 --probe net:U1.PA6
+FEEDBACK_ARGS  = --firmware $(FEEDBACK_ELF) $(FEEDBACK_BOARD_ARGS)
+FEEDBACK_POLL_ELF  := examples/feedback/firmware/build/feedback_poll.elf
+FEEDBACK_POLL_ARGS  = --firmware $(FEEDBACK_POLL_ELF) $(FEEDBACK_BOARD_ARGS)
 FEEDBACK_GOLDEN := tests/golden/feedback
 FEEDBACK_HASHES := $(FEEDBACK_GOLDEN)/outputs.sha256
 FEEDBACK_OPEN_ARGS = --netlist examples/feedback-open/board.cir --firmware $(FEEDBACK_ELF) \
@@ -138,8 +144,10 @@ golden:
 
 # Regenerate the snapshots from fresh, checked runs (review the diff!): the
 # spike waveform and partition hashes, the feedback waveforms and edge list,
-# and the feedback-open partition hashes (from its one-cell reference).
-golden-update: spike feedback-run feedback-open-ref
+# the hashes of the feedback boards' one-cell references (`--lookahead off`,
+# EXTI and polling firmware), and the feedback-open partition hashes (from
+# its one-cell reference).
+golden-update: spike feedback-run feedback-ref feedback-open-ref
 	mkdir -p $(dir $(GOLDEN))
 	$(PYTHON) scripts/golden.py write $(SPIKE_OUT)/nets.csv $(GOLDEN)
 	cd $(SPIKE_OUT) && grep -v '"type":"grant"' events.jsonl > non-grant-records \
@@ -149,27 +157,41 @@ golden-update: spike feedback-run feedback-open-ref
 	$(PYTHON) scripts/golden.py write $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/sense.csv --net SENSE
 	$(PYTHON) scripts/golden.py write $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/led_b.csv --net LED_B
 	grep '"type":"pin_edge"' $(FEEDBACK_OUT)/events.jsonl > $(FEEDBACK_GOLDEN)/pin_edges.jsonl
-	cd $(FEEDBACK_OUT) && sha256sum nets.csv events.jsonl nets.vcd > $(CURDIR)/$(FEEDBACK_HASHES)
+	cd $(FEEDBACK_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(FEEDBACK_HASHES) \
+	    && rm non-grant-records
 	cd $(FEEDBACK_OPEN_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv nets.vcd non-grant-records > $(CURDIR)/$(FEEDBACK_OPEN_HASHES) \
 	    && rm non-grant-records
 
 # ADR-003 step 4: examples/feedback, a board with a feedback loop (U1.PA5 ->
 # RC -> U1.PB0 digital_in; the EXTI0 ISR copies PB0 to PA6 -> LED). The loop
-# caps every grant at one Renode quantum. check_feedback.py: PB0 transitions
-# at the analytic RC crossings (in their lattice cells), PA6 edges in
-# (ceil_L(t_x), ceil_L(t_x) + L], LED_B plateaus.
+# caps a grant at one Renode quantum unless the sleeping MCU promises to stay
+# quiet: since step 8, lookahead is on by default for such boards (ADR-003
+# D5). check_feedback.py: PB0 transitions at the analytic RC crossings (in
+# their lattice cells), PA6 edges in (ceil_L(t_x), ceil_L(t_x) + L], LED_B
+# plateaus.
 feedback-run: firmware bb
 	$(BB) run $(FEEDBACK_ARGS) --out $(FEEDBACK_OUT)
 	$(PYTHON) scripts/check_feedback.py $(FEEDBACK_OUT)
 
 # ... plus the golden snapshot: SENSE and LED_B within 1 mV / 1 sample and
-# the exact pin_edge list.
+# the exact pin_edge list; and (step 8) nets.csv, nets.vcd and the non-grant
+# records byte-identical to the committed one-cell reference
+# ($(FEEDBACK_HASHES), `--lookahead off`): lookahead changes only grants.
 feedback: feedback-run
 	$(PYTHON) scripts/golden.py check $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/sense.csv --net SENSE
 	$(PYTHON) scripts/golden.py check $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/led_b.csv --net LED_B
 	diff <(grep '"type":"pin_edge"' $(FEEDBACK_OUT)/events.jsonl) $(FEEDBACK_GOLDEN)/pin_edges.jsonl
+	cd $(FEEDBACK_OUT) && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && grep -v ' events.jsonl$$' $(CURDIR)/$(FEEDBACK_HASHES) | sha256sum -c
 	@echo "feedback: golden snapshot PASS"
+
+# The one-cell reference of examples/feedback (`--lookahead off`): its
+# hashes are $(FEEDBACK_HASHES) (make golden-update).
+feedback-ref: firmware bb
+	$(BB) run $(FEEDBACK_ARGS) --lookahead off --out $(FEEDBACK_OUT)-ref
+	$(PYTHON) scripts/check_feedback.py $(FEEDBACK_OUT)-ref
 
 # Swapping the registration order (analog engine first) must give
 # byte-identical outputs: the advance order comes from the bindings (ADR-003
@@ -197,10 +219,11 @@ feedback-open: firmware bb
 	@echo "feedback-open: PASS (partition gate; registration order swapped: identical)"
 
 # ADR-003 step 5: Renode's lookahead plugin is inert. examples/feedback
-# without the plugin (--lookahead-plugin never) must give the committed
-# hashes ($(FEEDBACK_HASHES)); with the plugin loaded and armed (the
-# default for a feedback loop) and --lookahead off it must be byte-identical;
-# with --lookahead on only the grant records may differ. CI job `feedback`.
+# without the plugin (--lookahead-plugin never, so lookahead off) must give
+# the committed hashes ($(FEEDBACK_HASHES)); with the plugin loaded and armed
+# (the default for a feedback loop) and --lookahead off it must be
+# byte-identical; with lookahead on (the default since step 8) only the
+# grant records may differ. CI job `feedback`.
 LOOKAHEAD_INERT_OUT ?= out/lookahead-inert
 lookahead-inert: firmware bb
 	bash scripts/lookahead_inert.sh $(BB) $(LOOKAHEAD_INERT_OUT) $(FEEDBACK_HASHES) -- $(FEEDBACK_ARGS)
@@ -208,6 +231,37 @@ lookahead-inert: firmware bb
 	cd $(LOOKAHEAD_INERT_OUT)/spike && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum -c $(CURDIR)/$(PARTITION_HASHES)
 	@echo "lookahead-inert: the spike with the plugin loaded gives the committed partition hashes"
+
+# ADR-003 step 8 equivalence gate: examples/feedback with lookahead on at
+# max_quantum 1 ms and 10 ms must give its one-cell reference (--lookahead
+# off, the committed $(FEEDBACK_HASHES)) byte for byte in nets.csv, nets.vcd
+# and every non-grant record, with no broken promise and (10 ms) at most
+# LOOKAHEAD_MAX_GRANTS grants per 500 ms; the same for the polling-firmware
+# variant (feedback_poll.elf), whose one-cell outputs are those of the EXTI
+# firmware byte for byte (both copy PB0 to PA6 in the slice that opens at
+# ceil_L(t_x)), so it is held to the same hashes. CI job `feedback`.
+LOOKAHEAD_EQUIV_OUT  ?= out/lookahead-equiv
+LOOKAHEAD_MAX_GRANTS ?= 200
+lookahead-equiv: firmware bb
+	bash scripts/lookahead_equiv.sh $(BB) $(LOOKAHEAD_EQUIV_OUT) $(LOOKAHEAD_MAX_GRANTS) \
+	    feedback=$(FEEDBACK_ELF):$(FEEDBACK_HASHES) poll=$(FEEDBACK_POLL_ELF):$(FEEDBACK_HASHES) \
+	    -- $(FEEDBACK_BOARD_ARGS)
+
+# ADR-003 step 8 performance gates (measurement protocol: interleaved A/B,
+# PERF_N runs each, medians, startup separate, CPU time and load recorded):
+#  1. examples/feedback, lookahead on (bb's defaults) against step 4 (one-cell
+#     lockstep, no plugin): every run <= LOOKAHEAD_MAX_GRANTS grants and
+#     >= 10x less simulation time;
+#  2. the polling firmware, lookahead on against --lookahead off: at most
+#     10 % more simulation time (the Query back-off, D5.5).
+# Both also require identical outputs except grant records. Wall-clock: run
+# it on an otherwise idle host; not in CI (like `make perf`).
+LOOKAHEAD_PERF_OUT ?= out/lookahead-perf
+lookahead-perf: firmware bb
+	bash scripts/perf_ab.sh $(BB) $(LOOKAHEAD_PERF_OUT)/feedback $(PERF_N) \
+	    "--lookahead off --lookahead-plugin never" "" $(LOOKAHEAD_MAX_GRANTS) 10 - -- $(FEEDBACK_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(LOOKAHEAD_PERF_OUT)/poll $(PERF_N) \
+	    "--lookahead off" "" - - 1.10 -- $(FEEDBACK_POLL_ARGS)
 
 # ADR-003 step 5 startup-cost gate: with the cached plugin, Renode engine
 # startup is within 0.3 s of a start without it (interleaved, N =

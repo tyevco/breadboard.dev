@@ -65,13 +65,16 @@ The run writes these files to `out/spike/`:
 4. `make golden`: LED_A from the spike run is diffed against
    `tests/golden/spike/led_a.csv` (a 10 kHz snapshot) within 1 mV / 1 sample.
 5. `make feedback`: 500 ms of `examples/feedback`, a board with a feedback
-   loop (below), then `scripts/check_feedback.py` and the golden snapshot
-   `tests/golden/feedback/`.
+   loop (below), then `scripts/check_feedback.py`, the golden snapshot
+   `tests/golden/feedback/` and the one-cell reference hashes (lookahead
+   changes only `grant` records).
 6. `make feedback-order`: the same run with the engines registered in the
    other order must be byte-identical.
 
-`make feedback-determinism` (10 runs) and `make feedback-open` (the partition
-gate of the open-loop variant) run in their own CI job.
+`make feedback-determinism` (10 runs), `make feedback-open` (the partition
+gate of the open-loop variant), `make lookahead-inert` and
+`make lookahead-equiv` (the lookahead equivalence gate) run in their own CI
+job.
 
 ## Feedback example
 
@@ -91,10 +94,16 @@ interpolated between solver points, as a PB0 edge. PB0 rises 0.954859 ms
 after each PA5 rise, in the 10 µs cell 50.95–50.96 ms, and falls 1.452500 ms
 after each fall, in 101.45–101.46 ms. Renode sees the change at the end of
 that cell, `ceil_L(t_x)`, and PA6 follows 1 fs later. The loop
-U1 → ngspice → U1 keeps every grant at one Renode quantum (10 µs), so this
-board is correct but slow until ADR-003 Part B. Opening the loop
-(`examples/feedback-open`, SENSE driven by a circuit source) gives long
-grants again with byte-identical outputs.
+U1 → ngspice → U1 caps a grant at one Renode quantum (10 µs), except while
+the MCU sleeps: with CPU lookahead (ADR-003 Part B, on by default since plan
+step 8) the sleeping MCU promises to stay quiet until its next timer event,
+ngspice runs first and stops early at the lattice point after a PB0
+crossing, and the run takes 117 grants instead of 50 000 with byte-identical
+`nets.csv`, `nets.vcd` and non-grant records (`make lookahead-equiv`;
+`--lookahead off` gives the one-cell reference). Firmware that never sleeps
+(the polling variant `feedback_poll.elf`) gets no promise and stays in
+one-cell grants. Opening the loop (`examples/feedback-open`, SENSE driven by
+a circuit source) gives long grants with byte-identical outputs too.
 
 ## Result
 
@@ -131,7 +140,8 @@ average 3–12 from other work on the host).
 | --- | --- | --- | --- |
 | `--max-quantum 10us` (the Phase 0 setting: one-cell lockstep) | 50 000 | 45.9 s | 54.0 s |
 | default `--max-quantum 10ms` (`make spike`) | 50 | **1.42 s** (32×) | 9.2 s, mostly 4.9 s of engine startup |
-| `examples/feedback` (a feedback loop: one-cell grants whatever `--max-quantum` is) | 50 000 | 31.8 s (0.64 ms per grant) | 36.0 s |
+| `examples/feedback --lookahead off` (a feedback loop in one-cell grants whatever `--max-quantum` is) | 50 000 | 31.8 s (0.64 ms per grant) | 36.0 s |
+| `examples/feedback` with the default CPU lookahead (`make feedback`) | 117 | **1.20 s** (26× the one-cell run) | 4.2 s |
 | `examples/feedback-open` (the loop opened), default 10 ms grants | 50 | 2.1 s | 7.4 s |
 
 The cost of a co-simulation is almost all fixed cost per grant (Renode's
@@ -141,10 +151,12 @@ of a grant in a trace, its quantum (the lattice) stays 10 µs, and ngspice
 lands on every lattice point. The spike gives byte-identical `nets.csv`,
 `nets.vcd` and `pin_edge` records at 10 µs, 100 µs, 10 ms, 50 ms and 500 ms
 grants (`make partition`). A board with a feedback loop (an analog net read
-back by the MCU, `examples/feedback`) runs in one-cell grants; ADR-003 Part B
-lifts that while the MCU sleeps. The `examples/feedback` row is the median of
-5 interleaved runs (ADR-003 Amendment 4), and the `examples/feedback-open` row
-is one run of `make feedback-open`. Neither is `make perf`. The full cost table
+back by the MCU, `examples/feedback`) runs in one-cell grants unless the MCU
+sleeps: CPU lookahead (ADR-003 Part B, on by default) lifts the cap while it
+does, with byte-identical outputs. The `--lookahead off` row is the median of
+5 interleaved runs (ADR-003 Amendment 4), the lookahead row the median of
+`make lookahead-perf` (ADR-003 Amendment 9), and the `examples/feedback-open` row
+is one run of `make feedback-open`. None of them is `make perf`. The full cost table
 is refreshed in ADR-003 plan step 10.
 
 **Edge times depend on the Renode quantum, not on the grant partition**

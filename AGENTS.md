@@ -23,13 +23,15 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make perf` | ADR-003 performance gate with the measurement protocol: interleaved 10 µs vs 10 ms grant runs, N = 5 (`PERF_N`), medians; 10 ms must take exactly 50 grants, ≤ 2 s simulation and be ≥ 15× faster (`scripts/perf.sh`). Run it on an otherwise idle host |
 | `make determinism` | 10 spike runs (`DET_RUNS`, `DET_JOBS` in parallel); sha256 of `nets.csv`, `events.jsonl`, `nets.vcd` must match |
 | `make golden` | Diff `out/spike` LED_A against `tests/golden/spike/led_a.csv` (1 mV / 1 sample) |
-| `make feedback` | ADR-003 step 4: `examples/feedback` (U1.PA5 → RC → U1.PB0 `digital_in`; the EXTI0 ISR copies PB0 to PA6 → LED_B), 500 ms in one-cell grants (a feedback loop). `scripts/check_feedback.py`: PB0 transitions at the analytic RC crossings in their lattice cells, PA6 edges in `(ceil_L(t_x), ceil_L(t_x) + L]`, LED_B plateaus; then the golden snapshot `tests/golden/feedback/` (SENSE, LED_B within 1 mV / 1 sample, exact `pin_edge` list). `make feedback-run` skips the golden |
+| `make feedback` | ADR-003 step 4: `examples/feedback` (U1.PA5 → RC → U1.PB0 `digital_in`; the EXTI0 ISR copies PB0 to PA6 → LED_B), 500 ms with CPU lookahead on (the default since ADR-003 step 8: 117 grants; with `--lookahead off` a feedback loop runs 50 000 one-cell grants). `scripts/check_feedback.py`: PB0 transitions at the analytic RC crossings in their lattice cells, PA6 edges in `(ceil_L(t_x), ceil_L(t_x) + L]`, LED_B plateaus; then the golden snapshot `tests/golden/feedback/` (SENSE, LED_B within 1 mV / 1 sample, exact `pin_edge` list) and `nets.csv`, `nets.vcd` and the non-grant records byte-identical to the one-cell reference hashes `tests/golden/feedback/outputs.sha256`. `make feedback-run` skips the golden; `make feedback-ref` is the `--lookahead off` reference run |
 | `make feedback-order` | The feedback run with the engines registered in the other order (`bb run --engine-order analog-first`) must be byte-identical (ADR-003 D3) |
 | `make feedback-determinism` | 10 runs of `examples/feedback`, byte-identical (CI job `feedback`) |
 | `make feedback-open` | The acyclic variant `examples/feedback-open` (ngspice → U1 only, long grants) at `--max-quantum` 10 µs … 500 ms must give the committed one-cell hashes (`tests/golden/feedback-open/partition.sha256`), pass `check_feedback.py --open` and not depend on the registration order (CI job `feedback`) |
-| `make lookahead-inert` | ADR-003 step 5: Renode's lookahead plugin is inert. `examples/feedback` without the plugin (`--lookahead-plugin never`) must give the committed hashes (`tests/golden/feedback/outputs.sha256`), with the plugin armed and `--lookahead off` byte-identical, with `--lookahead on` identical except `grant` records; the spike with the plugin forced on must give its partition hashes (CI job `feedback`) |
+| `make lookahead-inert` | ADR-003 step 5: Renode's lookahead plugin is inert. `examples/feedback` without the plugin (`--lookahead-plugin never`, so lookahead off) must give the committed hashes (`tests/golden/feedback/outputs.sha256`), with the plugin armed and `--lookahead off` byte-identical, with lookahead on (the default) identical except `grant` records; the spike with the plugin forced on must give its partition hashes (CI job `feedback`) |
+| `make lookahead-equiv` | ADR-003 step 8 equivalence gate: `examples/feedback` and its polling-firmware variant (`feedback_poll.elf`) with lookahead on at `--max-quantum` 1 ms and 10 ms must give the one-cell `--lookahead off` reference (the committed `tests/golden/feedback/outputs.sha256`) byte for byte in `nets.csv`, `nets.vcd` and every non-grant record, with no broken promise and at most 200 grants per 500 ms at 10 ms (`scripts/lookahead_equiv.sh`; CI job `feedback`) |
+| `make lookahead-perf` | ADR-003 step 8 performance gates with the measurement protocol (`scripts/perf_ab.sh`, interleaved, N = `PERF_N`, medians): `examples/feedback` with lookahead on vs step 4 (one-cell, no plugin) at most 200 grants and >= 10x less simulation time; the polling firmware with lookahead on vs off at most 10 % slower. Run it on an otherwise idle host |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
-| `make golden-update` | Regenerate the golden snapshots and the partition hashes (spike, feedback, feedback-open) from fresh, checked runs. Review the diff before committing it |
+| `make golden-update` | Regenerate the golden snapshots and the partition hashes (spike, feedback, feedback-open) and the feedback one-cell reference hashes from fresh, checked runs. Review the diff before committing it |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
@@ -46,15 +48,16 @@ engines/cpu-renode/     Renode engine over the External Control API; platforms/b
                         (the lookahead plugin, ADR-003 D5); tests/firmware (its gate firmware)
 cli/                    `bb` binary (`bb run`, board-file parser)
 examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings)
-examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware
+examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware and a polling variant
 examples/feedback-open/ the same with the loop opened (acyclic, long grants)
 tests/golden/spike/     led_a.csv waveform snapshot, partition hashes
-tests/golden/feedback/  SENSE / LED_B snapshots, exact pin_edge list
+tests/golden/feedback/  SENSE / LED_B snapshots, exact pin_edge list, one-cell reference hashes
 tests/golden/feedback-open/ partition hashes of the one-cell reference
 spec/                   normative protocol and schema docs; changing them needs an ADR
 docs/adr/               architecture decision records
 scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh,
-                        partition.sh, perf.sh, check_resample.py, check_feedback.py
+                        partition.sh, perf.sh, perf_ab.sh, check_resample.py, check_feedback.py,
+                        lookahead_inert.sh, lookahead_equiv.sh
 ```
 
 ## The three invariants

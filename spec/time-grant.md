@@ -11,7 +11,8 @@ Amendment 3); `digital_in` thresholding, which produces the analog → digital
 traces of example 3, is ADR-003 D3 (plan step 4, Amendment 4); CPU
 lookahead (`quiet_until`), the per-grant plan, the early stop
 (`advance_until`), the promise audit and the query back-off are ADR-003 D5
-(kernel side: plan step 6, Amendment 6).
+(kernel side: plan step 6, Amendment 6); lookahead on by default and
+the Part B half of example 3 are ADR-003 plan step 8 (Amendment 9).
 Implementation: `bbcore::Scheduler`. Changing this file requires an ADR (see
 `AGENTS.md`).
 
@@ -80,6 +81,11 @@ touch an engine adapter.
   promise; a promise is *useful* when `floor_L(quiet_until) > now`. Asked
   only with lookahead on, in Query, before any input of the grant is
   delivered; a pure read.
+- **lookahead:** a scheduler setting, on by default (`SchedulerConfig`,
+  and `bb` on every board that loads Renode's lookahead plugin, i.e. every
+  board with a feedback loop). Off, every grant of a cyclic graph is
+  capped at `loop_quantum`: the one-cell reference. On or off gives the
+  same outputs; only `grant` records differ.
 - **lookahead candidates:** the engines in a feedback loop (a component of
   more than one engine, or reading a net they drive) for which a quiet grant
   with `Q = {c}` passes the structural checks below. Only candidates are
@@ -235,7 +241,7 @@ the boundary (Exchange step 2), which `loop_quantum` (one cell by default)
 makes harmless: a lattice-bound consumer would apply them at `ceil_L(t) = g`
 in any order (ADR-003 D3).
 
-## Quiet grants (ADR-003 D5; `lookahead` on)
+## Quiet grants (ADR-003 D5; `lookahead` on, the default)
 
 Only while the binding graph is cyclic and the loop cap binds, i.e.
 `floor_L(g') > now + loop_quantum` for `g'` the Grant-row minimum without
@@ -388,13 +394,14 @@ A grant may hold any number of edges per pin: with `max_quantum` = 500 ms
 the whole run is one grant whose trace holds all ten PA5 edges, with the same
 outputs.
 
-## Sequence example 3: a feedback loop (one-cell lockstep)
+## Sequence example 3: a feedback loop (one-cell lockstep, then quiet grants)
 
 U1 PA5 drives an RC; the RC node drives U1.PB0 back (`digital_in`, ADR-003
 "Feedback-path correctness"). The binding graph has the cycle U1 → ngspice →
-U1, so the plan order is [U1, ngspice] (lattice-bound first) and every grant
-is capped at `loop_quantum` = `L` = 10 µs, whatever `max_quantum` is. This is
-`examples/feedback` (`make feedback`); the times below are its measured
+U1, so the plan order is [U1, ngspice] (lattice-bound first) and, with
+lookahead off, every grant is capped at `loop_quantum` = `L` = 10 µs,
+whatever `max_quantum` is. This is `examples/feedback` (`make feedback-ref`,
+the one-cell reference); the times below are its measured
 `pin_edge` records. ngspice thresholds SENSE with the `digital_in` hysteresis
 at every accepted solver point and reports each level change in its trace,
 at the crossing interpolated between the two straddling points
@@ -415,6 +422,38 @@ Grant (50.96, 50.97]
 
 The MCU sees the crossing at `ceil_L(t_x)`: never early, and at most one cell
 late, exactly as in any one-cell run.
+
+With lookahead on (the default, `make feedback`), U1 is the one lookahead
+candidate (ngspice's producer U1 cannot stop early, so ngspice is not
+one). While the firmware sleeps in `wfi` with nothing pending, U1 promises
+to stay quiet until its next SysTick, and ngspice, the only producer
+feeding it, runs first with an early stop on U1.PB0. These are the
+measured `grant` records of the default run (500 ms in 117 grants instead
+of 50 000; every other record, `nets.csv` and `nets.vcd` are those of the
+one-cell run byte for byte):
+
+```
+Query @50.02      U1 in WFI, nothing pending -> quiet_until just below 100 ms
+                  (its next SysTick limit; floor_L gives 99.99 ms)
+                  G = floor_L(min(..., 50.02 + 10 ms)) = 60.02 ms; Q = {U1}
+Grant (50.02, 50.96] limited_by=stop:ngspice
+  ng  advance_until(60.02, watch {U1.PB0}): SENSE crosses vih at
+      t_x = 50.954859.. ms -> stops at r = ceil_L(t_x) = 50.96 ms
+  U1  pre-advance: PB0 High @ t_x; advance_to(50.96) -> SET_STATE PB0=1 at
+      50.96 ms (the lattice point a one-cell run uses); audit: no output, no wake
+Query @50.96      EXTI0 pending -> no promise -> one cell in plan order [U1, ng]
+Grant (50.96, 50.97] limited_by=loop_quantum
+  U1  the EXTI0 ISR: trace [PA6 High @ 50.96 ms + 1 fs], as in the one-cell run
+...               (the back-off skips the next two Queries)
+Grant (50.99, 60.99]  limited_by=max_quantum      quiet; ng stops nowhere
+...               (three more)
+Grant (90.99, 99.99]  limited_by=engine:U1        the promise, floored to L
+Grant (99.99, 100.00] limited_by=loop_quantum     SysTick fires at sync 100 ms
+Grant (100.00, 100.01]                            PA5 Low @ 100 ms + 1 fs
+...
+Grant (100.02, 101.46] limited_by=stop:ngspice    SENSE falls through vil at
+                                                  101.452500.. ms
+```
 
 Opening the loop (`examples/feedback-open`: SENSE driven by a circuit source,
 PA6 not loaded) leaves only ngspice → U1. The plan is [ngspice, U1] and grants

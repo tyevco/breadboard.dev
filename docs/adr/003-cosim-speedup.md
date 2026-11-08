@@ -1812,3 +1812,134 @@ is unchanged.
   therefore built and checked with a private
   `CARGO_TARGET_DIR=~/.cache/bb-target-s5`. AGENTS.md now says to use one
   target directory per checkout.
+
+### Amendment 9: step 8 (lookahead on for cyclic boards) as implemented (2026-11-08)
+
+**Status:** Accepted with step 8. `spec/time-grant.md` is updated in the
+same change: the header cites this amendment; a new definition,
+**lookahead**, says it is on by default; the "Quiet grants" heading says
+so; and sequence example 3 gains its Part B half, with the measured
+`grant` records of the default run (the ADR's spec diff list asks for
+"Part A and Part B" there). `spec/event-stream.md` and
+`spec/pin-model.md` do not change. The spike and `examples/feedback-open`
+are acyclic, so the kernel never asks for a promise there and every hash
+of theirs is unchanged. On `examples/feedback` the default run's
+`events.jsonl` now differs from the one-cell run in `grant` records only
+(approver decision 5); `nets.csv` and `nets.vcd` are unchanged.
+
+- **What landed.**
+  - **`bb run`:** `--lookahead` defaults to `on` wherever Renode's
+    lookahead plugin is loaded, which by default means every board with
+    a feedback loop. `--lookahead off` gives the one-cell reference.
+    `--lookahead-plugin never` without an explicit `--lookahead` now
+    means off, because there is no promise to give; `--lookahead on`
+    together with `never` is still rejected. With lookahead on, the run
+    summary prints one more line: "N grants with a Query, M quiet
+    grants, 0 promises broken". It is built from
+    `Scheduler::record_plans` / `plan_log` and goes only to stdout. A
+    broken promise fails the run (`PromiseBroken`) before that line is
+    printed.
+  - **`SchedulerConfig::default().lookahead` is now `true`.** The "Exact
+    changes" sketch says "default false until step 8". It matters only
+    in a cyclic graph with a candidate that promises: an engine without
+    `quiet_until` never promises, so its Queries return no promise and
+    the back-off thins them out. The `SchedulerConfig` struct literals
+    in the tests set the field explicitly and do not change.
+  - **Firmware:** `examples/feedback/firmware/feedback_poll.c`
+    (`build/feedback_poll.elf`), the polling variant. The board and pins
+    are the same. SysTick toggles PA5 every 50 ms. The main loop
+    busy-polls PB0 and copies each change to PA6, with no EXTI and no
+    `wfi`. `feedback.elf` is unchanged.
+  - **Make targets:**
+    - `feedback-ref`: the `--lookahead off` run.
+    - `feedback`: now runs with lookahead on. On top of the golden
+      checks it requires that `nets.csv`, `nets.vcd` and the non-grant
+      records match the committed one-cell hashes byte for byte. This is
+      in `make test`.
+    - `lookahead-equiv`: the equivalence gate, added to CI job
+      `feedback`.
+    - `lookahead-perf`: the speed gates. Not in CI, like `make perf`.
+    - `golden-update` now takes `tests/golden/feedback/outputs.sha256`
+      from `feedback-ref`. The file is still the one-cell reference and
+      gains a `non-grant-records` line (09d862d0…). Its three existing
+      hashes, 1f610526…, c4855b92… and 7ad78d8c…, are unchanged.
+    - `lookahead-inert` now names its modes explicitly: `never`, `off`
+      (`--lookahead off`) and `on` (the default).
+  - **Scripts:** `scripts/lookahead_equiv.sh` and `scripts/perf_ab.sh`,
+    an A/B variant of `perf.sh` in which the two cases differ by bb
+    flags rather than by `--max-quantum`.
+- **How the gates were read.**
+  1. **"≤ 200 grants per 500 ms" applies at `bb`'s default
+     `max_quantum`, 10 ms.** `max_quantum` is a pure cap, so a 500 ms run
+     at 1 ms cannot take fewer than 500 grants (measured: 562). The 1 ms
+     run is held to equivalence and to no broken promise.
+  2. **"0 promise violations".** A broken promise, whether an output
+     before `quiet_until` or a wake, is a run failure, `PromiseBroken`
+     (invariant 8; Amendments 6 and 8). So every gate run that exits 0
+     has none. Every quiet grant was audited, and the summary line
+     counts them.
+  3. **"vs the one-cell `--lookahead off` reference".** The reference
+     runs on the default platform, with the plugin loaded and armed.
+     `lookahead-equiv` checks it against all four committed hashes,
+     including `events.jsonl`, so it is the step 4 run byte for byte.
+     Step 5's `lookahead-inert` shows that plugin-armed-and-off equals
+     no plugin at all.
+  4. **"≥ 10× sim time vs step 4".** A is step 4's configuration,
+     `--lookahead off --lookahead-plugin never` (one cell, no plugin).
+     B is `bb`'s defaults.
+  5. **"polling-firmware variant is equivalent and ≤ 10 % slower than
+     off".** A is `--lookahead off`, the same platform, and B is the
+     default. The bound is median B simulation time ≤ 1.10 × median A.
+     The polling firmware's one-cell outputs equal the EXTI firmware's
+     byte for byte: both copy PB0 to PA6 in the slice that opens at
+     `ceil_L(t_x)`, which is stamped `ceil_L(t_x) + 1 fs`. So both are
+     held to the same committed hashes, and no second hash file is
+     needed.
+- **Gates (measured).**
+  - **Equivalence** (`make lookahead-equiv`; six runs in parallel, load
+    average 3–5). Every run matches its one-cell reference in
+    `nets.csv`, `nets.vcd` and every non-grant record, and every
+    reference matches the committed hashes and passes
+    `check_feedback.py`.
+
+    | Run | Grants | `limited_by` | Queries / quiet grants |
+    | --- | --- | --- | --- |
+    | feedback, `--lookahead off` (reference) | 50 000 | 49 999 `loop_quantum`, 1 `engine:ngspice` | – |
+    | feedback, on, `max_quantum` 1 ms | 562 | 490 `max_quantum`, 57 `loop_quantum`, 9 `stop:ngspice`, 5 `engine:U1`, 1 `engine:ngspice` | 523 / 504 |
+    | feedback, on, 10 ms (default) | **117** | 40 `max_quantum`, 57 `loop_quantum`, 10 `engine:U1`, 9 `stop:ngspice`, 1 `engine:ngspice` | 78 / 59 |
+    | poll, `--lookahead off` (reference) | 50 000 | as feedback off | – |
+    | poll, on, 1 ms and 10 ms | 50 000 | as off | 774 / 0 |
+
+    The polling CPU never sleeps, so it never promises: it is asked at
+    the back-off's grants (774 of 50 000) and every grant stays one
+    cell.
+  - **Order and determinism with lookahead on.** `make feedback-order`
+    compares all three files, `grant` records included. The swapped
+    registration order gives the same plan for every grant, because the
+    remaining graph ngspice → U1 has no ties.
+    `make feedback-determinism` now runs 10 lookahead-on runs.
+  - **Speed** (`make lookahead-perf`, PERF_N = 5, interleaved A/B,
+    medians; load average 2.7–11.1, from other work on the host; startup is
+    reported separately):
+
+    | Case | A: simulation / CPU / grants | B: simulation / CPU / grants | Result |
+    | --- | --- | --- | --- |
+    | `examples/feedback`: A = step 4 (`--lookahead off --lookahead-plugin never`), B = defaults | 31.67 s / 25.84 s / 50 000 | **1.20 s** / 4.07 s / **117** (every run) | **26.4×** ≥ 10×; ≤ 200 grants: PASS |
+    | polling firmware: A = `--lookahead off`, B = defaults | 34.58 s / 32.81 s / 50 000 | 35.82 s / 34.33 s / 50 000 | B / A = **1.036** ≤ 1.10: PASS |
+
+    In both cases every B run matched A in `nets.csv`, `nets.vcd` and the
+    non-grant records. Startup medians were 2.74 / 2.86 s (feedback) and
+    2.64 / 2.54 s (poll). Single runs varied much more than the
+    polling-firmware effect: A ranged from 32.1 to 57.7 s and B from 34.1
+    to 53.2 s, while the CPU-time medians differ by 4.6 %. What the
+    polling variant pays for lookahead is its 774 Queries, one
+    `SYSTEM_BUS` read each, because the back-off asks at most once per 65
+    grants. The 10 % bound holds on these medians. On a busier host a
+    single A/B pair can cross it in either direction, so the gate must be
+    read with the protocol (medians of interleaved runs), not from one
+    pair.
+- **Not changed.** The README cost table, the final `make golden-update`
+  of every hash and the AGENTS.md rules are step 10 (Docs). This step only
+  corrects the README and AGENTS.md text that the new default made wrong
+  (the feedback board "correct but slow until Part B", the make targets),
+  and adds one cost-table row for the default feedback run.

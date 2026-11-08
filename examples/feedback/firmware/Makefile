@@ -2,6 +2,10 @@
 # examples/feedback-open (ADR-003 plan step 4):
 #   build/feedback.elf  SysTick toggles PA5 every 50 ms; the EXTI0 ISR (PB0,
 #                       both edges) copies PB0 to PA6; main loop wfi
+#   build/feedback_poll.elf
+#                       (ADR-003 plan step 8) SysTick toggles PA5 every 50 ms;
+#                       the main loop busy-polls PB0 and copies it to PA6 (the
+#                       CPU never sleeps, so lookahead never gets a promise)
 # Same flags and linker script as examples/spike/firmware. Deterministic
 # build: no timestamps or absolute paths end up in the ELF.
 
@@ -19,13 +23,17 @@ LDFLAGS := -nostdlib -nostartfiles -T $(LDSCRIPT) -Wl,--gc-sections \
 .PHONY: all clean
 .SECONDARY:
 
-all: $(BUILD)/feedback.elf
+all: $(BUILD)/feedback.elf $(BUILD)/feedback_poll.elf
 
 $(BUILD)/%.o: %.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/feedback.elf: $(BUILD)/startup.o $(BUILD)/feedback.o $(LDSCRIPT)
 	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,-Map=$(BUILD)/feedback.map $(BUILD)/startup.o $(BUILD)/feedback.o -o $@
+	$(SIZE) $@
+
+$(BUILD)/feedback_poll.elf: $(BUILD)/startup.o $(BUILD)/feedback_poll.o $(LDSCRIPT)
+	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,-Map=$(BUILD)/feedback_poll.map $(BUILD)/startup.o $(BUILD)/feedback_poll.o -o $@
 	$(SIZE) $@
 
 $(BUILD):

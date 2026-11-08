@@ -5,9 +5,9 @@
 #
 # Runs examples/feedback (a feedback loop, so `bb run` loads the plugin by
 # default) three ways, in parallel:
-#   never  --lookahead-plugin never   (no plugin: the step 4 run)
-#   off    the default: plugin loaded and armed, --lookahead off
-#   on     --lookahead on
+#   never  --lookahead-plugin never   (no plugin, so lookahead off: the step 4 run)
+#   off    --lookahead off: plugin loaded and armed, no promise asked
+#   on     the default since plan step 8: plugin loaded, lookahead on
 # `never` must give the committed step 4 hashes (<feedback-hashes>), `off`
 # must be byte-identical to `never` in nets.csv, events.jsonl and nets.vcd,
 # and `on` must match `never` in nets.csv, nets.vcd and every non-grant
@@ -22,8 +22,8 @@ mkdir -p "$out"
 
 declare -A extra=(
     [never]="--lookahead-plugin never"
-    [off]=""
-    [on]="--lookahead on"
+    [off]="--lookahead off"
+    [on]=""
 )
 pids=()
 for m in never off on; do

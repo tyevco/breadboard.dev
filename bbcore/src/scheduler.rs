@@ -83,7 +83,9 @@ pub struct SchedulerConfig {
     /// feedback loop for [`Engine::quiet_until`] and lift the loop cap while
     /// a promise and the per-grant plan allow it. Lookahead changes only the
     /// partition (and so only `grant` records), never outputs. Default
-    /// `false`.
+    /// `true` (ADR-003 plan step 8); it matters only for a cyclic graph with
+    /// a candidate that promises (an engine without `quiet_until` never
+    /// does), and `false` gives the one-cell reference.
     pub lookahead: bool,
     /// Emit a `grant` record per grant.
     pub log_grants: bool,
@@ -96,7 +98,7 @@ impl Default for SchedulerConfig {
         SchedulerConfig {
             max_quantum: Time::from_ms(1),
             loop_quantum: None,
-            lookahead: false,
+            lookahead: true,
             log_grants: true,
             event_sampling: None,
         }
