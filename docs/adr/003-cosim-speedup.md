@@ -1495,3 +1495,90 @@ changes, so every existing hash is unchanged.
     (`plans_are_identical_across_two_runs`): `plan_log`, events and every
     engine call identical;
   - an acyclic graph never asks (`quiet_grants_respect_other_bounds`).
+
+### Amendment 7: step 7 (ngspice `advance_until`) as implemented (2026-11-08)
+
+**Status:** Accepted with step 7. No `spec/` change: the early-stop
+contract (`advance_until`, invariant 1, "Quiet grants") landed with step 6
+(Amendment 6), and this step implements it for ngspice. No change for
+`advance_to`, so every existing output and hash is unchanged.
+
+- **What landed.** `NgspiceEngine::can_stop_early()` is `true` when the
+  engine has a grant lattice (`NgspiceConfig::lattice`) and at least one
+  thresholded digital output (`digital_outputs`); otherwise it stays
+  `false` and the kernel never asks it to stop. `advance_until(t, watch)`
+  takes the names of thresholded digital outputs: an analog output or an
+  unknown pin is a protocol error, and so is a call without a lattice. An
+  empty watch is `advance_to(t)`. `adc_in` code-change watches are step
+  9's.
+- **How it stops.** The detection runs where the solver points are made:
+  in the `GetSyncData` callback, at every accepted point of an
+  `advance_until` grant (`loc == 0`, before the park test), the solver
+  thread reads the last value of the `time` vector and of each watched
+  node (`ngGet_Vec_Info`). It applies `DigitalIn::threshold` from the
+  levels at the grant start, and computes a level change's crossing with
+  the same interpolation, rounding and clamping as `threshold_window`
+  (Amendment 4). At the first change, at `t_x`, it lowers the grant end
+  to `ceil_L(t_x)` (at most `t`). The lattice clamp (D2) has put a point on
+  every lattice point, so the solver is at or before that point, takes its
+  normal steps and parks there. The park test, the clamp and the
+  breakpoint release then run exactly as in a grant that ended there. Two
+  self-checks turn any inconsistency into an error rather than a silent
+  difference:
+  1. the `time` vector's last value must be the accepted point,
+     bit for bit;
+  2. after parking, the stop must equal `ceil_L` of the first watched
+     transition of the trace that `threshold_window` rebuilds from the
+     window's points (or `t` if there is none).
+  The kernel checks the same thing (Amendment 6). The cost is one vector
+  lookup per watched node, plus the time vector, per accepted point, and
+  only in `advance_until` grants.
+- **Gates (measured)** (`engines/analog-ngspice/tests/until.rs`, `L` =
+  10 µs):
+  - **The RC crossing parks at exactly the analytic `ceil_L(t_x)`**
+    (`rc_crossing_parks_at_the_analytic_lattice_point`). This is the
+    feedback RC (25 Ω + 1 kΩ, 1 µF + 5 pF `cin`): PA5 rises at 1 ms + 1 fs
+    and falls at 8 ms + 1 fs, delivered before the grant that holds each
+    edge, and grants are `advance_until(now + 10 ms)` watching `U1.PB0`.
+    The analytic crossings, 1.954854433 ms and 9.451393099 ms, lie in the
+    cells ending at 1.96 ms and 9.46 ms. The stops are exactly 1.96 ms
+    (from the 10 ms grant end) and 9.46 ms (from 11.96 ms), so the run
+    takes 3 grants against 1200 one-cell ones. The transitions are at
+    1.954859687903 ms and 9.451387767786 ms.
+  - **Solver points identical to the one-cell run:** all 1324 raw points
+    (time and value bits), and the trace, are bit-identical to the
+    `advance_to(now + L)` run. The same holds without a watch in 10 ms
+    grants, with no stop.
+  - **Two runs are bit-identical:** points, trace, stops and grant count.
+    The test binary was also run 10 times, with identical output.
+  - **Hysteresis** (`hysteresis_gives_one_stop_per_direction`): a slow ramp
+    with 0.3 V ripple through the 0.8–2.0 V band crosses a single 2.0 V
+    threshold 14 times. It gives exactly one transition per direction
+    (High at 2.109593665 ms, Low at 6.366348705 ms) and exactly one stop
+    per direction, at 2.11 ms and 6.37 ms, with solver points equal to the
+    one-cell run's.
+  - The contract (`advance_until_contract`): no lattice or no digital
+    output means `can_stop_early() == false`, and watching an analog
+    output is an error.
+- **Steps 6 and 7 together** (`kernel_quiet_grants_with_ngspice_match_one_cell`).
+  This gate is not in the plan; it was added as evidence ahead of step 8.
+  The kernel runs with `lookahead` on, a lattice-bound mock of the
+  feedback firmware (PA5 toggles at 1, 8 and 15 ms + 1 fs, and PA6 copies
+  PB0 at `ceil_L(t) + 1 fs`; it is quiet until its next output) and the
+  real ngspice RC. Over 20 ms the run takes 25 grants, three of them
+  `stop:ngspice`, against 2000 one-cell grants. All 9 `pin_edge` records
+  and the 10 µs sampled SENSE CSV are byte-identical to the one-cell
+  (`lookahead` off) run. The Renode side of the same flow is step 5's
+  plugin, and the full equivalence on `examples/feedback` is step 8.
+- **`make check`** was run on a clean worktree of the step 6 commit plus
+  exactly these step 7 files, because the shared working tree held
+  another agent's unfinished step 5 edits to `engines/cpu-renode`. The
+  first run failed two Renode tests (`blinky.rs`) at startup with
+  "Connection reset by peer" during the External Control handshake. That
+  is the startup flake recorded in Amendment 3. The host was at load
+  average 13.6, with 11 Renode processes from parallel work, and step 7
+  changes no Renode code. The re-run was green: fmt-check, clippy, every
+  cargo test, the spike (`nets.csv` 09fed4ac…, `events.jsonl` 95775a08…,
+  `nets.vcd` da42656b…), determinism (10 runs), golden, feedback
+  (1f610526…, c4855b92…, 7ad78d8c…, the Amendment 4 hashes) and
+  feedback-order.

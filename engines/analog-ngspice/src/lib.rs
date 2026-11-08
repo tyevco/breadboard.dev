@@ -337,10 +337,120 @@ struct State {
     new_bkpts: Vec<(f64, f64)>,
     /// Grant lattice in fs (0: none).
     lattice_fs: u64,
+    /// The early-stop watch of the current `advance_until` grant (ADR-003
+    /// D5); `None` for `advance_to`.
+    until: Option<Until>,
     /// First fatal problem seen by a callback.
     error: Option<String>,
     /// [`NgspiceConfig::handoff_spin`].
     handoff_spin: Duration,
+}
+
+/// The early-stop watch of an `advance_until` grant (ADR-003 D5). The solver
+/// thread thresholds the watched nodes at every accepted point, exactly as
+/// `NgspiceEngine::threshold_window` later does over the same points; at
+/// the first level change, at `t_x`, the grant end becomes `ceil_L(t_x)`.
+/// The lattice clamp has put a point on every lattice point, so the solver
+/// is at or before that point and parks there, after the same steps as a
+/// one-cell run.
+struct Until {
+    lattice_fs: u64,
+    /// The grant start (the previous boundary), exact.
+    from_fs: u64,
+    pins: Vec<UntilPin>,
+    /// `<plot>.time` and `<plot>.<node>` per pin, built at the first point.
+    vecs: Option<(CString, Vec<CString>)>,
+    /// The previous accepted point: raw time (s) and time in fs as the
+    /// window history stores it.
+    prev_s: f64,
+    prev_fs: u64,
+    /// The stop (fs), once found.
+    stop_fs: Option<u64>,
+}
+
+struct UntilPin {
+    node: String,
+    model: DigitalIn,
+    level: Level,
+    prev_v: f64,
+}
+
+impl Until {
+    /// Threshold the point just accepted at `time` (the grant currently
+    /// ends at `target_fs`). Returns the stop once a watched pin changes
+    /// level. Runs on the solver thread, between steps, without the state
+    /// lock.
+    fn step(&mut self, time: f64, target_fs: u64, target_s: f64) -> Result<Option<u64>, String> {
+        let lib = ffi::lib(|_| Ok(()))?;
+        if self.vecs.is_none() {
+            // SAFETY: returns a pointer to the current plot's type name.
+            let plot = cstr_lossy(unsafe { (lib.cur_plot)() });
+            let name = |v: &str| CString::new(format!("{plot}.{v}")).map_err(|e| e.to_string());
+            let nodes = self
+                .pins
+                .iter()
+                .map(|p| name(&p.node))
+                .collect::<Result<_, _>>()?;
+            self.vecs = Some((name("time")?, nodes));
+        }
+        let (tv, nodes) = self.vecs.as_ref().expect("built above");
+        let last = |v: &CString| -> Result<f64, String> {
+            // SAFETY: as in `read_vectors`; the solver is between steps.
+            let info = unsafe { (lib.get_vec_info)(v.as_ptr().cast_mut()) };
+            if info.is_null() {
+                return Err(format!("ngspice vector {v:?} not found"));
+            }
+            // SAFETY: non-null pointer to ngspice's vector_info.
+            let info = unsafe { &*info };
+            let len = usize::try_from(info.v_length).unwrap_or(0);
+            if info.v_realdata.is_null() || len == 0 {
+                return Err(format!("ngspice vector {v:?} is empty or not real"));
+            }
+            // SAFETY: v_realdata holds v_length doubles.
+            Ok(unsafe { *info.v_realdata.add(len - 1) })
+        };
+        let t1 = last(tv)?;
+        if t1.to_bits() != time.to_bits() {
+            return Err(format!(
+                "early-stop watch: last time point {t1:e} s is not the accepted point {time:e} s"
+            ));
+        }
+        // The point's fs as the window history will store it: the grant
+        // end exactly if it is at the grant, otherwise rounded and kept
+        // inside the grant.
+        let t1_fs = if target_s - t1 <= grant_tolerance_s(target_s) {
+            target_fs
+        } else {
+            secs_to_fs(t1).clamp(self.from_fs, target_fs)
+        };
+        let mut first: Option<u64> = None;
+        for (p, v) in self.pins.iter_mut().zip(nodes) {
+            let v1 = last(v)?;
+            let new = p.model.threshold(p.level, v1);
+            if new != p.level {
+                let thr = if new == Level::High {
+                    p.model.vih
+                } else {
+                    p.model.vil
+                };
+                let lo = self.prev_fs + 1;
+                let at = crossing_fs((self.prev_s, p.prev_v), (t1, v1), thr)
+                    .max(lo)
+                    .min(t1_fs.max(lo))
+                    .min(target_fs);
+                first = Some(first.map_or(at, |f| f.min(at)));
+                p.level = new;
+            }
+            p.prev_v = v1;
+        }
+        self.prev_s = t1;
+        self.prev_fs = t1_fs;
+        if let Some(at) = first {
+            let stop = (at.div_ceil(self.lattice_fs) * self.lattice_fs).min(target_fs);
+            self.stop_fs = Some(stop);
+        }
+        Ok(self.stop_fs)
+    }
 }
 
 impl State {
@@ -362,6 +472,7 @@ impl State {
             corners: Vec::new(),
             new_bkpts: Vec::new(),
             lattice_fs: 0,
+            until: None,
             error: None,
             handoff_spin: Duration::ZERO,
         }
@@ -619,6 +730,24 @@ unsafe extern "C" fn cb_get_sync(
     }
     if loc == 0 {
         // `time` is the point just accepted and dumped to the vectors.
+        // Early stop (ADR-003 D5): threshold the watched nodes at this point
+        // and, at the first level change, end the grant at ceil_L(t_x).
+        if st.parked != Some(st.seq) && st.until.as_ref().is_some_and(|u| u.stop_fs.is_none()) {
+            let mut u = st.until.take().expect("checked above");
+            let (target_fs, target_s) = (st.target_fs, st.target_s);
+            drop(st);
+            let r = u.step(time, target_fs, target_s);
+            st = state();
+            match r {
+                Ok(Some(stop)) if stop < st.target_fs => {
+                    st.target_fs = stop;
+                    st.target_s = Time::from_fs(stop).as_secs_f64();
+                }
+                Ok(_) => {}
+                Err(e) => st.fail(e),
+            }
+            st.until = Some(u);
+        }
         let tol = grant_tolerance_s(st.target_s);
         // `target - time` (exact for close values, Sterbenz), not `time >=
         // target - tol` (rounded): the same predicate as the lattice clamp's
@@ -1090,6 +1219,50 @@ impl NgspiceEngine {
         self.take_boundary(Time::ZERO)
     }
 
+    /// Run the solver to `t` (or, with an early-stop watch, to where it
+    /// stops) and take the boundary there. Returns the boundary reached.
+    fn grant(&mut self, t: Time, until: Option<Until>) -> Result<Time, EngineError> {
+        if self.failed {
+            return Err(other("engine failed earlier"));
+        }
+        if t <= self.now {
+            return Err(EngineError::Protocol(format!(
+                "advance_to({t}) not after now = {}",
+                self.now
+            )));
+        }
+        if t > self.t_stop {
+            return Err(EngineError::Protocol(format!(
+                "advance_to({t}) past the transient end t_stop = {}",
+                self.t_stop
+            )));
+        }
+        let mut st = state();
+        st.seq += 1;
+        st.target_fs = t.as_fs();
+        st.target_s = t.as_secs_f64();
+        st.until = until;
+        let seq = st.seq;
+        GRANT_SEQ.store(seq, Ordering::Release);
+        WAKE.notify_all();
+        let spin = st.handoff_spin;
+        if !spin.is_zero() {
+            drop(st);
+            spin_until(spin, || PARKED_SEQ.load(Ordering::Acquire) == seq);
+            st = state();
+        }
+        while st.parked != Some(seq) && st.error.is_none() && st.bg_running {
+            st = WAKE.wait(st).unwrap_or_else(|e| e.into_inner());
+        }
+        // The grant end, lowered by an early stop.
+        let r = Time::from_fs(st.target_fs);
+        st.until = None;
+        drop(st);
+        self.breakpoints = self.breakpoints.split_off(&Time::from_fs(r.as_fs() + 1));
+        self.take_boundary(r)?;
+        Ok(r)
+    }
+
     /// After the solver parked at `t`: check errors, take the new samples.
     fn take_boundary(&mut self, t: Time) -> Result<(), EngineError> {
         let mut st = state();
@@ -1422,40 +1595,76 @@ impl Engine for NgspiceEngine {
     }
 
     fn advance_to(&mut self, t: Time) -> Result<(), EngineError> {
-        if self.failed {
-            return Err(other("engine failed earlier"));
+        self.grant(t, None).map(|_| ())
+    }
+
+    /// With a grant lattice and at least one thresholded digital output.
+    fn can_stop_early(&self) -> bool {
+        self.lattice.is_some() && !self.digital.is_empty()
+    }
+
+    /// ADR-003 D5: advance towards `t`, but at the first level change of a
+    /// watched digital output, at `t_x`, keep stepping to `ceil_L(t_x)` and
+    /// park there. The solver takes the same steps as in any other
+    /// partition (D2), so this is exactly the state a run with a grant
+    /// ending at `ceil_L(t_x)` reaches. `watch` must name thresholded
+    /// digital outputs.
+    fn advance_until(&mut self, t: Time, watch: &[String]) -> Result<Time, EngineError> {
+        let Some(l) = self.lattice else {
+            return Err(EngineError::Protocol(
+                "advance_until needs a grant lattice (NgspiceConfig::lattice)".into(),
+            ));
+        };
+        let mut pins = Vec::new();
+        let mut names: Vec<&str> = Vec::new();
+        for w in watch {
+            let d = self.digital.get(w).ok_or_else(|| {
+                EngineError::Protocol(format!(
+                    "advance_until: {w} is not a thresholded digital output of {}",
+                    self.name
+                ))
+            })?;
+            if names.contains(&w.as_str()) {
+                continue;
+            }
+            names.push(w);
+            pins.push(UntilPin {
+                node: self.watch[d.watch].clone(),
+                model: d.model,
+                level: d.level,
+                prev_v: self.hist.values[d.watch].last().copied().unwrap_or(0.0),
+            });
         }
-        if t <= self.now {
-            return Err(EngineError::Protocol(format!(
-                "advance_to({t}) not after now = {}",
-                self.now
+        if pins.is_empty() {
+            return self.grant(t, None);
+        }
+        let until = Until {
+            lattice_fs: l.as_fs(),
+            from_fs: self.now.as_fs(),
+            pins,
+            vecs: None,
+            prev_s: self.hist.times_s.last().copied().unwrap_or(0.0),
+            prev_fs: self.now.as_fs(),
+            stop_fs: None,
+        };
+        let r = self.grant(t, Some(until))?;
+        // The stop must be the first lattice point at or after the first
+        // watched transition of the trace, which `threshold_window` has just
+        // rebuilt from the same points.
+        let expected = self
+            .trace
+            .iter()
+            .find(|tr| names.contains(&tr.pin.as_str()))
+            .map_or(t, |tr| {
+                Time::from_fs(tr.t.as_fs().div_ceil(l.as_fs()) * l.as_fs()).min(t)
+            });
+        if r != expected {
+            self.failed = true;
+            return Err(other(format!(
+                "early stop at {r}, but the trace's first watched transition gives {expected}"
             )));
         }
-        if t > self.t_stop {
-            return Err(EngineError::Protocol(format!(
-                "advance_to({t}) past the transient end t_stop = {}",
-                self.t_stop
-            )));
-        }
-        let mut st = state();
-        st.seq += 1;
-        st.target_fs = t.as_fs();
-        st.target_s = t.as_secs_f64();
-        let seq = st.seq;
-        GRANT_SEQ.store(seq, Ordering::Release);
-        WAKE.notify_all();
-        let spin = st.handoff_spin;
-        if !spin.is_zero() {
-            drop(st);
-            spin_until(spin, || PARKED_SEQ.load(Ordering::Acquire) == seq);
-            st = state();
-        }
-        while st.parked != Some(seq) && st.error.is_none() && st.bg_running {
-            st = WAKE.wait(st).unwrap_or_else(|e| e.into_inner());
-        }
-        drop(st);
-        self.breakpoints = self.breakpoints.split_off(&Time::from_fs(t.as_fs() + 1));
-        self.take_boundary(t)
+        Ok(r)
     }
 
     fn read_outputs(&mut self) -> Result<PinSignals, EngineError> {
