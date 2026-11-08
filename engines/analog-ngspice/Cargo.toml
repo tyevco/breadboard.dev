@@ -11,3 +11,4 @@ name = "bb_analog_ngspice"
 
 [dependencies]
 bbcore.workspace = true
+libloading = "0.8"

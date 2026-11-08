@@ -1,8 +1,8 @@
 # ADR-002: Time-grant protocol (conservative lockstep with lookahead)
 
 - **Status:** Accepted. Approved via the Phase 0 plan on 2026-11-07.
-  Sub-decision D5 (ngspice pause mechanism) is **open**. The ngspice engine
-  agent closes it in an "Amendment" section at the end of this ADR.
+  Sub-decision D5 (ngspice pause mechanism) was resolved by Amendment 1 at
+  the end of this ADR: `GetSyncData` lock-step.
 - **Normative spec:** `spec/time-grant.md`. If this ADR and the spec disagree,
   the spec wins, and the disagreement is a bug to fix through a follow-up ADR.
 - **Implementation:** `bbcore/src/{time,engine,scheduler}.rs`.
@@ -123,7 +123,7 @@ At boundary `g`:
    `digital_out{voh, vol, rise, fall, zout}` edge into a PWL ramp on an
    `EXTERNAL` voltage source plus a series `zout`.
 
-### D5. ngspice pause mechanism (OPEN sub-decision)
+### D5. ngspice pause mechanism (resolved: candidate C, see Amendment 1)
 
 ngspice has to integrate a transient analysis up to exactly `g`, stop there with
 its state intact, report node voltages, accept new `EXTERNAL` source values, and
@@ -207,4 +207,101 @@ Constraints on any choice:
 
 ## Amendments
 
-_None yet. The ngspice engine agent appends "Amendment 1: D5 resolution" here._
+### Amendment 1: D5 resolution (2026-11-07)
+
+**Status:** Accepted. Implemented in `engines/analog-ngspice` (`bb-analog-ngspice`).
+
+**Decision: candidate C, `GetSyncData` lock-step**, running on ngspice's own
+background thread (`bg_run`). `bg_halt` is used only for teardown, never to
+pause at a grant.
+
+**Evidence.** It was checked against the ngspice 42 sources (the
+`ngspice-42.tar.gz` release, which is the version installed as `42+ds-3build1`)
+and against the installed `/usr/include/ngspice/sharedspice.h`:
+
+- `src/spicelib/analysis/dctran.c` calls `sharedsync(..., loc = 0)` once per
+  accepted time point. That happens after `CKTaccept`, after `CKTdump` has
+  appended the point to the output vectors, and after ngspice has done its own
+  breakpoint/delta forcing for the next step, but before the next step is
+  computed. `sharedspice.c:sharedsync` hands the caller `&ckt->CKTdelta`
+  through `GetSyncData` and then only caps it at the final time. A callback
+  can therefore cut the next step so it lands exactly on `g`, and when the
+  accepted point *is* `g`, it can block on a condvar while the full solver
+  state at `g` sits intact and already dumped.
+- `loc = 1` is the accept/reject site. On a rejected step (`redostep = 1`),
+  `CKTtime` is first rolled back to the last accepted point. The adapter only
+  clamps there and always returns 0, so it never forces a redo.
+- Candidate A (`bg_halt` to pause): `_thread_stop` sets `ft_intrpt` and polls
+  every 10 ms. The run stops at whichever accepted point `IFpauseTest` sees
+  first, so how far it gets depends on wall-clock timing. That is
+  nondeterministic, so it was rejected for pausing. It is kept for teardown,
+  where overshoot does not matter.
+- Candidate B (`stop when` + `resume`): a foreground `run` blocks the calling
+  thread, and `stop` conditions are checked after the step that crosses them,
+  so precision depends on the step sequence. It also re-enters the front end
+  on every grant. Rejected.
+- `ngSpice_SetBkpt` adds to `CKTbreaks` (or to a holding list before the
+  transient starts). It does not affect the step that was already chosen.
+  This is why the step is clamped inside the callback, and why breakpoints are
+  set from the solver thread only, while it is between steps.
+
+**Mechanism** (`engines/analog-ngspice/src/lib.rs`):
+
+1. `new()` loads the netlist (`ngSpice_Circ`). The engine appends the input
+   glue, `.tran TMAX (t_stop + TMAX) 0 TMAX` with every time written as exact
+   integer fs (`<n>e-15`), and `.end`. It then issues `bg_run`. The solver
+   parks in the callback at the first accepted point, t = 0, which is the DC
+   operating point.
+2. `advance_to(g)` publishes `g`, which bumps a grant sequence number, then
+   waits until the solver parks at `g`. A point is "at `g`" when
+   `round(time * 1e15) >= g_fs`. Landing past `g` is reported as an error;
+   clamping makes that impossible in practice.
+3. While parked, the solver thread copies the new samples of `time` and of
+   every watched node vector (`ngSpice_CurPlot` + `ngGet_Vec_Info("<plot>.<node>")`).
+   The kernel thread then reads them from the shared state. ngspice is never
+   called from two threads at once.
+4. Inputs (`apply_inputs` at `g`, ADR D4.4) add a linear ramp to that
+   source's piecewise-linear waveform, starting at `g`. `GetVSRCData`
+   evaluates the waveform at the solver's trial time. Ramp corners (`g + rise`)
+   become clamp points and `ngSpice_SetBkpt` breakpoints, so the solver
+   resolves the edge.
+5. Teardown (`Drop`): set `abort` (callbacks stop blocking), `bg_halt`,
+   `remcirc`, `destroy all`. ngspice is a process singleton: one engine at a
+   time, enforced at runtime, and tests serialize on a mutex.
+
+**Why it is deterministic.** The solver thread only moves while the kernel
+thread is blocked waiting for it, and every value it reads (source voltages,
+the step limit) is a pure function of the netlist, `TMAX` and the integer-time
+call sequence. Thread scheduling can change *when* things happen, but never
+*what* is computed. ngspice is advanced once per grant, never per instruction.
+
+**`t_safe`.** `min(t_stop, now + lookahead, next kernel-visible breakpoint)`.
+`lookahead` defaults to none, which per D2 means no internal events. The
+analysis runs one `TMAX` past `t_stop`, because ngspice ends the analysis on
+its final point without calling the sync callback, so a grant can end exactly
+at `t_stop`.
+
+**Sampling.** Grants are aligned to sample times (D3), so the CSV value at a
+boundary is the solver point at exactly `g`. `NgspiceEngine::sample(node, t)`
+also linearly interpolates the solver points retained since the previous
+boundary. That is a pure function of those points, so it is deterministic.
+
+**Test results** (WSL Ubuntu 24.04, ngspice 42, `cargo test -p bb-analog-ngspice`):
+
+- RC 1 kΩ / 1 µF with a 0→1 V external step at t = 0 (1 ns rise), paused at
+  0.5, 1 and 3 ms: relative error against `1 - e^(-t/RC)` of 7.0e-6, 5.1e-6
+  and 1.3e-6 (the limit is 1 %). Interpolated samples at 1.25, 2 and 2.75 ms
+  are within 7.5e-7.
+- Two identical runs give bit-identical boundary and interpolated values, and
+  the same solver-point count (317).
+- Under `bbcore::Scheduler` with a mock 1 ms toggler and a 100 µs `CsvWriter`,
+  two runs give byte-identical CSV and `events.jsonl`, and v(2 ms) is within
+  1 % of 3.3·(1 − e⁻¹).
+- The full suite was run 20 times in a row and passed every time.
+
+**Known limits.** A grant shorter than ngspice's `delmin` (≈1e-11·TMAX) has
+not been tested. Output vectors grow for the whole run, because ngspice keeps
+every point. A boundary that carries an input edge is not made an ngspice
+breakpoint retroactively, because the step from `g` had already been chosen.
+Only the clamp to the ramp corner applies, and ngspice's truncation-error
+control handles the slope change.
