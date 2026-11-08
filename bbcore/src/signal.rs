@@ -2,8 +2,10 @@
 //!
 //! See `spec/pin-model.md`. The kernel routes a [`PinSignal`] from the engine
 //! driving a net to every engine loading that net, unchanged. Conversion between
-//! domains (digital -> PWL voltage, analog -> thresholded level) happens in the
-//! consuming engine using the pin models from `crate::pin`.
+//! domains uses the pin models from `crate::pin`: digital -> PWL voltage in the
+//! consuming analog engine (`digital_out`), analog -> thresholded level in the
+//! *producing* analog engine (`digital_in`, ADR-003 D3), which reports each
+//! level change in its trace.
 
 use std::collections::BTreeMap;
 

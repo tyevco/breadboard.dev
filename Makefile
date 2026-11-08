@@ -8,7 +8,8 @@ CARGO ?= cargo
 
 .PHONY: setup doctor build test cargo-test fmt fmt-check clippy check firmware \
         bb spike spike-verify-every lattice-check partition perf determinism golden \
-        golden-update
+        golden-update feedback-run feedback feedback-order feedback-determinism \
+        feedback-open feedback-open-ref
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -23,6 +24,21 @@ DET_RUNS    ?= 10
 DET_JOBS    ?= 5
 PYTHON      ?= python3
 
+# --- ADR-003 step 4: digital_in thresholding and the feedback boards --------
+FEEDBACK_ELF  := examples/feedback/firmware/build/feedback.elf
+FEEDBACK_FOR  ?= 500ms
+FEEDBACK_OUT  ?= out/feedback
+FEEDBACK_ARGS  = --netlist examples/feedback/board.cir --firmware $(FEEDBACK_ELF) \
+                 --target U1 --for $(FEEDBACK_FOR) --probe net:SENSE --probe net:LED_B \
+                 --probe net:U1.PA5 --probe net:U1.PB0 --probe net:U1.PA6
+FEEDBACK_GOLDEN := tests/golden/feedback
+FEEDBACK_OPEN_ARGS = --netlist examples/feedback-open/board.cir --firmware $(FEEDBACK_ELF) \
+                 --target U1 --for $(FEEDBACK_FOR) --probe net:SENSE --probe net:U1.PB0 \
+                 --probe net:U1.PA6
+FEEDBACK_OPEN_OUT    ?= out/feedback-open
+FEEDBACK_OPEN_HASHES := tests/golden/feedback-open/partition.sha256
+FEEDBACK_OPEN_QUANTA ?= 10us,100us,1ms,10ms,50ms,500ms
+
 setup:
 	bash scripts/setup.sh
 
@@ -33,6 +49,7 @@ doctor:
 # tests: examples/spike/firmware/build/blinky.elf
 firmware:
 	$(MAKE) -C examples/spike/firmware
+	$(MAKE) -C examples/feedback/firmware
 
 build:
 	$(CARGO) build --workspace --all-targets
@@ -49,6 +66,8 @@ test:
 	$(MAKE) spike
 	$(MAKE) determinism
 	$(MAKE) golden
+	$(MAKE) feedback
+	$(MAKE) feedback-order
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -115,13 +134,70 @@ golden:
 	@if [ ! -f $(SPIKE_OUT)/nets.csv ]; then $(MAKE) spike; fi
 	$(PYTHON) scripts/golden.py check $(SPIKE_OUT)/nets.csv $(GOLDEN)
 
-# Regenerate the snapshot from a fresh, checked spike run (review the diff!).
-golden-update: spike
+# Regenerate the snapshots from fresh, checked runs (review the diff!): the
+# spike waveform and partition hashes, the feedback waveforms and edge list,
+# and the feedback-open partition hashes (from its one-cell reference).
+golden-update: spike feedback-run feedback-open-ref
 	mkdir -p $(dir $(GOLDEN))
 	$(PYTHON) scripts/golden.py write $(SPIKE_OUT)/nets.csv $(GOLDEN)
 	cd $(SPIKE_OUT) && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv nets.vcd non-grant-records > $(CURDIR)/$(PARTITION_HASHES) \
 	    && rm non-grant-records
+	mkdir -p $(FEEDBACK_GOLDEN) $(dir $(FEEDBACK_OPEN_HASHES))
+	$(PYTHON) scripts/golden.py write $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/sense.csv --net SENSE
+	$(PYTHON) scripts/golden.py write $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/led_b.csv --net LED_B
+	grep '"type":"pin_edge"' $(FEEDBACK_OUT)/events.jsonl > $(FEEDBACK_GOLDEN)/pin_edges.jsonl
+	cd $(FEEDBACK_OPEN_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum nets.csv nets.vcd non-grant-records > $(CURDIR)/$(FEEDBACK_OPEN_HASHES) \
+	    && rm non-grant-records
+
+# ADR-003 step 4: examples/feedback, a board with a feedback loop (U1.PA5 ->
+# RC -> U1.PB0 digital_in; the EXTI0 ISR copies PB0 to PA6 -> LED). The loop
+# caps every grant at one Renode quantum. check_feedback.py: PB0 transitions
+# at the analytic RC crossings (in their lattice cells), PA6 edges in
+# (ceil_L(t_x), ceil_L(t_x) + L], LED_B plateaus.
+feedback-run: firmware bb
+	$(BB) run $(FEEDBACK_ARGS) --out $(FEEDBACK_OUT)
+	$(PYTHON) scripts/check_feedback.py $(FEEDBACK_OUT)
+
+# ... plus the golden snapshot: SENSE and LED_B within 1 mV / 1 sample and
+# the exact pin_edge list.
+feedback: feedback-run
+	$(PYTHON) scripts/golden.py check $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/sense.csv --net SENSE
+	$(PYTHON) scripts/golden.py check $(FEEDBACK_OUT)/nets.csv $(FEEDBACK_GOLDEN)/led_b.csv --net LED_B
+	diff <(grep '"type":"pin_edge"' $(FEEDBACK_OUT)/events.jsonl) $(FEEDBACK_GOLDEN)/pin_edges.jsonl
+	@echo "feedback: golden snapshot PASS"
+
+# Swapping the registration order (analog engine first) must give
+# byte-identical outputs: the advance order comes from the bindings (ADR-003
+# D3). Reuses the `feedback` run.
+feedback-order: feedback
+	$(BB) run $(FEEDBACK_ARGS) --engine-order analog-first --out $(FEEDBACK_OUT)-swapped
+	set -e; for f in nets.csv events.jsonl nets.vcd; do cmp $(FEEDBACK_OUT)/$$f $(FEEDBACK_OUT)-swapped/$$f; done
+	@echo "feedback-order: outputs identical with the engines registered in the other order"
+
+# 10 runs of the feedback board (DET_RUNS, DET_JOBS): byte-identical
+# outputs. CI job `feedback`.
+feedback-determinism: firmware bb
+	bash scripts/determinism.sh $(BB) out/feedback-determinism $(DET_RUNS) $(DET_JOBS) -- $(FEEDBACK_ARGS)
+
+# examples/feedback-open, the acyclic variant (ngspice -> U1 only): long
+# grants, inputs applied at ceil_L(t_x). Partition gate: every max_quantum
+# gives the committed one-cell reference hashes; the 10 ms run passes
+# check_feedback.py --open. CI job `feedback`.
+feedback-open: firmware bb
+	bash scripts/partition.sh $(BB) $(FEEDBACK_OPEN_OUT) $(PARTITION_JOBS) $(FEEDBACK_OPEN_HASHES) \
+	    $(FEEDBACK_OPEN_QUANTA) -- $(FEEDBACK_OPEN_ARGS)
+	$(PYTHON) scripts/check_feedback.py $(FEEDBACK_OPEN_OUT)/mq-10ms --open
+	$(BB) run $(FEEDBACK_OPEN_ARGS) --engine-order analog-first --out $(FEEDBACK_OPEN_OUT)/swapped
+	set -e; for f in nets.csv events.jsonl nets.vcd; do cmp $(FEEDBACK_OPEN_OUT)/mq-10ms/$$f $(FEEDBACK_OPEN_OUT)/swapped/$$f; done
+	@echo "feedback-open: PASS (partition gate; registration order swapped: identical)"
+
+# The feedback-open one-cell reference (max_quantum = the lattice), for
+# golden-update.
+feedback-open-ref: firmware bb
+	$(BB) run $(FEEDBACK_OPEN_ARGS) --max-quantum 10us --out $(FEEDBACK_OPEN_OUT)-ref
+	$(PYTHON) scripts/check_feedback.py $(FEEDBACK_OPEN_OUT)-ref --open
 
 fmt:
 	$(CARGO) fmt --all

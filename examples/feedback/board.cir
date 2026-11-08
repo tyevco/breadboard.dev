@@ -1,0 +1,39 @@
+* Breadboard feedback example (ADR-003 "Feedback-path correctness", plan
+* step 4): a board whose MCU reads back a node it drives.
+*
+*   U1.PA5 -> 25 ohm (zout glue) -> R2 1k -> SENSE; C1 1 uF SENSE -> GND
+*   SENSE -> U1.PB0 (digital_in: vih 2.0 V, vil 0.8 V, cin 5 pF)
+*   U1.PA6 -> R3 330 ohm -> LED_B -> D2 (red LED) -> GND
+*
+* Firmware (examples/feedback/firmware/feedback.c): SysTick toggles PA5
+* every 50 ms; the EXTI0 ISR (PB0, both edges) copies PB0 to PA6.
+*
+* The binding graph is U1 -> ngspice (U1.PA5, U1.PA6) and ngspice -> U1
+* (U1.PB0): a feedback loop, so every grant is one Renode quantum
+* (loop_quantum = L) in the plan order [U1, ngspice], whatever
+* --max-quantum is (ADR-003 D3, D4). With tau = 1025 ohm * (1 uF + 5 pF),
+* SENSE crosses vih tau*ln(3.3/1.3) = 0.954852 ms after each PA5 rise and
+* vil tau*ln(3.3/0.8) = 1.452500 ms after each fall; U1 sees PB0 at the
+* next lattice point ceil_L(t_x) and PA6 follows in the slice after it.
+*
+* Directive grammar: see examples/spike/board.cir. digital_in: the analog
+* engine thresholds the node with hysteresis at every solver point and adds
+* cin (farads) as a capacitor to ground.
+*
+*bb part U1 engine=renode platform=stm32f103
+*bb pin U1.PA5 net=PA5 model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb pin U1.PB0 net=SENSE model=digital_in vih=2.0 vil=0.8 cin=5e-12
+*bb pin U1.PA6 net=PA6 model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+
+* Circuit body. Node 0 is GND.
+R2 PA5 SENSE 1k
+C1 SENSE 0 1u
+R3 PA6 LED_B 330
+D2 LED_B 0 LED_RED
+
+* Red LED: the spike's model (examples/spike/board.cir).
+.model LED_RED D(IS=1e-18 N=2 RS=2 CJO=10p)
+
+* Solver tolerances, as in the spike.
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

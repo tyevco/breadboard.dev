@@ -67,7 +67,10 @@ impl DigitalOut {
     }
 }
 
-/// A digital input with hysteresis.
+/// A digital input with hysteresis. When an analog engine drives the net,
+/// that (producing) engine applies [`DigitalIn::threshold`] at every solver
+/// point and reports the level changes in its trace (ADR-003 D3,
+/// `spec/pin-model.md`).
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DigitalIn {
     /// Input-high threshold (V): rising above it reads High.

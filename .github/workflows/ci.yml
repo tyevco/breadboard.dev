@@ -88,3 +88,32 @@ jobs:
 
       - name: Partition equivalence
         run: make partition
+
+  # ADR-003 step 4: 10 runs of the feedback board (examples/feedback) must be
+  # byte-identical, and the acyclic variant (examples/feedback-open) must give
+  # its committed one-cell reference hashes at every max_quantum.
+  feedback:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/bb-target
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .cache/bb-target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+
+      - name: Setup toolchain (make setup)
+        run: make setup
+
+      - name: Feedback determinism (10 runs)
+        run: make feedback-determinism
+
+      - name: Feedback-open partition equivalence
+        run: make feedback-open

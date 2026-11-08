@@ -34,6 +34,15 @@
 //! boundary where it was delivered (D4.4). [`NgspiceEngine::push_edge`] sets
 //! an explicit time.
 //!
+//! # Outputs
+//!
+//! [`OutputBinding`]s report a node voltage (`Analog`) at each boundary and,
+//! through `sample_output`, at any instant of the last grant (interpolated
+//! between solver points). [`DigitalOutputBinding`]s threshold a node with a
+//! consumer's `digital_in` model at every accepted solver point and report
+//! each level change in the output trace (ADR-003 D3): the analog → digital
+//! crossing of a feedback loop or of an analog-driven MCU input.
+//!
 //! # Process-global state
 //!
 //! ngspice is a process-global singleton. Only one [`NgspiceEngine`] can exist
@@ -50,7 +59,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use bbcore::{DigitalOut, Engine, EngineError, Level, PinSignal, PinSignals, Time};
+use bbcore::{
+    DigitalIn, DigitalOut, Engine, EngineError, Level, PinSignal, PinSignals, Time, Transition,
+};
 
 /// Name this engine reports through [`bbcore::Engine::name`] by default.
 pub const ENGINE_NAME: &str = "ngspice";
@@ -109,6 +120,30 @@ pub struct OutputBinding {
     pub node: String,
 }
 
+/// Binds a kernel output pin to a circuit node through the `digital_in` pin
+/// model of the consuming (digital) engine (ADR-003 D3, `spec/pin-model.md`).
+///
+/// The engine thresholds the node voltage with [`DigitalIn::threshold`] at
+/// every accepted solver point and reports each level change as a `Digital`
+/// transition of its output trace ([`bbcore::Engine::read_output_trace`]).
+/// The crossing time is linearly interpolated between the two straddling
+/// solver points and rounded up to whole femtoseconds: a pure function of
+/// the solver points, which a grant lattice makes partition independent
+/// (ADR-003 D2). The initial level (t = 0) is `threshold(Low, v(0))`. The
+/// engine also adds the model's `cin` as a capacitor from `node` to ground
+/// (glue `C_bbin_<pin>`, the pin name with every character other than an
+/// ASCII letter or digit replaced by `_`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DigitalOutputBinding {
+    /// Engine-side pin name (what the kernel binds the digital net to).
+    pub pin: String,
+    /// Circuit node whose voltage is thresholded.
+    pub node: String,
+    /// The consumer's input model: `vih`, `vil` (hysteresis, `vil < vih`)
+    /// and `cin` (F, `>= 0`).
+    pub model: DigitalIn,
+}
+
 /// Configuration of an [`NgspiceEngine`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct NgspiceConfig {
@@ -132,6 +167,10 @@ pub struct NgspiceConfig {
     pub inputs: Vec<InputBinding>,
     /// Output pins (node voltages reported by `read_outputs`).
     pub outputs: Vec<OutputBinding>,
+    /// Thresholded digital output pins (ADR-003 D3): a node voltage seen
+    /// through a consumer's `digital_in` model, reported as an ordered trace
+    /// of level changes.
+    pub digital_outputs: Vec<DigitalOutputBinding>,
     /// Extra nodes whose voltages are recorded for [`NgspiceEngine::voltage`]
     /// and [`NgspiceEngine::sample`].
     pub probes: Vec<String>,
@@ -164,6 +203,7 @@ impl NgspiceConfig {
             lookahead: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            digital_outputs: Vec::new(),
             probes: Vec::new(),
             handoff_spin: Duration::ZERO,
             lattice: None,
@@ -353,6 +393,12 @@ impl State {
 /// of `lattice_fs` (0: none). A time within the grant tolerance of a lattice
 /// point counts as on it, so a point that landed a few ulps short of `kL`
 /// is not followed by a micro-step to `kL`. A pure function of `time`.
+///
+/// Every decision compares `time` with the nearest lattice point in `f64`
+/// (`time - kL` is exact for close values), never through `time` rounded to
+/// fs: a point just outside the tolerance below `kL` that rounds to `kL`
+/// must still step to `kL`, as the park test at a grant ending at `kL`
+/// (`cb_get_sync`) sees it (ADR-003 Amendment 4).
 fn next_lattice_s(time: f64, lattice_fs: u64) -> Option<f64> {
     if lattice_fs == 0 {
         return None;
@@ -360,10 +406,10 @@ fn next_lattice_s(time: f64, lattice_fs: u64) -> Option<f64> {
     let t_fs = secs_to_fs(time);
     let near = (t_fs + lattice_fs / 2) / lattice_fs;
     let near_s = Time::from_fs(near * lattice_fs).as_secs_f64();
-    let k = if (time - near_s).abs() <= grant_tolerance_s(near_s) {
+    let k = if (time - near_s).abs() <= grant_tolerance_s(near_s) || time > near_s {
         near + 1
     } else {
-        t_fs / lattice_fs + 1
+        near
     };
     Some(Time::from_fs(k * lattice_fs).as_secs_f64())
 }
@@ -444,6 +490,33 @@ fn secs_to_fs(t: f64) -> u64 {
     } else {
         (t * 1e15).round() as u64
     }
+}
+
+/// The time (integer fs, rounded up) at which the straight line through the
+/// solver points `(t0, v0)` and `(t1, v1)` (s, V) reaches `threshold`
+/// (ADR-003 D3). A pure function of its arguments; the fraction is clamped to
+/// the segment.
+fn crossing_fs((t0, v0): (f64, f64), (t1, v1): (f64, f64), threshold: f64) -> u64 {
+    let frac = if v1 == v0 {
+        1.0
+    } else {
+        ((threshold - v0) / (v1 - v0)).clamp(0.0, 1.0)
+    };
+    let tx = t0 + frac * (t1 - t0);
+    if tx <= 0.0 {
+        0
+    } else {
+        (tx * 1e15).ceil() as u64
+    }
+}
+
+/// Glue element name of the `cin` capacitor of a digital output pin.
+fn cin_glue_name(pin: &str) -> String {
+    let p: String = pin
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("C_bbin_{p}")
 }
 
 /// Exact decimal spelling of a time for a netlist card (integer fs).
@@ -547,7 +620,13 @@ unsafe extern "C" fn cb_get_sync(
     if loc == 0 {
         // `time` is the point just accepted and dumped to the vectors.
         let tol = grant_tolerance_s(st.target_s);
-        if st.parked != Some(st.seq) && time >= st.target_s - tol {
+        // `target - time` (exact for close values, Sterbenz), not `time >=
+        // target - tol` (rounded): the same predicate as the lattice clamp's
+        // `|time - kL| <= tol` (`next_lattice_s`), so a point the clamp
+        // treats as on a lattice point is also at a grant ending there, and
+        // no partition takes a micro-step another does not (ADR-003
+        // Amendment 4).
+        if st.parked != Some(st.seq) && st.target_s - time <= tol {
             if time > st.target_s + tol {
                 let msg = format!(
                     "solver overshot the grant: accepted t = {time:e} s, grant = {} fs",
@@ -739,6 +818,15 @@ struct History {
     values: Vec<Vec<f64>>,
 }
 
+/// A thresholded digital output (ADR-003 D3).
+struct DigitalOutput {
+    /// Index into `NgspiceEngine::watch`.
+    watch: usize,
+    model: DigitalIn,
+    level: Level,
+    edge_time: Time,
+}
+
 /// The ngspice analog engine. See the crate docs.
 pub struct NgspiceEngine {
     name: String,
@@ -748,6 +836,11 @@ pub struct NgspiceEngine {
     lookahead: Option<Time>,
     inputs: BTreeMap<String, InputPin>,
     outputs: BTreeMap<String, String>,
+    /// Thresholded digital outputs by pin name.
+    digital: BTreeMap<String, DigitalOutput>,
+    /// Level changes of the digital outputs in the last grant, by time
+    /// (ties in pin order).
+    trace: Vec<Transition>,
     /// Watched node names (lower case), in vector-copy order.
     watch: Vec<String>,
     hist: History,
@@ -836,6 +929,52 @@ impl NgspiceEngine {
         for p in &cfg.probes {
             add_watch(p);
         }
+        let mut digital_watch = Vec::new();
+        for d in &cfg.digital_outputs {
+            let m = d.model;
+            if !(m.vil.is_finite() && m.vih.is_finite() && m.vil < m.vih) {
+                return Err(other(format!(
+                    "digital output {}: need finite vil < vih (got vil {}, vih {})",
+                    d.pin, m.vil, m.vih
+                )));
+            }
+            if !(m.cin.is_finite() && m.cin >= 0.0) {
+                return Err(other(format!(
+                    "digital output {}: cin must be >= 0 (got {})",
+                    d.pin, m.cin
+                )));
+            }
+            if outputs.contains_key(&d.pin) || digital_watch.iter().any(|(p, _)| p == &d.pin) {
+                return Err(other(format!("output pin {} bound twice", d.pin)));
+            }
+            add_watch(&d.node);
+            digital_watch.push((d.pin.clone(), d.node.to_ascii_lowercase()));
+            if m.cin > 0.0 {
+                glue.push(format!(
+                    "{} {} 0 {:e}",
+                    cin_glue_name(&d.pin),
+                    d.node,
+                    m.cin
+                ));
+            }
+        }
+        let digital: BTreeMap<String, DigitalOutput> = cfg
+            .digital_outputs
+            .iter()
+            .zip(&digital_watch)
+            .map(|(d, (_, node))| {
+                let w = watch.iter().position(|n| n == node).expect("node watched");
+                (
+                    d.pin.clone(),
+                    DigitalOutput {
+                        watch: w,
+                        model: d.model,
+                        level: Level::Low,
+                        edge_time: Time::ZERO,
+                    },
+                )
+            })
+            .collect();
 
         // Netlist.
         let mut lines = vec![format!("* breadboard engine {}", cfg.name)];
@@ -890,6 +1029,8 @@ impl NgspiceEngine {
             lookahead: cfg.lookahead,
             inputs,
             outputs,
+            digital,
+            trace: Vec::new(),
             hist: History {
                 times_fs: Vec::new(),
                 times_s: Vec::new(),
@@ -1013,8 +1154,56 @@ impl NgspiceEngine {
         if let Some(last) = h.times_fs.last_mut() {
             *last = t.as_fs();
         }
+        self.threshold_window(t, t.is_zero());
         self.now = t;
         Ok(())
+    }
+
+    /// Threshold every digital output over the solver points of the window
+    /// just taken (ADR-003 D3) and rebuild the trace of the grant `(now, t]`.
+    /// At the first boundary (t = 0) only the initial level is set.
+    fn threshold_window(&mut self, t: Time, initial: bool) {
+        self.trace.clear();
+        let h = &self.hist;
+        let n = h.times_fs.len();
+        for (pin, d) in self.digital.iter_mut() {
+            let vals = &h.values[d.watch];
+            if initial {
+                if let Some(&v) = vals.last() {
+                    d.level = d.model.threshold(Level::Low, v);
+                }
+                d.edge_time = Time::ZERO;
+                continue;
+            }
+            // Point 0 is the previous boundary, already thresholded.
+            for k in 1..n {
+                let new = d.model.threshold(d.level, vals[k]);
+                if new == d.level {
+                    continue;
+                }
+                let at = crossing_fs(
+                    (h.times_s[k - 1], vals[k - 1]),
+                    (h.times_s[k], vals[k]),
+                    if new == Level::High {
+                        d.model.vih
+                    } else {
+                        d.model.vil
+                    },
+                );
+                // Strictly after the earlier point (so after the previous
+                // boundary and any earlier crossing) and not after this one.
+                let lo = h.times_fs[k - 1] + 1;
+                let at = Time::from_fs(at.max(lo).min(h.times_fs[k].max(lo)).min(t.as_fs()));
+                d.level = new;
+                d.edge_time = at;
+                self.trace.push(Transition {
+                    t: at,
+                    pin: pin.clone(),
+                    signal: PinSignal::digital(new, at),
+                });
+            }
+        }
+        self.trace.sort_by_key(|tr| tr.t);
     }
 
     fn watch_index(&self, node: &str) -> Result<usize, EngineError> {
@@ -1274,7 +1463,21 @@ impl Engine for NgspiceEngine {
         for (pin, node) in &self.outputs {
             out.insert(pin.clone(), PinSignal::analog(self.voltage(node)?));
         }
+        for (pin, d) in &self.digital {
+            out.insert(pin.clone(), PinSignal::digital(d.level, d.edge_time));
+        }
         Ok(out)
+    }
+
+    /// With thresholded digital outputs, every level change of the grant
+    /// (ADR-003 D3). The analog outputs stay out of the trace: they are
+    /// reported by their boundary values and sampled through
+    /// [`Engine::sample_output`]. Without digital outputs: `None`, as before.
+    fn read_output_trace(&mut self) -> Result<Option<Vec<Transition>>, EngineError> {
+        if self.digital.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(self.trace.clone()))
     }
 
     fn sample_output(&self, pin: &str, t: Time) -> Option<PinSignal> {
@@ -1355,6 +1558,52 @@ mod tests {
         w2.prune(Time::from_us(3));
         assert_eq!(w2.segs.len(), 1);
         assert_eq!(w2.value_at(4e-6), 0.0);
+    }
+
+    #[test]
+    fn next_lattice_point_is_consistent_with_the_park_test() {
+        let l = 10_000_000_000; // 10 us
+        let k = Time::from_us(16_200).as_secs_f64();
+        let next = Time::from_us(16_210).as_secs_f64();
+        // Seen in examples/feedback-open: 0.5 fs (just beyond the tolerance)
+        // below 16.2 ms. It rounds to 16.2 ms in fs, but it is not on the
+        // lattice point, so the next one is 16.2 ms itself, as for a grant
+        // ending there.
+        let below = 0.0161999999999995;
+        assert!(k - below > grant_tolerance_s(k));
+        assert_eq!(secs_to_fs(below), 16_200_000_000_000);
+        assert_eq!(next_lattice_s(below, l), Some(k));
+        // Within the tolerance: on the lattice point, so the next one.
+        assert_eq!(
+            next_lattice_s(f64::from_bits(k.to_bits() - 2), l),
+            Some(next)
+        );
+        assert_eq!(next_lattice_s(k, l), Some(next));
+        assert_eq!(
+            next_lattice_s(f64::from_bits(k.to_bits() + 2), l),
+            Some(next)
+        );
+        // Mid-cell.
+        assert_eq!(next_lattice_s(16.2049e-3, l), Some(next));
+        assert_eq!(next_lattice_s(16.1951e-3, l), Some(k));
+        assert_eq!(
+            next_lattice_s(0.0, l),
+            Some(Time::from_us(10).as_secs_f64())
+        );
+        assert_eq!(next_lattice_s(1.0, 0), None);
+    }
+
+    #[test]
+    fn crossing_is_interpolated_and_rounded_up() {
+        // 0 V at 1 us, 2 V at 3 us: 1.5 V at 2.5 us exactly.
+        assert_eq!(crossing_fs((1e-6, 0.0), (3e-6, 2.0), 1.5), 2_500_000_000);
+        // Rounded up to the next whole fs.
+        let t = crossing_fs((0.0, 0.0), (3e-15, 3.0), 1.0);
+        assert!((1..=2).contains(&t), "{t}");
+        // Falling, and a flat segment (the later point).
+        assert_eq!(crossing_fs((1e-6, 2.0), (2e-6, 0.0), 1.0), 1_500_000_000);
+        assert_eq!(crossing_fs((1e-6, 1.0), (2e-6, 1.0), 1.0), 2_000_000_000);
+        assert_eq!(cin_glue_name("U1.PB0"), "C_bbin_U1_PB0");
     }
 
     #[test]

@@ -14,7 +14,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden` (about 5 min) |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order` (about 6–7 min) |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -23,12 +23,16 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make perf` | ADR-003 performance gate with the measurement protocol: interleaved 10 µs vs 10 ms grant runs, N = 5 (`PERF_N`), medians; 10 ms must take exactly 50 grants, ≤ 2 s simulation and be ≥ 15× faster (`scripts/perf.sh`). Run it on an otherwise idle host |
 | `make determinism` | 10 spike runs (`DET_RUNS`, `DET_JOBS` in parallel); sha256 of `nets.csv`, `events.jsonl`, `nets.vcd` must match |
 | `make golden` | Diff `out/spike` LED_A against `tests/golden/spike/led_a.csv` (1 mV / 1 sample) |
-| `make golden-update` | Regenerate the golden snapshot and the partition hashes from a fresh, checked spike run. Review the diff before committing it |
+| `make feedback` | ADR-003 step 4: `examples/feedback` (U1.PA5 → RC → U1.PB0 `digital_in`; the EXTI0 ISR copies PB0 to PA6 → LED_B), 500 ms in one-cell grants (a feedback loop). `scripts/check_feedback.py`: PB0 transitions at the analytic RC crossings in their lattice cells, PA6 edges in `(ceil_L(t_x), ceil_L(t_x) + L]`, LED_B plateaus; then the golden snapshot `tests/golden/feedback/` (SENSE, LED_B within 1 mV / 1 sample, exact `pin_edge` list). `make feedback-run` skips the golden |
+| `make feedback-order` | The feedback run with the engines registered in the other order (`bb run --engine-order analog-first`) must be byte-identical (ADR-003 D3) |
+| `make feedback-determinism` | 10 runs of `examples/feedback`, byte-identical (CI job `feedback`) |
+| `make feedback-open` | The acyclic variant `examples/feedback-open` (ngspice → U1 only, long grants) at `--max-quantum` 10 µs … 500 ms must give the committed one-cell hashes (`tests/golden/feedback-open/partition.sha256`), pass `check_feedback.py --open` and not depend on the registration order (CI job `feedback`) |
+| `make golden-update` | Regenerate the golden snapshots and the partition hashes (spike, feedback, feedback-open) from fresh, checked runs. Review the diff before committing it |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
 
-`make firmware` builds the blinky ELF on its own.
+`make firmware` builds the firmware ELFs (spike and feedback) on their own.
 
 ## Repo map
 
@@ -38,11 +42,15 @@ engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
 engines/cpu-renode/     Renode engine over the External Control API
 cli/                    `bb` binary (`bb run`, board-file parser)
 examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings)
-tests/golden/spike/     led_a.csv waveform snapshot
+examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware
+examples/feedback-open/ the same with the loop opened (acyclic, long grants)
+tests/golden/spike/     led_a.csv waveform snapshot, partition hashes
+tests/golden/feedback/  SENSE / LED_B snapshots, exact pin_edge list
+tests/golden/feedback-open/ partition hashes of the one-cell reference
 spec/                   normative protocol and schema docs; changing them needs an ADR
 docs/adr/               architecture decision records
 scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh,
-                        partition.sh, perf.sh, check_resample.py
+                        partition.sh, perf.sh, check_resample.py, check_feedback.py
 ```
 
 ## The three invariants

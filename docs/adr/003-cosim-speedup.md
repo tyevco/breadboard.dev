@@ -1154,3 +1154,133 @@ The `digital_in` text of `spec/pin-model.md` belongs to step 4.
     core). Two of the five B runs took 3.13 s and 4.13 s of simulation, so
     the 2 s bound holds for the median, as the protocol states it, not for
     every run under that load. Per-run numbers: `out/perf/results.tsv`.
+
+### Amendment 4: step 4 (`digital_in` thresholding, `examples/feedback`) as implemented (2026-11-08)
+
+**Status:** Accepted with step 4. `spec/pin-model.md` (header; the models
+table; `digital_in`: thresholding by the producing analog engine, the
+crossing-time rule, the t = 0 level; glue rules 2–5) and `spec/time-grant.md`
+(header; example 3 with the measured times and the open-loop variant) are
+updated in the same change. No protocol or schema change: the analog →
+digital crossing is an ordinary trace (Amendment 3).
+
+- **What landed.**
+  - `bb_analog_ngspice::DigitalOutputBinding { pin, node, model: DigitalIn }`
+    and `NgspiceConfig::digital_outputs`. At every accepted solver point the
+    engine applies `DigitalIn::threshold`; a level change is reported in
+    `read_output_trace` at the crossing interpolated between the two
+    straddling points through `vih`/`vil`, rounded up to whole fs and kept in
+    `(t_{k-1}, t_k]` of those points. The level at t = 0 is
+    `threshold(Low, v(0))`. `cin` becomes `C_bbin_<pin> <node> 0 <cin>`;
+    `vil < vih` and `cin >= 0` are checked. An engine without digital
+    outputs still returns no trace (the spike is unchanged). Analog outputs
+    stay out of the trace (Amendment 3, trace scope).
+  - The board file gains `*bb pin <ref>.<pin> net=<node> model=digital_in
+    vih= vil= cin=` (an MCU input; `cin` in farads) and `*bb pin <ref>.<pin>
+    model=digital_out` without `net=` (an MCU output not connected to the
+    circuit; its net can be probed). `bb run` binds a `digital_in` pin as a
+    Renode input and an ngspice digital output on the kernel net
+    `<ref>.<pin>`, and prints the plan.
+  - `bb run --engine-order mcu-first|analog-first` sets the registration
+    order (a test knob for the D3 gate below).
+  - `examples/feedback` (the board of "Feedback-path correctness") with its
+    firmware `examples/feedback/firmware/feedback.c` (SysTick toggles PA5
+    every 50 ms; the EXTI0 ISR, PB0 through AFIO on both edges, copies PB0
+    to PA6; `wfi`). Its `startup.c` has the STM32F103 device vectors; the
+    spike's startup is unchanged, so `blinky.elf` and the spike hashes are
+    unchanged. `scripts/check_feedback.py`; make targets `feedback-run`,
+    `feedback`, `feedback-order`, `feedback-determinism`, `feedback-open`,
+    `feedback-open-ref`; `make test` runs `feedback` and `feedback-order`; CI
+    job `feedback` runs `feedback-determinism` and `feedback-open` (ten and
+    seven runs, as `partition` has its own job).
+- **ngspice: the park test and the lattice clamp now agree (a
+  partition-independence fix).** The `examples/feedback-open` partition gate
+  first failed: one 1 µV sample of SENSE differed between 10 µs and 10 ms
+  grants. The raw solver points diverged at 16.2 ms, long before any edge.
+  ngspice had accepted a point 0.5 fs (just outside the grant tolerance)
+  below the lattice point. The park test (`time >= target - tol`, rounded)
+  said "not at the grant", so a one-cell run took a micro-step to 16.2 ms.
+  The lattice clamp (`next_lattice_s`) also said "not on the lattice point",
+  but it then found the next point from `time` rounded to fs, which is
+  16.2 ms, so it clamped to 16.21 ms and a long grant skipped 16.2 ms.
+  Both now decide in `f64` with the same exact subtraction: the park test is
+  `target - time <= tol`, and the clamp steps to `kL` whenever `time` is
+  below `kL` by more than the tolerance. Every partition now takes the same
+  steps. Unit test `next_lattice_point_is_consistent_with_the_park_test`,
+  integration test `pulse_board_is_partition_independent` (raw points,
+  samples and trace of the feedback-open circuit, one-cell vs 10 ms grants,
+  bit-identical). The spike's `nets.csv`, `nets.vcd` and `events.jsonl`
+  hashes are unchanged (09fed4ac…, da42656b…, 95775a08…), as are the
+  existing ngspice tests.
+- **`examples/feedback-open` deviates from the step 4 text.** The plan says
+  "PA6 is probed but not loaded by the circuit, so the graph is ngspice→U1".
+  But if PA5 still drives SENSE, U1→ngspice (PA5) and ngspice→U1 (PB0)
+  remain a cycle whatever PA6 does. The open variant therefore drives SENSE
+  from a circuit source with the firmware's PA5 timing,
+  `V_DRV PULSE(0 3.3 50m 5n 5n 49.999995m 100m)` behind 25 Ω, plus R2 and
+  C1 as before. PA5 is not bound, and PA6 is an unconnected `digital_out`,
+  probed. The firmware is the same ELF. The graph is ngspice→U1 and the plan
+  is [ngspice, U1].
+- **Analytic crossings.** The table under "Feedback-path correctness" leaves
+  out the 5 ppm of `cin` and half the 5 ns drive ramp. With both included,
+  the rising crossing is 0.954854 ms after the PA5 edge, and the run gives
+  50.954859 ms. The 5 ns gap is the linear interpolation between solver
+  points at most 10 µs apart. The cells are as the table says: (50.95,
+  50.96] and (101.45, 101.46] ms. From 299.99993 ms on, the PA5 edges drift
+  by tens of ns, as in the spike (Renode's SysTick reload timing), so
+  `check_feedback.py` computes each analytic crossing from the measured PA5
+  edge (the RC charge carried over).
+- **Gates (measured).**
+  - **PB0 in the analytic cells, every period:** all 9 PB0 transitions of
+    the 500 ms run land in their analytic cells: 50.95–50.96, 101.45–101.46,
+    150.95–150.96, 201.45–201.46, 250.95–250.96, 301.45–301.46,
+    350.95–350.96, 401.45–401.46 and 450.95–450.96 ms. The largest
+    difference from the analytic time is 5.3 ns. The tenth PA5 edge
+    (499.99987 ms) has no crossing before the end of the run.
+  - **PA6 never before `ceil_L(t_x)`:** each of the 9 PA6 edges is at
+    `ceil_L(t_x) + 1 fs` (lattice rule 1), inside
+    `(ceil_L(t_x), ceil_L(t_x) + L]`.
+  - **Registration order swapped** (`make feedback-order`, and for the open
+    variant inside `make feedback-open`): `nets.csv`, `events.jsonl` and
+    `nets.vcd` byte-identical.
+  - **10-run determinism** (`make feedback-determinism`): `nets.csv`
+    1f610526…, `events.jsonl` c4855b92…, `nets.vcd` 7ad78d8c…, identical in
+    all 10 runs and equal to `make feedback`'s run.
+  - **Golden snapshot `tests/golden/feedback/`:** `sense.csv` and
+    `led_b.csv` (10 kHz, checked within 1 mV / 1 sample by `golden.py`) and
+    `pin_edges.jsonl` (exact). `make golden-update` regenerates them.
+  - **`examples/feedback-open` partition gate:** at `--max-quantum` 10 µs,
+    100 µs, 1 ms, 10 ms, 50 ms and 500 ms (50 000, 5 000, 500, 50, 10 and 1
+    grants), `nets.csv` 819cd24b…, `nets.vcd` fa0c9668… and the non-grant
+    records d7c525b7… equal the committed one-cell reference hashes
+    (`tests/golden/feedback-open/partition.sha256`). The 10 ms run passes
+    `check_feedback.py --open`: the same 9 cells, and PA6 at
+    `ceil_L(t_x) + 1 fs` with Renode's `RUN_FOR` split at `ceil_L(t_x)`.
+  - ngspice tests (`engines/analog-ngspice/tests/threshold.rs`): the RC
+    crossings are within 1 µs of the analytic times, in the analytic cells,
+    and bit-identical for 10 µs, 70 µs and 1 ms grants. A slow ramp with
+    0.3 V ripple through the 0.8–2.0 V band gives exactly one transition per
+    direction, where a single 2.0 V threshold would cross 14 times. The
+    `cin` glue moves the crossing as expected, and bad models are rejected.
+- **One-cell cost of `examples/feedback`** (500 ms, `L` = 10 µs). This is
+  the Part A baseline that step 8's "≥ 10× vs step 4" is measured against.
+  Every run takes **50 000 grants**, all `loop_quantum` except the last,
+  which is `engine:ngspice` (its `t_stop` ties `t_end`). Measurement
+  protocol: interleaved runs, N = 5 per case, medians, startup separate,
+  load average 3.6–5.0 (other work shared the host).
+  - Default `--verify edges`: simulation **31.8 s** (0.64 ms per grant;
+    runs 26.8–37.1 s), startup 3.9 s, total 36.0 s, user+sys CPU 33.1 s.
+  - `--no-verify` (`final`): simulation 33.8 s (27.9–38.7 s), total 37.6 s,
+    CPU 34.8 s.
+  - All ten runs are byte-identical to `make feedback`'s outputs.
+  - `--no-verify` buys nothing here, because `Edges` already checks only the
+    few dozen grants that carry one of the 28 edges or an input. The ADR's estimate of 18.12 s
+    ("Expected speed-up", feedback Part A) was a profile on a less loaded
+    host. The measured cost per grant (0.64 ms) matches the spike's
+    one-cell runs on this host (45.9 s for 50 000 grants in step 3's perf
+    gate, with more load).
+  - Single runs elsewhere: 29.0–52.7 s of simulation in `make feedback`,
+    and 51–58 s in the 5-parallel `make feedback-determinism`.
+  - For comparison, `examples/feedback-open` takes 50 grants and 2.1 s of
+    simulation at the default 10 ms, against 34.8 s in one-cell grants
+    (`make feedback-open`).

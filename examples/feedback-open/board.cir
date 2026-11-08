@@ -1,0 +1,32 @@
+* Breadboard acyclic feedback variant (ADR-003 plan step 4,
+* examples/feedback-open): the feedback board with the loop opened.
+*
+*   V_DRV (pulse, the firmware's PA5 timing) -> 25 ohm -> R2 1k -> SENSE;
+*   C1 1 uF SENSE -> GND
+*   SENSE -> U1.PB0 (digital_in: vih 2.0 V, vil 0.8 V, cin 5 pF)
+*   U1.PA6: digital_out, probed but not connected to the circuit
+*
+* Firmware: examples/feedback/firmware/feedback.c, unchanged (its PA5 is
+* not bound; the circuit drives SENSE from its own source instead).
+*
+* Nothing the MCU drives is loaded by the circuit, so the binding graph is
+* ngspice -> U1 only: acyclic, ngspice first in the plan, and grants are
+* --max-quantum long (ADR-003 D3, D4). ngspice reports each PB0 crossing in
+* its trace before U1 advances, and Renode applies it at ceil_L(t_x) by
+* splitting its RUN_FOR there. The outputs must equal the one-cell
+* reference (--max-quantum = --renode-quantum) byte for byte
+* (make feedback-open, the partition gate).
+*
+*bb part U1 engine=renode platform=stm32f103
+*bb pin U1.PB0 net=SENSE model=digital_in vih=2.0 vil=0.8 cin=5e-12
+*bb pin U1.PA6 model=digital_out
+
+* Circuit body. Node 0 is GND. V_DRV toggles every 50 ms from 50 ms on,
+* 5 ns edges, like the firmware's PA5 (which toggles at k * 50 ms + 1 fs).
+V_DRV DRV 0 PULSE(0 3.3 50m 5n 5n 49.999995m 100m)
+R_DRV DRV DRVZ 25
+R2 DRVZ SENSE 1k
+C1 SENSE 0 1u
+
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

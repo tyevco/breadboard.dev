@@ -25,7 +25,7 @@ Run these inside WSL Ubuntu 24.04 or Linux, from the repo root:
 
 ```sh
 make setup   # pinned toolchain: Rust, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42
-make test    # cargo tests + 500 ms spike + 10-run determinism + golden diff
+make test    # cargo tests + 500 ms spike + 10-run determinism + golden diff + feedback board
 ```
 
 From Windows: `wsl -d Ubuntu-24.04 -- bash -lc 'cd /mnt/c/source/tyevco/breadboard.dev && make setup && make test'`.
@@ -64,6 +64,37 @@ The run writes these files to `out/spike/`:
    `nets.vcd` must be identical across all of them.
 4. `make golden`: LED_A from the spike run is diffed against
    `tests/golden/spike/led_a.csv` (a 10 kHz snapshot) within 1 mV / 1 sample.
+5. `make feedback`: 500 ms of `examples/feedback`, a board with a feedback
+   loop (below), then `scripts/check_feedback.py` and the golden snapshot
+   `tests/golden/feedback/`.
+6. `make feedback-order`: the same run with the engines registered in the
+   other order must be byte-identical.
+
+`make feedback-determinism` (10 runs) and `make feedback-open` (the partition
+gate of the open-loop variant) run in their own CI job.
+
+## Feedback example
+
+`examples/feedback` is a board on which the MCU reads back a node it drives
+(ADR-003 "Feedback-path correctness"):
+
+```
+U1.PA5 ─ 25 Ω ─ R2 1 kΩ ─ SENSE ─ C1 1 µF ─ GND
+                          SENSE ──▶ U1.PB0 digital_in {vih 2.0 V, vil 0.8 V, cin 5 pF}
+U1.PA6 ─ 25 Ω ─ R3 330 Ω ─ LED_B ─ D2 (red) ─ GND
+```
+
+The firmware toggles PA5 every 50 ms (SysTick). An EXTI0 interrupt on both
+edges of PB0 copies PB0 to PA6. ngspice thresholds SENSE with the
+`digital_in` hysteresis at every solver point and reports each crossing,
+interpolated between solver points, as a PB0 edge. PB0 rises 0.954859 ms
+after each PA5 rise, in the 10 µs cell 50.95–50.96 ms, and falls 1.452500 ms
+after each fall, in 101.45–101.46 ms. Renode sees the change at the end of
+that cell, `ceil_L(t_x)`, and PA6 follows 1 fs later. The loop
+U1 → ngspice → U1 keeps every grant at one Renode quantum (10 µs), so this
+board is correct but slow until ADR-003 Part B. Opening the loop
+(`examples/feedback-open`, SENSE driven by a circuit source) gives long
+grants again with byte-identical outputs.
 
 ## Result
 
@@ -100,6 +131,8 @@ average 3–12 from other work on the host).
 | --- | --- | --- | --- |
 | `--max-quantum 10us` (the Phase 0 setting: one-cell lockstep) | 50 000 | 45.9 s | 54.0 s |
 | default `--max-quantum 10ms` (`make spike`) | 50 | **1.42 s** (32×) | 9.2 s, mostly 4.9 s of engine startup |
+| `examples/feedback` (a feedback loop: one-cell grants whatever `--max-quantum` is) | 50 000 | 31.8 s (0.64 ms per grant) | 36.0 s |
+| `examples/feedback-open` (the loop opened), default 10 ms grants | 50 | 2.1 s | 7.4 s |
 
 The cost of a co-simulation is almost all fixed cost per grant (Renode's
 pause/resume per `RUN_FOR`), so the lever is fewer grants. Since ADR-003 the
@@ -108,8 +141,11 @@ of a grant in a trace, its quantum (the lattice) stays 10 µs, and ngspice
 lands on every lattice point. The spike gives byte-identical `nets.csv`,
 `nets.vcd` and `pin_edge` records at 10 µs, 100 µs, 10 ms, 50 ms and 500 ms
 grants (`make partition`). A board with a feedback loop (an analog net read
-back by the MCU) runs in one-cell grants; ADR-003 Part B lifts that while the
-MCU sleeps. The full cost table is refreshed in ADR-003 plan step 10.
+back by the MCU, `examples/feedback`) runs in one-cell grants; ADR-003 Part B
+lifts that while the MCU sleeps. The `examples/feedback` row is the median of
+5 interleaved runs (ADR-003 Amendment 4), and the `examples/feedback-open` row
+is one run of `make feedback-open`. Neither is `make perf`. The full cost table
+is refreshed in ADR-003 plan step 10.
 
 **Edge times depend on the Renode quantum, not on the grant partition**
 (ADR-003 D2). Renode's quantum (`--renode-quantum`, default 10 µs) is a grid

@@ -2,7 +2,8 @@
 
 Status: normative. Implementation: `bbcore::pin`, `bbcore::signal`. Changing
 this file requires an ADR. `digital_out` ramp start: ADR-003 D3 (plan step 3,
-Amendment 3).
+Amendment 3). `digital_in` thresholding by the producing analog engine and its
+glue: ADR-003 D3 (plan step 4, Amendment 4).
 
 Every component pin has **exactly one** pin model, supplied by its package (in
 Phase 0, hand-written in the board netlist). The kernel connects pins to nets
@@ -31,7 +32,7 @@ enum PinSignal {
 | Model | Parameters | Phase 0 use |
 | --- | --- | --- |
 | `digital_out` | `voh` V, `vol` V, `rise` Time, `fall` Time, `zout` Ω | **yes** (STM32 PA5) |
-| `digital_in` | `vih` V, `vil` V, `cin` F | not yet |
+| `digital_in` | `vih` V, `vil` V, `cin` F | **yes** (STM32 PB0 in `examples/feedback`) |
 | `analog` | none; bidirectional node, exchanged as volts | not yet (as a probe target only) |
 | `power` | `vmin` V, `vmax` V, `imax` A | not yet |
 | `passive` | none; exists only inside the analog engine (R, C, LED...) | **yes** (330 Ω, LED) |
@@ -63,12 +64,28 @@ Phase 0 STM32F103 GPIO (`DigitalOut::STM32_GPIO_3V3`):
 
 ### `digital_in{vih, vil, cin}`
 
-When an analog net feeds a digital engine, the producing analog engine (or the
-kernel glue) reports `Analog{volts}`. The consuming digital engine thresholds it
-with hysteresis using `DigitalIn::threshold(previous, volts)`: from Low, the pin
-reads High once `volts >= vih`; from High, it reads Low once `volts <= vil`;
-otherwise it keeps the previous level. `cin` is added to the analog netlist as a
-capacitor to ground on the net.
+When an analog net feeds a digital engine, the **producing** analog engine
+thresholds it (ADR-003 D3) and the value crosses the boundary as `Digital`:
+
+- At every accepted solver point it applies
+  `DigitalIn::threshold(previous, volts)` with hysteresis: from Low, the pin
+  reads High once `volts >= vih`; from High, it reads Low once
+  `volts <= vil`; otherwise it keeps the previous level. `vil < vih`.
+- At a level change, the crossing time is linearly interpolated between the
+  two straddling solver points, through `vih` (rising) or `vil` (falling),
+  and rounded up to whole femtoseconds, but kept strictly after the earlier
+  point and not after the later one. It is reported as a `Digital`
+  transition of the producer's trace (`spec/time-grant.md`), so any number
+  of changes per grant reach the consumer, each at its time. This is a pure
+  function of the solver points, which the grant lattice makes partition
+  independent (ADR-003 D2).
+- The level at t = 0 is `threshold(Low, v(0))`.
+- A glitch that starts and ends between two solver points (at most
+  `TMAX = L` apart) is missed. A slow ramp, even with peak-to-peak ripple
+  smaller than `vih - vil`, gives exactly one transition per direction.
+
+`cin` is added to the analog netlist as a capacitor to ground on the net.
+A lattice-bound consumer (Renode) applies each transition at `ceil_L(t)`.
 
 ### `analog`
 
@@ -90,9 +107,16 @@ boundary; the analog engine handles it entirely.
 1. A net driven by a `digital_out` and loaded by an analog engine gets the
    `EXTERNAL` source plus `zout` construct above, with one source per driver.
 2. A net driven by an analog engine and loaded by a `digital_in` gets the `cin`
-   capacitor, and its value crosses the boundary as `Analog`.
+   capacitor (`C_bbin_<pin> <net> 0 {cin}`, omitted when `cin = 0`), and its
+   value crosses the boundary as the thresholded `Digital` trace above.
 3. Glue element names are a pure function of the pin and net names
-   (`V_<pin>`, `R_<pin>_zout`), so generated netlists are deterministic.
-4. Phase 0 generates the glue by hand in the example netlist. The automatic
-   generator arrives with the KiCad importer, which must not parse KiCad with
-   regex.
+   (`V_<pin>`, `R_<pin>_zout`, `C_bbin_<pin>` with every character other
+   than an ASCII letter or digit replaced by `_`), so generated netlists are
+   deterministic.
+4. A `digital_out` that is not connected to the circuit (a board pin without
+   `net=`, e.g. `examples/feedback-open` U1.PA6) gets no glue and loads
+   nothing; its digital net can still be probed.
+5. In Phase 0, `bb run` generates the glue from the board file's `*bb pin`
+   directives (the analog engine writes it into the netlist). The automatic
+   generator from schematics arrives with the KiCad importer, which must not
+   parse KiCad with regex.

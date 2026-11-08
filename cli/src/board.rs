@@ -7,13 +7,21 @@
 //!
 //! Directives:
 //! - `*bb part <ref> engine=renode platform=stm32f103`
-//! - `*bb pin <ref>.<pin> net=<net> model=digital_out voh=<V> vol=<V> rise=<t> fall=<t> zout=<ohm>`
+//! - `*bb pin <ref>.<pin> net=<net> model=digital_out voh=<V> vol=<V> rise=<t> fall=<t> zout=<ohm>`:
+//!   an MCU output driving circuit node `<net>` through generated glue.
+//! - `*bb pin <ref>.<pin> model=digital_out` (no `net=`, no electrical keys):
+//!   an MCU output not connected to the circuit. Its kernel net
+//!   `<ref>.<pin>` can still be probed; nothing loads it.
+//! - `*bb pin <ref>.<pin> net=<net> model=digital_in vih=<V> vil=<V> cin=<F>`:
+//!   an MCU input reading circuit node `<net>` through the `digital_in` model
+//!   (hysteresis, `vil < vih`; `cin` in farads, e.g. `5e-12`). The analog
+//!   engine thresholds the node and adds `cin` as glue (ADR-003 D3).
 //!
 //! The parser is a tokenizer over a line-oriented grammar; no regex.
 
 use std::collections::BTreeMap;
 
-use bbcore::{DigitalOut, Time};
+use bbcore::{DigitalIn, DigitalOut, Time};
 
 /// A part simulated by a CPU engine.
 #[derive(Clone, Debug, PartialEq)]
@@ -23,16 +31,25 @@ pub struct Part {
     pub platform: String,
 }
 
-/// An MCU pin bound to a circuit net through a digital-out pin model.
+/// How an MCU pin meets the circuit.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PinKind {
+    /// `digital_out` driving circuit node `net` through generated glue.
+    Out { net: String, model: DigitalOut },
+    /// `digital_out` not connected to the circuit (probe only).
+    OutUnconnected,
+    /// `digital_in` reading circuit node `net`.
+    In { net: String, model: DigitalIn },
+}
+
+/// An MCU pin bound through its pin model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinBinding {
     /// Part reference, e.g. `U1`.
     pub part: String,
     /// Pin name on the part, e.g. `PA5`.
     pub pin: String,
-    /// Circuit net the generated glue drives, e.g. `PA5`.
-    pub net: String,
-    pub model: DigitalOut,
+    pub kind: PinKind,
 }
 
 impl PinBinding {
@@ -156,34 +173,66 @@ pub fn parse(text: &str) -> Result<Board, String> {
                 if pins.iter().any(|p| p.part == part && p.pin == pin) {
                     return Err(format!("line {lineno}: pin {name} bound twice"));
                 }
-                let net = take(lineno, &mut kv, "net")?.to_string();
-                if pins.iter().any(|p| p.net.eq_ignore_ascii_case(&net)) {
-                    return Err(format!(
-                        "line {lineno}: net {net} already driven by another pin"
-                    ));
-                }
-                let kind = take(lineno, &mut kv, "model")?;
-                if kind != "digital_out" {
-                    return Err(format!(
-                        "line {lineno}: model={kind} not supported (Phase 0: digital_out)"
-                    ));
-                }
-                let model = DigitalOut {
-                    voh: volts(lineno, "voh", take(lineno, &mut kv, "voh")?)?,
-                    vol: volts(lineno, "vol", take(lineno, &mut kv, "vol")?)?,
-                    rise: time(lineno, "rise", take(lineno, &mut kv, "rise")?)?,
-                    fall: time(lineno, "fall", take(lineno, &mut kv, "fall")?)?,
-                    zout: volts(lineno, "zout", take(lineno, &mut kv, "zout")?)?,
+                let net = kv.remove("net").map(str::to_string);
+                let model_kind = take(lineno, &mut kv, "model")?;
+                let kind = match (model_kind, net) {
+                    ("digital_out", Some(net)) => {
+                        if pins.iter().any(|p| {
+                            matches!(&p.kind, PinKind::Out { net: n, .. } if n.eq_ignore_ascii_case(&net))
+                        }) {
+                            return Err(format!(
+                                "line {lineno}: net {net} already driven by another pin"
+                            ));
+                        }
+                        let model = DigitalOut {
+                            voh: volts(lineno, "voh", take(lineno, &mut kv, "voh")?)?,
+                            vol: volts(lineno, "vol", take(lineno, &mut kv, "vol")?)?,
+                            rise: time(lineno, "rise", take(lineno, &mut kv, "rise")?)?,
+                            fall: time(lineno, "fall", take(lineno, &mut kv, "fall")?)?,
+                            zout: volts(lineno, "zout", take(lineno, &mut kv, "zout")?)?,
+                        };
+                        if model.zout < 0.0 {
+                            return Err(format!("line {lineno}: zout must be >= 0"));
+                        }
+                        PinKind::Out { net, model }
+                    }
+                    ("digital_out", None) => {
+                        if let Some(k) = kv.keys().next() {
+                            return Err(format!(
+                                "line {lineno}: {k}=: a digital_out without net= is not \
+                                 connected to the circuit and takes no electrical keys"
+                            ));
+                        }
+                        PinKind::OutUnconnected
+                    }
+                    ("digital_in", Some(net)) => {
+                        let model = DigitalIn {
+                            vih: volts(lineno, "vih", take(lineno, &mut kv, "vih")?)?,
+                            vil: volts(lineno, "vil", take(lineno, &mut kv, "vil")?)?,
+                            cin: volts(lineno, "cin", take(lineno, &mut kv, "cin")?)?,
+                        };
+                        if model.vil >= model.vih {
+                            return Err(format!("line {lineno}: digital_in needs vil < vih"));
+                        }
+                        if model.cin < 0.0 {
+                            return Err(format!("line {lineno}: cin must be >= 0"));
+                        }
+                        PinKind::In { net, model }
+                    }
+                    ("digital_in", None) => {
+                        return Err(format!("line {lineno}: digital_in needs net="))
+                    }
+                    (other, _) => {
+                        return Err(format!(
+                            "line {lineno}: model={other} not supported (digital_out, digital_in)"
+                        ))
+                    }
                 };
                 no_extra(lineno, &kv)?;
-                if model.zout < 0.0 {
-                    return Err(format!("line {lineno}: zout must be >= 0"));
-                }
                 pins.push(PinBinding {
                     part: part.to_string(),
                     pin: pin.to_string(),
-                    net,
-                    model,
+                    kind,
                 });
             }
             other => return Err(format!("line {lineno}: unknown directive *bb {other}")),
@@ -207,12 +256,69 @@ mod tests {
         assert_eq!(b.parts[0].reference, "U1");
         assert_eq!(b.pins.len(), 1);
         let p = &b.pins[0];
+        assert_eq!((p.part.as_str(), p.pin.as_str()), ("U1", "PA5"));
         assert_eq!(
-            (p.part.as_str(), p.pin.as_str(), p.net.as_str()),
-            ("U1", "PA5", "PA5")
+            p.kind,
+            PinKind::Out {
+                net: "PA5".into(),
+                model: DigitalOut::STM32_GPIO_3V3
+            }
         );
-        assert_eq!(p.model, DigitalOut::STM32_GPIO_3V3);
         assert_eq!(p.kernel_net(), "U1.PA5");
+    }
+
+    #[test]
+    fn parses_feedback_boards() {
+        let b = parse(include_str!("../../examples/feedback/board.cir")).unwrap();
+        let kinds: Vec<(&str, &PinKind)> =
+            b.pins.iter().map(|p| (p.pin.as_str(), &p.kind)).collect();
+        assert_eq!(kinds.len(), 3);
+        assert_eq!(
+            kinds[1],
+            (
+                "PB0",
+                &PinKind::In {
+                    net: "SENSE".into(),
+                    model: DigitalIn {
+                        vih: 2.0,
+                        vil: 0.8,
+                        cin: 5e-12
+                    }
+                }
+            )
+        );
+        assert!(matches!(kinds[2], ("PA6", PinKind::Out { net, .. }) if net == "PA6"));
+        let open = parse(include_str!("../../examples/feedback-open/board.cir")).unwrap();
+        let kinds: Vec<(&str, &PinKind)> = open
+            .pins
+            .iter()
+            .map(|p| (p.pin.as_str(), &p.kind))
+            .collect();
+        assert!(matches!(kinds[0], ("PB0", PinKind::In { .. })));
+        assert_eq!(kinds[1], ("PA6", &PinKind::OutUnconnected));
+    }
+
+    #[test]
+    fn digital_in_and_unconnected_pins() {
+        let part = "*bb part U1 engine=renode platform=stm32f103\n";
+        let ok = |s: &str| parse(&format!("{part}{s}\n"));
+        assert!(ok("*bb pin U1.PB0 net=S model=digital_in vih=2 vil=0.8 cin=5e-12").is_ok());
+        assert!(ok("*bb pin U1.PB0 model=digital_in vih=2 vil=0.8 cin=0").is_err());
+        assert!(ok("*bb pin U1.PB0 net=S model=digital_in vih=2 vil=2 cin=0").is_err());
+        assert!(ok("*bb pin U1.PB0 net=S model=digital_in vih=2 vil=1 cin=-1").is_err());
+        assert!(ok("*bb pin U1.PB0 net=S model=digital_in vih=2 vil=1").is_err());
+        assert!(ok("*bb pin U1.PA6 model=digital_out").is_ok());
+        assert!(ok("*bb pin U1.PA6 model=digital_out voh=3.3").is_err());
+        assert!(ok("*bb pin U1.PA6 net=S model=analog").is_err());
+        // Two inputs may read one node; an input may read a driven node.
+        let out = "*bb pin U1.PA5 net=S model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25";
+        let b = ok(&format!(
+            "{out}\n*bb pin U1.PB0 net=S model=digital_in vih=2 vil=1 cin=0\n\
+             *bb pin U1.PB1 net=S model=digital_in vih=2 vil=1 cin=0"
+        ))
+        .unwrap();
+        assert_eq!(b.pins.len(), 3);
+        assert!(ok(&format!("{out}\n{}", out.replace("PA5", "PA6"))).is_err());
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
 //!        --probe net:<NET> [--probe net:<NET> ...] --out <dir>
 //!        [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
-//!        [--renode <path>] [--verify edges] [--no-verify]
+//!        [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
 //! ```
 //!
 //! Writes `<out>/events.jsonl`, `<out>/nets.csv` and `<out>/nets.vcd`, and
@@ -14,10 +14,14 @@
 //! must stay byte-identical across runs).
 //!
 //! The kernel advances engines in the plan order it builds from the bindings
-//! (ADR-003 D3): the MCU drives the analog engine's inputs, so it advances
-//! first, and every MCU edge of a grant (its trace) reaches ngspice before
-//! ngspice advances through it, at its exact Renode timestamp. The
-//! registration order does not matter.
+//! (ADR-003 D3). When the MCU only drives the analog engine (the spike), it
+//! advances first, and every MCU edge of a grant (its trace) reaches ngspice
+//! before ngspice advances through it, at its exact Renode timestamp. When
+//! ngspice only drives MCU inputs (`digital_in`, `examples/feedback-open`),
+//! ngspice goes first and Renode applies each thresholded transition at
+//! `ceil_L(t)`. With both (a feedback loop, `examples/feedback`) the grants
+//! are one Renode quantum. The registration order does not matter
+//! (`--engine-order`).
 
 mod board;
 
@@ -27,20 +31,23 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use bb_analog_ngspice::{Drive, InputBinding, NgspiceConfig, NgspiceEngine, OutputBinding};
+use bb_analog_ngspice::{
+    DigitalOutputBinding, Drive, InputBinding, NgspiceConfig, NgspiceEngine, OutputBinding,
+};
 use bb_cpu_renode::{find_renode, PinDirection, PinSpec, RenodeConfig, RenodeEngine, Verify};
 use bbcore::{
     CsvWriter, Direction, Engine, EventSink, Level, Probe, Scheduler, SchedulerConfig, Time,
     VcdKind, VcdWriter,
 };
+use board::PinKind;
 
 const USAGE: &str = "\
 usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
-              [--renode <path>] [--verify edges] [--no-verify]
+              [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
 
-  --netlist      board file: SPICE body plus *bb directives (examples/spike/board.cir)
+  --netlist     board file: SPICE body plus *bb directives (examples/spike/board.cir)
   --firmware     ELF loaded into the target MCU
   --target       part reference the firmware runs on (e.g. U1)
   --for          simulated duration, e.g. 500ms
@@ -69,7 +76,10 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  the engine: every (each grant), edges (grants with an edge or
                  input, and the end; default) or final (end only). Pure reads:
                  outputs are identical in every mode
-  --no-verify    alias for --verify final";
+  --no-verify    alias for --verify final
+  --engine-order registration order: mcu-first (default) or analog-first. The
+                 advance order comes from the bindings, so outputs are
+                 identical either way (ADR-003 D3; a test knob)";
 
 struct RunArgs {
     netlist: PathBuf,
@@ -84,6 +94,26 @@ struct RunArgs {
     seed: i32,
     renode: Option<PathBuf>,
     verify: Verify,
+    engine_order: EngineOrder,
+}
+
+/// Registration order of the two engines (`--engine-order`). It must not
+/// change any output (ADR-003 D3); the option exists for that gate.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum EngineOrder {
+    McuFirst,
+    AnalogFirst,
+}
+
+impl std::str::FromStr for EngineOrder {
+    type Err = String;
+    fn from_str(s: &str) -> Result<EngineOrder, String> {
+        match s {
+            "mcu-first" => Ok(EngineOrder::McuFirst),
+            "analog-first" => Ok(EngineOrder::AnalogFirst),
+            _ => Err(format!("{s:?}: expected mcu-first or analog-first")),
+        }
+    }
 }
 
 /// Parse `<number>[.<frac>]<unit>` with unit Hz, kHz, MHz or GHz into an exact
@@ -143,6 +173,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut seed = 0i32;
     let mut renode = None;
     let mut verify = Verify::Edges;
+    let mut engine_order = EngineOrder::McuFirst;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -186,6 +217,11 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--renode" => renode = Some(PathBuf::from(val(a)?)),
             "--verify" => verify = val(a)?.parse().map_err(|e| format!("--verify: {e}"))?,
             "--no-verify" => verify = Verify::Final,
+            "--engine-order" => {
+                engine_order = val(a)?
+                    .parse()
+                    .map_err(|e| format!("--engine-order: {e}"))?
+            }
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -222,6 +258,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         seed,
         renode,
         verify,
+        engine_order,
     })
 }
 
@@ -268,7 +305,13 @@ fn run(a: RunArgs) -> Result<(), String> {
     rcfg.verify = a.verify;
     rcfg.pins = mcu_pins
         .iter()
-        .map(|p| PinSpec::stm32(&p.pin, PinDirection::Output))
+        .map(|p| {
+            let dir = match p.kind {
+                PinKind::In { .. } => PinDirection::Input,
+                PinKind::Out { .. } | PinKind::OutUnconnected => PinDirection::Output,
+            };
+            PinSpec::stm32(&p.pin, dir)
+        })
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
 
@@ -279,15 +322,26 @@ fn run(a: RunArgs) -> Result<(), String> {
     let mut ncfg = NgspiceConfig::new(board.spice.clone(), a.duration, a.renode_quantum);
     ncfg.lattice = Some(a.renode_quantum);
     for p in &mcu_pins {
-        ncfg.inputs.push(InputBinding {
-            pin: p.kernel_net(),
-            source: format!("V_bb_{}_{}", p.part, p.pin),
-            drive: Drive::Digital {
-                model: p.model,
-                initial: Level::Low,
-            },
-            glue_node: Some(p.net.clone()),
-        });
+        match &p.kind {
+            // An MCU output into the circuit: EXTERNAL source + zout glue.
+            PinKind::Out { net, model } => ncfg.inputs.push(InputBinding {
+                pin: p.kernel_net(),
+                source: format!("V_bb_{}_{}", p.part, p.pin),
+                drive: Drive::Digital {
+                    model: *model,
+                    initial: Level::Low,
+                },
+                glue_node: Some(net.clone()),
+            }),
+            // An MCU input: ngspice thresholds the node (ADR-003 D3) and
+            // adds cin.
+            PinKind::In { net, model } => ncfg.digital_outputs.push(DigitalOutputBinding {
+                pin: p.kernel_net(),
+                node: net.clone(),
+                model: *model,
+            }),
+            PinKind::OutUnconnected => {}
+        }
     }
     let analog_probes: Vec<&String> = a
         .probes
@@ -315,28 +369,40 @@ fn run(a: RunArgs) -> Result<(), String> {
         event_sampling: None,
     })
     .map_err(|e| e.to_string())?;
-    let cpu_id = sched.add_engine(Box::new(cpu)).map_err(|e| e.to_string())?;
-    let an_id = sched
-        .add_engine(Box::new(analog))
-        .map_err(|e| e.to_string())?;
+    // Registration order only breaks ties (plan order, record order); the
+    // advance order comes from the bindings (ADR-003 D3).
+    let (cpu_id, an_id) = match a.engine_order {
+        EngineOrder::McuFirst => {
+            let c = sched.add_engine(Box::new(cpu)).map_err(|e| e.to_string())?;
+            let n = sched
+                .add_engine(Box::new(analog))
+                .map_err(|e| e.to_string())?;
+            (c, n)
+        }
+        EngineOrder::AnalogFirst => {
+            let n = sched
+                .add_engine(Box::new(analog))
+                .map_err(|e| e.to_string())?;
+            let c = sched.add_engine(Box::new(cpu)).map_err(|e| e.to_string())?;
+            (c, n)
+        }
+    };
     let bind = |s: &mut Scheduler, id, pin: &str, net: &str, d| {
         s.bind(id, pin, net, d).map_err(|e| e.to_string())
     };
     for p in &mcu_pins {
-        bind(
-            &mut sched,
-            cpu_id,
-            &p.pin,
-            &p.kernel_net(),
-            Direction::Output,
-        )?;
-        bind(
-            &mut sched,
-            an_id,
-            &p.kernel_net(),
-            &p.kernel_net(),
-            Direction::Input,
-        )?;
+        let k = p.kernel_net();
+        match p.kind {
+            PinKind::Out { .. } => {
+                bind(&mut sched, cpu_id, &p.pin, &k, Direction::Output)?;
+                bind(&mut sched, an_id, &k, &k, Direction::Input)?;
+            }
+            PinKind::OutUnconnected => bind(&mut sched, cpu_id, &p.pin, &k, Direction::Output)?,
+            PinKind::In { .. } => {
+                bind(&mut sched, an_id, &k, &k, Direction::Output)?;
+                bind(&mut sched, cpu_id, &p.pin, &k, Direction::Input)?;
+            }
+        }
     }
     for n in &analog_probes {
         bind(&mut sched, an_id, n, n, Direction::Output)?;
@@ -384,14 +450,32 @@ fn run(a: RunArgs) -> Result<(), String> {
     };
     sink.flush().map_err(|e| format!("write events: {e}"))?;
     let run_s = t_run.elapsed().as_secs_f64();
+    let plan = match sched.plan() {
+        Some(p) => {
+            let names = p
+                .order
+                .iter()
+                .map(|&i| {
+                    if i == cpu_id.index() {
+                        part.reference.as_str()
+                    } else {
+                        analog_name.as_str()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            format!("{names}{}", if p.cyclic { ", feedback loop" } else { "" })
+        }
+        None => String::new(),
+    };
     drop(sched); // stops Renode and releases ngspice
     let total_s = wall.elapsed().as_secs_f64();
 
     let mut so = std::io::stdout().lock();
     let _ = writeln!(
         so,
-        "bb run: simulated {} in {} grants (max quantum {}, renode quantum {}, engines {} -> {analog_name})",
-        summary.now, summary.grants, a.max_quantum, a.renode_quantum, part.reference
+        "bb run: simulated {} in {} grants (max quantum {}, renode quantum {}, plan {plan})",
+        summary.now, summary.grants, a.max_quantum, a.renode_quantum
     );
     let _ = writeln!(
         so,
@@ -478,5 +562,14 @@ mod tests {
         let mut bad = v.clone();
         bad.push("--bogus".into());
         assert!(parse_args(&bad).is_err());
+        assert_eq!(a.engine_order, EngineOrder::McuFirst);
+        let mut o = v.clone();
+        o.extend(["--engine-order".into(), "analog-first".into()]);
+        assert_eq!(
+            parse_args(&o).unwrap().engine_order,
+            EngineOrder::AnalogFirst
+        );
+        o.extend(["--engine-order".into(), "random".into()]);
+        assert!(parse_args(&o).is_err());
     }
 }

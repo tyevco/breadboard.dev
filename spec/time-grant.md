@@ -7,7 +7,8 @@ Status: normative. Rationale: `docs/adr/002-time-grant-protocol.md`
 `docs/adr/003-cosim-speedup.md` D2 (plan step 2, Amendment 2); the end-of-run
 hook (`end_of_run`) is ADR-003 Amendment 1; traces, the plan order, the loop
 cap, the record order and sampled VCDs are ADR-003 D3/D4 (plan step 3,
-Amendment 3).
+Amendment 3); `digital_in` thresholding, which produces the analog → digital
+traces of example 3, is ADR-003 D3 (plan step 4, Amendment 4).
 Implementation: `bbcore::Scheduler`. Changing this file requires an ADR (see
 `AGENTS.md`).
 
@@ -323,15 +324,18 @@ outputs.
 U1 PA5 drives an RC; the RC node drives U1.PB0 back (`digital_in`, ADR-003
 "Feedback-path correctness"). The binding graph has the cycle U1 → ngspice →
 U1, so the plan order is [U1, ngspice] (lattice-bound first) and every grant
-is capped at `loop_quantum` = `L` = 10 µs, whatever `max_quantum` is. (The
-loop cap and the boundary delivery are implemented; ngspice's `digital_in`
-thresholding, which produces the PB0 trace, lands in ADR-003 plan step 4.)
+is capped at `loop_quantum` = `L` = 10 µs, whatever `max_quantum` is. This is
+`examples/feedback` (`make feedback`); the times below are its measured
+`pin_edge` records. ngspice thresholds SENSE with the `digital_in` hysteresis
+at every accepted solver point and reports each level change in its trace,
+at the crossing interpolated between the two straddling points
+(`spec/pin-model.md`).
 
 ```
 Grant (50.95, 50.96] limited_by=loop_quantum
   U1  advance_to(50.96)   RunFor(10us); no edge
   ng  advance_to(50.96)   SENSE crosses vih between two solver points
-                          -> trace U1.PB0: High @ t_x = 50.954847.. ms
+                          -> trace U1.PB0: High @ t_x = 50.954859.. ms
   Exchange  U1 comes before ngspice: apply_input_trace([PB0 High @ t_x]) at the
             boundary -> ceil_L(t_x) = 50.96 ms = now -> SET_STATE PB0=1 while paused
 Grant (50.96, 50.97]
@@ -342,6 +346,12 @@ Grant (50.96, 50.97]
 
 The MCU sees the crossing at `ceil_L(t_x)`: never early, and at most one cell
 late, exactly as in any one-cell run.
+
+Opening the loop (`examples/feedback-open`: SENSE driven by a circuit source,
+PA6 not loaded) leaves only ngspice → U1. The plan is [ngspice, U1] and grants
+are `max_quantum` long: ngspice reports `PB0 High @ t_x` in the trace of the
+grant holding it, U1 receives it before it advances and splits its `RunFor`
+at `ceil_L(t_x)`, so the outputs equal the one-cell run's byte for byte.
 
 ## What engines MUST NOT do
 
