@@ -1284,3 +1284,94 @@ digital crossing is an ordinary trace (Amendment 3).
   - For comparison, `examples/feedback-open` takes 50 grants and 2.1 s of
     simulation at the default 10 ms, against 34.8 s in one-cell grants
     (`make feedback-open`).
+
+### Amendment 5: the ADC platform (approver decision 4, ahead of step 9) (2026-11-08)
+
+**Status:** Accepted. Resolves Context fact 8 and Open question 4 for
+Part C. No `spec/`, kernel or engine change: `examples/adc` is a Renode-only
+platform check that step 9 builds on. The facts below were checked against
+the Renode 1.17.0 install and its sources (renode `v1.17.0`, infrastructure
+submodule `066a7f13`), and then measured.
+
+- **Decision: an existing model, no in-repo STM32F1 ADC.** Renode 1.17.0's
+  `platforms/cpus/stm32f072.repl` (via `stm32f0.repl`) has
+  `adc: Analog.STM32F0_ADC @ sysbus 0x40012400` (`referenceVoltage: 3.3`,
+  `externalEventFrequency: 1000`, IRQ 12). `STM32F0_ADC` is an
+  `STM32_ADC_Common`, which implements `IADC`. The External Control `ADC`
+  command (command 4, `ADC.cs`) finds the instance by name (`adc`), and
+  `SetValue(channel, uV)` sets the channel's default `ADCChannelSource`
+  (`IADCExtensions.SetVoltage`). The platform loads offline (no `ApplySVD`).
+  The other candidates do not work: `STM32_ADC` (F4/F7/L0) is not an `IADC`,
+  takes queued samples (`FeedSample`), and has neither the analog watchdog
+  nor external triggers. The G0/L5/H7/WBA models share `STM32_ADC_Common`,
+  so the F0 one has nothing to gain over them, and its CPU (Cortex-M0) is
+  the closest to the F103.
+- **Consequence for the demo board.** Part C's demo is a separate STM32F072
+  board, `examples/adc`, not the F103 feedback board ("ADC on the same
+  board" under Feedback-path correctness). The ADC input is channel 1 on
+  PA1. The Renode engine can load the platform today through
+  `Platform::Repl("platforms/cpus/stm32f072.repl")`. Step 9 adds the `ADC`
+  command to `protocol.rs` and the `adc_in` binding.
+- **Firmware** (`examples/adc/firmware`, `adc.elf`): TIM3 updates every
+  1 ms, and its ISR starts one conversion (`ADSTART`). The analog watchdog
+  watches channel 1 with the window [1241, 2482] (1.0 V to 2.0 V). Its ISR
+  drives PA5 (ALARM) high, and the next in-window conversion drives it low.
+  A status block sits at 0x20000000. The build is reproducible.
+- **Model facts that step 9 must follow** (pinned by the test):
+  1. **The conversion mapping** is
+     `code = round_half_even(floor(uV / 1000) / (vref * 1000) * (2^bits - 1))`,
+     computed in IEEE double. `Sample.Voltage / 1000` is a uint division,
+     so the model sees whole millivolts. This replaces D6's
+     `floor(v / vref * 2^bits)`. The analog watchdog compares this code.
+     Since 1 mV is coarser than one 12-bit code at 3.3 V, the exact and
+     cheapest push rule for `adc_in` is: emit a transition when
+     `floor(uV / 1000)` changes. It is also exact whatever resolution or
+     alignment the firmware selects at run time, which a code-change rule
+     with a fixed `bits` is not.
+  2. **No saturation.** `ADC_DR` is not saturated at 4095: `ClampSample`
+     clamps to the 16-bit DATA field, so 3.4 V reads 4219. The producer
+     must clamp the delivered voltage to [0, vref], as real silicon
+     saturates.
+  3. **`SetValue` of an unchanged value has no side effect.** It only
+     replaces the default sample (the RESD stream is null). Pushing at
+     every lattice point and pushing only at the changes are therefore
+     equivalent on the Renode side (gate 4 below).
+  4. **Hardware triggers are not modelled.** With `EXTEN != 0` the model
+     ignores `EXTSEL` (it is a tag) and converts on its own managed-thread
+     clock entry at `externalEventFrequency`, from the `ADSTART` write.
+     The demo therefore starts conversions from the TIM3 ISR, which keeps
+     the conversion instants under firmware control. Those instants also
+     come from a timer that Part B's nearest-event scan already covers. A
+     board that uses `EXTEN` adds one more clock entry, which step 9's
+     watch and Part B would have to see.
+  5. **TIM3's period on Renode is ARR ticks, not ARR + 1.**
+     `STM32_Timer` sets `Limit = ARR`, so ARR 999 at 1 MHz updates every
+     999 us. In this platform every `STM32_Timer` is clocked at a fixed
+     10 MHz, whatever RCC is set to.
+- **Gate (measured):** `make -C examples/adc test`
+  (`examples/adc/renode_adc_test.py`, Renode only, External Control with
+  `L` = 10 us and lattice-aligned `RUN_FOR`s, `SetValue` while paused on a
+  lattice point). It passes in WSL in 14.7 s for four Renode runs.
+  1. The ADC has 19 channels, and `GetValue` returns exactly the microvolts
+     that `SetValue` wrote.
+  2. **`SetValue` changes the converted value.** The 11 changes over 30 ms
+     give, at each of the 31 observations, the code the mapping above
+     predicts for the value in effect at the last conversion: 1861, 745,
+     2048, 3102, 2482 (2.000999 V is truncated to 2000 mV, which equals HT
+     and is inside the window), 1240, 1241, 4219, 0 and 1861. A 0 V glitch
+     that is restored before the next conversion is never converted.
+  3. **Watchdog.** The watchdog flags exactly the 15 out-of-window
+     conversions. The 8 ALARM edges land at `k * 999 us + 120 ns`, the
+     conversion instants.
+  4. **Determinism and push equivalence.** Two runs that push at the
+     changes and one run in one-cell `RUN_FOR`s that pushes at every
+     lattice point give byte-identical transcripts (sha256 29c76a27…):
+     the status words at every observation, plus every ALARM edge with its
+     Renode stamp.
+  5. **The hardware-trigger build** (`adc_hwtrig.elf`: `EXTSEL` = TIM3_TRGO,
+     TIM3 at 2 ms) makes 20 conversions against 10 TIM3 updates in
+     20.5 ms. The model converts at its 1 kHz rate, not on TRGO (fact 4).
+- **Not yet wired into the top-level `make test` or CI.** This change is
+  limited to `examples/adc` and this ADR, so the top-level Makefile is left
+  alone. Step 9 adds the target (`make -C examples/adc test`; about 15 s)
+  next to the `adc_in` gates.
