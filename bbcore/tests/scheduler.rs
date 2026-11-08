@@ -56,6 +56,8 @@ struct Mock {
     logs: Vec<LogRecord>,
     /// `end_of_run` fails (to test that the error fails the run).
     fail_end: bool,
+    /// Declared grant lattice (ADR-003 D2).
+    lattice: Option<Time>,
 }
 
 impl Mock {
@@ -73,6 +75,7 @@ impl Mock {
             input_high: false,
             logs: Vec::new(),
             fail_end: false,
+            lattice: None,
         }
     }
     fn record(&self, c: Call) {
@@ -151,6 +154,10 @@ impl Engine for Mock {
 
     fn drain_logs(&mut self) -> Vec<LogRecord> {
         std::mem::take(&mut self.logs)
+    }
+
+    fn grant_lattice(&self) -> Option<Time> {
+        self.lattice
     }
 
     fn end_of_run(&mut self) -> Result<(), EngineError> {
@@ -660,4 +667,148 @@ fn end_of_run_is_called_after_the_last_grant() {
         "{err}"
     );
     assert_eq!(s.phase(), Phase::Error);
+}
+
+/// ADR-003 D2: grants are rounded down to the lattice after the min; the
+/// label is the bound that won the min.
+#[test]
+fn grants_round_down_to_the_lattice() {
+    let j: Journal = Rc::default();
+    let mut s = Scheduler::new(cfg(Time::from_us(100))).unwrap();
+    let mut cpu = Mock::new("cpu", &j, |now| now + Time::from_us(25));
+    cpu.lattice = Some(Time::from_us(10));
+    s.add_engine(Box::new(cpu)).unwrap();
+    // A non-lattice engine with an off-lattice lookahead.
+    let mut rng = Lcg(7);
+    s.add_engine(Box::new(Mock::new("jitter", &j, move |now| {
+        now + Time::from_ns(10_001 + rng.next() % 50_000)
+    })))
+    .unwrap();
+    let mut sink = EventSink::new(Vec::new());
+    s.run(Time::from_ms(1), &mut sink, &mut []).unwrap();
+    assert_eq!(s.lattice(), Some(Time::from_us(10)));
+    let gs = grants(&events(sink));
+    let journal = j.borrow();
+    let safes: Vec<Time> = journal
+        .iter()
+        .filter_map(|(_, c)| match c {
+            Call::Safe { t_safe, .. } => Some(*t_safe),
+            _ => None,
+        })
+        .collect();
+    for (k, (from, until, _)) in gs.iter().enumerate() {
+        assert!(
+            until.as_fs().is_multiple_of(Time::from_us(10).as_fs()),
+            "{until}"
+        );
+        let m = safes[2 * k].min(safes[2 * k + 1]).min(Time::from_ms(1));
+        let want = Time::from_fs(m.as_fs() / 10_000_000_000 * 10_000_000_000);
+        assert_eq!(*until, want, "grant {k} from {from}");
+        assert!(until > from);
+    }
+    assert_eq!(gs.last().unwrap().1, Time::from_ms(1));
+    // Every advance landed on the lattice.
+    for (_, c) in journal.iter() {
+        if let Call::Advance { to } = c {
+            assert!(to.as_fs().is_multiple_of(Time::from_us(10).as_fs()));
+        }
+    }
+}
+
+/// ADR-003 D2: configurations off the lattice are `Config` errors, and an
+/// engine whose t_safe is less than one cell away is a `Lattice` error.
+#[test]
+fn lattice_config_and_progress_errors() {
+    let j: Journal = Rc::default();
+    let l = Some(Time::from_us(10));
+    let cpu = |j: &Journal, name: &str, lat: Option<Time>| {
+        let mut m = Mock::new(name, j, |_| Time::MAX);
+        m.lattice = lat;
+        Box::new(m)
+    };
+    let mut sink = EventSink::new(Vec::new());
+
+    // max_quantum off the lattice.
+    let mut s = Scheduler::new(cfg(Time::from_us(15))).unwrap();
+    s.add_engine(cpu(&j, "a", l)).unwrap();
+    let e = s.run(Time::from_ms(1), &mut sink, &mut []).unwrap_err();
+    assert!(
+        matches!(e, SchedError::Config(ref m) if m.contains("max_quantum")),
+        "{e}"
+    );
+
+    // t_end off the lattice.
+    let mut s = Scheduler::new(cfg(Time::from_us(10))).unwrap();
+    s.add_engine(cpu(&j, "a", l)).unwrap();
+    let e = s.run(Time::from_us(105), &mut sink, &mut []).unwrap_err();
+    assert!(
+        matches!(e, SchedError::Config(ref m) if m.contains("t_end")),
+        "{e}"
+    );
+
+    // Two different lattices.
+    let mut s = Scheduler::new(cfg(Time::from_us(20))).unwrap();
+    s.add_engine(cpu(&j, "a", l)).unwrap();
+    s.add_engine(cpu(&j, "b", Some(Time::from_us(20)))).unwrap();
+    let e = s.run(Time::from_ms(1), &mut sink, &mut []).unwrap_err();
+    assert!(
+        matches!(e, SchedError::Config(ref m) if m.contains("different")),
+        "{e}"
+    );
+
+    // Event sampling period off the lattice.
+    let mut s = Scheduler::new(SchedulerConfig {
+        event_sampling: Some(EventSampling {
+            period: Time::from_us(25),
+            nets: vec![],
+        }),
+        ..cfg(Time::from_us(10))
+    })
+    .unwrap();
+    s.add_engine(cpu(&j, "a", l)).unwrap();
+    let e = s.run(Time::from_ms(1), &mut sink, &mut []).unwrap_err();
+    assert!(
+        matches!(e, SchedError::Config(ref m) if m.contains("sampling")),
+        "{e}"
+    );
+
+    // An aligned probe whose sample instants are off the lattice.
+    let mut s = Scheduler::new(cfg(Time::from_us(100))).unwrap();
+    s.add_engine(cpu(&j, "a", l)).unwrap();
+    let mut csv = CsvWriter::new(Vec::new(), Time::from_us(35), vec![]).unwrap();
+    let e = s
+        .run(Time::from_ms(1), &mut sink, &mut [&mut csv])
+        .unwrap_err();
+    assert!(
+        matches!(e, SchedError::Config(ref m) if m.contains("sample instant")),
+        "{e}"
+    );
+
+    // t_safe less than one cell ahead: never clamped silently.
+    let mut s = Scheduler::new(cfg(Time::from_us(100))).unwrap();
+    s.add_engine(cpu(&j, "a", l)).unwrap();
+    s.add_engine(Box::new(Mock::new("short", &j, |now| {
+        now + Time::from_us(5)
+    })))
+    .unwrap();
+    let e = s.run(Time::from_ms(1), &mut sink, &mut []).unwrap_err();
+    match e {
+        SchedError::Lattice {
+            engine,
+            now,
+            t_safe,
+        } => {
+            assert_eq!(engine, "short");
+            assert_eq!(now, Time::ZERO);
+            assert_eq!(t_safe, Time::from_us(5));
+        }
+        other => panic!("expected Lattice, got {other}"),
+    }
+    assert_eq!(s.phase(), Phase::Error);
+
+    // Without a declared lattice nothing is rounded.
+    let mut s = Scheduler::new(cfg(Time::from_us(15))).unwrap();
+    s.add_engine(cpu(&j, "a", None)).unwrap();
+    s.run(Time::from_us(105), &mut sink, &mut []).unwrap();
+    assert_eq!(s.lattice(), None);
 }

@@ -7,7 +7,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/.local/bin:$(PATH)
 CARGO ?= cargo
 
 .PHONY: setup doctor build test cargo-test fmt fmt-check clippy check firmware \
-        bb spike spike-verify-every determinism golden golden-update
+        bb spike spike-verify-every lattice-check determinism golden golden-update
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -66,6 +66,23 @@ spike-verify-every: spike
 	$(PYTHON) scripts/check_spike.py $(VERIFY_EVERY_OUT)
 	set -e; for f in nets.csv events.jsonl nets.vcd; do cmp $(SPIKE_OUT)/$$f $(VERIFY_EVERY_OUT)/$$f; done
 	@echo "spike-verify-every: outputs identical to $(SPIKE_OUT)"
+
+# ADR-003 D2 (step 2) gate: on the fixed 10 us lattice, 1 ms grants give the
+# spike's nets.csv byte for byte and the same non-grant records, and a 1 kHz
+# CSV samples exactly the 100 kHz waveform (TMAX no longer follows the grant
+# or the sample rate). check_spike is not run on the 1 kHz CSV: its LED_A
+# crossing check interpolates between samples and needs samples much closer
+# than its 0.1 ms spacing tolerance (ADR-003 Amendment 2).
+LATTICE_OUT ?= out/lattice
+lattice-check: spike
+	$(BB) run $(SPIKE_ARGS) --max-quantum 1ms --out $(LATTICE_OUT)/mq1ms
+	$(PYTHON) scripts/check_spike.py $(LATTICE_OUT)/mq1ms
+	cmp $(SPIKE_OUT)/nets.csv $(LATTICE_OUT)/mq1ms/nets.csv
+	diff <(grep -v '"type":"grant"' $(SPIKE_OUT)/events.jsonl) \
+	     <(grep -v '"type":"grant"' $(LATTICE_OUT)/mq1ms/events.jsonl)
+	$(BB) run $(SPIKE_ARGS) --max-quantum 1ms --sample-rate 1kHz --out $(LATTICE_OUT)/mq1ms-1khz
+	$(PYTHON) scripts/check_resample.py $(SPIKE_OUT) $(LATTICE_OUT)/mq1ms-1khz
+	@echo "lattice-check: PASS"
 
 determinism: firmware bb
 	bash scripts/determinism.sh $(BB) out/determinism $(DET_RUNS) $(DET_JOBS) -- $(SPIKE_ARGS)

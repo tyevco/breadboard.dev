@@ -5,7 +5,7 @@
 //! ```text
 //! bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
 //!        --probe net:<NET> [--probe net:<NET> ...] --out <dir>
-//!        [--max-quantum 10us] [--sample-rate 100kHz] [--seed 0]
+//!        [--max-quantum 10us] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
 //!        [--renode <path>] [--verify edges] [--no-verify]
 //! ```
 //!
@@ -36,7 +36,7 @@ use bbcore::{
 const USAGE: &str = "\
 usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
-              [--max-quantum 10us] [--sample-rate 100kHz] [--seed 0]
+              [--max-quantum 10us] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify]
 
   --netlist      board file: SPICE body plus *bb directives (examples/spike/board.cir)
@@ -46,7 +46,14 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
   --probe        net to record; a circuit net (analog volts) or an MCU pin net
                  <ref>.<pin> (digital level). Repeatable; order = CSV column order
   --out          output directory (events.jsonl, nets.csv, nets.vcd)
-  --max-quantum  upper bound on one grant and Renode's quantum (default 10us)
+  --max-quantum  upper bound on one grant (default 10us); a multiple of the
+                 Renode quantum. It no longer sets Renode's quantum
+  --renode-quantum
+                 Renode's global quantum, the grant lattice L (default 10us):
+                 every grant boundary is a multiple of it, firmware timing,
+                 edge stamps and MCU inputs resolve to it, and ngspice steps at
+                 most L and lands on every multiple of it. Run configuration:
+                 changing it changes results (ADR-003 D2)
   --sample-rate  nets.csv sample rate (default 100kHz). Samples never change
                  the grant partition; between boundaries analog nets are
                  interpolated between solver points
@@ -66,6 +73,7 @@ struct RunArgs {
     probes: Vec<String>,
     out: PathBuf,
     max_quantum: Time,
+    renode_quantum: Time,
     sample_period: Time,
     seed: i32,
     renode: Option<PathBuf>,
@@ -124,6 +132,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut probes = Vec::new();
     let mut out = None;
     let mut max_quantum = Time::from_us(10);
+    let mut renode_quantum = Time::from_us(10);
     let mut sample_period = Time::from_us(10);
     let mut seed = 0i32;
     let mut renode = None;
@@ -157,6 +166,11 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
                     .parse::<Time>()
                     .map_err(|e| format!("--max-quantum: {e}"))?
             }
+            "--renode-quantum" => {
+                renode_quantum = val(a)?
+                    .parse::<Time>()
+                    .map_err(|e| format!("--renode-quantum: {e}"))?
+            }
             "--sample-rate" => sample_period = parse_rate(&val(a)?)?,
             "--seed" => {
                 seed = val(a)?
@@ -173,8 +187,18 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     if duration.is_zero() {
         return Err("--for must be > 0".into());
     }
-    if max_quantum.is_zero() || !max_quantum.as_fs().is_multiple_of(1_000_000) {
-        return Err("--max-quantum must be a positive whole number of ns".into());
+    if renode_quantum.is_zero() || !renode_quantum.as_fs().is_multiple_of(1_000_000) {
+        return Err("--renode-quantum must be a positive whole number of ns".into());
+    }
+    if max_quantum.is_zero() || !max_quantum.as_fs().is_multiple_of(renode_quantum.as_fs()) {
+        return Err(format!(
+            "--max-quantum {max_quantum} must be a positive multiple of --renode-quantum {renode_quantum}"
+        ));
+    }
+    if !duration.as_fs().is_multiple_of(renode_quantum.as_fs()) {
+        return Err(format!(
+            "--for {duration} must be a multiple of --renode-quantum {renode_quantum}"
+        ));
     }
     if probes.is_empty() {
         return Err("at least one --probe is required".into());
@@ -187,6 +211,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         probes,
         out: need(out, "--out")?,
         max_quantum,
+        renode_quantum,
         sample_period,
         seed,
         renode,
@@ -232,7 +257,8 @@ fn run(a: RunArgs) -> Result<(), String> {
     };
     let mut rcfg = RenodeConfig::stm32f103(renode, a.firmware.clone());
     rcfg.name = part.reference.clone();
-    rcfg.quantum = a.max_quantum;
+    rcfg.quantum = a.renode_quantum;
+    rcfg.max_grant = a.max_quantum;
     rcfg.seed = a.seed;
     rcfg.verify = a.verify;
     rcfg.pins = mcu_pins
@@ -242,8 +268,11 @@ fn run(a: RunArgs) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     // --- Analog engine: the board's SPICE body plus generated pin glue.
-    let t_max = a.max_quantum.min(a.sample_period);
-    let mut ncfg = NgspiceConfig::new(board.spice.clone(), a.duration, t_max);
+    // ADR-003 D2: TMAX is the lattice, not min(max_quantum, sample period),
+    // and ngspice lands on every lattice point, so its solver points do not
+    // depend on the grant partition or the sample rate.
+    let mut ncfg = NgspiceConfig::new(board.spice.clone(), a.duration, a.renode_quantum);
+    ncfg.lattice = Some(a.renode_quantum);
     for p in &mcu_pins {
         ncfg.inputs.push(InputBinding {
             pin: p.kernel_net(),
@@ -351,8 +380,8 @@ fn run(a: RunArgs) -> Result<(), String> {
     let mut so = std::io::stdout().lock();
     let _ = writeln!(
         so,
-        "bb run: simulated {} in {} grants (max quantum {}, engines {} -> {analog_name})",
-        summary.now, summary.grants, a.max_quantum, part.reference
+        "bb run: simulated {} in {} grants (max quantum {}, renode quantum {}, engines {} -> {analog_name})",
+        summary.now, summary.grants, a.max_quantum, a.renode_quantum, part.reference
     );
     let _ = writeln!(
         so,
@@ -410,6 +439,22 @@ mod tests {
         assert_eq!(a.duration, Time::from_ms(500));
         assert_eq!(a.probes, vec!["LED_A", "PA5"]);
         assert_eq!(a.max_quantum, Time::from_us(10));
+        assert_eq!(a.renode_quantum, Time::from_us(10));
+        let mut q = v.clone();
+        q.extend([
+            "--max-quantum".into(),
+            "1ms".into(),
+            "--renode-quantum".into(),
+            "100us".into(),
+        ]);
+        let qa = parse_args(&q).unwrap();
+        assert_eq!(
+            (qa.max_quantum, qa.renode_quantum),
+            (Time::from_ms(1), Time::from_us(100))
+        );
+        let mut off = v.clone();
+        off.extend(["--max-quantum".into(), "15us".into()]);
+        assert!(parse_args(&off).is_err(), "max quantum off the lattice");
         assert_eq!(a.sample_period, Time::from_us(1));
         assert_eq!(a.verify, Verify::Edges);
         let mut v2 = v.clone();

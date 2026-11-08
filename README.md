@@ -107,16 +107,17 @@ setting is much cheaper: `--max-quantum 1ms --sample-rate 1kHz` runs 500
 grants in **3.7 s** total (0.9 s of simulation), with the same 10 edges at the
 same times. The CSV is then sampled only every 1 ms.
 
-**Limitation: edge times depend on the quantum.** Edges carry the exact time
-at which the emulated firmware changed the pin, but Renode's behaviour depends
-on where `RUN_FOR` calls end. A SysTick expiry just before a grant boundary
-has its ISR deferred to the next grant, and the edge is then reported 1 fs
-after that boundary. Measured: the first edge is at 50 ms + 1 fs with 10 µs or
-1 ms grants and at 49.99999 ms with 70 µs grants, a 10 ns difference. Up to
-50 ns was seen at 200 ms. A run is deterministic for a fixed quantum. The
-sample rate does not affect edges: CSV samples are not grant boundaries
-(`engines/cpu-renode/tests/blinky.rs::csv_sample_rate_does_not_change_edges`).
-The quantum also caps how many edges can fall into one grant: one per pin.
+**Edge times depend on the Renode quantum, not on the grant partition**
+(ADR-003 D2). Renode's quantum (`--renode-quantum`, default 10 µs) is a grid
+that every grant boundary must sit on; it is run configuration, like the seed.
+Renode stamps a pin change with the sync point that opens the slice it ran
+in; a stamp on the grid is reported 1 fs later, a timer-driven stamp exactly.
+With every `RUN_FOR` ending on the grid, 10 µs, 70 µs, 100 µs and 1 ms grants
+give the identical edge list (`engines/cpu-renode/tests/blinky.rs`), and
+`--max-quantum 1ms` gives the spike's `nets.csv` byte for byte
+(`make lattice-check`). MCU inputs take effect at the next grid point, never
+earlier. `--max-quantum` (a multiple of the quantum) still caps how many
+edges can fall into one grant: one per pin.
 
 ## Layout
 

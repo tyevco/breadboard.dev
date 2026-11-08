@@ -957,3 +957,76 @@ engines MUST NOT do") is updated in the same change.
   race in `free_port`: the OS can hand the same ephemeral port to two
   `bind(0)` probes, and one engine then connected to the other's server. The
   engine now never reuses a port within a process.
+
+### Amendment 2: step 2 (D2) as implemented (2026-11-08)
+
+**Status:** Accepted with step 2. `spec/time-grant.md` (header,
+Definitions: lattice `L` and `edge_time`; state machine and table: Init
+lattice checks, Grant `floor_L`, `Lattice` error; invariants 1, 2, 4 and new
+7; Advance step 1 `ceil_L`; sampled-probe note; example 1; "What engines MUST
+NOT do") is updated in the same change. The other spec edits listed under
+"Exact changes" belong to steps 3 and later.
+
+- **Renode `t_safe` in step 2.** D4 (step 3) makes Renode's `t_safe`
+  `Time::MAX`, which needs traces. Until then the engine keeps the
+  one-change-per-pin rule with `t_safe = now + max_grant`, a new
+  `RenodeConfig::max_grant` (a multiple of the quantum) that `bb run` sets to
+  `--max-quantum`. This keeps the spike's grant records (`limited_by:
+  engine:U1`) and with them the `events.jsonl` hash unchanged, as step 2
+  requires, while `quantum` (the lattice) is now separate from the grant.
+- **Lattice checks.** Besides `max_quantum`, `t_end` and the
+  `event_sampling` period, every sample instant an *aligned* probe asks for
+  (`CsvWriter::new`) must be on the lattice (`Config` error); otherwise
+  `floor_L` could silently skip it. `SchedError::Lattice` names the engine
+  with the smallest `t_safe` (the only term that can round down to `now`).
+  `bb run` also rejects `--max-quantum` or `--for` off `--renode-quantum`.
+- **Renode advance.** `advance_to(t)` refuses `t` off the lattice. Queued
+  inputs split the advance into `RUN_FOR` segments at each distinct
+  `ceil_L(t)`; `SET_STATE` is sent there in delivery order. An input
+  delivered at a boundary (`edge_time <= now`) is applied at once. Events
+  stamped exactly at the grant end are carried over (rule 3) and `Verify`
+  expects the carried level.
+- **ngspice.** `NgspiceConfig::lattice` (bb: `--renode-quantum`) with
+  `t_max` required to divide it (bb: `t_max = L`). The lattice clamp treats a
+  solver time within the grant tolerance of `kL` as on it, so a point a few
+  ulps short of `kL` is not followed by a micro-step. A ramp's breakpoints
+  are released at `max(now, ceil_L(t0) - L)`, the lattice point opening the
+  cell that holds the ramp start `t0`.
+- **Gate: `bb run --max-quantum 1ms --sample-rate 1kHz` passes
+  `check_spike` is infeasible as written, and Context fact 4 misattributed
+  the symptom.** With D2 in place (TMAX = 10 µs, partition-independent
+  solver points) that run still fails `check_spike` with exactly the spacing
+  the ADR quotes, 48.928731 ms. The cause is `check_spike` itself: it finds
+  LED_A transitions by interpolating 1.0 V crossings between consecutive CSV
+  samples, so at 1 kHz each crossing is only known to within the 1 ms sample
+  period, against a 0.1 ms spacing tolerance. TMAX was not the cause of that
+  number. The closest correct gate, `make lattice-check`, checks what D2
+  actually promises: (1) the spike in 1 ms grants passes `check_spike` (100
+  kHz CSV) and its `nets.csv` is byte-identical to the 10 µs spike
+  (09fed4ac...), with identical non-grant records; (2) the 1 ms-grant 1 kHz
+  CSV is row-for-row identical to the 100 kHz spike CSV at the same instants
+  (501 rows, 0 differences), so the analog solution no longer depends on the
+  sample rate or the partition. `check_spike` is unchanged.
+- **Measured gate results.**
+  - Spike hashes unchanged at the defaults: `nets.csv` 09fed4ac...,
+    `events.jsonl` 83bd875e..., `nets.vcd` da42656b....
+  - `blinky.rs`: 10, 70 and 100 µs and 1 ms grants on the 10 µs lattice give
+    the golden edge list (first five at k·50 ms + 1 fs, including at 70 µs),
+    identical non-grant records and identical sampled CSVs.
+  - Busy-loop firmware (`examples/spike/firmware/busyloop.c`): every edge is
+    a lattice point + 1 fs (1.500, 3.010, 4.510 ms ... + 1 fs at 10 µs; the
+    same with 50 µs grants); a 100 µs lattice gives 1.5, 3.0, 4.5 ms ... + 1 fs.
+  - Copy firmware (`copy.c`, PB0 -> PA6), driver registered before Renode,
+    inputs at 123.456789 µs, 1.2 ms and 2 ms + 1 fs: PA6 follows at 130 µs,
+    1.2 ms and 2.01 ms, each + 1 fs, in 1 ms grants and in 10 µs grants alike.
+  - ngspice raw solver-point dump (RC with τ = 2.2 µs, three mid-cell
+    edges): 424 points, bit-identical for 10 µs, 70 µs and 1 ms grants; as a
+    negative control, without the lattice the same runs give 424, 389 and
+    401 points.
+  - RC analytic tests unchanged (same 317 solver points and value digest).
+- **Test firmware.** `examples/spike/firmware/Makefile` now builds
+  `busyloop.elf` and `copy.elf` next to `blinky.elf`; `blinky.elf` is
+  byte-identical to before.
+- **Process note.** The step 1 commit accidentally included early draft
+  lattice text for `spec/time-grant.md`; the next commit restored the step 1
+  version, and the text lands with this step.

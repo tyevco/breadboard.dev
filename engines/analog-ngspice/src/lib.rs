@@ -142,6 +142,15 @@ pub struct NgspiceConfig {
     /// it; it saves the condvar wake-up latency when grants are short (one-
     /// cell lockstep) at the cost of burning a core while waiting.
     pub handoff_spin: Duration,
+    /// The kernel's grant lattice `L` (ADR-003 D2), when the run has one.
+    /// Then `t_max` must divide `L`, every solver step is also clamped to the
+    /// next lattice point (so there is an accepted point on every lattice
+    /// point), and an input ramp's breakpoints are handed to ngspice only at
+    /// the lattice point that opens the cell containing the ramp start. The
+    /// solver then makes the same calls with the same arguments whatever the
+    /// grant partition, so its points do not depend on it. `None`: no
+    /// lattice clamp, breakpoints released at once (the Phase 0 behaviour).
+    pub lattice: Option<Time>,
 }
 
 impl NgspiceConfig {
@@ -157,6 +166,7 @@ impl NgspiceConfig {
             outputs: Vec::new(),
             probes: Vec::new(),
             handoff_spin: Duration::ZERO,
+            lattice: None,
         }
     }
 }
@@ -281,8 +291,12 @@ struct State {
     /// Upcoming ramp corners (s, sorted): solver steps are clamped to land on
     /// them.
     corners: Vec<f64>,
-    /// Breakpoints to hand to `ngSpice_SetBkpt` on the solver thread.
-    new_bkpts: Vec<f64>,
+    /// Breakpoints to hand to `ngSpice_SetBkpt` on the solver thread, as
+    /// `(release_s, bkpt_s)` in push order: each is set at the first
+    /// accepted point at or after `release_s` (ADR-003 D2).
+    new_bkpts: Vec<(f64, f64)>,
+    /// Grant lattice in fs (0: none).
+    lattice_fs: u64,
     /// First fatal problem seen by a callback.
     error: Option<String>,
     /// [`NgspiceConfig::handoff_spin`].
@@ -307,6 +321,7 @@ impl State {
             sources: BTreeMap::new(),
             corners: Vec::new(),
             new_bkpts: Vec::new(),
+            lattice_fs: 0,
             error: None,
             handoff_spin: Duration::ZERO,
         }
@@ -318,10 +333,13 @@ impl State {
         }
     }
 
-    /// Limit the next solver step so it lands exactly on the grant and on the
-    /// next ramp corner.
+    /// Limit the next solver step so it lands exactly on the grant, on the
+    /// next lattice point (ADR-003 D2) and on the next ramp corner.
     fn clamp(&self, time: f64, delta: &mut f64) {
         let mut limit = self.target_s;
+        if let Some(l) = next_lattice_s(time, self.lattice_fs) {
+            limit = limit.min(l);
+        }
         if let Some(&c) = self.corners.iter().find(|&&c| c > time + CORNER_MIN_S) {
             limit = limit.min(c);
         }
@@ -329,6 +347,25 @@ impl State {
             *delta = limit - time;
         }
     }
+}
+
+/// The first lattice point after the solver time `time` (s), for a lattice
+/// of `lattice_fs` (0: none). A time within the grant tolerance of a lattice
+/// point counts as on it, so a point that landed a few ulps short of `kL`
+/// is not followed by a micro-step to `kL`. A pure function of `time`.
+fn next_lattice_s(time: f64, lattice_fs: u64) -> Option<f64> {
+    if lattice_fs == 0 {
+        return None;
+    }
+    let t_fs = secs_to_fs(time);
+    let near = (t_fs + lattice_fs / 2) / lattice_fs;
+    let near_s = Time::from_fs(near * lattice_fs).as_secs_f64();
+    let k = if (time - near_s).abs() <= grant_tolerance_s(near_s) {
+        near + 1
+    } else {
+        t_fs / lattice_fs + 1
+    };
+    Some(Time::from_fs(k * lattice_fs).as_secs_f64())
 }
 
 /// Corners closer than this to the current solver time are not clamped to
@@ -547,17 +584,29 @@ unsafe extern "C" fn cb_get_sync(
             if st.abort {
                 return 0;
             }
-            let bkpts = std::mem::take(&mut st.new_bkpts);
-            if !bkpts.is_empty() {
-                drop(st);
-                if let Ok(lib) = ffi::lib(|_| Ok(())) {
-                    for b in bkpts {
-                        // SAFETY: called on the solver thread, between steps.
-                        unsafe { (lib.set_bkpt)(b) };
-                    }
+        }
+        // Breakpoint release (ADR-003 D2): a ramp's breakpoints reach
+        // ngspice at the accepted point that opens the lattice cell holding
+        // the ramp start, which is where a one-cell run is parked when it
+        // learns of the ramp. Without a lattice they are due at once.
+        let rtol = grant_tolerance_s(time);
+        if st.new_bkpts.iter().any(|&(r, _)| r <= time + rtol) {
+            let mut due = Vec::new();
+            st.new_bkpts.retain(|&(r, b)| {
+                let now_due = r <= time + rtol;
+                if now_due {
+                    due.push(b);
                 }
-                st = state();
+                !now_due
+            });
+            drop(st);
+            if let Ok(lib) = ffi::lib(|_| Ok(())) {
+                for b in due {
+                    // SAFETY: called on the solver thread, between steps.
+                    unsafe { (lib.set_bkpt)(b) };
+                }
             }
+            st = state();
         }
         st.clamp(time, delta);
     } else if redostep != 0 {
@@ -704,6 +753,8 @@ pub struct NgspiceEngine {
     hist: History,
     /// Kernel-visible breakpoints (`add_breakpoint`).
     breakpoints: BTreeSet<Time>,
+    /// [`NgspiceConfig::lattice`].
+    lattice: Option<Time>,
     /// Number of solver points accepted so far (including t = 0).
     solver_points: usize,
     failed: bool,
@@ -715,6 +766,14 @@ impl NgspiceEngine {
     pub fn new(cfg: NgspiceConfig) -> Result<NgspiceEngine, EngineError> {
         if cfg.t_stop.is_zero() || cfg.t_max.is_zero() {
             return Err(other("t_stop and t_max must be > 0"));
+        }
+        if let Some(l) = cfg.lattice {
+            if l.is_zero() || !l.as_fs().is_multiple_of(cfg.t_max.as_fs()) {
+                return Err(other(format!(
+                    "TMAX {} must divide the grant lattice {l} (ADR-003 D2)",
+                    cfg.t_max
+                )));
+            }
         }
         let lib = init_lib().map_err(other)?;
 
@@ -821,6 +880,7 @@ impl NgspiceEngine {
             st.watch = watch.clone();
             st.sources = sources;
             st.handoff_spin = cfg.handoff_spin;
+            st.lattice_fs = cfg.lattice.map_or(0, Time::as_fs);
         }
         let mut engine = NgspiceEngine {
             name: cfg.name.clone(),
@@ -837,6 +897,7 @@ impl NgspiceEngine {
             },
             watch,
             breakpoints: BTreeSet::new(),
+            lattice: cfg.lattice,
             solver_points: 0,
             failed: false,
         };
@@ -1034,6 +1095,20 @@ impl NgspiceEngine {
             .collect())
     }
 
+    /// Like [`Self::solver_window`], but with ngspice's raw `f64` solver
+    /// times (s) instead of times rounded to fs: for bit-exact comparisons of
+    /// solver point sequences (the ADR-003 D2 partition gate).
+    pub fn solver_window_raw(&self, node: &str) -> Result<Vec<(f64, f64)>, EngineError> {
+        let i = self.watch_index(node)?;
+        Ok(self
+            .hist
+            .times_s
+            .iter()
+            .zip(&self.hist.values[i])
+            .map(|(&t, &v)| (t, v))
+            .collect())
+    }
+
     /// Total solver points accepted so far (including t = 0).
     pub fn solver_points(&self) -> usize {
         self.solver_points
@@ -1117,9 +1192,19 @@ impl NgspiceEngine {
         if !dur.is_zero() {
             corners.push(at.saturating_add(dur).as_secs_f64());
         }
+        // ADR-003 D2: release the breakpoints at the lattice point that
+        // opens the cell (kL, (k+1)L] holding `at` (never before now).
+        let release = match self.lattice {
+            Some(l) => {
+                let open = at.as_fs().div_ceil(l.as_fs()).saturating_sub(1) * l.as_fs();
+                Time::from_fs(open).max(self.now)
+            }
+            None => self.now,
+        };
+        let release_s = release.as_secs_f64();
         for c in corners {
             st.corners.push(c);
-            st.new_bkpts.push(c);
+            st.new_bkpts.push((release_s, c));
         }
         st.corners.sort_by(f64::total_cmp);
         st.corners.dedup();

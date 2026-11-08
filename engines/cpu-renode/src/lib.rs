@@ -7,59 +7,81 @@
 //! with a generated script that creates the machine, loads the platform and
 //! the ELF, and opens an External Control server
 //! (`emulation CreateExternalControlServer`). The engine then only ever sends
-//! `RUN_FOR(n ns)` with `n = floor(g) - floor(now)` for each kernel grant `g`
-//! (times floored to Renode's 1 ns resolution). `RUN_FOR` returns once Renode
-//! has paused again, so Renode never runs between grants and its virtual time
-//! never passes the grant. [`RenodeConfig::verify`] cross-checks Renode's
-//! virtual time (`GET_TIME`) and the output pin states (`GPIO GET_STATE`)
-//! against what the engine tracked, and a mismatch is a protocol error. The
-//! checks are pure reads, so they never change results; [`Verify`] picks how
-//! often they run (ADR-003 D1.2).
+//! `RUN_FOR(n ns)` calls that end on the grant lattice: Renode's global
+//! quantum [`RenodeConfig::quantum`] (`L`, ADR-003 D2), which the engine
+//! declares through [`bbcore::Engine::grant_lattice`]. `RUN_FOR` returns once
+//! Renode has paused again, so Renode never runs between grants and its
+//! virtual time never passes the grant. [`RenodeConfig::verify`] cross-checks
+//! Renode's virtual time (`GET_TIME`) and the output pin states
+//! (`GPIO GET_STATE`) against what the engine tracked, and a mismatch is a
+//! protocol error. The checks are pure reads, so they never change results;
+//! [`Verify`] picks how often they run (ADR-003 D1.2).
 //!
 //! The emulation always runs with `emulation SetGlobalAdvanceImmediately
 //! true` (ADR-003 D1.1). Without it Renode sleeps on the host while the CPU
 //! is in WFI and then skips instructions by the host's measured sleep time
 //! (`BaseCPU.cs`), which is a host-timing dependence. It is not optional.
 //!
-//! Known bad idea: never let Renode's virtual time run ahead of the kernel
-//! grant; never `start` the emulation and try to catch up.
+//! Known bad ideas: never let Renode's virtual time run ahead of the kernel
+//! grant; never `start` the emulation and try to catch up; never end a
+//! `RUN_FOR` off the lattice.
+//!
+//! # Why the lattice (ADR-003 D2)
+//!
+//! Renode's results depend on its sequence of sync points: one every global
+//! quantum, plus wherever a timer limit stops a sleeping CPU. A `RUN_FOR` that
+//! ends between two of them shifts every later one. When every `RUN_FOR` ends
+//! on a multiple of the quantum, the sync points are the same whatever the
+//! grant partition, so the results depend on `L` alone. `L` is run
+//! configuration (`bb run --renode-quantum`), like the seed: it is the
+//! firmware-timing, edge-stamp and input resolution.
 //!
 //! # Edges
 //!
 //! Each output pin has a GPIO state-change callback registered over the
-//! External Control API. Renode reports every change with its virtual
-//! timestamp (ns), so an edge is reported to the kernel at the time it
-//! happened inside the grant, not quantized to the grant boundary. More than
-//! one edge on a pin inside one grant is a protocol error (the configured
-//! `quantum`, which bounds every grant through `t_safe`, is too large).
+//! External Control API. Renode stamps every change with
+//! `MasterTimeSource.ElapsedVirtualTime` (`GPIOPort.cs`), the sync point that
+//! opens the slice in which the write executed: the true instruction time
+//! lies in `[stamp, next sync point)`, so stamps are slice accurate. The
+//! engine reports the stamp `s` (ns, converted to fs) by the lattice +1 fs
+//! rule, which depends only on `s` and `L`, never on where grants end:
 //!
-//! Measured Renode 1.17.0 behaviour (ADR-002 Amendment 3): when a timer
-//! (here SysTick) expires close to the end of a `RUN_FOR`, Renode can defer
-//! the ISR to the start of the *next* `RUN_FOR`; the resulting pin change is
-//! then stamped with the pause time itself, i.e. the previous boundary. The
-//! pin still read the old level at that boundary, so the edge belongs to the
-//! new grant; the engine reports it 1 fs after the previous kernel boundary
-//! and counts it in [`RenodeEngine::boundary_edges`]. Timestamps before the
+//! 1. `s` a multiple of `L`: the write happened after the re-sync at `s`, and
+//!    the engine reports `s + 1 fs`.
+//! 2. otherwise `s` is a limit-driven sync point (a timer expiry that stopped
+//!    a sleeping CPU) and the engine reports `s` exactly.
+//! 3. a change stamped exactly at the grant end `g` (a lattice point) belongs
+//!    to the next grant by rule 1: the engine carries it over, reports the
+//!    old level at `g` and the change at `g + 1 fs` in the next grant
+//!    (counted in [`RenodeEngine::carried_edges`]).
+//! 4. so a write that genuinely happens on a lattice point is reported 1 fs
+//!    late (an accepted convention).
+//!
+//! More than one edge on a pin inside one grant is a protocol error (the
+//! one-change-per-pin rule; lower `--max-quantum`). Stamps before the
 //! previous boundary or after the grant are protocol errors.
 //!
-//! The firmware-visible time of such an edge is the boundary, not the timer
-//! expiry: it is late by the distance from the expiry to the boundary (up to
-//! ~50 ns measured, not bounded by Renode's 1 ns resolution). More generally
-//! Renode's results depend on the `RUN_FOR` partition: edge times are exact
-//! *for a given partition* and deterministic, but a different partition
-//! (another quantum) can move them by tens of ns. The kernel therefore keeps
-//! the partition a function of the quantum alone: output sampling does not
-//! add boundaries (`CsvWriter::sampled`).
+//! # Inputs
+//!
+//! Renode can observe an external input only at a sync point. An input
+//! transition at time `t` therefore takes effect at `ceil_L(t)`, the first
+//! lattice point at or after `t`, and never earlier. Transitions delivered
+//! before an advance (`edge_time` inside the coming grant) are queued; the
+//! advance is split into `RUN_FOR` segments that end at each distinct
+//! `ceil_L(t)`, and `GPIO SET_STATE` is sent, in delivery order, while Renode
+//! is paused there. Every segment ends on the lattice at or before the grant,
+//! so this is not a free-run. A transition delivered at a boundary
+//! (`edge_time <= now`) takes effect at once, at `now`.
 //!
 //! # Determinism
 //!
 //! Renode is deterministic for a single machine given the same ELF, platform,
-//! quantum and sequence of `RUN_FOR` calls. The engine fixes everything it
-//! can: `emulation SetSeed`, `emulation SetGlobalQuantum` (= `quantum`),
+//! quantum and lattice-aligned `RUN_FOR` calls. The engine fixes everything
+//! it can: `emulation SetSeed`, `emulation SetGlobalQuantum` (= `quantum`),
 //! `emulation SetGlobalSerialExecution true`,
-//! `emulation SetGlobalAdvanceImmediately true`, an offline platform file (no SVD
-//! download) and a fixed machine name. GPIO events are acknowledged inline on a
-//! single connection, so they are seen in emulation order.
+//! `emulation SetGlobalAdvanceImmediately true`, an offline platform file (no
+//! SVD download) and a fixed machine name. GPIO events are acknowledged
+//! inline on a single connection, so they are seen in emulation order.
 
 pub mod protocol;
 
@@ -196,9 +218,18 @@ pub struct RenodeConfig {
     /// Renode machine name.
     pub machine: String,
     pub pins: Vec<PinSpec>,
-    /// Lookahead: `t_safe = now + quantum`, and Renode's global quantum.
-    /// Must be a positive whole number of nanoseconds.
+    /// Renode's global quantum, which is the grant lattice `L` (ADR-003 D2,
+    /// `bb run --renode-quantum`). Every `RUN_FOR` ends on a multiple of it.
+    /// It is the firmware-timing, edge-stamp and input resolution, and part
+    /// of the run configuration: changing it changes results. Must be a
+    /// positive whole number of nanoseconds.
     pub quantum: Time,
+    /// Lookahead horizon: `t_safe = now + max_grant`. It bounds a grant so
+    /// that the one-change-per-pin rule can hold, and is not a promise that
+    /// outputs stay constant. Must be a positive multiple of `quantum`. (The
+    /// interim rule of ADR-003 step 2, Amendment 2; step 3 reports traces
+    /// and returns `Time::MAX`.)
+    pub max_grant: Time,
     /// `emulation SetSeed`.
     pub seed: i32,
     /// When to check Renode's virtual time and the output pin states against
@@ -212,7 +243,8 @@ pub struct RenodeConfig {
 }
 
 impl RenodeConfig {
-    /// STM32F103 with PA5 as an output, quantum 10 us: the Phase 0 spike setup.
+    /// STM32F103 with PA5 as an output, quantum (lattice) and `max_grant`
+    /// 10 us: the Phase 0 spike setup.
     pub fn stm32f103(renode: PathBuf, firmware: PathBuf) -> RenodeConfig {
         RenodeConfig {
             name: ENGINE_NAME.to_string(),
@@ -222,6 +254,7 @@ impl RenodeConfig {
             machine: "bb".to_string(),
             pins: vec![PinSpec::stm32("PA5", PinDirection::Output).expect("valid pin")],
             quantum: Time::from_us(10),
+            max_grant: Time::from_us(10),
             seed: 0,
             verify: Verify::Edges,
             startup_timeout: Duration::from_secs(120),
@@ -255,8 +288,15 @@ struct PinState {
     gpio: i32,
     level: Level,
     edge_time: Time,
-    /// Last level driven into an input pin.
-    applied: Option<Level>,
+    /// Input pin: the last level driven or queued to be driven.
+    scheduled: Option<Level>,
+}
+
+/// An input transition waiting for its lattice point `ceil_L(t)`.
+struct PendingInput {
+    at_ns: u64,
+    pin: usize,
+    level: Level,
 }
 
 /// A [`bbcore::Engine`] backed by one headless Renode process.
@@ -279,8 +319,17 @@ pub struct RenodeEngine {
     renode_ns: u64,
     promised: Time,
     pins: Vec<PinState>,
+    /// `t_safe` horizon ([`RenodeConfig::max_grant`]).
+    max_grant: Time,
+    /// Input transitions queued for a lattice point inside the next advance,
+    /// sorted by `at_ns` (stable: delivery order within a point).
+    pending: Vec<PendingInput>,
+    /// GPIO events stamped exactly at the last grant end: they belong to the
+    /// next grant (lattice rule 3).
+    carried: Vec<protocol::GpioEvent>,
     run_for_calls: u64,
     boundary_edges: u64,
+    carried_edges: u64,
     /// An advance or input failed: Drop keeps `workdir` (with `renode.log`)
     /// for diagnosis.
     failed: bool,
@@ -342,6 +391,12 @@ impl RenodeEngine {
             return Err(EngineError::Other(format!(
                 "quantum {} must be a positive whole number of ns",
                 cfg.quantum
+            )));
+        }
+        if cfg.max_grant.is_zero() || !cfg.max_grant.as_fs().is_multiple_of(cfg.quantum.as_fs()) {
+            return Err(EngineError::Other(format!(
+                "max_grant {} must be a positive multiple of the quantum {}",
+                cfg.max_grant, cfg.quantum
             )));
         }
         let firmware = std::fs::canonicalize(&cfg.firmware)
@@ -445,7 +500,7 @@ impl RenodeEngine {
                     gpio,
                     level,
                     edge_time: Time::ZERO,
-                    applied: None,
+                    scheduled: None,
                 });
             }
             let t0 = client.get_time()?;
@@ -477,8 +532,12 @@ impl RenodeEngine {
             renode_ns: 0,
             promised: Time::ZERO,
             pins,
+            max_grant: cfg.max_grant,
+            pending: Vec::new(),
+            carried: Vec::new(),
             run_for_calls: 0,
             boundary_edges: 0,
+            carried_edges: 0,
             failed: false,
         })
     }
@@ -499,10 +558,16 @@ impl RenodeEngine {
         self.run_for_calls
     }
 
-    /// Edges Renode stamped exactly at the previous pause point, reported
-    /// 1 fs after that boundary instead (see `advance_to`).
+    /// Edges stamped on a lattice point and therefore reported 1 fs after
+    /// it (lattice rule 1).
     pub fn boundary_edges(&self) -> u64 {
         self.boundary_edges
+    }
+
+    /// GPIO events stamped exactly at a grant end and carried over to the
+    /// next grant (lattice rule 3).
+    pub fn carried_edges(&self) -> u64 {
+        self.carried_edges
     }
 
     /// Number of time/GPIO cross-checks run so far (see [`Verify`]).
@@ -591,23 +656,34 @@ impl Engine for RenodeEngine {
     }
 
     fn next_safe_time(&mut self, _now: Time) -> Time {
-        // Phase 0 lookahead: a fixed quantum past Renode's current time. This
-        // is not a promise that outputs stay constant: the firmware may change
-        // an output at any instruction. It bounds the grant so at most one
-        // edge per pin falls inside it; the edge carries its time within this
-        // partition, and consumers registered after this engine apply it at
-        // that time (ADR-002 Amendment 3).
-        self.promised = Time::from_ns(self.renode_ns + self.quantum_ns);
+        // A fixed horizon past the current time. This is not a promise that
+        // outputs stay constant: the firmware may change an output at any
+        // instruction. It bounds the grant so at most one edge per pin falls
+        // inside it; the edge carries its lattice-rule time, and consumers
+        // registered after this engine apply it at that time (ADR-002
+        // Amendment 3, ADR-003 D2).
+        self.promised = self.now.saturating_add(self.max_grant);
         self.promised
     }
 
+    fn grant_lattice(&self) -> Option<Time> {
+        Some(Time::from_ns(self.quantum_ns))
+    }
+
     fn advance_to(&mut self, t: Time) -> Result<(), EngineError> {
-        // A grant outside the promise is the caller's error; Renode was not
-        // touched, so there is no log worth keeping.
+        // A grant outside the promise or off the lattice is the caller's
+        // error; Renode was not touched, so there is no log worth keeping.
         if t <= self.now || t > self.promised {
             return Err(EngineError::Protocol(format!(
                 "advance_to({t}) outside ({}, {}]",
                 self.now, self.promised
+            )));
+        }
+        if !t.as_fs().is_multiple_of(self.quantum_ns * FS_PER_NS) {
+            return Err(EngineError::Protocol(format!(
+                "advance_to({t}) is not on the grant lattice {} (a RUN_FOR must never \
+                 end off the lattice, ADR-003 D2)",
+                Time::from_ns(self.quantum_ns)
             )));
         }
         self.advance_inner(t).map_err(|e| self.failure(e))
@@ -656,42 +732,87 @@ impl RenodeEngine {
         Ok(())
     }
 
-    /// `GPIO GET_STATE` of every output pin must equal the tracked level.
+    /// `GPIO GET_STATE` of every output pin must equal the tracked level,
+    /// or, for a pin with an event carried over to the next grant (lattice
+    /// rule 3), the level of its last carried event: Renode already shows it.
     fn verify_pins(&mut self) -> Result<(), EngineError> {
-        for p in self
-            .pins
-            .iter()
-            .filter(|p| p.spec.direction == PinDirection::Output)
-        {
+        for (i, p) in self.pins.iter().enumerate() {
+            if p.spec.direction != PinDirection::Output {
+                continue;
+            }
+            let want = self
+                .carried
+                .iter()
+                .rev()
+                .find(|e| e.descriptor == i as i32)
+                .map_or(p.level, |e| Level::from_bool(e.state));
             let s = self
                 .client
                 .gpio_get_state(p.gpio, p.spec.index)
                 .map_err(proto)?;
-            if Level::from_bool(s) != p.level {
+            if Level::from_bool(s) != want {
                 return Err(EngineError::Protocol(format!(
-                    "verify: {}: Renode reports {s} at {} ns but events say {:?}",
-                    p.spec.name, self.renode_ns, p.level
+                    "verify: {}: Renode reports {s} at {} ns but events say {want:?}",
+                    p.spec.name, self.renode_ns
                 )));
             }
         }
         Ok(())
     }
 
+    /// One `RUN_FOR` from the tracked time to `to_ns` (a lattice point);
+    /// collects the GPIO events it produced.
+    fn run_to(
+        &mut self,
+        to_ns: u64,
+        events: &mut Vec<protocol::GpioEvent>,
+    ) -> Result<(), EngineError> {
+        if to_ns <= self.renode_ns {
+            return Ok(());
+        }
+        let mut ns = to_ns - self.renode_ns;
+        if let Some(Fault::RunForExtraNs { at, ns: extra }) = self.fault {
+            if Time::from_ns(to_ns) >= at {
+                ns += extra;
+                self.fault = None;
+            }
+        }
+        self.client.run_for(ns).map_err(proto)?;
+        self.run_for_calls += 1;
+        self.renode_ns = to_ns;
+        events.extend(self.client.take_events());
+        Ok(())
+    }
+
+    fn set_input(&mut self, i: usize, level: Level) -> Result<(), EngineError> {
+        let p = &self.pins[i];
+        self.client
+            .gpio_set_state(p.gpio, p.spec.index, level == Level::High)
+            .map_err(proto)?;
+        self.input_applied = true;
+        Ok(())
+    }
+
     fn advance_inner(&mut self, t: Time) -> Result<(), EngineError> {
         let start_ns = self.renode_ns;
         let target_ns = t.as_fs() / FS_PER_NS;
-        if target_ns > start_ns {
-            let mut ns = target_ns - start_ns;
-            if let Some(Fault::RunForExtraNs { at, ns: extra }) = self.fault {
-                if t >= at {
-                    ns += extra;
-                    self.fault = None;
-                }
+        // Events carried over from the previous grant end come first: they
+        // are stamped `start_ns` (lattice rule 3).
+        let mut events = std::mem::take(&mut self.carried);
+        // Split the advance at each queued input's lattice point and drive
+        // the input while Renode is paused there (ADR-003 D2: never early).
+        // Every segment ends on the lattice at or before `t`.
+        while let Some(at_ns) = self.pending.first().map(|p| p.at_ns) {
+            if at_ns > target_ns {
+                break;
             }
-            self.client.run_for(ns).map_err(proto)?;
-            self.run_for_calls += 1;
+            self.run_to(at_ns, &mut events)?;
+            while self.pending.first().is_some_and(|p| p.at_ns == at_ns) {
+                let p = self.pending.remove(0);
+                self.set_input(p.pin, p.level)?;
+            }
         }
-        let mut events = self.client.take_events();
+        self.run_to(target_ns, &mut events)?;
         if let Some(Fault::DropGpioEvent { at_ns }) = self.fault {
             if let Some(k) = events.iter().position(|e| e.time_ns >= at_ns) {
                 events.remove(k);
@@ -722,29 +843,31 @@ impl RenodeEngine {
                     self.pins[i].spec.name, ev.time_ns
                 )));
             }
+            // Lattice rule 3: a change stamped exactly at the grant end
+            // happened after the re-sync there, so it belongs to the next
+            // grant. Renode already shows it; the kernel sees it next grant.
+            if ev.time_ns == target_ns {
+                self.carried.push(ev);
+                self.carried_edges += 1;
+                continue;
+            }
             let pin = &mut self.pins[i];
             let level = Level::from_bool(ev.state);
             if level == pin.level {
                 continue; // not a change (e.g. re-write of the same value)
             }
-            // Boundary edge: Renode stamps a change made by an ISR it deferred
-            // past the previous pause point with that pause time, although it
-            // executed during this grant (the pin read back the old level at
-            // that boundary). It is reported 1 fs after the previous kernel
-            // boundary, the earliest time inside this grant. That is when the
-            // firmware really changed the pin in this partition; the timer
-            // expiry it reacts to may have been tens of ns earlier (see the
-            // crate docs). Counted in `boundary_edges()`.
-            let mut edge_time = Time::from_ns(ev.time_ns);
-            if edge_time <= self.now {
-                edge_time = self.now + Time::from_fs(1);
+            // Lattice rules 1 and 2. A stamp at `start_ns` (the previous
+            // boundary, a lattice point) becomes `now + 1 fs`, inside this
+            // grant.
+            let edge_time = lattice_edge_time(ev.time_ns, self.quantum_ns);
+            if edge_time.as_fs() % (self.quantum_ns * FS_PER_NS) == 1 {
                 self.boundary_edges += 1;
             }
             edges[i] += 1;
             if edges[i] > 1 {
                 return Err(EngineError::Protocol(format!(
                     "{}: more than one edge inside grant ({start_ns}, {target_ns}] ns; \
-                     reduce the engine quantum",
+                     reduce --max-quantum (the engine's max_grant)",
                     pin.spec.name
                 )));
             }
@@ -773,17 +896,53 @@ impl RenodeEngine {
                     self.name
                 ))
             })?;
-            let p = &mut self.pins[i];
-            if p.applied != Some(level) {
-                self.client
-                    .gpio_set_state(p.gpio, p.spec.index, level == Level::High)
-                    .map_err(proto)?;
-                p.applied = Some(level);
-                self.input_applied = true;
+            if self.pins[i].scheduled == Some(level) {
+                continue; // a snapshot already applied or queued: no-op
+            }
+            self.pins[i].scheduled = Some(level);
+            // ADR-003 D2: Renode observes an input at its next sync point, so
+            // a transition at `t` takes effect at ceil_L(t), never earlier.
+            // One already in the past (delivered at a boundary) takes effect
+            // now.
+            let t = match sig {
+                PinSignal::Digital { edge_time, .. } => (*edge_time).max(self.now),
+                PinSignal::Analog { .. } => self.now,
+            };
+            let at_ns = ceil_lattice_ns(t, self.quantum_ns);
+            if at_ns <= self.renode_ns {
+                self.set_input(i, level)?;
+            } else {
+                let k = self.pending.partition_point(|p| p.at_ns <= at_ns);
+                self.pending.insert(
+                    k,
+                    PendingInput {
+                        at_ns,
+                        pin: i,
+                        level,
+                    },
+                );
             }
         }
         Ok(())
     }
+}
+
+/// Lattice +1 fs rule (ADR-003 D2) for a Renode stamp `stamp_ns` and lattice
+/// `quantum_ns`: a stamp on a lattice point is reported 1 fs after it, any
+/// other stamp (a timer-driven sync point) exactly.
+fn lattice_edge_time(stamp_ns: u64, quantum_ns: u64) -> Time {
+    let t = Time::from_ns(stamp_ns);
+    if stamp_ns.is_multiple_of(quantum_ns) {
+        t + Time::from_fs(1)
+    } else {
+        t
+    }
+}
+
+/// `ceil_L(t)` in ns: the first lattice point at or after `t`.
+fn ceil_lattice_ns(t: Time, quantum_ns: u64) -> u64 {
+    let l = quantum_ns * FS_PER_NS;
+    t.as_fs().div_ceil(l) * quantum_ns
 }
 
 impl Drop for RenodeEngine {
@@ -820,6 +979,27 @@ mod tests {
     fn seconds_string_is_exact() {
         assert_eq!(ns_to_seconds_str(10_000), "0.000010000");
         assert_eq!(ns_to_seconds_str(1_500_000_001), "1.500000001");
+    }
+
+    #[test]
+    fn lattice_rule_and_ceil() {
+        // Lattice 10 us: a stamp on a lattice point is reported +1 fs.
+        assert_eq!(
+            lattice_edge_time(50_000_000, 10_000),
+            Time::from_ms(50) + Time::from_fs(1)
+        );
+        // A timer-driven sync off the lattice is exact.
+        assert_eq!(
+            lattice_edge_time(299_999_930, 10_000),
+            Time::from_ns(299_999_930)
+        );
+        assert_eq!(ceil_lattice_ns(Time::from_ps(123_456_789), 10_000), 130_000);
+        assert_eq!(ceil_lattice_ns(Time::from_us(120), 10_000), 120_000);
+        assert_eq!(
+            ceil_lattice_ns(Time::from_us(120) + Time::from_fs(1), 10_000),
+            130_000
+        );
+        assert_eq!(ceil_lattice_ns(Time::ZERO, 10_000), 0);
     }
 
     #[test]

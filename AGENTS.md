@@ -18,6 +18,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike`, check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
+| `make lattice-check` | ADR-003 D2 gate: the spike in 1 ms grants on the 10 µs lattice must give `out/spike`'s `nets.csv` and non-grant records byte for byte, and a 1 kHz CSV must sample the 100 kHz waveform exactly (`scripts/check_resample.py`) |
 | `make determinism` | 10 spike runs (`DET_RUNS`, `DET_JOBS` in parallel); sha256 of `nets.csv`, `events.jsonl`, `nets.vcd` must match |
 | `make golden` | Diff `out/spike` LED_A against `tests/golden/spike/led_a.csv` (1 mV / 1 sample) |
 | `make golden-update` | Regenerate the golden snapshot from a fresh, checked spike run. Review the diff before committing it |
@@ -79,8 +80,14 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
 - **Stepping ngspice per instruction.** ngspice advances one *grant* at a
   time, to a breakpoint at `g`.
 - **Letting Renode's virtual time run ahead of the grant.** Drive Renode only
-  with `RunFor(g - now)`. Never use `start`/free-running emulation and then try
-  to catch up.
+  with `RunFor` calls that end on the grant lattice at or before `g`. Never use
+  `start`/free-running emulation and then try to catch up.
+- **A `RUN_FOR` that ends off the lattice** (ADR-003 D2). Renode's results
+  depend on its sync-point sequence; every boundary must be a multiple of the
+  Renode quantum (`--renode-quantum`), which is run configuration, not a
+  tuning knob to couple to `--max-quantum`.
+- **Applying an MCU input before `ceil_L(edge_time)`.** Renode sees an input
+  only at a sync point; earlier is acausal, later than that is a skew.
 - **Parsing KiCad files with regex.** Use a real S-expression parser.
 - Using float seconds for scheduling. Convert at the engine's FFI boundary only.
 - Registering a consumer engine before its producer. The Advance phase is

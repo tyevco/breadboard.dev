@@ -116,6 +116,15 @@ pub enum SchedError {
         #[source]
         source: EngineError,
     },
+    #[error(
+        "engine {engine}: t_safe {t_safe} rounds down to the grant lattice at or before \
+         now {now}; use a smaller lattice or fix the engine's t_safe (ADR-003 D2)"
+    )]
+    Lattice {
+        engine: String,
+        now: Time,
+        t_safe: Time,
+    },
     #[error("causality violation on net {net}: {detail}")]
     Causality { net: String, detail: String },
     #[error("output I/O failed: {0}")]
@@ -153,6 +162,8 @@ pub struct Scheduler {
     phase: Phase,
     grants: u64,
     next_event_sample: Time,
+    /// The grant lattice (ADR-003 D2), fixed at the first `run`.
+    lattice: Option<Time>,
 }
 
 /// What bounded a grant, in tie-break order.
@@ -185,6 +196,7 @@ impl Scheduler {
             phase: Phase::Init,
             grants: 0,
             next_event_sample: Time::ZERO,
+            lattice: None,
         })
     }
 
@@ -289,6 +301,16 @@ impl Scheduler {
             if self.engines.is_empty() {
                 return Err(SchedError::Config("no engines registered".into()));
             }
+            self.lattice = self.check_lattice()?;
+        }
+        if let Some(l) = self.lattice {
+            if !t_end.as_fs().is_multiple_of(l.as_fs()) {
+                return Err(SchedError::Config(format!(
+                    "t_end {t_end} is not a multiple of the grant lattice {l}"
+                )));
+            }
+        }
+        if self.phase == Phase::Init {
             self.phase = Phase::Exchange;
             let mut events = Vec::new();
             let mut changed = BTreeSet::new();
@@ -304,6 +326,9 @@ impl Scheduler {
             self.prev_nets.clone_from(&self.nets);
             let mut g = t_end;
             let mut limiter = Limiter::TEnd;
+            // The engine with the smallest t_safe (first registered on a
+            // tie): the only term that can round down to `now`.
+            let mut min_safe: Option<(usize, Time)> = None;
             for (i, e) in self.engines.iter_mut().enumerate() {
                 let t_safe = e.next_safe_time(now);
                 if t_safe <= now {
@@ -312,6 +337,9 @@ impl Scheduler {
                         now,
                         t_safe,
                     });
+                }
+                if min_safe.is_none_or(|(_, t)| t_safe < t) {
+                    min_safe = Some((i, t_safe));
                 }
                 consider(t_safe, Limiter::Engine(i), &mut g, &mut limiter);
             }
@@ -327,6 +355,13 @@ impl Scheduler {
                 .filter(|t| *t > now)
                 .min();
             if let Some(t) = sample {
+                if let Some(l) = self.lattice {
+                    if !t.as_fs().is_multiple_of(l.as_fs()) {
+                        return Err(SchedError::Config(format!(
+                            "aligned sample instant {t} is not a multiple of the grant lattice {l}"
+                        )));
+                    }
+                }
                 consider(t, Limiter::Sample, &mut g, &mut limiter);
             }
             consider(
@@ -338,6 +373,20 @@ impl Scheduler {
 
             // Grant
             self.phase = Phase::Grant;
+            // ADR-003 D2: round down to the lattice after the min. Every
+            // term except an engine's t_safe is on the lattice, so only an
+            // engine promising less than one cell can leave no progress.
+            if let Some(l) = self.lattice {
+                g = Time::from_fs(g.as_fs() / l.as_fs() * l.as_fs());
+                if g <= now {
+                    let (i, t_safe) = min_safe.expect("at least one engine");
+                    return Err(SchedError::Lattice {
+                        engine: self.engines[i].name().to_string(),
+                        now,
+                        t_safe,
+                    });
+                }
+            }
             self.grants += 1;
             if self.config.log_grants {
                 let limited_by = match limiter {
@@ -397,6 +446,54 @@ impl Scheduler {
             })?;
         }
         Ok(())
+    }
+
+    /// The grant lattice declared by the engines (ADR-003 D2): all declared
+    /// lattices must be equal and positive, and `max_quantum` and the event
+    /// sampling period must be multiples of it.
+    fn check_lattice(&self) -> Result<Option<Time>, SchedError> {
+        let mut lattice: Option<(Time, &str)> = None;
+        for e in &self.engines {
+            let Some(l) = e.grant_lattice() else { continue };
+            if l.is_zero() {
+                return Err(SchedError::Config(format!(
+                    "engine {}: grant lattice must be > 0",
+                    e.name()
+                )));
+            }
+            match lattice {
+                Some((l0, n0)) if l0 != l => {
+                    return Err(SchedError::Config(format!(
+                        "engines {n0} and {} declare different grant lattices ({l0} vs {l})",
+                        e.name()
+                    )))
+                }
+                Some(_) => {}
+                None => lattice = Some((l, e.name())),
+            }
+        }
+        let Some((l, _)) = lattice else {
+            return Ok(None);
+        };
+        let off = |what: &str, t: Time| {
+            SchedError::Config(format!(
+                "{what} {t} is not a multiple of the grant lattice {l}"
+            ))
+        };
+        if !self.config.max_quantum.as_fs().is_multiple_of(l.as_fs()) {
+            return Err(off("max_quantum", self.config.max_quantum));
+        }
+        if let Some(s) = &self.config.event_sampling {
+            if !s.period.as_fs().is_multiple_of(l.as_fs()) {
+                return Err(off("event sampling period", s.period));
+            }
+        }
+        Ok(Some(l))
+    }
+
+    /// The grant lattice in effect (ADR-003 D2), known after the first `run`.
+    pub fn lattice(&self) -> Option<Time> {
+        self.lattice
     }
 
     /// Current input snapshot of engine `i`, keyed by its pin names.

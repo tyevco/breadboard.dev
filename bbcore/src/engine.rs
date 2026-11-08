@@ -60,6 +60,18 @@ pub trait Engine {
     /// set of bound, driven input pins (a snapshot, not a delta).
     fn apply_inputs(&mut self, inputs: &PinSignals) -> Result<(), EngineError>;
 
+    /// The grant lattice `L` this engine requires (ADR-003 D2): every grant
+    /// boundary must be a multiple of it, because the engine's results
+    /// depend on where its advances end (Renode: its global quantum). The
+    /// kernel rounds every grant down to the lattice and rejects a
+    /// configuration whose `max_quantum`, `t_end` or aligned sample instants
+    /// are off it. All declared lattices must be equal. A lattice-bound
+    /// engine applies an input at `ceil_L(edge_time)`, never earlier.
+    /// Default: `None` (not lattice-bound).
+    fn grant_lattice(&self) -> Option<Time> {
+        None
+    }
+
     /// Value of output pin `pin` at `t`, for `prev <= t <= now` where `prev`
     /// is the previous boundary, if the engine can reconstruct it (e.g. by
     /// interpolating solver points). Must be a pure function of the engine
