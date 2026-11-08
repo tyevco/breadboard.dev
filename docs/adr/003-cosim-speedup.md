@@ -1375,3 +1375,123 @@ submodule `066a7f13`), and then measured.
   limited to `examples/adc` and this ADR, so the top-level Makefile is left
   alone. Step 9 adds the target (`make -C examples/adc test`; about 15 s)
   next to the `adc_in` gates.
+
+### Amendment 6: step 6 (kernel per-grant plan and early stop, D5) as implemented (2026-11-08)
+
+**Status:** Accepted with step 6. `spec/time-grant.md` (header;
+Definitions: `loop_quantum`, `quiet_until`, lookahead candidates, early
+stop; state machine and table; invariants 1, 2, 3 and new 8; new section
+"Quiet grants"; Exchange step 2; "What engines MUST NOT do") and
+`spec/event-stream.md` (`limited_by`: `stop:<engine>` is no longer reserved,
+and `engine:<name>` can be a `quiet_until` bound) are updated in the same
+change. No record gains a field; with lookahead off (the default) nothing
+changes, so every existing hash is unchanged.
+
+- **What landed.** `Engine::quiet_until`, `Engine::can_stop_early` and
+  `Engine::advance_until`, defaulted as the "Exact changes" sketch says
+  (no promise, `false`, `advance_to(t)` returning `t`);
+  `EngineError::PromiseBroken { promised, at }`;
+  `SchedulerConfig::lookahead` (default `false`);
+  `SchedError::PromiseBroken { engine, promised, at }`; the `stop:<engine>`
+  limiter; and, for tests and diagnostics, `Scheduler::record_plans` /
+  `Scheduler::plan_log` returning one `GrantPlan { from, until, order,
+  quiet, stop, queried }` per grant. All additive: existing engines and
+  mocks compile unchanged. The struct-literal `SchedulerConfig`s in
+  `cli/src/main.rs` and `engines/cpu-renode/tests/blinky.rs` gain
+  `lookahead: false` (no behaviour change); the `bb run --lookahead` flag
+  and Renode's `quiet_until` are step 5's.
+- **Who is asked (candidates).** D5 says "the quiet candidates" without
+  defining them. A candidate is an engine in a feedback loop (a component
+  of more than one engine, or reading a net it drives) for which a quiet
+  grant with `Q = {c}` passes the D5.2 structural checks, computed once at
+  the first `run`. So ngspice in `examples/feedback` (its producer U1
+  cannot stop early) and a CPU in MCU→MCU feedback are never asked, and
+  never pay the 0.3–0.7 ms Query. The checks are repeated per grant for the
+  actual `Q`. Phase 1 has one CPU, so this is exact there.
+- **When they are asked.** Only when the loop cap binds:
+  `floor_L(g') > now + loop_quantum`, where `g'` is the Grant-row minimum
+  without the loop term. Otherwise no quiet grant could be longer, the
+  Query is skipped and the back-off is not touched.
+- **`G` includes the aligned sample term.** D5.1 writes
+  `G = floor_L(min(t_safe_i, now + max_quantum, t_end, quiet_until_c))`. A
+  quiet grant must not skip an aligned sample instant either (invariant 7),
+  so `G` is `floor_L` of the full Grant-row minimum without the loop term,
+  and the `quiet_until` terms. `bb` uses sampled probes, so this changes
+  nothing there.
+- **A useful promise.** `quiet_until = now` is no promise (D5); a value
+  with `floor_L(q) <= now` cannot lengthen a grant either, so a promise
+  counts (for `Q` and for the back-off) only when `floor_L(q) > now`.
+- **The audit and the open interval.** D5 defines the promise on the open
+  interval `(now, quiet_until)`, and D5.4 asks for "no output transition in
+  `(now, r]`". These differ only for a change exactly at `r = q` (a
+  promise on the lattice, granted to the end). The kernel follows the
+  promise: a change at `t < q` is `PromiseBroken`; a change at `t = r = q`
+  is allowed. It reaches the engines advanced before the quiet engine at
+  the boundary and takes effect from `r` on, which is what a one-cell run
+  gives (ngspice: a ramp from `q`). For Renode this case does not arise: a
+  write at a lattice sync is reported 1 fs later (D2 rule 1), and an
+  off-lattice `q` floors below itself. The mock gate covers both (a wake
+  at 5 ms, on the lattice, and at 12.345678 ms).
+- **The wake audit's contract.** An engine that sees its own early wake
+  without an output (Renode: the plugin's WFI-exit counter) returns
+  `EngineError::PromiseBroken` from its advance; the scheduler turns that
+  into `SchedError::PromiseBroken` with the engine's name, from any grant.
+  `quiet_until` is asked in Query before any input of the grant is
+  delivered and may be skipped by the back-off, so it must be a pure read.
+- **The early stop is checked.** After the first engine's
+  `advance_until(G, watch)` the kernel checks `now < r <= G`, `r` on the
+  lattice (or `= G`), and that `r` is `min(ceil_L(t_x), G)` for the first
+  change `t_x` on a watched net in `(now, r]`, or `G` if there is none;
+  otherwise it is a protocol error of that engine. A quiet engine that
+  advanced past a changed input would compute something a one-cell run
+  does not, so this is not left to the engine.
+- **Zero producers.** D5.2 asks for exactly one producer feeding `Q`. With
+  none (for example a CPU that only reads its own outputs), a long grant
+  would also be safe, but it is not needed for any Phase 1 board; the
+  kernel follows the ADR and falls back.
+- **"First in the topological order".** As written: the remaining graph's
+  Kahn order with ties by registration index. An unconnected engine with a
+  lower registration index therefore comes first and the grant falls back
+  (a mock gate). The plan order of the grant is that Kahn order.
+- **The `grant` record of a quiet grant** is emitted once the early stop
+  `r` is known, after the first engine's advance. No other record of the
+  grant is emitted before Exchange, so the stream order is unchanged.
+- **Back-off.** Per candidate: after `k` consecutive Queries without a
+  useful promise, the next `min(2^k, 64)` grants at which it would be asked
+  skip it. A useful promise resets `k`. Measured: a CPU that never promises
+  is asked at grants 1, 4, 9, 18, 35, 68, 133, 198, 263, ...
+- **Gates** (`bbcore/tests/lookahead.rs`, mock CPU `u`: lattice-bound,
+  quiet until its next timer wake while no reaction is pending, reacting
+  to a rising input at `ceil_L(t) + 1 fs`; mock producer `n`: stops early;
+  wired `u.P -> n.A`, `n.B -> u.IN`, `L` = 10 µs, `max_quantum` = 10 ms):
+  - **equivalence** (`lookahead_changes_only_grant_records`): 50 ms with
+    lookahead on gives the one-cell run's (5000 grants) non-grant records
+    byte for byte, 12 edges including a sub-cell pulse, in 22 grants (10 quiet);
+  - **a quiet producer with its consumer advanced first**
+    (`a_quiet_producer_with_its_consumer_advanced_first`): the first grant
+    runs `[n, u]` with `Q = {u}`; one-cell grants keep the static `[u, n]`;
+  - **an early stop shrinks `g` for later engines**
+    (`an_early_stop_shrinks_the_grant_for_later_engines`): `n`'s edge at
+    3.000001 ms stops it at 3.01 ms (`stop:n`) instead of `u`'s 5 ms
+    promise; `u` gets the edge before it advances to 3.01 ms; quiet grants
+    are also labelled `engine:u` (floored to 12.34 ms for a wake at
+    12.345678 ms) and `max_quantum`;
+  - **a stopping engine that is not first falls back**, and so does a
+    producer that cannot stop early
+    (`a_stopping_engine_that_is_not_first_falls_back`);
+  - **a remaining cycle falls back** (`a_remaining_cycle_falls_back`);
+  - **two producers feeding `Q` fall back**
+    (`two_producers_feeding_q_fall_back`); every fallback grants one cell
+    and asks nobody;
+  - **a broken promise and a broken wake each raise `PromiseBroken`**
+    (`broken_promises_and_wakes_raise_promise_broken`): an output at 2.5 ms
+    under a 9 ms promise (`at` 2.5 ms), and an engine-reported wake at
+    1 ms under the 5 ms promise;
+  - **the back-off depends only on history**
+    (`the_back_off_depends_only_on_history`): the exact Query sequence
+    above, identical in two runs, and reset by a promise (asked at 0,
+    3.01 and 3.04 ms in the feedback run);
+  - **identical plans across two runs**
+    (`plans_are_identical_across_two_runs`): `plan_log`, events and every
+    engine call identical;
+  - an acyclic graph never asks (`quiet_grants_respect_other_bounds`).

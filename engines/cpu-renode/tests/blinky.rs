@@ -102,6 +102,7 @@ fn run_blinky(
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: grant,
         loop_quantum: None,
+        lookahead: false,
         log_grants: false,
         event_sampling: None,
     })
@@ -423,6 +424,7 @@ fn run_faulty(
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: grant,
         loop_quantum: None,
+        lookahead: false,
         log_grants: false,
         event_sampling: None,
     })
@@ -676,6 +678,7 @@ fn run_copy(
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: grant,
         loop_quantum: None,
+        lookahead: false,
         log_grants: false,
         event_sampling: None,
     })

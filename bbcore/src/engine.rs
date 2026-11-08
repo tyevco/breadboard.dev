@@ -18,6 +18,18 @@ pub enum EngineError {
     /// Anything else (solver failure, bad netlist, ...).
     #[error("{0}")]
     Other(String),
+    /// The engine detected that it broke its last [`Engine::quiet_until`]
+    /// promise (ADR-003 D5.4, invariant 8): it promised quiet outputs on
+    /// `(now, promised)` but woke (e.g. a CPU left WFI) at `at`, before the
+    /// boundary it was advanced to. The scheduler reports it as
+    /// `SchedError::PromiseBroken`.
+    #[error("quiet promise until {promised} broken at {at}")]
+    PromiseBroken {
+        /// The promise (`quiet_until`) the engine gave.
+        promised: Time,
+        /// When the engine woke.
+        at: Time,
+    },
 }
 
 /// A simulation engine (CPU emulator, analog solver, ...).
@@ -127,6 +139,45 @@ pub trait Engine {
     /// Log lines produced since the last call (e.g. UART). Default: none.
     fn drain_logs(&mut self) -> Vec<LogRecord> {
         Vec::new()
+    }
+
+    /// CPU lookahead (ADR-003 D5): a promise, separate from and stronger than
+    /// `t_safe`, that **if this engine's inputs stay constant, its outputs
+    /// stay constant on `(now, quiet_until)`** (for a CPU: it sleeps until a
+    /// timer limit). Returning `now` (the default) means "no promise". Asked
+    /// only when the scheduler's `lookahead` is on, in Query, after
+    /// `next_safe_time(now)` and before any input of the coming grant is
+    /// delivered; it may be skipped (query back-off), so it must be a pure
+    /// read that changes nothing that affects results. When the kernel uses
+    /// the promise (a quiet grant `(now, r]` with `r <= floor_L(quiet_until)`),
+    /// it checks that the engine reports no output change in `(now, r]`;
+    /// an engine that can see its own early wake (a CPU leaving WFI before
+    /// `r` without an output change) reports it from `advance_to` as
+    /// [`EngineError::PromiseBroken`]. Both fail the run.
+    fn quiet_until(&mut self, now: Time) -> Time {
+        now
+    }
+
+    /// Whether this engine implements [`Engine::advance_until`] (ADR-003
+    /// D5): it can stop at the first lattice point at or after the first
+    /// change on a watched output. Default `false` (Renode: there is no
+    /// run-until-event primitive).
+    fn can_stop_early(&self) -> bool {
+        false
+    }
+
+    /// Advance towards `t` (same contract as [`Engine::advance_to`]) but stop
+    /// early (ADR-003 D5.3): at the first transition, at `t_x`, of an output
+    /// pin in `watch` (this engine's pin names), the engine stops at
+    /// `r = ceil_L(t_x)` (the grant lattice `L`; at most `t`) and returns `r`;
+    /// with no such transition it returns `t`. `now < r <= t`, and `r` is on
+    /// the lattice or equals `t`. Afterwards the engine is at `r` and its
+    /// outputs and trace are those of `(now, r]`, exactly as if the kernel
+    /// had called `advance_to(r)`. Called only when [`Engine::can_stop_early`]
+    /// is `true`. Default: `advance_to(t)`, returning `t`.
+    fn advance_until(&mut self, t: Time, watch: &[String]) -> Result<Time, EngineError> {
+        let _ = watch;
+        self.advance_to(t).map(|()| t)
     }
 
     /// Called once, in registration order, each time a `Scheduler::run`

@@ -194,6 +194,7 @@ fn cfg(max_quantum: Time) -> SchedulerConfig {
     SchedulerConfig {
         max_quantum,
         loop_quantum: None,
+        lookahead: false,
         log_grants: true,
         event_sampling: None,
     }
@@ -356,6 +357,7 @@ fn blinky_run(t_end: Time) -> (Vec<u8>, Vec<u8>, Vec<u8>, Journal) {
     let config = SchedulerConfig {
         max_quantum: Time::from_ms(5),
         loop_quantum: None,
+        lookahead: false,
         log_grants: true,
         event_sampling: Some(EventSampling {
             period: Time::from_ms(10),

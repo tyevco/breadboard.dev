@@ -8,7 +8,10 @@ Status: normative. Rationale: `docs/adr/002-time-grant-protocol.md`
 hook (`end_of_run`) is ADR-003 Amendment 1; traces, the plan order, the loop
 cap, the record order and sampled VCDs are ADR-003 D3/D4 (plan step 3,
 Amendment 3); `digital_in` thresholding, which produces the analog → digital
-traces of example 3, is ADR-003 D3 (plan step 4, Amendment 4).
+traces of example 3, is ADR-003 D3 (plan step 4, Amendment 4); CPU
+lookahead (`quiet_until`), the per-grant plan, the early stop
+(`advance_until`), the promise audit and the query back-off are ADR-003 D5
+(kernel side: plan step 6, Amendment 6).
 Implementation: `bbcore::Scheduler`. Changing this file requires an ADR (see
 `AGENTS.md`).
 
@@ -69,7 +72,22 @@ touch an engine adapter.
   latency; with the lattice and traces it never changes results.
 - **loop_quantum** (ADR-003 D4): the cap on `g - now` while the binding graph
   is cyclic. Default `L` (one-cell lockstep); a cyclic graph without a
-  lattice needs an explicit value.
+  lattice needs an explicit value. With lookahead a quiet grant lifts it
+  (see "Quiet grants").
+- **quiet_until** (ADR-003 D5): `quiet_until(now)`, a promise separate from
+  and stronger than `t_safe`: if the engine's inputs stay constant, its
+  outputs stay constant on `(now, quiet_until)`. `now` (the default) is no
+  promise; a promise is *useful* when `floor_L(quiet_until) > now`. Asked
+  only with lookahead on, in Query, before any input of the grant is
+  delivered; a pure read.
+- **lookahead candidates:** the engines in a feedback loop (a component of
+  more than one engine, or reading a net they drive) for which a quiet grant
+  with `Q = {c}` passes the structural checks below. Only candidates are
+  asked for `quiet_until`.
+- **early stop:** `advance_until(t, watch)` on an engine with
+  `can_stop_early()`: it advances towards `t` and, at the first change of a
+  pin in `watch` at `t_x`, stops at `r = ceil_L(t_x)` (at most `t`) and
+  returns `r`; with no such change it returns `t`.
 - **t_end:** end of the run.
 
 ## State machine
@@ -82,15 +100,19 @@ touch an engine adapter.
                v
    +-------> Query ---- t_safe_i <= now -------------------------+
    |           |                                                   |
-   |           v                                                   |
+   |           v       [lookahead, cyclic: quiet_until(now) of the candidates]
    |         Grant     g = floor_L(min(t_safe_i, next_sample,      |
    |           |             now+loop_quantum [cyclic], now+max_quantum, t_end))
+   |           |       or a quiet grant G (see "Quiet grants")      |
    |           |       (floor_L(..) <= now: Lattice error)            |
    |           |       emit {"type":"grant", t_fs: now, until_fs: g}  |
+   |           |       (a quiet grant: once the early stop r is known) |
    |           v                                                   |
    |        Advance    per engine i, in plan order:  --------------+-- engine error
    |           |         [apply_input_trace if an input net changed  |   / causality
-   |           |          earlier in this grant]; advance_to(g);    |
+   |           |          earlier in this grant]; advance_to(g);    |   / PromiseBroken
+   |           |         (quiet grant: the grant's order; the first
+   |           |          runs advance_until(G, watch) -> r; g := r)
    |           |         drain_logs; read_output_trace; read_outputs -> nets
    |           |       now := g                                    |
    |           v                                                   |
@@ -108,12 +130,12 @@ touch an engine adapter.
 | State | Entry action | Exit to | Condition |
 | --- | --- | --- | --- |
 | Init | check the lattice: declared lattices equal; `max_quantum`, `loop_quantum`, `t_end` and the `event_sampling` period multiples of `L` (`Config` error otherwise); build the plan order from the bindings; a cyclic graph without a lattice or `loop_quantum` is a `Config` error | Exchange (initial) | first `run()`, at least 1 engine |
-| Query | `t_safe_i = next_safe_time(now)` for every *i* | Grant | every `t_safe_i > now` |
+| Query | `t_safe_i = next_safe_time(now)` for every *i*; with lookahead on, a cyclic graph and the loop cap binding, `quiet_until(now)` for every candidate not backed off (see "Quiet grants") | Grant | every `t_safe_i > now` |
 | Query | | Error | any `t_safe_i <= now` (`NoProgress`) |
-| Grant | compute `g`, emit `grant` | Advance | `g > now` |
+| Grant | compute `g` (or the quiet grant `G`), emit `grant` (a quiet grant: after the early stop) | Advance | `g > now` |
 | Grant | | Error | `floor_L(min(..)) <= now` (`Lattice`) |
-| Advance | for every *i* in plan order: pre-advance delivery, `advance_to(g)`, collect (see "Advance"); `now := g` | Exchange | every call returned Ok |
-| Advance | | Error | any engine error or causality violation |
+| Advance | for every *i* in plan order (a quiet grant: its own order, the first engine with `advance_until`): pre-advance delivery, `advance_to(g)`, collect (see "Advance"); `now := g` | Exchange | every call returned Ok |
+| Advance | | Error | any engine error, causality violation or broken promise (`PromiseBroken`) |
 | Exchange | see "Exchange" below | Query | `now < t_end` |
 | Exchange | | Done | `now == t_end` |
 | Exchange | | Error | causality violation, engine error or I/O error |
@@ -128,16 +150,21 @@ touch an engine adapter.
    recent promise) and `t` on the lattice, and the engine stops at exactly
    `t`. An engine may split its own advance into steps that each end on the
    lattice at or before `t` (Renode, to apply inputs at `ceil_L`); that is
-   not a free-run.
+   not a free-run. `advance_until(t, watch)` returns `r` with
+   `now < r <= t`, `r` on the lattice or equal to `t`, and the engine stops
+   at exactly `r`; every later engine of the grant is then advanced to `r`.
+   Advancing a producer before a quiet consumer is not a free-run.
 2. **Grant = min:** `g` is exactly the minimum in the Grant row, rounded
    down to the lattice after the min. The `loop_quantum` term is present only
-   while the binding graph is cyclic. When several bounds tie, `limited_by`
-   names the first in this order: engines in registration order, then
-   `sample`, then `loop_quantum`, then `max_quantum`, then `t_end`. Rounding
-   never changes the label.
+   while the binding graph is cyclic and the grant is not a quiet grant. When
+   several bounds tie, `limited_by` names the first in this order: engines in
+   registration order (a `t_safe` or a `quiet_until` term), then `sample`,
+   then `loop_quantum`, then `max_quantum`, then `t_end`. Rounding never
+   changes the label. A quiet grant whose first engine stopped early
+   (`r < G`) is labelled `stop:<engine>`.
 3. **Lockstep:** every engine is advanced to the same `g` in every iteration.
-   Engines advance one after another in plan order (ADR-003 D3), never
-   concurrently.
+   Engines advance one after another in plan order (ADR-003 D3), or in the
+   quiet grant's order (D5), never concurrently.
 4. **Progress:** `g > now`. Every term is greater than `now`, and `now`,
    `max_quantum`, `loop_quantum`, `t_end` and aligned sample instants are on
    the lattice, so only an engine with `t_safe < now + L` can make
@@ -161,6 +188,16 @@ touch an engine adapter.
    function of the inputs. See ADR-002 D6 and ADR-003 "Determinism argument".
 7. **Lattice:** every boundary, `max_quantum`, `loop_quantum`, `t_end` and
    every aligned sample instant is a multiple of `L` (ADR-003 D2).
+8. **Quiet promises** (ADR-003 D5.4): in a quiet grant `(now, r]`, an engine
+   of `Q` that promised `q = quiet_until(now)` reports no output change at a
+   time `< q` (the kernel checks its changes in `(now, r]`; since
+   `r <= floor_L(q)`, only a change exactly at `r = q` is allowed), and an
+   engine that detects its own early wake (a CPU leaving its sleep before
+   `r` without an output change) reports `EngineError::PromiseBroken` from
+   its advance. Either is `SchedError::PromiseBroken { engine, promised, at
+   }`. The early stop `r` must be `min(ceil_L(t_x), G)` for the first
+   change `t_x` of a watched net in `(now, r]`, or `G` if there is none
+   (otherwise an engine error).
 
 ## Advance (grant `g`, previous boundary `p`)
 
@@ -198,13 +235,45 @@ the boundary (Exchange step 2), which `loop_quantum` (one cell by default)
 makes harmless: a lattice-bound consumer would apply them at `ceil_L(t) = g`
 in any order (ADR-003 D3).
 
+## Quiet grants (ADR-003 D5; `lookahead` on)
+
+Only while the binding graph is cyclic and the loop cap binds, i.e.
+`floor_L(g') > now + loop_quantum` for `g'` the Grant-row minimum without
+the `loop_quantum` term:
+
+1. **Query.** Every lookahead candidate *c* that is not backed off is asked
+   `q_c = quiet_until(now)`. Let `G = floor_L(min(g', q_c))` over the useful
+   promises (`floor_L(q_c) > now`) and `Q = {c : floor_L(q_c) >= G}`. With
+   no useful promise, the grant is the one-cell grant.
+2. **Structure.** With the out-edges of every engine in `Q` removed, the
+   remaining graph must be acyclic; exactly one engine `p` outside `Q` may
+   drive a net read by an engine in `Q`; `p.can_stop_early()` must hold; and
+   `p` must be first in the remaining graph's Kahn order (ties by
+   registration index). Otherwise the grant is the one-cell grant of the
+   static plan (`loop_quantum`, plan order).
+3. **Early stop.** The grant's order is that Kahn order. Engine `p` runs
+   `advance_until(G, watch)`, with `watch` its output pins whose nets an
+   engine in `Q` reads, and returns `r`. The `grant` record `(now, r]` is
+   emitted then, labelled `stop:<p>` when `r < G` and otherwise by `G`'s
+   bound. Every later engine gets its pre-advance delivery as usual and
+   `advance_to(r)`. Engines of `Q` thus receive a change of `p` at `t_x`
+   before they advance and, lattice-bound, apply it at `ceil_L(t_x) = r`:
+   exactly where a one-cell run applies it.
+4. **Audit** (invariant 8) after each engine of `Q` is collected.
+5. **Back-off.** Per candidate: after `k` consecutive Queries without a
+   useful promise, the next `min(2^k, 64)` loop-capped grants (those where
+   the Query would be asked) skip it; a useful promise resets `k` to 0. The
+   back-off is a function of the simulated history only, and lookahead
+   changes only the partition (`grant` records), never outputs.
+
 ## Exchange (at boundary `g`, previous boundary `p`)
 
 1. Logs and outputs have already been collected for each engine during
    Advance (step 3).
 2. For each engine in registration order: if a net bound to one of its
    inputs was changed during this grant by an engine at or after it in the
-   plan order (only possible in a feedback loop), `apply_input_trace` with
+   grant's order (the plan order, or a quiet grant's order; only possible in
+   a feedback loop), `apply_input_trace` with
    those changes, which then take effect at once, in order. Then
    `apply_inputs(snapshot)`, where `snapshot[pin] = net value` for every
    input binding whose net has a value. An engine must treat a snapshot or a
@@ -370,3 +439,6 @@ at `ceil_L(t_x)`, so the outputs equal the one-cell run's byte for byte.
 - Depend on wall-clock time, thread timing or unseeded randomness.
 - Change anything that affects results in `end_of_run`: it is for pure
   self-checks (e.g. the Renode cross-check), and a later `run` may resume.
+- Change state in `quiet_until` (it may be skipped by the back-off), promise
+  quiet outputs it cannot guarantee, or stop `advance_until` anywhere but the
+  first lattice point at or after the first watched change (or `t`).

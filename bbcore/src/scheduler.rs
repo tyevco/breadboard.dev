@@ -23,6 +23,15 @@
 //! its inputs *before* its own `advance_to(g)` ([`Engine::apply_input_trace`]),
 //! so it applies them at their true time. A binding graph with a cycle caps
 //! every grant at `loop_quantum` (default: the lattice, one cell).
+//!
+//! With `lookahead` on (ADR-003 D5) the loop cap is lifted for a grant while
+//! CPU engines promise to stay quiet ([`Engine::quiet_until`]): the kernel
+//! cuts the out-edges of the quiet set `Q`, and if the rest of the graph is
+//! acyclic with exactly one producer feeding `Q` that can stop early and is
+//! first in its topological order, that producer runs
+//! [`Engine::advance_until`] on the pins feeding `Q` and every later engine
+//! advances to where it stopped (a per-grant plan). Otherwise the grant is
+//! the one-cell grant of the static plan.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
@@ -70,6 +79,12 @@ pub struct SchedulerConfig {
     /// D4). `None`: the grant lattice, i.e. one-cell lockstep. A cyclic
     /// graph without a lattice needs an explicit value.
     pub loop_quantum: Option<Time>,
+    /// CPU lookahead for cyclic graphs (ADR-003 D5): ask the engines in a
+    /// feedback loop for [`Engine::quiet_until`] and lift the loop cap while
+    /// a promise and the per-grant plan allow it. Lookahead changes only the
+    /// partition (and so only `grant` records), never outputs. Default
+    /// `false`.
+    pub lookahead: bool,
     /// Emit a `grant` record per grant.
     pub log_grants: bool,
     /// Emit `net_sample` records at a fixed rate (grants are aligned to it).
@@ -81,10 +96,55 @@ impl Default for SchedulerConfig {
         SchedulerConfig {
             max_quantum: Time::from_ms(1),
             loop_quantum: None,
+            lookahead: false,
             log_grants: true,
             event_sampling: None,
         }
     }
+}
+
+/// The plan of one grant (ADR-003 D5), recorded when
+/// [`Scheduler::record_plans`] is on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantPlan {
+    /// The grant `(from, until]` as executed (`until` is the early stop).
+    pub from: Time,
+    pub until: Time,
+    /// Registration indices in this grant's advance order.
+    pub order: Vec<usize>,
+    /// The quiet set `Q` (registration order); empty for a static grant.
+    pub quiet: Vec<usize>,
+    /// The engine that ran `advance_until` (a quiet grant only).
+    pub stop: Option<usize>,
+    /// Engines asked for `quiet_until` in this grant's Query.
+    pub queried: Vec<usize>,
+}
+
+/// Query back-off of one lookahead candidate (ADR-003 D5.5).
+#[derive(Copy, Clone, Debug, Default)]
+struct Backoff {
+    /// Consecutive Queries without a promise.
+    misses: u32,
+    /// Remaining loop-capped grants that skip the Query.
+    skip: u32,
+}
+
+/// The longest skip after Queries without a promise (ADR-003 D5.5).
+const MAX_QUERY_SKIP: u32 = 64;
+
+/// A quiet grant chosen in Query (ADR-003 D5).
+struct QuietGrant {
+    /// `G`, on the lattice.
+    g: Time,
+    limiter: Limiter,
+    /// Advance order of the remaining graph; `order[0]` stops early.
+    order: Vec<usize>,
+    /// `Q` with each promise, in registration order.
+    promises: Vec<(usize, Time)>,
+    /// Output pins of `order[0]` that feed `Q`.
+    watch: Vec<String>,
+    /// Nets of those pins.
+    watch_nets: Vec<String>,
 }
 
 /// The advance order built from the bindings at the first `run` (ADR-003
@@ -156,6 +216,15 @@ pub enum SchedError {
     },
     #[error("causality violation on net {net}: {detail}")]
     Causality { net: String, detail: String },
+    /// A quiet promise was broken (ADR-003 D5.4, invariant 8): an output
+    /// change, or a wake the engine reported, at `at`, before the boundary
+    /// of a grant that relied on `quiet_until = promised`.
+    #[error("engine {engine}: quiet promise until {promised} broken at {at} (ADR-003 D5.4)")]
+    PromiseBroken {
+        engine: String,
+        promised: Time,
+        at: Time,
+    },
     #[error("output I/O failed: {0}")]
     Io(#[from] io::Error),
     #[error("scheduler halted after an earlier error")]
@@ -207,17 +276,29 @@ pub struct Scheduler {
     lattice: Option<Time>,
     /// The advance order (ADR-003 D3), fixed at the first `run`.
     plan: Option<Plan>,
-    /// Plan position of the engine driving each net.
-    driver_pos: BTreeMap<String, usize>,
+    /// Registration index of the engine driving each net.
+    driver: BTreeMap<String, usize>,
+    /// The binding graph `(j, i)`: an output of j drives a net i reads.
+    edges: BTreeSet<(usize, usize)>,
     /// The cap on a grant of a cyclic graph, fixed at the first `run`.
     loop_quantum: Option<Time>,
+    /// Lookahead candidates (ADR-003 D5): engines in a feedback loop for
+    /// which a quiet grant with `Q = {c}` is structurally possible.
+    candidate: Vec<bool>,
+    /// Query back-off per engine (ADR-003 D5.5).
+    backoff: Vec<Backoff>,
+    /// Per-grant plans, when recording is on.
+    plan_log: Option<Vec<GrantPlan>>,
     /// Changes of each net in the last grant (for sampled probes).
     changes: NetChanges,
 }
 
 /// What bounded a grant, in tie-break order.
+#[derive(Copy, Clone, Debug)]
 enum Limiter {
     Engine(usize),
+    /// The early stop of this engine (ADR-003 D5.3), `stop:<engine>`.
+    Stop(usize),
     Sample,
     LoopQuantum,
     MaxQuantum,
@@ -251,10 +332,30 @@ impl Scheduler {
             next_event_sample: Time::ZERO,
             lattice: None,
             plan: None,
-            driver_pos: BTreeMap::new(),
+            driver: BTreeMap::new(),
+            edges: BTreeSet::new(),
             loop_quantum: None,
+            candidate: Vec::new(),
+            backoff: Vec::new(),
+            plan_log: None,
             changes: NetChanges::new(),
         })
+    }
+
+    /// Record the plan of every grant from now on ([`Scheduler::plan_log`]),
+    /// for tests and diagnostics (ADR-003 D5). Off by default.
+    pub fn record_plans(&mut self, on: bool) {
+        match (on, self.plan_log.is_some()) {
+            (true, false) => self.plan_log = Some(Vec::new()),
+            (false, true) => self.plan_log = None,
+            _ => {}
+        }
+    }
+
+    /// The recorded per-grant plans (empty unless [`Scheduler::record_plans`]
+    /// is on).
+    pub fn plan_log(&self) -> &[GrantPlan] {
+        self.plan_log.as_deref().unwrap_or(&[])
     }
 
     /// Register an engine. The registration index orders the Query, the
@@ -383,6 +484,7 @@ impl Scheduler {
             .expect("plan built at Init")
             .order
             .clone();
+        let static_pos = positions(&order);
         let loop_quantum = self.loop_quantum;
         if self.phase == Phase::Init {
             self.phase = Phase::Exchange;
@@ -392,7 +494,7 @@ impl Scheduler {
                 self.collect(i, Time::ZERO, Time::ZERO, true, &mut records, &mut changes)?;
             }
             self.changes = NetChanges::new();
-            self.exchange(Time::ZERO, records, sink, probes)?;
+            self.exchange(Time::ZERO, records, sink, probes, &static_pos)?;
         }
         while self.now < t_end {
             // Query
@@ -439,25 +541,34 @@ impl Scheduler {
                 }
                 consider(t, Limiter::Sample, &mut g, &mut limiter);
             }
-            // ADR-003 D4: a feedback loop runs in one-cell lockstep (or
-            // `loop_quantum` grants) in plan order.
-            if let Some(q) = loop_quantum {
-                consider(
-                    now.saturating_add(q),
-                    Limiter::LoopQuantum,
-                    &mut g,
-                    &mut limiter,
-                );
-            }
             consider(
                 now.saturating_add(self.config.max_quantum),
                 Limiter::MaxQuantum,
                 &mut g,
                 &mut limiter,
             );
+            // ADR-003 D4: a feedback loop runs in one-cell lockstep (or
+            // `loop_quantum` grants) in plan order, unless a quiet promise
+            // lifts the cap for this grant (D5). Asking is useful only when
+            // the cap binds.
+            let mut quiet = None;
+            let mut queried = Vec::new();
+            if let Some(q) = loop_quantum {
+                let capped = now.saturating_add(q);
+                if self.config.lookahead && self.floor_l(g) > capped {
+                    quiet = self.query_quiet(now, g, limiter, &mut queried);
+                }
+                if quiet.is_none() {
+                    consider(capped, Limiter::LoopQuantum, &mut g, &mut limiter);
+                }
+            }
 
             // Grant
             self.phase = Phase::Grant;
+            if let Some(qg) = &quiet {
+                g = qg.g;
+                limiter = qg.limiter;
+            }
             // ADR-003 D2: round down to the lattice after the min. Every
             // term except an engine's t_safe is on the lattice, so only an
             // engine promising less than one cell can leave no progress.
@@ -473,53 +584,85 @@ impl Scheduler {
                 }
             }
             self.grants += 1;
-            if self.config.log_grants {
-                let limited_by = match limiter {
-                    Limiter::Engine(i) => format!("engine:{}", self.engines[i].name()),
-                    Limiter::Sample => "sample".to_string(),
-                    Limiter::LoopQuantum => "loop_quantum".to_string(),
-                    Limiter::MaxQuantum => "max_quantum".to_string(),
-                    Limiter::TEnd => "t_end".to_string(),
-                };
-                sink.emit(&Event::Grant {
-                    t_fs: now,
-                    until_fs: g,
-                    limited_by,
-                })?;
+            // A quiet grant's record waits for the early stop (below); no
+            // other record of this grant is emitted before Exchange.
+            if quiet.is_none() {
+                self.emit_grant(sink, now, g, limiter)?;
             }
 
-            // Advance, in plan order (ADR-003 D3).
+            // Advance, in plan order (ADR-003 D3), or in this grant's
+            // order with an early stop (D5).
             self.phase = Phase::Advance;
+            let grant_order = quiet.as_ref().map_or(&order, |qg| &qg.order).clone();
+            let gpos = positions(&grant_order);
             let mut records: Vec<Record> = Vec::new();
             let mut changes = NetChanges::new();
-            for (pos, &i) in order.iter().enumerate() {
+            for (pos, &i) in grant_order.iter().enumerate() {
                 // Pre-advance delivery: every change on this engine's inputs
-                // made by an engine earlier in the plan reaches it before it
+                // made by an engine earlier in the order reaches it before it
                 // advances, so it can act at the true time.
-                let (base, trace) = self.input_trace(i, &changes, |p| p < pos);
+                let (base, trace) = self.input_trace(i, &changes, |d| gpos[d] < pos);
                 if !trace.is_empty() {
                     let e = &mut self.engines[i];
                     e.apply_input_trace(&base, &trace)
-                        .map_err(|source| SchedError::Engine {
-                            engine: e.name().to_string(),
-                            phase: Phase::Advance,
-                            source,
-                        })?;
+                        .map_err(|source| engine_error(e.name(), Phase::Advance, source))?;
                 }
                 let e = &mut self.engines[i];
-                e.advance_to(g).map_err(|source| SchedError::Engine {
-                    engine: e.name().to_string(),
-                    phase: Phase::Advance,
-                    source,
-                })?;
+                match &quiet {
+                    Some(qg) if pos == 0 => {
+                        let r = e
+                            .advance_until(g, &qg.watch)
+                            .map_err(|source| engine_error(e.name(), Phase::Advance, source))?;
+                        let on_lattice = self
+                            .lattice
+                            .is_none_or(|l| r.as_fs().is_multiple_of(l.as_fs()));
+                        if r <= now || r > g || !(on_lattice || r == g) {
+                            return Err(engine_error(
+                                e.name(),
+                                Phase::Advance,
+                                EngineError::Protocol(format!(
+                                    "advance_until({g}) from {now} returned {r}: not in \
+                                     ({now}, {g}] on the lattice"
+                                )),
+                            ));
+                        }
+                        let lim = if r < g { Limiter::Stop(i) } else { qg.limiter };
+                        g = r;
+                        self.emit_grant(sink, now, g, lim)?;
+                    }
+                    _ => e
+                        .advance_to(g)
+                        .map_err(|source| engine_error(e.name(), Phase::Advance, source))?,
+                }
                 self.collect(i, now, g, false, &mut records, &mut changes)?;
+                if let Some(qg) = &quiet {
+                    if pos == 0 {
+                        self.check_stop(i, qg, now, g, &changes)?;
+                    }
+                    if let Some(&(_, promised)) = qg.promises.iter().find(|(c, _)| *c == i) {
+                        self.audit_quiet(i, promised, &changes)?;
+                    }
+                }
             }
             self.now = g;
+            if let Some(log) = &mut self.plan_log {
+                log.push(GrantPlan {
+                    from: now,
+                    until: g,
+                    order: grant_order,
+                    quiet: quiet
+                        .as_ref()
+                        .map(|qg| qg.promises.iter().map(|(c, _)| *c).collect())
+                        .unwrap_or_default(),
+                    stop: quiet.as_ref().map(|qg| qg.order[0]),
+                    queried,
+                });
+            }
 
             // Exchange
             self.phase = Phase::Exchange;
             self.changes = changes;
-            self.exchange(now, records, sink, probes)?;
+            self.exchange(now, records, sink, probes, &gpos)?;
         }
         // Done: end-of-run self-checks (ADR-003 Amendment 1).
         for e in self.engines.iter_mut() {
@@ -601,15 +744,25 @@ impl Scheduler {
             .map(|e| e.grant_lattice().is_some())
             .collect();
         let plan = plan_order(n, &edges, &bound);
-        let mut pos = vec![0; n];
-        for (p, &i) in plan.order.iter().enumerate() {
-            pos[i] = p;
-        }
-        self.driver_pos = self
+        self.driver = self
             .outputs
             .iter()
-            .map(|o| (o.net.clone(), pos[o.engine]))
+            .map(|o| (o.net.clone(), o.engine))
             .collect();
+        // ADR-003 D5: an engine in a feedback loop is a lookahead candidate
+        // if a quiet grant with Q = {it} is structurally possible (the check
+        // is repeated per grant for the actual Q).
+        let can_stop: Vec<bool> = self.engines.iter().map(|e| e.can_stop_early()).collect();
+        let cyc = cyclic_members(n, &edges);
+        self.candidate = (0..n)
+            .map(|c| {
+                let mut q = vec![false; n];
+                q[c] = true;
+                cyc[c] && quiet_order(n, &edges, &q, &can_stop).is_some()
+            })
+            .collect();
+        self.backoff = vec![Backoff::default(); n];
+        self.edges = edges;
         self.loop_quantum = if plan.cyclic {
             match self.config.loop_quantum.or(self.lattice) {
                 Some(q) => Some(q),
@@ -639,9 +792,187 @@ impl Scheduler {
         ins
     }
 
-    /// The changes of this grant on engine `i`'s input nets whose driver's
-    /// plan position satisfies `pick`, as a trace in time order (ties in
-    /// input-binding order), plus the snapshot before them: picked nets at
+    /// `floor_L(t)` (the identity without a lattice).
+    fn floor_l(&self, t: Time) -> Time {
+        match self.lattice {
+            Some(l) => Time::from_fs(t.as_fs() / l.as_fs() * l.as_fs()),
+            None => t,
+        }
+    }
+
+    /// Emit the `grant` record of `(now, g]`.
+    fn emit_grant<W: Write>(
+        &self,
+        sink: &mut EventSink<W>,
+        now: Time,
+        g: Time,
+        limiter: Limiter,
+    ) -> Result<(), SchedError> {
+        if !self.config.log_grants {
+            return Ok(());
+        }
+        let limited_by = match limiter {
+            Limiter::Engine(i) => format!("engine:{}", self.engines[i].name()),
+            Limiter::Stop(i) => format!("stop:{}", self.engines[i].name()),
+            Limiter::Sample => "sample".to_string(),
+            Limiter::LoopQuantum => "loop_quantum".to_string(),
+            Limiter::MaxQuantum => "max_quantum".to_string(),
+            Limiter::TEnd => "t_end".to_string(),
+        };
+        sink.emit(&Event::Grant {
+            t_fs: now,
+            until_fs: g,
+            limited_by,
+        })?;
+        Ok(())
+    }
+
+    /// ADR-003 D5 steps 1, 2 and 5: ask the lookahead candidates (unless
+    /// backed off) for `quiet_until`, and build the quiet grant if the
+    /// promises and the remaining graph allow one. `g` and `limiter` are the
+    /// grant without the loop cap (not yet rounded). Every decision is a
+    /// function of the simulated history.
+    fn query_quiet(
+        &mut self,
+        now: Time,
+        g: Time,
+        limiter: Limiter,
+        queried: &mut Vec<usize>,
+    ) -> Option<QuietGrant> {
+        let n = self.engines.len();
+        let mut promises = Vec::new();
+        for c in (0..n).filter(|&c| self.candidate[c]) {
+            let b = &mut self.backoff[c];
+            if b.skip > 0 {
+                b.skip -= 1;
+                continue;
+            }
+            queried.push(c);
+            let q = self.engines[c].quiet_until(now);
+            let useful = match self.lattice {
+                Some(l) => q.as_fs() / l.as_fs() * l.as_fs() > now.as_fs(),
+                None => q > now,
+            };
+            let b = &mut self.backoff[c];
+            if useful {
+                b.misses = 0;
+                promises.push((c, q));
+            } else {
+                b.misses = b.misses.saturating_add(1);
+                b.skip = 1u32
+                    .checked_shl(b.misses)
+                    .unwrap_or(u32::MAX)
+                    .min(MAX_QUERY_SKIP);
+            }
+        }
+        if promises.is_empty() {
+            return None;
+        }
+        let (mut big_g, mut lim) = (g, limiter);
+        for &(c, q) in &promises {
+            consider(q, Limiter::Engine(c), &mut big_g, &mut lim);
+        }
+        let big_g = self.floor_l(big_g);
+        // Q = {c : floor_L(quiet_until_c) >= G}.
+        promises.retain(|&(_, q)| self.floor_l(q) >= big_g);
+        let mut in_q = vec![false; n];
+        for &(c, _) in &promises {
+            in_q[c] = true;
+        }
+        let can_stop: Vec<bool> = self.engines.iter().map(|e| e.can_stop_early()).collect();
+        let (order, p) = quiet_order(n, &self.edges, &in_q, &can_stop)?;
+        // The producer's output pins whose nets an engine in Q reads.
+        let mut watch = Vec::new();
+        let mut watch_nets = Vec::new();
+        for o in self.outputs.iter().filter(|o| o.engine == p) {
+            let feeds_q = self.inputs.iter().any(|i| i.net == o.net && in_q[i.engine]);
+            if feeds_q && !watch.contains(&o.pin) {
+                watch.push(o.pin.clone());
+                watch_nets.push(o.net.clone());
+            }
+        }
+        Some(QuietGrant {
+            g: big_g,
+            limiter: lim,
+            order,
+            promises,
+            watch,
+            watch_nets,
+        })
+    }
+
+    /// ADR-003 D5.3: the early stop `r` of the first engine must be the first
+    /// lattice point at or after its first change on a watched net, or `G`
+    /// if there is none in `(now, r]`.
+    fn check_stop(
+        &self,
+        i: usize,
+        qg: &QuietGrant,
+        now: Time,
+        r: Time,
+        changes: &NetChanges,
+    ) -> Result<(), SchedError> {
+        let first = qg
+            .watch_nets
+            .iter()
+            .filter_map(|n| changes.get(n).and_then(|c| c.first()).map(|(t, _)| *t))
+            .min();
+        let expected = match first {
+            Some(t) => {
+                let c = match self.lattice {
+                    Some(l) => Time::from_fs(t.as_fs().div_ceil(l.as_fs()) * l.as_fs()),
+                    None => t,
+                };
+                c.min(qg.g)
+            }
+            None => qg.g,
+        };
+        if r != expected {
+            return Err(engine_error(
+                self.engines[i].name(),
+                Phase::Advance,
+                EngineError::Protocol(format!(
+                    "advance_until stopped at {r}, but its first watched change in \
+                     ({now}, {r}] is {first:?}: expected a stop at {expected} (ADR-003 D5.3)"
+                )),
+            ));
+        }
+        Ok(())
+    }
+
+    /// ADR-003 D5.4: a quiet engine reports no output change in the grant
+    /// `(now, r]` before its promised time. The promise covers the open
+    /// interval `(now, promised)`, and `r <= floor_L(promised)`, so the only
+    /// change it allows is one exactly at `r = promised` (a lattice-bound
+    /// CPU reports a write at a lattice point 1 fs later anyway). That change
+    /// reaches the engines advanced before it at the boundary, where it takes
+    /// effect from `r` on, as in a one-cell run.
+    fn audit_quiet(
+        &self,
+        i: usize,
+        promised: Time,
+        changes: &NetChanges,
+    ) -> Result<(), SchedError> {
+        let first = self
+            .outputs
+            .iter()
+            .filter(|o| o.engine == i)
+            .filter_map(|o| changes.get(&o.net).and_then(|c| c.first()).map(|(t, _)| *t))
+            .filter(|&t| t < promised)
+            .min();
+        match first {
+            Some(at) => Err(SchedError::PromiseBroken {
+                engine: self.engines[i].name().to_string(),
+                promised,
+                at,
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// The changes of this grant on engine `i`'s input nets whose driver
+    /// (registration index) satisfies `pick`, as a trace in time order (ties
+    /// in input-binding order), plus the snapshot before them: picked nets at
     /// the previous boundary, the others at their current value.
     fn input_trace(
         &self,
@@ -652,7 +983,7 @@ impl Scheduler {
         let mut base = PinSignals::new();
         let mut trace = Vec::new();
         for b in self.inputs.iter().filter(|b| b.engine == i) {
-            let picked = self.driver_pos.get(&b.net).is_some_and(|&p| pick(p));
+            let picked = self.driver.get(&b.net).is_some_and(|&d| pick(d));
             let ch = changes.get(&b.net).filter(|_| picked);
             let before = if ch.is_some() {
                 self.prev_nets.get(&b.net)
@@ -795,6 +1126,7 @@ impl Scheduler {
         mut records: Vec<Record>,
         sink: &mut EventSink<W>,
         probes: &mut [&mut dyn Probe],
+        pos: &[usize],
     ) -> Result<(), SchedError> {
         let now = self.now;
 
@@ -802,16 +1134,11 @@ impl Scheduler {
         //    advance (see `collect`).
 
         // 2. Route inputs to every engine: first the changes it has not seen
-        //    yet (from an engine at or after it in the plan, which only a
-        //    feedback loop has), every one in order, then the full snapshot.
-        let mut pos = vec![0; self.engines.len()];
-        if let Some(plan) = &self.plan {
-            for (p, &i) in plan.order.iter().enumerate() {
-                pos[i] = p;
-            }
-        }
+        //    yet (from an engine at or after it in this grant's order, which
+        //    only a feedback loop has), every one in order, then the full
+        //    snapshot.
         for (i, &here) in pos.iter().enumerate() {
-            let (base, trace) = self.input_trace(i, &self.changes, |p| p >= here);
+            let (base, trace) = self.input_trace(i, &self.changes, |d| pos[d] >= here);
             let ins = self.input_snapshot(i);
             let e = &mut self.engines[i];
             let r = if trace.is_empty() {
@@ -997,6 +1324,109 @@ impl NetSampler for WindowSampler<'_> {
     }
 }
 
+/// The engines in a feedback loop: in a strongly connected component of
+/// more than one engine, or reading a net they drive.
+fn cyclic_members(n: usize, edges: &BTreeSet<(usize, usize)>) -> Vec<bool> {
+    let mut succ = vec![Vec::new(); n];
+    for &(j, i) in edges {
+        succ[j].push(i);
+    }
+    // a is in a loop iff a is reachable from one of its successors.
+    (0..n)
+        .map(|a| {
+            let mut seen = vec![false; n];
+            let mut stack: Vec<usize> = succ[a].clone();
+            while let Some(v) = stack.pop() {
+                if v == a {
+                    return true;
+                }
+                if !seen[v] {
+                    seen[v] = true;
+                    stack.extend(&succ[v]);
+                }
+            }
+            false
+        })
+        .collect()
+}
+
+/// ADR-003 D5.2: the advance order of a quiet grant with quiet set `q`, and
+/// the engine that stops early, or `None` if the grant must fall back to one
+/// cell. With the out-edges of every engine in `q` removed, the remaining
+/// graph must be acyclic; exactly one engine outside `q` may drive a net
+/// read by an engine in `q`; it must be able to stop early; and it must be
+/// first in the remaining graph's Kahn order (ties by registration index).
+/// A pure function of its arguments.
+fn quiet_order(
+    n: usize,
+    edges: &BTreeSet<(usize, usize)>,
+    q: &[bool],
+    can_stop: &[bool],
+) -> Option<(Vec<usize>, usize)> {
+    let producers: BTreeSet<usize> = edges
+        .iter()
+        .filter(|&&(j, i)| q[i] && !q[j])
+        .map(|&(j, _)| j)
+        .collect();
+    if producers.len() != 1 {
+        return None;
+    }
+    let p = *producers.first()?;
+    if !can_stop[p] {
+        return None;
+    }
+    let mut succ = vec![Vec::new(); n];
+    let mut indeg = vec![0usize; n];
+    for &(j, i) in edges.iter().filter(|&&(j, _)| !q[j]) {
+        if i == j {
+            return None; // a self-loop remains
+        }
+        succ[j].push(i);
+        indeg[i] += 1;
+    }
+    let mut ready: BTreeSet<usize> = (0..n).filter(|&k| indeg[k] == 0).collect();
+    let mut order = Vec::with_capacity(n);
+    while let Some(k) = ready.pop_first() {
+        order.push(k);
+        for &s in &succ[k] {
+            indeg[s] -= 1;
+            if indeg[s] == 0 {
+                ready.insert(s);
+            }
+        }
+    }
+    if order.len() < n || order[0] != p {
+        return None; // a cycle remains, or the producer is not first
+    }
+    Some((order, p))
+}
+
+/// `pos[i]`: the position of engine `i` in `order`.
+fn positions(order: &[usize]) -> Vec<usize> {
+    let mut pos = vec![0; order.len()];
+    for (p, &i) in order.iter().enumerate() {
+        pos[i] = p;
+    }
+    pos
+}
+
+/// An engine error during `phase`; a broken quiet promise the engine
+/// reported (ADR-003 D5.4) becomes [`SchedError::PromiseBroken`].
+fn engine_error(engine: &str, phase: Phase, source: EngineError) -> SchedError {
+    match source {
+        EngineError::PromiseBroken { promised, at } => SchedError::PromiseBroken {
+            engine: engine.to_string(),
+            promised,
+            at,
+        },
+        source => SchedError::Engine {
+            engine: engine.to_string(),
+            phase,
+            source,
+        },
+    }
+}
+
 /// Lower `g` to `t` if `t` is earlier (ties go to the lower-ranked limiter).
 fn consider(t: Time, l: Limiter, g: &mut Time, lim: &mut Limiter) {
     if t < *g || (t == *g && rank(&l) < rank(lim)) {
@@ -1007,7 +1437,7 @@ fn consider(t: Time, l: Limiter, g: &mut Time, lim: &mut Limiter) {
 
 fn rank(l: &Limiter) -> (u8, usize) {
     match l {
-        Limiter::Engine(i) => (0, *i),
+        Limiter::Engine(i) | Limiter::Stop(i) => (0, *i),
         Limiter::Sample => (1, 0),
         Limiter::LoopQuantum => (2, 0),
         Limiter::MaxQuantum => (3, 0),

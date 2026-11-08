@@ -5,10 +5,10 @@ was Phase 0). Implementation: `bbcore::event`. Changing a record's fields,
 their order, or their meaning requires an ADR.
 
 Version 1 changes, all from `docs/adr/003-cosim-speedup.md`: `limited_by`
-gains `loop_quantum` (and `stop:<engine>`, reserved for Part B); `pin_edge`
-may repeat a net within one grant; ties in the boundary records are ordered
-by registration index, never by the advance (plan) order. No record gains or
-loses a field.
+gains `loop_quantum` and `stop:<engine>` (the early stop of ADR-003 D5,
+in use since plan step 6, Amendment 6); `pin_edge` may repeat a net within
+one grant; ties in the boundary records are ordered by registration index,
+never by the advance (plan) order. No record gains or loses a field.
 
 ## Format
 
@@ -43,7 +43,7 @@ The kernel granted every engine the interval `(t_fs, until_fs]`.
 | --- | --- | --- |
 | `t_fs` | int | start of the interval (the previous boundary) |
 | `until_fs` | int | the grant `g` |
-| `limited_by` | string | `engine:<name>`, `sample`, `loop_quantum` (the binding graph has a feedback loop), `max_quantum` or `t_end`; `stop:<engine>` is reserved for ADR-003 Part B (an early stop) |
+| `limited_by` | string | `engine:<name>` (its `t_safe`, or with lookahead its `quiet_until` promise), `sample`, `loop_quantum` (the binding graph has a feedback loop), `max_quantum`, `t_end`, or `stop:<engine>`: with lookahead (ADR-003 D5) that engine stopped the grant early, at the first lattice point at or after a change on a pin feeding a quiet engine, so `until_fs` is that point |
 
 ```json
 {"type":"grant","t_fs":0,"until_fs":10000000000000,"limited_by":"max_quantum"}

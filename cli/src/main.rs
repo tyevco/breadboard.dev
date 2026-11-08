@@ -365,6 +365,7 @@ fn run(a: RunArgs) -> Result<(), String> {
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: a.max_quantum,
         loop_quantum: None, // one Renode quantum (ADR-003 D4)
+        lookahead: false,
         log_grants: true,
         event_sampling: None,
     })
