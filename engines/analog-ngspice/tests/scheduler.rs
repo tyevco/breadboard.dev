@@ -42,6 +42,9 @@ impl Engine for Toggler {
     }
 }
 
+/// ngspice is a process singleton: tests in this binary take turns.
+static NGSPICE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run_once() -> (String, String, f64) {
     let mut cfg = NgspiceConfig::new("C1 a 0 1u\n", Time::from_ms(10), Time::from_us(10));
     cfg.inputs.push(InputBinding {
@@ -103,6 +106,7 @@ fn run_once() -> (String, String, f64) {
 
 #[test]
 fn scheduler_run_is_byte_identical_and_physical() {
+    let _g = NGSPICE.lock().unwrap_or_else(|e| e.into_inner());
     let (csv1, ev1, a1) = run_once();
     let (csv2, ev2, _) = run_once();
     assert_eq!(csv1, csv2, "CSV differs between runs");
@@ -130,4 +134,120 @@ fn scheduler_run_is_byte_identical_and_physical() {
         csv1.lines().count(),
         ev1.lines().count()
     );
+}
+
+/// Raises `OUT` once at `at`, which lies strictly inside a grant (t_safe is
+/// always now + 1 ms, edges are not on grant boundaries).
+struct OneEdge {
+    at: Time,
+    now: Time,
+    level: Level,
+    edge: Time,
+}
+
+impl Engine for OneEdge {
+    fn name(&self) -> &str {
+        "one_edge"
+    }
+    fn next_safe_time(&mut self, now: Time) -> Time {
+        now + Time::from_ms(1)
+    }
+    fn advance_to(&mut self, t: Time) -> Result<(), EngineError> {
+        if self.now < self.at && self.at <= t {
+            self.level = Level::High;
+            self.edge = self.at;
+        }
+        self.now = t;
+        Ok(())
+    }
+    fn read_outputs(&mut self) -> Result<PinSignals, EngineError> {
+        let mut m = PinSignals::new();
+        m.insert("OUT".into(), PinSignal::digital(self.level, self.edge));
+        Ok(m)
+    }
+    fn apply_inputs(&mut self, _: &PinSignals) -> Result<(), EngineError> {
+        Ok(())
+    }
+}
+
+/// v(a) at 1 ms and 2 ms for an edge at 0.3 ms, with the driver registered
+/// before (`cpu_first`) or after the ngspice engine.
+fn mid_grant_run(cpu_first: bool) -> (f64, f64) {
+    let mut cfg = NgspiceConfig::new("C1 a 0 1u\n", Time::from_ms(10), Time::from_us(10));
+    cfg.inputs.push(InputBinding {
+        pin: "DRV".into(),
+        source: "V_DRV".into(),
+        drive: Drive::Digital {
+            model: DigitalOut {
+                voh: 3.3,
+                vol: 0.0,
+                rise: Time::from_ns(5),
+                fall: Time::from_ns(5),
+                zout: 1e3,
+            },
+            initial: Level::Low,
+        },
+        glue_node: Some("a".into()),
+    });
+    cfg.outputs.push(OutputBinding {
+        pin: "A".into(),
+        node: "a".into(),
+    });
+    let mut s = Scheduler::new(SchedulerConfig {
+        log_grants: false,
+        ..SchedulerConfig::default()
+    })
+    .unwrap();
+    let drv = OneEdge {
+        at: Time::from_us(300),
+        now: Time::ZERO,
+        level: Level::Low,
+        edge: Time::ZERO,
+    };
+    let ng = NgspiceEngine::new(cfg).unwrap();
+    let (t, n) = if cpu_first {
+        let t = s.add_engine(Box::new(drv)).unwrap();
+        (t, s.add_engine(Box::new(ng)).unwrap())
+    } else {
+        let n = s.add_engine(Box::new(ng)).unwrap();
+        (s.add_engine(Box::new(drv)).unwrap(), n)
+    };
+    s.bind(t, "OUT", "DRV", Direction::Output).unwrap();
+    s.bind(n, "DRV", "DRV", Direction::Input).unwrap();
+    s.bind(n, "A", "A", Direction::Output).unwrap();
+    let mut sink = EventSink::new(Vec::new());
+    s.run(Time::from_ms(1), &mut sink, &mut []).unwrap();
+    let v1 = s.net("A").and_then(PinSignal::volts).unwrap();
+    s.run(Time::from_ms(2), &mut sink, &mut []).unwrap();
+    let v2 = s.net("A").and_then(PinSignal::volts).unwrap();
+    (v1, v2)
+}
+
+/// ADR-002 Amendment 2: an edge inside a grant, from an engine registered
+/// before ngspice, is applied at its true edge_time (Gauss-Seidel). From an
+/// engine registered after ngspice it is applied at the next boundary
+/// (Jacobi, D4.4).
+#[test]
+fn mid_grant_edge_is_applied_at_its_true_time() {
+    let _g = NGSPICE.lock().unwrap_or_else(|e| e.into_inner());
+    let rc = |dt_ms: f64| 3.3 * (1.0 - (-dt_ms).exp()); // RC = 1 ms
+    let (v1, v2) = mid_grant_run(true);
+    assert!(
+        ((v1 - rc(0.7)) / rc(0.7)).abs() < 0.01,
+        "v(1ms) = {v1}, want {}",
+        rc(0.7)
+    );
+    assert!(
+        ((v2 - rc(1.7)) / rc(1.7)).abs() < 0.01,
+        "v(2ms) = {v2}, want {}",
+        rc(1.7)
+    );
+    let (j1, j2) = mid_grant_run(false);
+    assert!(j1.abs() < 1e-3, "Jacobi: v(1ms) = {j1}, want 0");
+    assert!(
+        ((j2 - rc(1.0)) / rc(1.0)).abs() < 0.01,
+        "Jacobi: v(2ms) = {j2}, want {}",
+        rc(1.0)
+    );
+    println!("gauss-seidel v(1ms)={v1:.6} v(2ms)={v2:.6}; jacobi v(1ms)={j1:.6} v(2ms)={j2:.6}");
 }

@@ -428,13 +428,16 @@ fn routing_edges_and_outputs() {
         ev.contains(r#"{"type":"net_sample","t_fs":60000000000000,"net":"LED_A","uv":1900000}"#)
     );
 
-    // CSV: header + 251 rows at 1 ms, analog follows with one-grant latency.
+    // CSV: header + 251 rows at 1 ms. The follower is registered after the
+    // MCU, so it sees each edge inside the same grant (Gauss-Seidel advance,
+    // ADR-002 Amendment 2) and answers at the same boundary.
     let csv = String::from_utf8(csv).unwrap();
     let rows: Vec<&str> = csv.lines().collect();
     assert_eq!(rows[0], "t_fs,PA5,LED_A");
     assert_eq!(rows.len(), 1 + 251);
     assert_eq!(rows[1], "0,0,0.000000");
-    assert_eq!(rows[51], "50000000000000,1,0.000000");
+    assert_eq!(rows[50], "49000000000000,0,0.000000");
+    assert_eq!(rows[51], "50000000000000,1,1.900000");
     assert_eq!(rows[52], "51000000000000,1,1.900000");
 
     // VCD: deterministic header and the first edge.
@@ -532,4 +535,62 @@ fn rejects_protocol_violations() {
     let mut sink = EventSink::new(Vec::new());
     let err = s.run(Time::from_ms(400), &mut sink, &mut []).unwrap_err();
     assert!(matches!(err, SchedError::Causality { .. }), "{err}");
+}
+
+/// ADR-002 Amendment 2: in a grant where an earlier engine changes a net,
+/// a later engine bound to it gets `apply_inputs` before its `advance_to`;
+/// an engine registered earlier than the driver only sees it at the boundary.
+#[test]
+fn gauss_seidel_delivers_edges_before_later_engines_advance() {
+    let j: Journal = Rc::default();
+    let mut s = Scheduler::new(cfg(Time::from_ms(50))).unwrap();
+    let early = Mock::new("early", &j, |_| Time::MAX);
+    let mut mcu = Mock::new("mcu", &j, |now| now + Time::from_ms(30));
+    mcu.toggle = Some(("P".into(), Time::from_ms(50)));
+    let late = Mock::new("late", &j, |_| Time::MAX);
+    let e = s.add_engine(Box::new(early)).unwrap();
+    let m = s.add_engine(Box::new(mcu)).unwrap();
+    let l = s.add_engine(Box::new(late)).unwrap();
+    s.bind(m, "P", "N", Direction::Output).unwrap();
+    s.bind(e, "IN", "N", Direction::Input).unwrap();
+    s.bind(l, "IN", "N", Direction::Input).unwrap();
+    let mut sink = EventSink::new(Vec::new());
+    // Grants (0,30], (30,60]: the edge at 50 ms falls inside the second.
+    s.run(Time::from_ms(60), &mut sink, &mut []).unwrap();
+    let high = |c: &Call| matches!(c, Call::Apply(p) if p.get("IN").and_then(|v| v.level()) == Some(Level::High));
+    let journal = j.borrow();
+    let pos = |name: &str, f: &dyn Fn(&Call) -> bool| {
+        journal
+            .iter()
+            .position(|(n, c)| n == name && f(c))
+            .unwrap_or_else(|| panic!("{name}: call not found"))
+    };
+    let adv60 = |c: &Call| {
+        *c == Call::Advance {
+            to: Time::from_ms(60),
+        }
+    };
+    // late: the high edge arrives before its advance to 60 ms, with the true
+    // edge_time 50 ms.
+    assert!(pos("late", &high) < pos("late", &adv60));
+    let edge_time = journal.iter().find_map(|(n, c)| match c {
+        Call::Apply(p) if n == "late" => p.get("IN").and_then(|v| match v {
+            PinSignal::Digital {
+                level: Level::High,
+                edge_time,
+            } => Some(*edge_time),
+            _ => None,
+        }),
+        _ => None,
+    });
+    assert_eq!(edge_time, Some(Time::from_ms(50)));
+    // early: only at the 60 ms boundary, after it advanced.
+    assert!(pos("early", &high) > pos("early", &adv60));
+    // The pre-advance delivery happens only in grants where the net changed:
+    // late gets one Apply per boundary (initial + 2) plus one pre-advance.
+    let applies = journal
+        .iter()
+        .filter(|(n, c)| n == "late" && matches!(c, Call::Apply(_)))
+        .count();
+    assert_eq!(applies, 4);
 }

@@ -28,9 +28,11 @@
 //! Inputs are `EXTERNAL` voltage sources (`Vname n+ n- dc 0 external`). Their
 //! value comes from the `GetVSRCData` callback, computed from the edge history
 //! the kernel provides as a piecewise-linear waveform: each edge is a linear
-//! ramp (rise/fall time of the pin model) starting at the boundary where it
-//! was delivered (ADR-002 D4.4), or at an explicit time via
-//! [`NgspiceEngine::push_edge`].
+//! ramp (rise/fall time of the pin model) starting at `max(edge_time, now)`:
+//! at its true time when the kernel delivers it before this engine advances
+//! through the grant containing it (ADR-002 Amendment 2), otherwise at the
+//! boundary where it was delivered (D4.4). [`NgspiceEngine::push_edge`] sets
+//! an explicit time.
 //!
 //! # Process-global state
 //!
@@ -1112,9 +1114,15 @@ impl Engine for NgspiceEngine {
                 return Err(other(format!("unknown input pin {pin}")));
             }
             match *sig {
-                // ADR-002 D4.4: the transition starts at the boundary where it
-                // is delivered; edge_time is for reporting only.
-                PinSignal::Digital { level, .. } => self.push_edge(pin, level, now)?,
+                // ADR-002 Amendment 2: an edge delivered before this engine
+                // advances (Gauss-Seidel, edge_time in (now, g]) starts at its
+                // true edge_time. An edge delivered at a boundary after the
+                // engine already simulated past it (edge_time <= now) starts
+                // at now (D4.4). A repeated snapshot with an unchanged level
+                // is a no-op.
+                PinSignal::Digital { level, edge_time } => {
+                    self.push_edge(pin, level, edge_time.max(now))?
+                }
                 PinSignal::Analog { volts } => self.push_value(pin, volts, now)?,
             }
         }

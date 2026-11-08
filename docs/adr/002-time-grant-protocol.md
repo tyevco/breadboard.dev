@@ -2,7 +2,9 @@
 
 - **Status:** Accepted. Approved via the Phase 0 plan on 2026-11-07.
   Sub-decision D5 (ngspice pause mechanism) was resolved by Amendment 1 at
-  the end of this ADR: `GetSyncData` lock-step.
+  the end of this ADR: `GetSyncData` lock-step. Amendment 2 changes the
+  Advance phase to Gauss-Seidel order (D3, D4.4): an edge from an earlier
+  engine reaches later engines inside the same grant, at its true time.
 - **Normative spec:** `spec/time-grant.md`. If this ADR and the spec disagree,
   the spec wins, and the disagreement is a bug to fix through a follow-up ADR.
 - **Implementation:** `bbcore/src/{time,engine,scheduler}.rs`.
@@ -109,7 +111,9 @@ At boundary `g`:
    record at `edge_time`.
 3. For every engine: `apply_inputs()` receives the **full snapshot** of its bound,
    driven input pins, keyed by the engine's own pin names.
-4. Inputs applied at `g` take effect for the interval `(g, next grant]`. A
+4. *(Superseded for engines registered after the producer by Amendment 2;
+   still the rule for engines registered before it.)*
+   Inputs applied at `g` take effect for the interval `(g, next grant]`. A
    consuming engine has already simulated up to `g`, so it **starts the
    transition at `g`** (the boundary where the edge was delivered). It uses
    `edge_time` only for reporting. The CPU→analog edge skew is therefore
@@ -191,7 +195,7 @@ Constraints on any choice:
 - **Gauss-Seidel ordering** (advance the CPU first, then deliver its edges to
   analog inside the same grant): this removes the CPU→analog skew in D4.4. It is
   deferred because it changes the phase order and the trait contract, so it
-  would need its own ADR.
+  would need its own ADR. *(Adopted later by Amendment 2.)*
 - **Float seconds for time:** rejected because of rounding nondeterminism and
   unstable comparisons.
 
@@ -305,3 +309,74 @@ every point. A boundary that carries an input edge is not made an ngspice
 breakpoint retroactively, because the step from `g` had already been chosen.
 Only the clamp to the ramp corner applies, and ngspice's truncation-error
 control handles the slope change.
+
+### Amendment 2: Gauss-Seidel Advance, intra-grant edge delivery (2026-11-07)
+
+**Status:** Accepted. It was required by the Phase 0 integration task ("an
+edge occurring inside a grant is applied at its true time: the CPU engine
+advances first for each grant, then analog advances to the same g with the
+new edges known"). It is implemented in `bbcore/src/scheduler.rs`, and
+`spec/time-grant.md` ("Advance") is updated in the same change.
+
+**Problem.** Under D3/D4.4 every engine advanced to `g` before any outputs
+were read. An MCU edge at `te` in `(p, g]` therefore reached ngspice only at
+`g`, and ngspice started the ramp there. The skew `g - te` is deterministic
+and below one quantum, but it is not zero, and the analog waveform was
+shifted by a grant-dependent amount.
+
+**Decision.** The Advance phase is ordered Gauss-Seidel style. For each engine
+*i*, in registration order:
+
+1. If an earlier engine changed a net bound to an input of *i* during this
+   grant, the kernel calls `apply_inputs(snapshot)` on *i* **before** it
+   advances. Digital signals in that snapshot may carry `edge_time` in
+   `(p, g]`, and the consumer applies the transition at `edge_time`.
+2. `advance_to(g)`.
+3. The kernel collects at `g`: it drains logs, reads outputs, routes them to
+   nets, runs the invariant-5 checks and marks the changed nets.
+
+Exchange then runs as before, minus the output read: the full
+`apply_inputs` snapshot to every engine, samples, events, probes. Engines
+registered *before* a producer still get its edges at the boundary (Jacobi,
+D4.4 unchanged for them), which covers feedback paths such as analog → MCU
+input.
+
+**Trait contract changes (no signature change).**
+
+- `apply_inputs` can be called before `advance_to` within a grant, with
+  `edge_time > now`. An engine that can apply an input at a sub-grant time
+  (ngspice: a PWL ramp starting at `edge_time`) must do so. An engine that
+  cannot do so applies it at `now`, which is no worse than before.
+- `apply_inputs` must be idempotent for a snapshot that was already applied,
+  because a later engine sees the same edge before its advance and again at
+  the boundary. Both shipped engines already are: ngspice ignores an
+  unchanged level, and Renode only writes a changed input level.
+- The order of engine calls within a grant changes (advance, read and the
+  next engine's apply are interleaved). It is still a pure function of the
+  registration order and the net values, so D6 holds.
+- Registration order now matters for fidelity, not just for tie-break
+  labels. Producers must be registered before consumers. `bb run` registers
+  the CPU engine first and ngspice second.
+
+**Why it is safe.** No engine runs past `g`, and no engine runs before its
+inputs for `(p, g]` are known from every engine earlier in the order. A
+producer's outputs in `(p, g]` are final once it has reached `g`, so
+delivering them earlier cannot be undone. The `t_safe` promise of each
+engine is unchanged.
+
+**Changes made.**
+
+- `Scheduler::run`: the Advance loop does pre-advance delivery, then
+  `advance_to`, then collect. `exchange()` no longer reads outputs.
+- `NgspiceEngine::apply_inputs`: a digital edge is pushed at
+  `max(edge_time, now)` instead of `now`.
+- Tests: `bbcore/tests/scheduler.rs::gauss_seidel_delivers_edges_before_later_engines_advance`
+  checks call order, the edge_time and that no extra calls are made.
+  `routing_edges_and_outputs` now expects the follower to answer at the same
+  boundary. `engines/analog-ngspice/tests/scheduler.rs::mid_grant_edge_is_applied_at_its_true_time`
+  uses an edge at 0.3 ms inside a 1 ms grant into an RC with τ = 1 ms. With
+  the driver registered first, v(1 ms) = 1.661274 V = 3.3·(1 − e^−0.7)
+  (true time). With the driver registered after ngspice, v(1 ms) = 0 and
+  v(2 ms) = 2.086005 V = 3.3·(1 − e^−1) (Jacobi, starts at the boundary).
+- Phase 0 spike (`make spike`): every PA5 edge reaches ngspice in its own
+  grant, and LED_A has switched by the first 10 µs sample after the edge.

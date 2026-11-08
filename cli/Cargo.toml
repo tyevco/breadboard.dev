@@ -12,3 +12,5 @@ path = "src/main.rs"
 
 [dependencies]
 bbcore.workspace = true
+bb-analog-ngspice = { path = "../engines/analog-ngspice" }
+bb-cpu-renode = { path = "../engines/cpu-renode" }

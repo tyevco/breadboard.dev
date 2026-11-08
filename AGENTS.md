@@ -14,13 +14,17 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | `cargo test --workspace`. Phase 0 integration adds spike, determinism and golden checks |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden` (about 5 min) |
+| `make cargo-test` | `cargo test --workspace` only |
+| `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike`, check it (`scripts/check_spike.py`) |
+| `make determinism` | 10 spike runs (`DET_RUNS`, `DET_JOBS` in parallel); sha256 of `nets.csv`, `events.jsonl`, `nets.vcd` must match |
+| `make golden` | Diff `out/spike` LED_A against `tests/golden/spike/led_a.csv` (1 mV / 1 sample) |
+| `make golden-update` | Regenerate the golden snapshot from a fresh, checked spike run. Review the diff before committing it |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
 
-Phase 0 integration adds `make firmware`, `make spike`, `make determinism` and
-`make golden` (see the plan and `tests/golden/`).
+`make firmware` builds the blinky ELF on its own.
 
 ## Repo map
 
@@ -28,10 +32,12 @@ Phase 0 integration adds `make firmware`, `make spike`, `make determinism` and
 bbcore/                 kernel: Time, PinSignal, Engine trait, Scheduler, EventSink, CsvWriter, VcdWriter
 engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
 engines/cpu-renode/     Renode engine over the External Control API
-cli/                    `bb` binary
+cli/                    `bb` binary (`bb run`, board-file parser)
+examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings)
+tests/golden/spike/     led_a.csv waveform snapshot
 spec/                   normative protocol and schema docs; changing them needs an ADR
 docs/adr/               architecture decision records
-scripts/                setup.sh, doctor.sh
+scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh
 ```
 
 ## The three invariants
@@ -75,6 +81,9 @@ scripts/                setup.sh, doctor.sh
   to catch up.
 - **Parsing KiCad files with regex.** Use a real S-expression parser.
 - Using float seconds for scheduling. Convert at the engine's FFI boundary only.
+- Registering a consumer engine before its producer. The Advance phase is
+  Gauss-Seidel (ADR-002 Amendment 2), so only engines registered *after* a
+  producer see its edges inside the same grant, at their true time.
 - Iterating a `HashMap` into any output, or putting `$date`/timestamps/PIDs/
   absolute paths in output files.
 - Silently clamping a protocol violation. The scheduler reports `Causality` /

@@ -1,0 +1,34 @@
+* Breadboard Phase 0 spike board: STM32F103 PA5 -> 330 ohm -> red LED -> GND.
+*
+* This file is a plain SPICE netlist (the circuit body) plus Breadboard
+* directives. Directive lines start with "*bb", so ngspice sees them as
+* comments. Grammar: "*bb <keyword> <name> key=value ...", whitespace
+* separated, no quoting.
+*
+*   *bb part <ref> engine=renode platform=stm32f103
+*       A part simulated by a CPU engine. `bb run --target <ref>` loads the
+*       firmware into it.
+*   *bb pin <ref>.<pin> net=<net> model=digital_out voh=<V> vol=<V>
+*       rise=<time> fall=<time> zout=<ohm>
+*       Binds an MCU pin to a circuit net through its pin model
+*       (spec/pin-model.md). The kernel generates the SPICE glue from the
+*       model: an EXTERNAL voltage source driven by the pin's edges, plus a
+*       series resistor of `zout` into <net>. Do not write that glue here.
+*
+*bb part U1 engine=renode platform=stm32f103
+*bb pin U1.PA5 net=PA5 model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+
+* Circuit body. Node 0 is GND.
+R1 PA5 LED_A 330
+D1 LED_A 0 LED_RED
+
+* Red LED as an ngspice diode: Vf ~= 1.87 V at ~4 mA (Is, N fitted to a
+* typical 5 mm red LED: 1.8-2.1 V at a few mA), 2 ohm series resistance,
+* 10 pF junction capacitance.
+.model LED_RED D(IS=1e-18 N=2 RS=2 CJO=10p)
+
+* Solver tolerances (part of the board, so the step sequence is fixed by it).
+* The ngspice default RELTOL=1e-3 leaves ~5 mV of Newton noise on the LED
+* plateau; 1e-5 brings it well under the 1 mV golden tolerance.
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

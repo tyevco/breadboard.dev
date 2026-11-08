@@ -12,8 +12,14 @@
 //! t_end)`; every engine advances to exactly `g`; outputs are read, routed by
 //! net name and applied as inputs. Only integer [`Time`] takes part in the
 //! decision, and every collection is ordered, so runs are deterministic.
+//!
+//! Advance is Gauss-Seidel ordered (ADR-002 Amendment 2): engines advance in
+//! registration order, each engine's outputs are read right after its
+//! advance, and an engine whose bound input nets changed earlier in the same
+//! grant receives `apply_inputs` *before* its own `advance_to(g)`, so it can
+//! apply an edge at its true `edge_time` in `(now, g]`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 
 use crate::engine::{Engine, EngineError};
@@ -281,7 +287,12 @@ impl Scheduler {
                 return Err(SchedError::Config("no engines registered".into()));
             }
             self.phase = Phase::Exchange;
-            self.exchange(Time::ZERO, true, sink, probes)?;
+            let mut events = Vec::new();
+            let mut changed = BTreeSet::new();
+            for i in 0..self.engines.len() {
+                self.collect(i, Time::ZERO, Time::ZERO, true, &mut events, &mut changed)?;
+            }
+            self.exchange(Time::ZERO, events, sink, probes)?;
         }
         while self.now < t_end {
             // Query
@@ -338,89 +349,129 @@ impl Scheduler {
                 })?;
             }
 
-            // Advance
+            // Advance (Gauss-Seidel order, ADR-002 Amendment 2)
             self.phase = Phase::Advance;
-            for e in self.engines.iter_mut() {
+            let mut events: Vec<Event> = Vec::new();
+            let mut changed: BTreeSet<String> = BTreeSet::new();
+            for i in 0..self.engines.len() {
+                // Intra-grant delivery: an input net changed by an engine
+                // earlier in the order during this grant reaches this engine
+                // before it advances, so it can act at the true edge_time.
+                if self
+                    .inputs
+                    .iter()
+                    .any(|b| b.engine == i && changed.contains(&b.net))
+                {
+                    let ins = self.input_snapshot(i);
+                    let e = &mut self.engines[i];
+                    e.apply_inputs(&ins).map_err(|source| SchedError::Engine {
+                        engine: e.name().to_string(),
+                        phase: Phase::Advance,
+                        source,
+                    })?;
+                }
+                let e = &mut self.engines[i];
                 e.advance_to(g).map_err(|source| SchedError::Engine {
                     engine: e.name().to_string(),
                     phase: Phase::Advance,
                     source,
                 })?;
+                self.collect(i, now, g, false, &mut events, &mut changed)?;
             }
             self.now = g;
 
             // Exchange
             self.phase = Phase::Exchange;
-            self.exchange(now, false, sink, probes)?;
+            self.exchange(now, events, sink, probes)?;
+        }
+        Ok(())
+    }
+
+    /// Current input snapshot of engine `i`, keyed by its pin names.
+    fn input_snapshot(&self, i: usize) -> PinSignals {
+        let mut ins = PinSignals::new();
+        for b in self.inputs.iter().filter(|b| b.engine == i) {
+            if let Some(sig) = self.nets.get(&b.net) {
+                ins.insert(b.pin.clone(), *sig);
+            }
+        }
+        ins
+    }
+
+    /// Drain logs and read outputs of engine `i`, which has just reached the
+    /// boundary `at` (previous boundary `prev`). Updates the driven nets,
+    /// validates digital transitions and records every net whose value
+    /// changed in `changed`.
+    fn collect(
+        &mut self,
+        i: usize,
+        prev: Time,
+        at: Time,
+        initial: bool,
+        events: &mut Vec<Event>,
+        changed: &mut BTreeSet<String>,
+    ) -> Result<(), SchedError> {
+        let e = &mut self.engines[i];
+
+        let name = e.name().to_string();
+        for rec in e.drain_logs() {
+            if rec.t > at {
+                return Err(SchedError::Engine {
+                    engine: name,
+                    phase: Phase::Exchange,
+                    source: EngineError::Protocol(format!(
+                        "log record at {} is after boundary {at}",
+                        rec.t
+                    )),
+                });
+            }
+            events.push(Event::Log {
+                t_fs: rec.t.max(prev),
+                source: name.clone(),
+                level: rec.level,
+                msg: rec.msg,
+            });
+        }
+        let outs = e.read_outputs().map_err(|source| SchedError::Engine {
+            engine: name.clone(),
+            phase: Phase::Exchange,
+            source,
+        })?;
+        for b in self.outputs.iter().filter(|b| b.engine == i) {
+            let Some(sig) = outs.get(&b.pin) else {
+                continue; // omitted: hold previous value
+            };
+            let driver = format!("{name}.{}", b.pin);
+            let old = self.nets.get(&b.net);
+            if let Some(ev) = check_transition(&b.net, &driver, old, sig, prev, at, initial)? {
+                events.push(ev);
+            }
+            if old != Some(sig) {
+                changed.insert(b.net.clone());
+            }
+            self.nets.insert(b.net.clone(), *sig);
         }
         Ok(())
     }
 
     /// Boundary exchange at `self.now`; `prev` is the previous boundary.
+    /// `events` holds the log and edge records collected during Advance.
     fn exchange<W: Write>(
         &mut self,
         prev: Time,
-        initial: bool,
+        mut events: Vec<Event>,
         sink: &mut EventSink<W>,
         probes: &mut [&mut dyn Probe],
     ) -> Result<(), SchedError> {
         let now = self.now;
-        let mut events: Vec<Event> = Vec::new();
 
-        // 1. Logs and outputs, engines in registration order.
-        for (i, e) in self.engines.iter_mut().enumerate() {
-            let name = e.name().to_string();
-            for rec in e.drain_logs() {
-                if rec.t > now {
-                    return Err(SchedError::Engine {
-                        engine: name,
-                        phase: Phase::Exchange,
-                        source: EngineError::Protocol(format!(
-                            "log record at {} is after boundary {now}",
-                            rec.t
-                        )),
-                    });
-                }
-                events.push(Event::Log {
-                    t_fs: rec.t.max(prev),
-                    source: name.clone(),
-                    level: rec.level,
-                    msg: rec.msg,
-                });
-            }
-            let outs = e.read_outputs().map_err(|source| SchedError::Engine {
-                engine: name.clone(),
-                phase: Phase::Exchange,
-                source,
-            })?;
-            for b in self.outputs.iter().filter(|b| b.engine == i) {
-                let Some(sig) = outs.get(&b.pin) else {
-                    continue; // omitted: hold previous value
-                };
-                let driver = format!("{name}.{}", b.pin);
-                if let Some(ev) = check_transition(
-                    &b.net,
-                    &driver,
-                    self.nets.get(&b.net),
-                    sig,
-                    prev,
-                    now,
-                    initial,
-                )? {
-                    events.push(ev);
-                }
-                self.nets.insert(b.net.clone(), *sig);
-            }
-        }
+        // 1. Logs and outputs were collected per engine right after its
+        //    advance (see `collect`).
 
         // 2. Route inputs (full snapshot) to every engine.
-        for (i, e) in self.engines.iter_mut().enumerate() {
-            let mut ins = PinSignals::new();
-            for b in self.inputs.iter().filter(|b| b.engine == i) {
-                if let Some(sig) = self.nets.get(&b.net) {
-                    ins.insert(b.pin.clone(), *sig);
-                }
-            }
+        for i in 0..self.engines.len() {
+            let ins = self.input_snapshot(i);
+            let e = &mut self.engines[i];
             e.apply_inputs(&ins).map_err(|source| SchedError::Engine {
                 engine: e.name().to_string(),
                 phase: Phase::Exchange,
