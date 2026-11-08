@@ -1,0 +1,13 @@
+[package]
+name = "bb-analog-ngspice"
+description = "Breadboard analog engine: ngspice shared library driven by kernel time grants"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "bb_analog_ngspice"
+
+[dependencies]
+bbcore.workspace = true

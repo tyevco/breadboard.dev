@@ -1,0 +1,40 @@
+# Mirrors `make setup` + `make check` (fmt-check, clippy, test).
+# Written for parity with local runs; this repo is local-only and is not pushed.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/bb-target
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .cache/bb-target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+
+      - name: Setup toolchain (make setup)
+        run: make setup
+
+      - name: Doctor
+        run: make doctor
+
+      - name: Format
+        run: make fmt-check
+
+      - name: Clippy
+        run: make clippy
+
+      - name: Test
+        run: make test

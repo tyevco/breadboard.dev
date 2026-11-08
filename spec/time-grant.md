@@ -1,0 +1,172 @@
+# Time-grant protocol
+
+Status: normative. Rationale: `docs/adr/002-time-grant-protocol.md`.
+Implementation: `bbcore::Scheduler`. Changing this file requires an ADR (see
+`AGENTS.md`).
+
+This is the piece agents most often get subtly wrong. Read all of it before you
+touch an engine adapter.
+
+## Definitions
+
+- **Time:** `u64` femtoseconds (`bbcore::Time`). All comparisons and arithmetic
+  below are integer.
+- **now:** the kernel's current time, which is always the last boundary.
+  Every engine is at exactly `now` between iterations.
+- **t_safe_i:** engine *i*'s promise that it can be advanced to any
+  `t <= t_safe_i` without the kernel missing an interaction. It must satisfy
+  `t_safe_i > now`. `Time::MAX` means idle.
+- **grant g:** the time every engine advances to in one iteration.
+- **boundary:** the instant `g` at which pin signals are exchanged.
+- **max_quantum:** configured upper bound on `g - now`, which must be greater than 0.
+- **t_end:** end of the run.
+
+## State machine
+
+```
+            +------+
+            | Init |  bind engines and nets; initial Exchange at t = 0
+            +------+
+               |
+               v
+   +-------> Query ---- t_safe_i <= now -------------------------+
+   |           |                                                   |
+   |           v                                                   |
+   |         Grant     g = min(t_safe_i, next_sample, now+max_quantum, t_end)
+   |           |       emit {"type":"grant", t_fs: now, until_fs: g}  |
+   |           v                                                   |
+   |        Advance    engine_i.advance_to(g), registration order ---+-- engine error
+   |           |       now := g                                    |
+   |           v                                                   |
+   |        Exchange   outputs -> nets -> inputs; events; probes --+-- causality / I/O
+   |           |                                                   |
+   +-- now < t_end                                                 v
+               |                                                +-------+
+           now == t_end                                         | Error | (terminal)
+               v                                                +-------+
+            +------+
+            | Done |  run(t_end') with t_end' > now resumes at Query
+            +------+
+```
+
+| State | Entry action | Exit to | Condition |
+| --- | --- | --- | --- |
+| Init | none | Exchange (initial) | first `run()`, at least 1 engine |
+| Query | `t_safe_i = next_safe_time(now)` for every *i* | Grant | every `t_safe_i > now` |
+| Query | | Error | any `t_safe_i <= now` (`NoProgress`) |
+| Grant | compute `g`, emit `grant` | Advance | always |
+| Advance | `advance_to(g)` for every *i*; `now := g` | Exchange | every call returned Ok |
+| Advance | | Error | any engine error |
+| Exchange | see "Exchange" below | Query | `now < t_end` |
+| Exchange | | Done | `now == t_end` |
+| Exchange | | Error | causality violation, engine error or I/O error |
+| Done | none | Query | `run(t_end')` with `t_end' > now` |
+| Error | none | none | every later call returns `Halted` |
+
+## Invariants (MUST)
+
+1. **No free-run:** an engine's internal time never exceeds the latest grant.
+   `advance_to(t)` is called only with `now < t <= t_safe` (the engine's most
+   recent promise), and the engine stops at exactly `t`.
+2. **Grant = min:** `g` is exactly the minimum in the Grant row. When several
+   bounds tie, `limited_by` names the first in this order: engines in
+   registration order, then `sample`, then `max_quantum`, then `t_end`.
+3. **Lockstep:** every engine is advanced to the same `g` in every iteration.
+4. **Progress:** `g > now`, which holds because every term is greater than `now`.
+5. **Digital transitions:** at boundary `g`, after previous boundary `p`:
+   - level changed: `p < edge_time <= g`, and `pin_edge` is emitted at `edge_time`;
+   - level unchanged: `edge_time` is unchanged. A moved `edge_time` means
+     more than one edge fell inside one grant, and is an error.
+   - `edge_time > g` is always an error.
+6. **Determinism:** the order of every call and every emitted record is a pure
+   function of the inputs. See ADR-002 D6.
+
+## Exchange (at boundary `g`, previous boundary `p`)
+
+1. For each engine in registration order:
+   1. `drain_logs()`. A record with `t > g` is an error. A record with `t < p`
+      is clamped to `p`.
+   2. `read_outputs()`. For each output binding `(engine, pin) -> net`, if the
+      pin is present, check invariant 5 and set `net := signal`. An absent pin
+      holds its previous value.
+2. For each engine in registration order: `apply_inputs(snapshot)`, where
+   `snapshot[pin] = net value` for every input binding whose net has a value.
+3. If event sampling is configured: for every sample instant `s <= g` not yet
+   emitted, emit `net_sample` for each configured net.
+4. Emit the collected `log`, `pin_edge` and `net_sample` records, stably sorted
+   by `t_fs`.
+5. Call `Probe::on_boundary(p, g, nets)` for each probe, such as `CsvWriter`
+   and `VcdWriter`.
+
+Inputs applied at `g` govern the consumer for `(g, next g]`. A consumer starts
+a transition at `g`, the boundary where it was delivered, not at `edge_time`,
+because it has already simulated up to `g`.
+
+## Sequence example 1: MCU toggles PA5, LED net follows
+
+Renode quantum 10 µs, `max_quantum` = 1 ms, CSV sampling at 1 ms, t_end = 60 ms.
+Firmware sets PA5 high at 50 ms. ngspice is idle (`Time::MAX`).
+
+```
+kernel                renode (cpu)                ngspice (analog)
+  | Init: exchange @0                                  |
+  |-- read_outputs ------> PA5=Low,e=0                 |
+  |-- read_outputs ---------------------------------> LED_A=0.0V
+  |-- apply_inputs ---------------------------------> {PA5: Low,e=0}
+  | Query @0                                           |
+  |-- next_safe_time(0) -> 10us                        |
+  |-- next_safe_time(0) ----------------------------> MAX
+  | Grant g=10us (engine:renode)     emit grant 0->10us
+  |-- advance_to(10us) -> RunFor(10us)                 |
+  |-- advance_to(10us) -----------------------------> transient to 10us, pause
+  | Exchange @10us ... (repeats every 10 us)           |
+  ...
+  | Grant g=50.000ms (engine:renode)                   |
+  |-- advance_to(50ms) -> firmware writes ODR at 49.995ms; PA5=High,e=49.995ms
+  |-- advance_to(50ms) -----------------------------> (still sees PA5 Low)
+  | Exchange @50ms                                     |
+  |   PA5: Low -> High, 49.995ms in (49.99ms, 50ms]  OK
+  |   emit pin_edge{t_fs: 49.995ms, net: PA5, level: 1}
+  |-- apply_inputs ---------------------------------> {PA5: High,e=49.995ms}
+  |   CsvWriter row @50ms: PA5=1, LED_A=0.000000     (analog has not seen it yet)
+  | Grant g=50.01ms                                    |
+  |-- advance_to --------------------------------------> V_PA5 ramps 0->3.3V over
+  |                                                      [50ms, 50ms+5ns]; LED_A rises
+  | Exchange @50.01ms: LED_A ~ 1.9V                     |
+```
+
+The CPU→analog skew here is 5 µs (50 ms - 49.995 ms), which is below one
+quantum. It is deterministic.
+
+## Sequence example 2: idle MCU gets large grants
+
+The firmware is in `WFI` and its next SysTick is 50 ms away. The Renode adapter
+knows this from timer lookahead. `max_quantum` = 20 ms, no probes, ngspice idle,
+t_end = 100 ms.
+
+```
+Query @0        renode t_safe = 50ms, ngspice = MAX
+Grant           g = min(50ms, MAX, 0+20ms, 100ms) = 20ms   limited_by=max_quantum
+Advance         RunFor(20ms) ; ngspice transient to 20ms
+Exchange @20ms  nothing changed; no records except the grant
+Query @20ms     renode t_safe = 50ms
+Grant           g = min(50ms, 40ms) = 40ms                 limited_by=max_quantum
+Query @40ms     renode t_safe = 50ms
+Grant           g = 50ms                                   limited_by=engine:renode
+Exchange @50ms  SysTick ISR ran at 50ms: PA5 edge e=50ms (zero skew)
+Query @50ms     renode t_safe = 100ms
+Grant           g = 70ms, 90ms (max_quantum), then 100ms (engine:renode = t_end; engine wins the tie)
+Done @100ms     6 grants for 100 ms of idle-ish sim
+```
+
+Without lookahead, a 10 µs quantum would need 10 000 grants for the same run.
+Either way the result is identical; only the cost differs.
+
+## What engines MUST NOT do
+
+- Advance past `g`, or advance on their own between calls (no free-run). For
+  Renode this means only `RunFor(g - now)`, never `start`.
+- Return `t_safe <= now`.
+- Report a digital `edge_time` outside `(p, g]`, or hide a second edge inside a grant.
+- Step ngspice per CPU instruction.
+- Depend on wall-clock time, thread timing or unseeded randomness.
