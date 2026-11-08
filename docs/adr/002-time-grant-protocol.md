@@ -5,6 +5,9 @@
   the end of this ADR: `GetSyncData` lock-step. Amendment 2 changes the
   Advance phase to Gauss-Seidel order (D3, D4.4): an edge from an earlier
   engine reaches later engines inside the same grant, at its true time.
+  Amendment 3 (Phase 0 verification) makes sampling independent of the
+  grant partition, fixes ngspice grant detection past ~2.3 s, and corrects
+  the `t_safe` wording (D2).
 - **Normative spec:** `spec/time-grant.md`. If this ADR and the spec disagree,
   the spec wins, and the disagreement is a bug to fix through a follow-up ADR.
 - **Implementation:** `bbcore/src/{time,engine,scheduler}.rs`.
@@ -31,7 +34,8 @@ grants the minimum.
 ### D1. Time is an integer number of femtoseconds
 
 `bbcore::Time(u64)` counts femtoseconds. The range is about 18 446 s of simulated
-time, more than any Phase 0–3 run needs. 1 fs resolves every edge we model (the
+time, more than any Phase 0–3 run needs. (Engines must not assume an f64 of
+seconds round-trips to the same fs: above ~2.3 s it does not; see Amendment 3.) 1 fs resolves every edge we model (the
 fastest is a 5 ns ramp) with six orders of magnitude to spare.
 
 Floats never take part in a scheduling decision: lookahead, grant, cap,
@@ -54,7 +58,10 @@ pub trait Engine {
 
 `t_safe` is a promise. The engine's outputs will not change in `(now, t_safe)`
 except as the engine will report at the boundary, and the engine can be advanced
-to any `t <= t_safe` without the kernel missing an interaction. The rules:
+to any `t <= t_safe` without the kernel missing an interaction. (Corrected by
+Amendment 3: outputs *may* change inside the grant; every change is reported
+at the boundary with its exact `edge_time`, at most one per digital pin, and
+only consumers registered after the producer apply it at that time.) The rules:
 
 - **CPU engine (Renode):** `t_safe = now + quantum`, with a default quantum of
   10 µs that can be configured. When the adapter can learn the next peripheral
@@ -89,6 +96,8 @@ Done
 - **Sample alignment:** fixed-rate outputs (`CsvWriter`, `net_sample` events)
   register their next sample time, and grants are capped at it. Every sample is
   therefore taken at an exchange boundary, not interpolated from solver points.
+  (Amendment 3: this changes the partition and with it Renode's results;
+  `bb run` now uses `CsvWriter::sampled`, which does not align grants.)
 - **Tie-break order for `limited_by`:** engines in registration order, then
   `sample`, then `max_quantum`, then `t_end`. It only affects the label on the
   grant record, never `g` itself.
@@ -176,7 +185,8 @@ Constraints on any choice:
    header has no `$date`.
 4. **Sample alignment:** waveform samples sit at sim-time multiples of a fixed
    period, which are exchange boundaries. They do not depend on solver points
-   or wall-clock time.
+   or wall-clock time. (Amendment 3: sampled probes interpolate inside the
+   window instead; still a pure function of the solver points.)
 5. **Engines are deterministic:** each adapter must produce identical results
    for identical call sequences. Renode is run headless, and ngspice runs with
    a fixed netlist and options. Any engine-side randomness must take the run
@@ -380,3 +390,75 @@ engine is unchanged.
   v(2 ms) = 2.086005 V = 3.3·(1 − e^−1) (Jacobi, starts at the boundary).
 - Phase 0 spike (`make spike`): every PA5 edge reaches ngspice in its own
   grant, and LED_A has switched by the first 10 µs sample after the edge.
+
+### Amendment 3: Phase 0 verification fixes (2026-11-07)
+
+**Status:** Accepted. Made by the Phase 0 fix task after independent
+verification. `spec/time-grant.md` ("Definitions", "Exchange", "Sampled
+probes") is updated in the same change.
+
+**Finding A: Renode results depend on the `RUN_FOR` partition.** Measured
+with Renode 1.17.0 and the blinky firmware at a 1 ms quantum: with the CSV at
+1 kHz, every 50 ms instant was a grant boundary and the first five PA5 edges
+came out at `k·50 ms + 1 fs` (SysTick ISR deferred to the next `RUN_FOR`,
+then relabelled by the engine). At 1024 Hz the same edges came out mid-grant,
+up to 50 ns earlier (`199 999 950 000 000` fs instead of
+`200 000 000 000 001`). Even mid-grant edges moved by a few ns. The run was
+deterministic for a fixed configuration, but D3's sample alignment made the
+firmware-visible timing a function of an *output* setting, and the old claims
+("an error of at most 1 ns"; "edge timing does not depend on the quantum")
+were wrong.
+
+Decision:
+
+1. **Sampling never shapes the partition by default.** `Probe` gains
+   `on_window(prev, now, nets, sampler)` and `Engine` gains
+   `sample_output(pin, t)` (default `None`), both with defaults, so existing
+   engines and probes are unchanged. `CsvWriter::sampled` does not register
+   sample times; each row due in `[prev, now]` is read through the
+   scheduler's sampler: the driving engine's `sample_output` (ngspice:
+   linear interpolation between the solver points of that window, a pure
+   function of them), otherwise the boundary value, with a digital net read
+   at its previous level before `edge_time`. `bb run` uses it, so the grant
+   partition is a function of the quantum, `t_end` and engine lookahead only.
+   The aligned `CsvWriter::new` and `event_sampling` remain (D3 for them is
+   unchanged) for callers that want boundary-exact samples and accept the
+   partition dependence.
+2. **Edge times are exact per partition, not partition independent.** An
+   edge carries the time at which the emulated firmware changed the pin in
+   *this* partition. Another quantum can move it by tens of ns (70 µs vs
+   10 µs grants: 10 ns for the first five edges, measured). That is
+   recorded as a Phase 0 limitation; a fixed quantum is part of the run
+   configuration, like the seed. The engine docs, README and tests state it.
+3. Tests: `engines/cpu-renode/tests/blinky.rs` asserts the exact golden edge
+   list for the spike partition (10 µs, 500 ms), runs a 70 µs partition in
+   which every expiry falls mid-grant, and checks that 1 kHz and 1024 Hz CSV
+   rates give identical edges, grants and event streams.
+
+**Finding B: f64 grant detection in ngspice broke after ~2.3 s.** Amendment 1
+parked the solver when `round(time · 1e15) >= target_fs`. Above about 2.3 s an
+f64 ulp exceeds 0.5 fs, so a solver landing one ulp above `target_s` rounded
+to `target_fs + 1` and was reported as an overshoot; any run longer than
+~2.29 s failed. D1's "converts at its own boundary" is kept, but the
+boundary is now recognised in the f64 domain: the solver is at the grant when
+`|time − target_s| <= max(0.5 fs, 4 ulp(target_s))`, and the parked point is
+recorded as exactly `g`. Interior points are rounded to fs and clamped into
+`[p, g]`. Test: `long_run_past_ten_seconds_in_1ms_grants` (12 s, 1 ms grants,
+edges mid-grant).
+
+**Finding C: the `t_safe` wording over-promised.** D2 said outputs "will not
+change in `(now, t_safe)`". Renode's `t_safe = now + quantum` makes no such
+promise: firmware can toggle at any instruction. The actual guarantee is:
+advanced to any `g <= t_safe`, the engine reports every output change in
+`(now, g]` at `g` with its exact `edge_time`, at most one per digital pin.
+Consumers registered after the producer apply it at `edge_time`
+(Amendment 2); consumers registered before it get it at the boundary
+(Jacobi). The scheduler does not reject a consumer-before-producer order,
+because the Jacobi fallback is legal and needed for feedback paths; the
+wording in `bbcore::Engine` and the spec now says what is guaranteed.
+
+**Smaller fixes.** `make test` sets `BB_REQUIRE_RENODE=1`, so the Renode
+tests fail instead of skipping without Renode. A Renode engine that fails
+after startup keeps its workdir and attaches the `renode.log` tail to the
+error. `make setup` no longer changes the global rustup default
+(`rust-toolchain.toml` pins the toolchain).

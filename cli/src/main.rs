@@ -47,8 +47,9 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  <ref>.<pin> (digital level). Repeatable; order = CSV column order
   --out          output directory (events.jsonl, nets.csv, nets.vcd)
   --max-quantum  upper bound on one grant and Renode's quantum (default 10us)
-  --sample-rate  nets.csv sample rate; samples are exchange boundaries
-                 (default 100kHz = one sample per default quantum)
+  --sample-rate  nets.csv sample rate (default 100kHz). Samples never change
+                 the grant partition; between boundaries analog nets are
+                 interpolated between solver points
   --seed         Renode emulation seed (default 0)
   --renode       path to the renode launcher (default: $BB_RENODE, PATH, ~/.local/bin)
   --no-verify    skip the per-grant Renode time/GPIO cross-check (faster)";
@@ -302,7 +303,11 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
 
     let mut sink = EventSink::new(create(&a.out.join("events.jsonl"))?);
-    let mut csv = CsvWriter::new(
+    // Sampled, not aligned: CSV sample instants must not become grant
+    // boundaries, because the RUN_FOR partition changes when Renode runs
+    // timer ISRs (ADR-002 Amendment 3). The partition is set by the quantum
+    // alone; rows are interpolated inside each grant window.
+    let mut csv = CsvWriter::sampled(
         create(&a.out.join("nets.csv"))?,
         a.sample_period,
         a.probes.clone(),

@@ -35,8 +35,10 @@ firmware:
 build:
 	$(CARGO) build --workspace --all-targets
 
+# BB_REQUIRE_RENODE=1: the Renode engine tests fail instead of skipping when
+# Renode or the firmware toolchain is missing, so the gate really runs them.
 cargo-test:
-	$(CARGO) test --workspace
+	BB_REQUIRE_RENODE=1 $(CARGO) test --workspace
 
 # The exit gate: unit/engine tests, then the end-to-end spike, 10-run
 # determinism and the golden-waveform diff (golden reuses the spike output).

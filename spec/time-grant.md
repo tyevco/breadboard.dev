@@ -1,7 +1,8 @@
 # Time-grant protocol
 
 Status: normative. Rationale: `docs/adr/002-time-grant-protocol.md`
-(Advance ordering: Amendment 2, Gauss-Seidel intra-grant delivery).
+(Advance ordering: Amendment 2, Gauss-Seidel intra-grant delivery;
+`t_safe` wording and sampled probes: Amendment 3).
 Implementation: `bbcore::Scheduler`. Changing this file requires an ADR (see
 `AGENTS.md`).
 
@@ -14,9 +15,14 @@ touch an engine adapter.
   below are integer.
 - **now:** the kernel's current time, which is always the last boundary.
   Every engine is at exactly `now` between iterations.
-- **t_safe_i:** engine *i*'s promise that it can be advanced to any
-  `t <= t_safe_i` without the kernel missing an interaction. It must satisfy
-  `t_safe_i > now`. `Time::MAX` means idle.
+- **t_safe_i:** engine *i*'s promise that, advanced to any `g <= t_safe_i`,
+  it reports every output change in `(now, g]` at the boundary `g`, with its
+  exact `edge_time` and at most one change per digital pin (invariant 5).
+  It does *not* promise that outputs are constant inside the grant (a CPU
+  can toggle a pin at any instruction). Engines registered after the
+  producer apply the change at `edge_time` (see "Advance"); engines
+  registered before it see it one grant late (Jacobi). It must satisfy
+  `t_safe_i > now`. `Time::MAX` means idle. (ADR-002 Amendment 3.)
 - **grant g:** the time every engine advances to in one iteration.
 - **boundary:** the instant `g` at which pin signals are exchanged.
 - **max_quantum:** configured upper bound on `g - now`, which must be greater than 0.
@@ -130,8 +136,28 @@ In Phase 0 the CPU engine (Renode) is registered before the analog engine
    emitted, emit `net_sample` for each configured net.
 4. Emit the collected `log`, `pin_edge` and `net_sample` records, stably sorted
    by `t_fs`.
-5. Call `Probe::on_boundary(p, g, nets)` for each probe, such as `CsvWriter`
-   and `VcdWriter`.
+5. Call `Probe::on_window(p, g, nets, sampler)` for each probe, such as
+   `CsvWriter` and `VcdWriter` (default: `on_boundary(p, g, nets)`). See
+   "Sampled probes".
+
+## Sampled probes (ADR-002 Amendment 3)
+
+`next_sample` in the Grant row comes only from probes that ask for aligned
+boundaries (`CsvWriter::new`, `event_sampling`). Every extra boundary changes
+the grant partition, and Renode's results depend on the partition (when a
+timer ISR runs relative to a `RUN_FOR` end). Outputs that must not perturb the
+simulation therefore use sampled probes (`CsvWriter::sampled`, used by
+`bb run`): they never constrain grants and read each sample instant
+`s` in `[p, g]` through the sampler:
+
+1. the driving engine's `sample_output(pin, s)` if it returns a value
+   (ngspice: linear interpolation between the solver points of the window);
+2. otherwise the net's value at `g`, except that a digital net whose
+   `edge_time > s` reads its value at `p`.
+
+The sampler is a pure function of engine state and net values, so sampled
+outputs are deterministic. Edge times are exact for the partition the run
+uses; a different quantum may change them by tens of ns.
 
 Inputs applied at the boundary `g` govern the consumer for `(g, next g]`. For
 an edge the consumer has not seen yet (one from an engine registered after

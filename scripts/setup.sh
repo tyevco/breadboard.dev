@@ -49,7 +49,11 @@ else
   log "rustup: present; ensuring toolchain ${RUST_VERSION}"
 fi
 rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt --component clippy
-rustup default "${RUST_VERSION}"
+# The repo pins its toolchain through rust-toolchain.toml; do not touch the
+# user's global default unless rustup has none at all.
+if ! rustup default >/dev/null 2>&1; then
+  rustup default "${RUST_VERSION}"
+fi
 
 # ---- uv --------------------------------------------------------------------
 if ! command -v uv >/dev/null 2>&1 || [ "$(uv --version | awk '{print $2}')" != "${UV_VERSION}" ]; then

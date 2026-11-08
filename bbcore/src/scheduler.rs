@@ -24,7 +24,7 @@ use std::io::{self, Write};
 
 use crate::engine::{Engine, EngineError};
 use crate::event::{Event, EventSink};
-use crate::probe::Probe;
+use crate::probe::{NetSampler, Probe};
 use crate::signal::{volts_to_microvolts, NetValues, PinSignal, PinSignals};
 use crate::time::Time;
 
@@ -147,6 +147,8 @@ pub struct Scheduler {
     inputs: Vec<Binding>,
     drivers: BTreeMap<String, String>,
     nets: NetValues,
+    /// Net values at the previous boundary (for sampling inside a window).
+    prev_nets: NetValues,
     now: Time,
     phase: Phase,
     grants: u64,
@@ -178,6 +180,7 @@ impl Scheduler {
             inputs: Vec::new(),
             drivers: BTreeMap::new(),
             nets: NetValues::new(),
+            prev_nets: NetValues::new(),
             now: Time::ZERO,
             phase: Phase::Init,
             grants: 0,
@@ -298,6 +301,7 @@ impl Scheduler {
             // Query
             self.phase = Phase::Query;
             let now = self.now;
+            self.prev_nets.clone_from(&self.nets);
             let mut g = t_end;
             let mut limiter = Limiter::TEnd;
             for (i, e) in self.engines.iter_mut().enumerate() {
@@ -514,10 +518,42 @@ impl Scheduler {
         }
 
         // 5. Probes.
+        let sampler = WindowSampler {
+            engines: &self.engines,
+            outputs: &self.outputs,
+            nets: &self.nets,
+            prev_nets: &self.prev_nets,
+        };
         for p in probes.iter_mut() {
-            p.on_boundary(prev, now, &self.nets)?;
+            p.on_window(prev, now, &self.nets, &sampler)?;
         }
         Ok(())
+    }
+}
+
+/// Net values inside the last grant window `[prev, now]`: the driving
+/// engine's [`Engine::sample_output`] if it has one, otherwise the boundary
+/// value, with a digital net read as its previous level before `edge_time`.
+struct WindowSampler<'a> {
+    engines: &'a [Box<dyn Engine>],
+    outputs: &'a [Binding],
+    nets: &'a NetValues,
+    prev_nets: &'a NetValues,
+}
+
+impl NetSampler for WindowSampler<'_> {
+    fn sample(&self, net: &str, t: Time) -> Option<PinSignal> {
+        if let Some(b) = self.outputs.iter().find(|b| b.net == net) {
+            if let Some(v) = self.engines[b.engine].sample_output(&b.pin, t) {
+                return Some(v);
+            }
+        }
+        match self.nets.get(net) {
+            Some(PinSignal::Digital { edge_time, .. }) if t < *edge_time => {
+                self.prev_nets.get(net).copied()
+            }
+            v => v.copied(),
+        }
     }
 }
 

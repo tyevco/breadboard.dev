@@ -3,7 +3,7 @@
 //! Protocol: `docs/adr/002-time-grant-protocol.md` and `spec/time-grant.md`.
 
 use crate::event::LogRecord;
-use crate::signal::PinSignals;
+use crate::signal::{PinSignal, PinSignals};
 use crate::time::Time;
 
 /// Error returned by an engine.
@@ -24,10 +24,16 @@ pub enum EngineError {
 ///
 /// The kernel drives every engine through this loop and nothing else:
 ///
-/// 1. `next_safe_time(now)`: the engine promises that none of its outputs will
-///    change in `(now, t_safe)` other than as already reported, i.e. it can be
-///    advanced to any `t <= t_safe` without the kernel missing an interaction.
-///    Must be strictly greater than `now`. Return [`Time::MAX`] when idle.
+/// 1. `next_safe_time(now)`: the largest grant this engine accepts next. It
+///    promises that if it is advanced to any `g <= t_safe`, every output
+///    change in `(now, g]` is reported at the boundary `g` with its exact
+///    `edge_time`, at most one change per digital pin (ADR-002 Amendment 3).
+///    It does **not** promise that outputs stay constant inside the grant: a
+///    CPU may toggle a pin at any instruction. Consumers registered *after*
+///    the producer receive the change before they advance and apply it at
+///    `edge_time` (Gauss-Seidel); consumers registered *before* it receive it
+///    one grant late, at the boundary (Jacobi). Must be strictly greater than
+///    `now`. Return [`Time::MAX`] when idle.
 /// 2. `advance_to(g)`: advance internal time from `now` to exactly `g`, where
 ///    `now < g <= t_safe`. The engine must not simulate past `g` (no free-run).
 /// 3. `read_outputs()`: values of the engine's output pins at `g`.
@@ -53,6 +59,16 @@ pub trait Engine {
     /// Input pin values at the current time, keyed by pin name. Always the full
     /// set of bound, driven input pins (a snapshot, not a delta).
     fn apply_inputs(&mut self, inputs: &PinSignals) -> Result<(), EngineError>;
+
+    /// Value of output pin `pin` at `t`, for `prev <= t <= now` where `prev`
+    /// is the previous boundary, if the engine can reconstruct it (e.g. by
+    /// interpolating solver points). Must be a pure function of the engine
+    /// state. Used by sampled probes, so that output sample instants need
+    /// not be grant boundaries. Default: `None` (the kernel falls back to the
+    /// boundary values and, for digital pins, `edge_time`).
+    fn sample_output(&self, _pin: &str, _t: Time) -> Option<PinSignal> {
+        None
+    }
 
     /// Log lines produced since the last call (e.g. UART). Default: none.
     fn drain_logs(&mut self) -> Vec<LogRecord> {

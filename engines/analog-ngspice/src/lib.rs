@@ -338,7 +338,25 @@ fn log() -> MutexGuard<'static, Vec<String>> {
     LOG.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Distance to the next larger `f64` (unit in the last place) of `|x|`.
+fn ulp(x: f64) -> f64 {
+    let x = x.abs();
+    f64::from_bits(x.to_bits() + 1) - x
+}
+
+/// How close (s) an accepted solver time must be to the grant time to count
+/// as "at the grant" (ADR-002 Amendment 3). The decision is made in the f64
+/// domain the solver works in: `time + (target - time)` need not equal
+/// `target` exactly, and above ~2.3 s one ulp exceeds 0.5 fs, so rounding to
+/// integer fs cannot be used to recognise the boundary. Half a femtosecond
+/// (the kernel resolution) or four ulps of the target, whichever is larger.
+fn grant_tolerance_s(target_s: f64) -> f64 {
+    (4.0 * ulp(target_s)).max(0.5e-15)
+}
+
 /// Seconds (ngspice) to integer femtoseconds (kernel), rounding to nearest.
+/// Only for points strictly inside a grant (diagnostics, sample lookup); a
+/// boundary is always stored as the exact kernel time.
 fn secs_to_fs(t: f64) -> u64 {
     if t <= 0.0 {
         0
@@ -447,9 +465,9 @@ unsafe extern "C" fn cb_get_sync(
     }
     if loc == 0 {
         // `time` is the point just accepted and dumped to the vectors.
-        let fs = secs_to_fs(time);
-        if st.parked != Some(st.seq) && fs >= st.target_fs {
-            if fs > st.target_fs {
+        let tol = grant_tolerance_s(st.target_s);
+        if st.parked != Some(st.seq) && time >= st.target_s - tol {
+            if time > st.target_s + tol {
                 let msg = format!(
                     "solver overshot the grant: accepted t = {time:e} s, grant = {} fs",
                     st.target_fs
@@ -850,7 +868,8 @@ impl NgspiceEngine {
             self.failed = true;
             return Err(other(format!("no new solver point at {t}")));
         }
-        if secs_to_fs(parked_s) != t.as_fs() {
+        let t_s = t.as_secs_f64();
+        if (parked_s - t_s).abs() > grant_tolerance_s(t_s) {
             self.failed = true;
             return Err(other(format!(
                 "solver parked at {parked_s:e} s, expected {t}"
@@ -865,7 +884,13 @@ impl NgspiceEngine {
         for v in &mut h.values {
             v.drain(..keep_from);
         }
-        h.times_fs.extend(r.times.iter().map(|&s| secs_to_fs(s)));
+        // Interior points are rounded to fs and kept inside [previous
+        // boundary, t] (rounding can push a point within one ulp of a
+        // boundary past it once ulp > 1 fs).
+        let lo = self.now.as_fs();
+        let hi = t.as_fs();
+        h.times_fs
+            .extend(r.times.iter().map(|&s| secs_to_fs(s).clamp(lo, hi)));
         h.times_s.extend_from_slice(&r.times);
         for (dst, src) in h.values.iter_mut().zip(r.values) {
             dst.extend(src);
@@ -1107,6 +1132,11 @@ impl Engine for NgspiceEngine {
         Ok(out)
     }
 
+    fn sample_output(&self, pin: &str, t: Time) -> Option<PinSignal> {
+        let node = self.outputs.get(pin)?;
+        self.sample(node, t).ok().map(PinSignal::analog)
+    }
+
     fn apply_inputs(&mut self, inputs: &PinSignals) -> Result<(), EngineError> {
         let now = self.now;
         for (pin, sig) in inputs {
@@ -1188,5 +1218,18 @@ mod tests {
         assert_eq!(secs_to_fs(3e-3), 3_000_000_000_000);
         assert_eq!(secs_to_fs(-1.0), 0);
         assert_eq!(spice_time(Time::from_ns(1)), "1000000e-15");
+    }
+
+    #[test]
+    fn grant_tolerance_covers_one_ulp_at_large_times() {
+        // The verifier's failing case: 2.304 s lands one ulp high and rounds
+        // to grant + 1 fs; it must still count as "at the grant".
+        let t = Time::from_ms(2304).as_secs_f64();
+        let landed = f64::from_bits(t.to_bits() + 1);
+        assert!((landed - t).abs() <= grant_tolerance_s(t));
+        // Small times keep the half-femtosecond resolution.
+        assert_eq!(grant_tolerance_s(1e-3), 0.5e-15);
+        // A real overshoot (a whole step) is still caught.
+        assert!(1e-6 > grant_tolerance_s(10_000.0));
     }
 }

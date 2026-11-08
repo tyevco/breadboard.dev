@@ -20,7 +20,7 @@ pub mod time;
 pub use engine::{Engine, EngineError};
 pub use event::{Event, EventSink, LogLevel, LogRecord};
 pub use pin::{DigitalIn, DigitalOut, PinModel, Power};
-pub use probe::{format_volts, CsvWriter, Probe, VcdKind, VcdWriter};
+pub use probe::{format_volts, CsvWriter, NetSampler, Probe, VcdKind, VcdWriter};
 pub use scheduler::{
     Direction, EngineId, EventSampling, Phase, RunSummary, SchedError, Scheduler, SchedulerConfig,
 };

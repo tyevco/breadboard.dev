@@ -25,15 +25,23 @@
 //! one edge on a pin inside one grant is a protocol error (the configured
 //! `quantum`, which bounds every grant through `t_safe`, is too large).
 //!
-//! Measured Renode 1.17.0 behaviour: when a timer (here SysTick) expires
-//! exactly at the point where `RUN_FOR` paused, the ISR runs at the start of
-//! the *next* `RUN_FOR`, and the resulting pin change is stamped with the
-//! pause time itself, i.e. the previous boundary. The pin still read the old
-//! level at that boundary, so the edge belongs to the new grant; the engine
-//! reports it 1 fs after the previous kernel boundary (an error of at most
-//! 1 ns, Renode's resolution) and counts it in
-//! [`RenodeEngine::boundary_edges`]. Timestamps before the previous boundary
-//! or after the grant are protocol errors.
+//! Measured Renode 1.17.0 behaviour (ADR-002 Amendment 3): when a timer
+//! (here SysTick) expires close to the end of a `RUN_FOR`, Renode can defer
+//! the ISR to the start of the *next* `RUN_FOR`; the resulting pin change is
+//! then stamped with the pause time itself, i.e. the previous boundary. The
+//! pin still read the old level at that boundary, so the edge belongs to the
+//! new grant; the engine reports it 1 fs after the previous kernel boundary
+//! and counts it in [`RenodeEngine::boundary_edges`]. Timestamps before the
+//! previous boundary or after the grant are protocol errors.
+//!
+//! The firmware-visible time of such an edge is the boundary, not the timer
+//! expiry: it is late by the distance from the expiry to the boundary (up to
+//! ~50 ns measured, not bounded by Renode's 1 ns resolution). More generally
+//! Renode's results depend on the `RUN_FOR` partition: edge times are exact
+//! *for a given partition* and deterministic, but a different partition
+//! (another quantum) can move them by tens of ns. The kernel therefore keeps
+//! the partition a function of the quantum alone: output sampling does not
+//! add boundaries (`CsvWriter::sampled`).
 //!
 //! # Determinism
 //!
@@ -214,6 +222,9 @@ pub struct RenodeEngine {
     pins: Vec<PinState>,
     run_for_calls: u64,
     boundary_edges: u64,
+    /// An advance or input failed: Drop keeps `workdir` (with `renode.log`)
+    /// for diagnosis.
+    failed: bool,
 }
 
 static INSTANCE: AtomicU64 = AtomicU64::new(0);
@@ -389,6 +400,7 @@ impl RenodeEngine {
             pins,
             run_for_calls: 0,
             boundary_edges: 0,
+            failed: false,
         })
     }
 
@@ -417,6 +429,32 @@ impl RenodeEngine {
     fn pin_index(&self, name: &str) -> Option<usize> {
         self.pins.iter().position(|p| p.spec.name == name)
     }
+
+    /// Directory with the generated script and `renode.log`. Removed on drop
+    /// unless the engine failed.
+    pub fn workdir(&self) -> &Path {
+        &self.workdir
+    }
+
+    /// Mark the engine failed and attach the Renode log tail (and where the
+    /// full log is kept) to an error from the running phase.
+    fn failure(&mut self, e: EngineError) -> EngineError {
+        self.failed = true;
+        let exited = match self.child.try_wait() {
+            Ok(Some(status)) => format!("renode exited ({status}); "),
+            _ => String::new(),
+        };
+        let log = self.workdir.join("renode.log");
+        let msg = format!(
+            "{e}\n--- {exited}renode log kept at {} (tail) ---\n{}",
+            log.display(),
+            log_tail(&log)
+        );
+        match e {
+            EngineError::Protocol(_) => EngineError::Protocol(msg),
+            _ => EngineError::Other(msg),
+        }
+    }
 }
 
 fn proto(e: ProtocolError) -> EngineError {
@@ -432,21 +470,49 @@ impl Engine for RenodeEngine {
     }
 
     fn next_safe_time(&mut self, _now: Time) -> Time {
-        // Phase 0 lookahead: a fixed quantum past Renode's current time. The
-        // firmware may change an output at any instruction, so this bounds how
-        // late (at most one grant) the analog side learns of an edge; the edge
-        // itself carries its exact time.
+        // Phase 0 lookahead: a fixed quantum past Renode's current time. This
+        // is not a promise that outputs stay constant: the firmware may change
+        // an output at any instruction. It bounds the grant so at most one
+        // edge per pin falls inside it; the edge carries its time within this
+        // partition, and consumers registered after this engine apply it at
+        // that time (ADR-002 Amendment 3).
         self.promised = Time::from_ns(self.renode_ns + self.quantum_ns);
         self.promised
     }
 
     fn advance_to(&mut self, t: Time) -> Result<(), EngineError> {
+        // A grant outside the promise is the caller's error; Renode was not
+        // touched, so there is no log worth keeping.
         if t <= self.now || t > self.promised {
             return Err(EngineError::Protocol(format!(
                 "advance_to({t}) outside ({}, {}]",
                 self.now, self.promised
             )));
         }
+        self.advance_inner(t).map_err(|e| self.failure(e))
+    }
+
+    fn read_outputs(&mut self) -> Result<PinSignals, EngineError> {
+        Ok(self
+            .pins
+            .iter()
+            .filter(|p| p.spec.direction == PinDirection::Output)
+            .map(|p| {
+                (
+                    p.spec.name.clone(),
+                    PinSignal::digital(p.level, p.edge_time),
+                )
+            })
+            .collect())
+    }
+
+    fn apply_inputs(&mut self, inputs: &PinSignals) -> Result<(), EngineError> {
+        self.apply_inner(inputs).map_err(|e| self.failure(e))
+    }
+}
+
+impl RenodeEngine {
+    fn advance_inner(&mut self, t: Time) -> Result<(), EngineError> {
         let start_ns = self.renode_ns;
         let target_ns = t.as_fs() / FS_PER_NS;
         if target_ns > start_ns {
@@ -480,13 +546,14 @@ impl Engine for RenodeEngine {
             if level == pin.level {
                 continue; // not a change (e.g. re-write of the same value)
             }
-            // Boundary edge: Renode stamps a change made by code that ran
-            // because of a timer expiring exactly at the previous pause point
-            // with that pause time, although it executed during this grant
-            // (the pin read back the old level at that boundary). It is
-            // reported 1 fs after the previous kernel boundary, the earliest
-            // time inside this grant: an error of at most 1 ns, below Renode's
-            // own resolution. Counted in `boundary_edges()`.
+            // Boundary edge: Renode stamps a change made by an ISR it deferred
+            // past the previous pause point with that pause time, although it
+            // executed during this grant (the pin read back the old level at
+            // that boundary). It is reported 1 fs after the previous kernel
+            // boundary, the earliest time inside this grant. That is when the
+            // firmware really changed the pin in this partition; the timer
+            // expiry it reacts to may have been tens of ns earlier (see the
+            // crate docs). Counted in `boundary_edges()`.
             let mut edge_time = Time::from_ns(ev.time_ns);
             if edge_time <= self.now {
                 edge_time = self.now + Time::from_fs(1);
@@ -526,21 +593,7 @@ impl Engine for RenodeEngine {
         Ok(())
     }
 
-    fn read_outputs(&mut self) -> Result<PinSignals, EngineError> {
-        Ok(self
-            .pins
-            .iter()
-            .filter(|p| p.spec.direction == PinDirection::Output)
-            .map(|p| {
-                (
-                    p.spec.name.clone(),
-                    PinSignal::digital(p.level, p.edge_time),
-                )
-            })
-            .collect())
-    }
-
-    fn apply_inputs(&mut self, inputs: &PinSignals) -> Result<(), EngineError> {
+    fn apply_inner(&mut self, inputs: &PinSignals) -> Result<(), EngineError> {
         for (name, sig) in inputs {
             let i = self
                 .pin_index(name)
@@ -570,7 +623,15 @@ impl Drop for RenodeEngine {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.workdir);
+        if self.failed {
+            eprintln!(
+                "{}: Renode workdir kept for diagnosis: {}",
+                self.name,
+                self.workdir.display()
+            );
+        } else {
+            let _ = std::fs::remove_dir_all(&self.workdir);
+        }
     }
 }
 

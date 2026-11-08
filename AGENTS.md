@@ -47,7 +47,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
    `Time` for every scheduling decision, ordered collections (`BTreeMap`/`Vec`,
    never `HashMap` iteration into an output), no wall-clock reads, no unseeded
    randomness, and no thread-timing-dependent results. Samples are taken at
-   fixed sim-time boundaries, not at solver points.
+   fixed sim-time instants, not at solver points, and must not add grant
+   boundaries (that changes Renode's results; ADR-002 Amendment 3).
 2. **Pin-boundary contract.** Engines interact only through pins bound to nets.
    Each pin has exactly one pin model (`spec/pin-model.md`) and each net has
    exactly one driver. Values cross the boundary as `PinSignal`

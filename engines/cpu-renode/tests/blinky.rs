@@ -1,7 +1,8 @@
 //! Renode engine against the real STM32F103 blinky firmware.
 //!
 //! Needs Renode (`make setup`) and the firmware (`make firmware`; built here
-//! on demand). Without Renode the tests print a SKIP line and pass.
+//! on demand). Without Renode the tests print a SKIP line and pass, unless
+//! `BB_REQUIRE_RENODE=1` (set by `make test`), which makes them fail.
 //!
 //! Run with `cargo test -p bb-cpu-renode -- --nocapture` to see wall times.
 
@@ -11,7 +12,8 @@ use std::time::Instant;
 
 use bb_cpu_renode::{find_renode, RenodeConfig, RenodeEngine};
 use bbcore::{
-    Direction, Engine, Event, EventSink, Level, PinSignal, Scheduler, SchedulerConfig, Time,
+    CsvWriter, Direction, Engine, Event, EventSink, Level, PinSignal, Probe, Scheduler,
+    SchedulerConfig, Time,
 };
 
 /// SysTick runs at 72 MHz in Renode's stm32f103.repl: one tick is 13.89 ns.
@@ -34,16 +36,27 @@ fn firmware() -> Option<PathBuf> {
                 .output()
                 .is_ok();
             assert!(!have_gcc, "building {} failed", elf.display());
-            eprintln!("SKIP: arm-none-eabi-gcc not installed and {} missing (run `make setup && make firmware`)", elf.display());
+            skip(&format!(
+                "arm-none-eabi-gcc not installed and {} missing (run `make setup && make firmware`)",
+                elf.display()
+            ));
             return None;
         }
     }
     Some(elf)
 }
 
+/// `BB_REQUIRE_RENODE=1` (set by `make test` / CI) turns a SKIP into a
+/// failure, so the gate cannot pass without running these tests.
+fn skip(msg: &str) {
+    let required = std::env::var("BB_REQUIRE_RENODE").is_ok_and(|v| v == "1");
+    assert!(!required, "BB_REQUIRE_RENODE=1 but {msg}");
+    eprintln!("SKIP: {msg}");
+}
+
 fn setup() -> Option<RenodeConfig> {
     let Some(renode) = find_renode() else {
-        eprintln!("SKIP: renode not installed (run `make setup`, or set BB_RENODE)");
+        skip("renode not installed (run `make setup`, or set BB_RENODE)");
         return None;
     };
     let elf = firmware()?;
@@ -53,12 +66,15 @@ fn setup() -> Option<RenodeConfig> {
 struct Run {
     edges: Vec<(Time, u8)>,
     events: Vec<u8>,
+    csv: String,
     grants: u64,
     wall_s: f64,
 }
 
 /// Run the blinky under the scheduler to `t_end` with grants of `grant`.
-fn run_blinky(cfg: &RenodeConfig, grant: Time, t_end: Time) -> Run {
+/// With `csv_period`, a sampled `CsvWriter` records PA5 (it must not change
+/// the grant partition).
+fn run_blinky(cfg: &RenodeConfig, grant: Time, t_end: Time, csv_period: Option<Time>) -> Run {
     let mut cfg = cfg.clone();
     cfg.quantum = grant;
     let engine = RenodeEngine::start(&cfg).expect("start renode");
@@ -71,8 +87,16 @@ fn run_blinky(cfg: &RenodeConfig, grant: Time, t_end: Time) -> Run {
     let id = sched.add_engine(Box::new(engine)).unwrap();
     sched.bind(id, "PA5", "PA5", Direction::Output).unwrap();
     let mut sink = EventSink::new(Vec::new());
+    let mut csv =
+        csv_period.map(|p| CsvWriter::sampled(Vec::new(), p, vec!["PA5".into()]).unwrap());
     let t0 = Instant::now();
-    let summary = sched.run(t_end, &mut sink, &mut []).expect("run");
+    let summary = {
+        let mut probes: Vec<&mut dyn Probe> = Vec::new();
+        if let Some(c) = csv.as_mut() {
+            probes.push(c);
+        }
+        sched.run(t_end, &mut sink, &mut probes).expect("run")
+    };
     let wall_s = t0.elapsed().as_secs_f64();
     assert_eq!(summary.now, t_end);
     let events = sink.into_inner();
@@ -87,14 +111,23 @@ fn run_blinky(cfg: &RenodeConfig, grant: Time, t_end: Time) -> Run {
     Run {
         edges,
         events,
+        csv: csv
+            .map(|c| String::from_utf8(c.into_inner()).unwrap())
+            .unwrap_or_default(),
         grants: summary.grants,
         wall_s,
     }
 }
 
+/// Measured tolerance of the blinky edges against the ideal k * 50 ms, for
+/// any of the partitions below (ADR-002 Amendment 3). Edges are never late by
+/// more than the 1 fs boundary relabel. They run early by a drift that grows
+/// with sim time (Renode's SysTick reload timing, about 130 ns by 500 ms) plus
+/// a partition-dependent part of tens of ns.
+const EARLY_TOL: Time = Time::from_ns(200);
+const LATE_TOL: Time = Time::from_fs(1);
+
 fn check_blinky_edges(edges: &[(Time, u8)], t_end: Time) {
-    // The firmware starts SysTick within the first microsecond; edge k is at
-    // k * 50 ms (+ that start-up time), level alternating from high.
     let expected = (t_end.as_fs() / TOGGLE.as_fs()) as usize;
     assert!(
         edges.len() == expected || edges.len() + 1 == expected,
@@ -103,49 +136,106 @@ fn check_blinky_edges(edges: &[(Time, u8)], t_end: Time) {
     assert!(edges.len() >= 4, "too few edges: {edges:?}");
     for (k, (t, level)) in edges.iter().enumerate() {
         let ideal = Time::from_fs(TOGGLE.as_fs() * (k as u64 + 1));
-        let err = t.as_fs().abs_diff(ideal.as_fs());
         assert!(
-            err <= SYSTICK_TICK.as_fs(),
-            "edge {k} at {t}, expected {ideal} +/- 1 SysTick tick"
+            *t + EARLY_TOL >= ideal && *t <= ideal + LATE_TOL,
+            "edge {k} at {t}, expected {ideal} -{EARLY_TOL}/+{LATE_TOL}"
         );
         assert_eq!(*level, if k % 2 == 0 { 1 } else { 0 }, "edge {k} level");
     }
     for w in edges.windows(2) {
         let dt = w[1].0 - w[0].0;
         assert!(
-            dt.as_fs().abs_diff(TOGGLE.as_fs()) <= SYSTICK_TICK.as_fs(),
-            "edge spacing {dt}, expected 50ms +/- 1 SysTick tick"
+            dt.as_fs().abs_diff(TOGGLE.as_fs()) <= 8 * SYSTICK_TICK.as_fs(),
+            "edge spacing {dt}, expected 50ms +/- 8 SysTick ticks"
         );
     }
 }
 
-/// Two independent 250 ms runs in 10 us grants: edges every 50 ms within one
-/// SysTick tick, identical edge lists and identical event streams.
+/// Edges whose time is not "previous boundary + 1 fs", i.e. reported from
+/// inside the grant rather than relabelled at its start.
+fn mid_grant_edges(edges: &[(Time, u8)], grant: Time) -> usize {
+    edges
+        .iter()
+        .filter(|(t, _)| t.as_fs() % grant.as_fs() != 1)
+        .count()
+}
+
+/// Golden edge list for the Phase 0 partition (10 us grants, 500 ms), Renode
+/// 1.17.0. The first five SysTick expiries are deferred to a boundary and
+/// relabelled +1 fs; the rest are reported mid-grant.
+const GOLDEN_10US: [u64; 10] = [
+    50_000_000_000_001,
+    100_000_000_000_001,
+    150_000_000_000_001,
+    200_000_000_000_001,
+    250_000_000_000_001,
+    299_999_930_000_000,
+    349_999_910_000_000,
+    399_999_900_000_000,
+    449_999_890_000_000,
+    499_999_870_000_000,
+];
+
+/// Two independent 500 ms runs in 10 us grants (the spike partition): the
+/// exact golden edge list, identical event streams.
 #[test]
-fn blinky_250ms_in_10us_grants_is_exact_and_deterministic() {
+fn blinky_500ms_in_10us_grants_is_exact_and_deterministic() {
     let Some(cfg) = setup() else { return };
     let grant = Time::from_us(10);
-    let t_end = Time::from_ms(250);
+    let t_end = Time::from_ms(500);
     let handles: Vec<_> = (0..2)
         .map(|_| {
             let cfg = cfg.clone();
-            std::thread::spawn(move || run_blinky(&cfg, grant, t_end))
+            std::thread::spawn(move || run_blinky(&cfg, grant, t_end, None))
         })
         .collect();
     let runs: Vec<Run> = handles.into_iter().map(|h| h.join().unwrap()).collect();
     for (i, r) in runs.iter().enumerate() {
         eprintln!(
-            "run {i}: 250ms sim in {} grants of {grant}: wall {:.2} s, edges {:?}",
+            "run {i}: 500ms sim in {} grants of {grant}: wall {:.2} s, edges {:?}",
             r.grants, r.wall_s, r.edges
         );
     }
-    assert_eq!(runs[0].grants, 25_000);
+    assert_eq!(runs[0].grants, 50_000);
     check_blinky_edges(&runs[0].edges, t_end);
+    let got: Vec<u64> = runs[0].edges.iter().map(|e| e.0.as_fs()).collect();
+    assert_eq!(got, GOLDEN_10US, "edge times differ from the golden list");
+    assert!(mid_grant_edges(&runs[0].edges, grant) >= 5);
     assert_eq!(
         runs[0].edges, runs[1].edges,
         "edge lists differ between runs"
     );
     assert_eq!(runs[0].events, runs[1].events, "event streams differ");
+}
+
+/// A 70 us partition: no multiple of 50 ms (k < 7) is a grant boundary, so
+/// SysTick expiries fall mid-grant and the normal in-grant edge path is
+/// exercised. Edges stay within the measured tolerance of the ideal times and
+/// of the 10 us golden list (the partition dependence of Amendment 3).
+#[test]
+fn blinky_500ms_in_70us_grants_mid_grant_edges() {
+    let Some(cfg) = setup() else { return };
+    let grant = Time::from_us(70);
+    let t_end = Time::from_ms(500);
+    let r = run_blinky(&cfg, grant, t_end, None);
+    eprintln!(
+        "500ms sim in {} grants of {grant}: wall {:.2} s, edges {:?}",
+        r.grants, r.wall_s, r.edges
+    );
+    check_blinky_edges(&r.edges, t_end);
+    let mid = mid_grant_edges(&r.edges, grant);
+    assert!(
+        mid >= 8,
+        "only {mid} edges reported mid-grant: {:?}",
+        r.edges
+    );
+    for ((t, _), g) in r.edges.iter().zip(GOLDEN_10US) {
+        let d = t.as_fs().abs_diff(g);
+        assert!(
+            d <= Time::from_ns(100).as_fs(),
+            "edge at {t} is {d} fs from the 10 us partition's {g}"
+        );
+    }
 }
 
 /// Drive the engine directly with uneven grants, including ones that are not
@@ -186,17 +276,45 @@ fn virtual_time_tracks_every_grant() {
     assert!(e.advance_to(t_safe + Time::from_ns(1)).is_err());
 }
 
-/// Coarser grants (1 ms) give edges within one tick of the same times.
-/// Every SysTick expiry lands on a grant boundary here, so this also covers
-/// the boundary-edge path. Records wall time.
+/// Regression (Phase 0 verification): the CSV sample rate must not change
+/// the firmware's edge times. 1 kHz puts every 50 ms on a sample instant,
+/// 1024 Hz puts almost none there; with sampled probes both runs use the same
+/// 1 ms partition and give identical edges, and each CSV row agrees with the
+/// edge list.
 #[test]
-fn blinky_250ms_in_1ms_grants() {
+fn csv_sample_rate_does_not_change_edges() {
     let Some(cfg) = setup() else { return };
-    let t_end = Time::from_ms(250);
-    let r = run_blinky(&cfg, Time::from_ms(1), t_end);
-    eprintln!(
-        "250ms sim in {} grants of 1ms: wall {:.2} s, edges {:?}",
-        r.grants, r.wall_s, r.edges
-    );
-    check_blinky_edges(&r.edges, t_end);
+    let grant = Time::from_ms(1);
+    let t_end = Time::from_ms(350);
+    let periods = [Time::from_ms(1), Time::from_fs(976_562_500_000)]; // 1 kHz, 1024 Hz
+    let handles: Vec<_> = periods
+        .iter()
+        .map(|&p| {
+            let cfg = cfg.clone();
+            std::thread::spawn(move || run_blinky(&cfg, grant, t_end, Some(p)))
+        })
+        .collect();
+    let runs: Vec<Run> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    for (r, p) in runs.iter().zip(periods) {
+        eprintln!("csv period {p}: {} grants, edges {:?}", r.grants, r.edges);
+    }
+    assert_eq!(runs[0].grants, runs[1].grants, "partition changed");
+    assert_eq!(runs[0].edges, runs[1].edges, "edges depend on the CSV rate");
+    assert_eq!(runs[0].events, runs[1].events);
+    check_blinky_edges(&runs[0].edges, t_end);
+    for (r, p) in runs.iter().zip(periods) {
+        let mut rows = 0;
+        for line in r.csv.lines().skip(1) {
+            let (t, v) = line.split_once(',').unwrap();
+            let t = Time::from_fs(t.parse().unwrap());
+            let want = r.edges.iter().filter(|e| e.0 <= t).count() % 2;
+            assert_eq!(v, want.to_string(), "PA5 at {t} (period {p})");
+            rows += 1;
+        }
+        assert_eq!(
+            rows as u64,
+            t_end.as_fs() / p.as_fs() + 1,
+            "rows (period {p})"
+        );
+    }
 }

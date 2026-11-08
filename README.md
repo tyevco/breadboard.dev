@@ -44,7 +44,7 @@ The run writes these files to `out/spike/`:
 | File | Contents |
 | --- | --- |
 | `events.jsonl` | One `grant` record per grant, plus `pin_edge` records with Renode's exact edge times (`spec/event-stream.md`) |
-| `nets.csv` | `t_fs,LED_A,PA5` sampled every 10 µs at exchange boundaries, in volts with 6 decimals |
+| `nets.csv` | `t_fs,LED_A,PA5` sampled every 10 µs, in volts with 6 decimals. Samples never add grant boundaries; at the default quantum they coincide with boundaries, otherwise analog values are interpolated between solver points (ADR-002 Amendment 3) |
 | `nets.vcd` | The probed analog nets as `real`, and the MCU pin net `U1.PA5` as a wire (timescale 1 fs) |
 
 `bb` prints the wall-clock time to the terminal, never into the outputs.
@@ -53,7 +53,8 @@ The run writes these files to `out/spike/`:
 
 1. `cargo test --workspace`: scheduler mock tests, the ngspice RC test against
    the analytic answer, the Renode blinky edge-timing tests and the CLI's
-   unit tests.
+   unit tests. `make test` sets `BB_REQUIRE_RENODE=1`, so the Renode tests
+   fail rather than skip when Renode or the ARM toolchain is missing.
 2. `make spike`: the 500 ms run, then `scripts/check_spike.py`. The LED_A high
    plateau must be in [1.7, 2.2] V and the low plateau below 0.1 V. There must
    be at least 8 PA5 edges and at least 8 LED_A transitions, each spaced
@@ -104,9 +105,18 @@ lever is lookahead, a larger `t_safe` while the MCU is idle (see
 `spec/time-grant.md`, example 2). Phase 0 does not use it yet. A coarser
 setting is much cheaper: `--max-quantum 1ms --sample-rate 1kHz` runs 500
 grants in **3.7 s** total (0.9 s of simulation), with the same 10 edges at the
-same exact times. The CSV is then sampled only every 1 ms. Edge timing does not
-depend on the quantum, because edges carry exact times. The quantum only
-bounds how many edges can fall into one grant, at most one per pin.
+same times. The CSV is then sampled only every 1 ms.
+
+**Limitation: edge times depend on the quantum.** Edges carry the exact time
+at which the emulated firmware changed the pin, but Renode's behaviour depends
+on where `RUN_FOR` calls end. A SysTick expiry just before a grant boundary
+has its ISR deferred to the next grant, and the edge is then reported 1 fs
+after that boundary. Measured: the first edge is at 50 ms + 1 fs with 10 µs or
+1 ms grants and at 49.99999 ms with 70 µs grants, a 10 ns difference. Up to
+50 ns was seen at 200 ms. A run is deterministic for a fixed quantum. The
+sample rate does not affect edges: CSV samples are not grant boundaries
+(`engines/cpu-renode/tests/blinky.rs::csv_sample_rate_does_not_change_edges`).
+The quantum also caps how many edges can fall into one grant: one per pin.
 
 ## Layout
 

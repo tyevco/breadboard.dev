@@ -233,3 +233,46 @@ fn lookahead_and_breakpoints_bound_t_safe() {
     e.advance_to(Time::from_us(40)).unwrap();
     assert_eq!(e.next_safe_time(e.now()), Time::from_us(140));
 }
+
+/// Regression (Phase 0 verification): above ~2.3 s one f64 ulp exceeds
+/// 0.5 fs, so the solver landing on `target_s` no longer rounds back to the
+/// integer grant. Run 12 s in 1 ms grants with edges every second (some
+/// mid-grant) and check every boundary and the settled levels.
+#[test]
+fn long_run_past_ten_seconds_in_1ms_grants() {
+    let _g = lock();
+    let mut cfg = NgspiceConfig::new(
+        "R1 in out 1k\nC1 out 0 1u\n",
+        Time::from_secs(12),
+        Time::from_ms(1),
+    );
+    cfg.inputs = rc_config().inputs;
+    cfg.outputs = rc_config().outputs;
+    let mut e = NgspiceEngine::new(cfg).expect("engine");
+    let grant = Time::from_ms(1);
+    let mut level = Level::Low;
+    let mut now = Time::ZERO;
+    while now < Time::from_secs(12) {
+        let g = now + grant;
+        let ms = now.as_fs() / Time::from_ms(1).as_fs();
+        if ms.is_multiple_of(1000) {
+            // Toggle once a second, half a millisecond into the grant.
+            level = level.toggled();
+            e.push_edge("IN", level, now + Time::from_us(500)).unwrap();
+        }
+        e.advance_to(g)
+            .unwrap_or_else(|err| panic!("grant to {g} failed: {err}"));
+        assert_eq!(e.now(), g);
+        let win = e.solver_window("out").unwrap();
+        assert_eq!(win.last().unwrap().0, g);
+        assert!(win.windows(2).all(|w| w[0].0 <= w[1].0), "monotone at {g}");
+        if ms % 1000 == 999 {
+            // 999.5 ms (~1000 tau) after the edge: settled.
+            let want = if level == Level::High { 1.0 } else { 0.0 };
+            let got = e.voltage("out").unwrap();
+            assert!((got - want).abs() < 1e-3, "at {g}: {got} != {want}");
+        }
+        now = g;
+    }
+    assert_eq!(now, Time::from_secs(12));
+}
