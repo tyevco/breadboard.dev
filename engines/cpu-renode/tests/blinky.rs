@@ -15,7 +15,7 @@ use bb_cpu_renode::{
 };
 use bbcore::{
     CsvWriter, Direction, Engine, EngineError, Event, EventSink, Level, PinSignal, PinSignals,
-    Probe, SchedError, Scheduler, SchedulerConfig, Time,
+    Probe, SchedError, Scheduler, SchedulerConfig, Time, Transition,
 };
 
 /// The default grant lattice (Renode quantum, `--renode-quantum`).
@@ -98,10 +98,10 @@ fn run_blinky(
 ) -> Run {
     let mut cfg = cfg.clone();
     cfg.quantum = lattice;
-    cfg.max_grant = grant;
     let engine = RenodeEngine::start(&cfg).expect("start renode");
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: grant,
+        loop_quantum: None,
         log_grants: false,
         event_sampling: None,
     })
@@ -242,11 +242,13 @@ fn non_grant_records(events: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// ADR-003 D2 gate: on a fixed 10 us lattice, the 10, 70 and 100 us and 1 ms
-/// partitions give the identical `pin_edge` list (the golden one), identical
-/// non-grant records and an identical sampled CSV. The "70 us anomaly" (first
-/// edges at 50 ms instead of 50 ms + 1 fs when the quantum was the grant) is
-/// gone: a stamp on a lattice point is reported +1 fs wherever grants end.
+/// ADR-003 D2/D3 gate: on a fixed 10 us lattice, the 10, 70 and 100 us and
+/// 1, 10, 50 and 500 ms partitions give the identical `pin_edge` list (the
+/// golden one), identical non-grant records and an identical sampled CSV. The
+/// "70 us anomaly" (first edges at 50 ms instead of 50 ms + 1 fs when the
+/// quantum was the grant) is gone: a stamp on a lattice point is reported
+/// +1 fs wherever grants end. From 100 ms on a grant holds several edges of
+/// PA5 (the trace, D3); the 500 ms run holds all ten in one grant.
 #[test]
 fn blinky_partitions_of_one_lattice_are_identical() {
     let Some(cfg) = setup() else { return };
@@ -256,6 +258,9 @@ fn blinky_partitions_of_one_lattice_are_identical() {
         Time::from_us(70),
         Time::from_us(100),
         Time::from_ms(1),
+        Time::from_ms(10),
+        Time::from_ms(50),
+        Time::from_ms(500),
     ];
     let csv = Some(Time::from_us(50));
     let handles: Vec<_> = grants
@@ -290,16 +295,17 @@ fn blinky_partitions_of_one_lattice_are_identical() {
     // The 70 us anomaly is gone: 50 ms is not a 70 us boundary, yet the
     // first edge is 50 ms + 1 fs as in every other partition.
     assert_eq!(runs[1].edges[0].0, Time::from_ms(50) + Time::from_fs(1));
+    assert_eq!(runs[6].grants, 1, "one 500 ms grant carries all ten edges");
 }
 
 /// Drive the engine directly with uneven lattice-aligned grants: Renode's
 /// virtual time must equal the grant after every advance, and outputs must
-/// never claim an edge after the boundary. A grant off the lattice or past
-/// t_safe is refused, not clamped, and Renode is not touched.
+/// never claim an edge after the boundary. A grant off the lattice is
+/// refused, not clamped, and Renode is not touched. `t_safe` is `Time::MAX`
+/// (ADR-003 D4), and one long advance reports every edge in its trace.
 #[test]
 fn virtual_time_tracks_every_grant() {
-    let Some(mut cfg) = setup() else { return };
-    cfg.max_grant = Time::from_ms(1);
+    let Some(cfg) = setup() else { return };
     let mut e = RenodeEngine::start(&cfg).expect("start renode");
     assert_eq!(e.grant_lattice(), Some(L));
     let mut now = Time::ZERO;
@@ -307,13 +313,13 @@ fn virtual_time_tracks_every_grant() {
         Time::from_us(10),
         Time::from_us(30),
         Time::from_us(70),
-        Time::from_ms(5), // capped by t_safe = now + 1 ms
+        Time::from_us(300),
         Time::from_us(20),
     ];
     for k in 0..100 {
         let t_safe = e.next_safe_time(now);
-        assert_eq!(t_safe, now + Time::from_ms(1));
-        let g = (now + steps[k % steps.len()]).min(t_safe);
+        assert_eq!(t_safe, Time::MAX);
+        let g = now + steps[k % steps.len()];
         e.advance_to(g).unwrap();
         now = g;
         let vt = e.query_renode_time_ns().unwrap();
@@ -328,14 +334,30 @@ fn virtual_time_tracks_every_grant() {
         }
     }
     assert!(now < Time::from_ms(50));
-    let t_safe = e.next_safe_time(now);
+    assert_eq!(e.read_output_trace().unwrap(), Some(vec![]));
+    e.next_safe_time(now);
     // Off the lattice: refused.
     let err = e.advance_to(now + Time::from_us(5)).unwrap_err();
     assert!(err.to_string().contains("lattice"), "{err}");
     assert!(e.advance_to(now + Time::from_ns(1)).is_err());
-    // Past t_safe: refused.
-    assert!(e.advance_to(t_safe + L).is_err());
     assert_eq!(e.query_renode_time_ns().unwrap(), now.as_fs() / 1_000_000);
+    // One advance to 180 ms: the trace holds the 50, 100 and 150 ms edges,
+    // alternating, and its last entry is the boundary value.
+    e.advance_to(Time::from_ms(180)).unwrap();
+    let trace = e.read_output_trace().unwrap().unwrap();
+    let got: Vec<(u64, Option<Level>)> = trace
+        .iter()
+        .map(|tr| (tr.t.as_fs(), tr.signal.level()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (GOLDEN_10US[0], Some(Level::High)),
+            (GOLDEN_10US[1], Some(Level::Low)),
+            (GOLDEN_10US[2], Some(Level::High)),
+        ]
+    );
+    assert_eq!(e.read_outputs().unwrap()["PA5"], trace[2].signal);
 }
 
 /// Regression (Phase 0 verification): the CSV sample rate must not change
@@ -395,12 +417,12 @@ fn run_faulty(
     let grant = Time::from_us(100);
     let mut cfg = cfg.clone();
     cfg.quantum = grant;
-    cfg.max_grant = grant;
     cfg.verify = verify;
     let mut engine = RenodeEngine::start(&cfg).expect("start renode");
     engine.inject_fault(fault);
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: grant,
+        loop_quantum: None,
         log_grants: false,
         event_sampling: None,
     })
@@ -515,10 +537,9 @@ fn verify_modes_do_not_change_results() {
 fn sysbus_helpers_read_and_write() {
     let Some(mut cfg) = setup() else { return };
     cfg.quantum = Time::from_ms(1);
-    cfg.max_grant = Time::from_ms(1);
     let mut e = RenodeEngine::start(&cfg).expect("start renode");
-    let t_safe = e.next_safe_time(Time::ZERO);
-    e.advance_to(t_safe).unwrap();
+    e.next_safe_time(Time::ZERO);
+    e.advance_to(Time::from_ms(1)).unwrap();
     // SYST_RVR = 72 MHz / 1000 * 50 - 1.
     assert_eq!(e.sysbus_read_u32s(0xE000_E014, 1).unwrap(), vec![3_599_999]);
     e.sysbus_write_u32(0x2000_1000, 0xC0FF_EE00).unwrap();
@@ -588,13 +609,15 @@ fn busy_loop_edges_land_on_the_lattice() {
     }
 }
 
-/// Drives `OUT` through the transitions `edges` (time, level), one per grant
-/// at most; t_safe is unbounded.
+/// Drives `OUT` through the transitions `edges` (time, level, alternating),
+/// any number per grant, reported as a trace (ADR-003 D3); t_safe is
+/// unbounded.
 struct Driver {
     edges: Vec<(Time, Level)>,
     now: Time,
     level: Level,
     edge_time: Time,
+    trace: Vec<Transition>,
 }
 
 impl Engine for Driver {
@@ -605,10 +628,16 @@ impl Engine for Driver {
         Time::MAX
     }
     fn advance_to(&mut self, t: Time) -> Result<(), EngineError> {
+        self.trace.clear();
         for &(at, level) in &self.edges {
             if self.now < at && at <= t {
                 self.level = level;
                 self.edge_time = at;
+                self.trace.push(Transition {
+                    t: at,
+                    pin: "OUT".into(),
+                    signal: PinSignal::digital(level, at),
+                });
             }
         }
         self.now = t;
@@ -619,38 +648,52 @@ impl Engine for Driver {
         m.insert("OUT".into(), PinSignal::digital(self.level, self.edge_time));
         Ok(m)
     }
+    fn read_output_trace(&mut self) -> Result<Option<Vec<Transition>>, EngineError> {
+        Ok(Some(self.trace.clone()))
+    }
     fn apply_inputs(&mut self, _: &PinSignals) -> Result<(), EngineError> {
         Ok(())
     }
 }
 
-/// PA6 edges of the copy firmware when a driver registered before Renode
-/// (so Renode gets each edge before it advances, with its true edge_time)
-/// toggles PB0 at `edges`, in grants of `grant`.
-fn run_copy(cfg: &RenodeConfig, grant: Time, edges: &[(Time, Level)]) -> Vec<(Time, u8)> {
+/// PA6 edges of the copy firmware when a driver toggles PB0 at `edges`, in
+/// grants of `grant`. The driver advances before Renode (the plan order,
+/// ADR-003 D3), so Renode gets each edge before it advances, with its true
+/// edge_time, whether the driver is registered first or not.
+fn run_copy(
+    cfg: &RenodeConfig,
+    grant: Time,
+    driver_first: bool,
+    edges: &[(Time, Level)],
+) -> Vec<(Time, u8)> {
     let mut cfg = cfg.clone();
-    cfg.max_grant = grant;
     cfg.verify = Verify::Every;
     cfg.pins = vec![
         PinSpec::stm32("PB0", PinDirection::Input).unwrap(),
         PinSpec::stm32("PA6", PinDirection::Output).unwrap(),
     ];
-    let renode = RenodeEngine::start(&cfg).expect("start renode");
+    let renode = Box::new(RenodeEngine::start(&cfg).expect("start renode"));
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: grant,
+        loop_quantum: None,
         log_grants: false,
         event_sampling: None,
     })
     .unwrap();
-    let d = sched
-        .add_engine(Box::new(Driver {
-            edges: edges.to_vec(),
-            now: Time::ZERO,
-            level: Level::Low,
-            edge_time: Time::ZERO,
-        }))
-        .unwrap();
-    let r = sched.add_engine(Box::new(renode)).unwrap();
+    let driver = Box::new(Driver {
+        edges: edges.to_vec(),
+        now: Time::ZERO,
+        level: Level::Low,
+        edge_time: Time::ZERO,
+        trace: Vec::new(),
+    });
+    let (d, r) = if driver_first {
+        let d = sched.add_engine(driver).unwrap();
+        (d, sched.add_engine(renode).unwrap())
+    } else {
+        let r = sched.add_engine(renode).unwrap();
+        (sched.add_engine(driver).unwrap(), r)
+    };
     sched.bind(d, "OUT", "PB0", Direction::Output).unwrap();
     sched.bind(r, "PB0", "PB0", Direction::Input).unwrap();
     sched.bind(r, "PA6", "PA6", Direction::Output).unwrap();
@@ -675,6 +718,8 @@ fn run_copy(cfg: &RenodeConfig, grant: Time, edges: &[(Time, Level)]) -> Vec<(Ti
 /// The copy firmware polls PB0 and writes PA6 in the slice after the input
 /// appears, so PA6 follows at exactly `ceil_L(t) + 1 fs`, both in 1 ms
 /// grants (Renode splits its advance at `ceil_L(t)`) and in one-cell grants.
+/// Step 3 (D3): the same with Renode registered before its driver, and in
+/// one 3 ms grant holding all three inputs.
 #[test]
 fn inputs_take_effect_at_ceil_lattice_never_early() {
     let Some(mut cfg) = setup_fw("copy") else {
@@ -694,16 +739,23 @@ fn inputs_take_effect_at_ceil_lattice_never_early() {
     .iter()
     .map(|&(t, l)| (t + Time::from_fs(1), l))
     .collect();
-    let handles: Vec<_> = [Time::from_ms(1), L]
+    let cases = [
+        (Time::from_ms(1), true),
+        (L, true),
+        (Time::from_ms(1), false),
+        (Time::from_ms(3), false),
+    ];
+    let handles: Vec<_> = cases
         .into_iter()
-        .map(|g| {
+        .map(|(g, first)| {
             let cfg = cfg.clone();
-            std::thread::spawn(move || run_copy(&cfg, g, &edges))
+            std::thread::spawn(move || run_copy(&cfg, g, first, &edges))
         })
         .collect();
     let runs: Vec<Vec<(Time, u8)>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-    eprintln!("PA6 edges, 1 ms grants: {:?}", runs[0]);
-    eprintln!("PA6 edges, 10 us grants: {:?}", runs[1]);
+    for ((g, first), run) in cases.iter().zip(&runs) {
+        eprintln!("PA6 edges, {g} grants, driver registered first: {first}: {run:?}");
+    }
     for run in &runs {
         assert_eq!(run, &want);
         for ((t_out, _), (t_in, _)) in run.iter().zip(edges) {

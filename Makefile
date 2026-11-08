@@ -7,7 +7,8 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/.local/bin:$(PATH)
 CARGO ?= cargo
 
 .PHONY: setup doctor build test cargo-test fmt fmt-check clippy check firmware \
-        bb spike spike-verify-every lattice-check determinism golden golden-update
+        bb spike spike-verify-every lattice-check partition perf determinism golden \
+        golden-update
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -17,6 +18,7 @@ SPIKE_OUT   ?= out/spike
 SPIKE_ARGS   = --netlist examples/spike/board.cir --firmware $(SPIKE_ELF) \
                --target U1 --for $(SPIKE_FOR) --probe net:LED_A --probe net:PA5
 GOLDEN      := tests/golden/spike/led_a.csv
+PARTITION_HASHES := tests/golden/spike/partition.sha256
 DET_RUNS    ?= 10
 DET_JOBS    ?= 5
 PYTHON      ?= python3
@@ -84,6 +86,26 @@ lattice-check: spike
 	$(PYTHON) scripts/check_resample.py $(SPIKE_OUT) $(LATTICE_OUT)/mq1ms-1khz
 	@echo "lattice-check: PASS"
 
+# ADR-003 step 3 partition-equivalence gate: the spike at every max_quantum
+# below (10 us is the one-cell reference) must give nets.csv, nets.vcd and
+# the non-grant event records of the committed baseline hashes
+# ($(PARTITION_HASHES)) byte for byte. CI job `partition`.
+PARTITION_OUT    ?= out/partition
+PARTITION_QUANTA ?= 10us,100us,10ms,50ms,500ms
+PARTITION_JOBS   ?= 5
+partition: firmware bb
+	bash scripts/partition.sh $(BB) $(PARTITION_OUT) $(PARTITION_JOBS) $(PARTITION_HASHES) \
+	    $(PARTITION_QUANTA) -- $(SPIKE_ARGS)
+
+# ADR-003 step 3 performance gate (measurement protocol: interleaved A/B,
+# N runs each, medians, startup separate, CPU time and load recorded): the
+# spike at the default 10 ms grants (B) against 10 us grants (A) must take
+# exactly 50 grants, a median simulation time <= 2 s and be >= 15x faster.
+PERF_OUT ?= out/perf
+PERF_N   ?= 5
+perf: firmware bb
+	bash scripts/perf.sh $(BB) $(PERF_OUT) $(PERF_N) 10us 10ms 50 2.0 15 -- $(SPIKE_ARGS)
+
 determinism: firmware bb
 	bash scripts/determinism.sh $(BB) out/determinism $(DET_RUNS) $(DET_JOBS) -- $(SPIKE_ARGS)
 
@@ -97,6 +119,9 @@ golden:
 golden-update: spike
 	mkdir -p $(dir $(GOLDEN))
 	$(PYTHON) scripts/golden.py write $(SPIKE_OUT)/nets.csv $(GOLDEN)
+	cd $(SPIKE_OUT) && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum nets.csv nets.vcd non-grant-records > $(CURDIR)/$(PARTITION_HASHES) \
+	    && rm non-grant-records
 
 fmt:
 	$(CARGO) fmt --all

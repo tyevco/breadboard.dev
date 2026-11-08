@@ -17,6 +17,14 @@ pub trait NetSampler {
     /// Value of `net` at `t` (`prev <= t <= now`), or `None` if the net has no
     /// value. Deterministic.
     fn sample(&self, net: &str, t: Time) -> Option<PinSignal>;
+
+    /// Every level change of the digital net `net` inside the window
+    /// `(prev, now]`, in time order (each `edge_time` is its time). With
+    /// traces (ADR-003 D3) a net can change any number of times per window.
+    /// Default: none known (a probe then falls back to the boundary value).
+    fn digital_changes(&self, _net: &str) -> Vec<PinSignal> {
+        Vec::new()
+    }
 }
 
 /// Something that observes net values at exchange boundaries.
@@ -206,14 +214,25 @@ struct VcdVar {
 
 /// Value-change-dump writer (timescale 1 fs).
 ///
-/// Digital changes are stamped at their `edge_time`; analog changes at the
-/// boundary time, and only when the 1 uV-rounded value changes. The header
-/// contains no date, so output is deterministic.
+/// Digital changes are stamped at their `edge_time`. Analog changes are
+/// written only when the 1 uV-rounded value changes, stamped at:
+/// - [`VcdWriter::new`] (boundary mode): the boundary time. The file then
+///   depends on the grant partition.
+/// - [`VcdWriter::sampled`]: fixed sample instants `0, period, 2*period,
+///   ...`, read through the [`NetSampler`], and every digital change of a
+///   window comes from it too (any number per window, ADR-003 D3). The file
+///   then does not depend on the grant partition.
+///
+/// The header contains no date, so output is deterministic.
 pub struct VcdWriter<W: Write> {
     w: W,
     vars: Vec<VcdVar>,
     header_done: bool,
     last_t: Option<Time>,
+    /// `Some(period)`: sampled mode.
+    period: Option<Time>,
+    /// Next analog sample instant (sampled mode).
+    next: Time,
 }
 
 fn vcd_id(mut i: usize) -> String {
@@ -246,11 +265,41 @@ impl<W: Write> VcdWriter<W> {
             vars,
             header_done: false,
             last_t: None,
+            period: None,
+            next: Time::ZERO,
         }
+    }
+
+    /// A writer that stamps analog values at fixed sample instants and takes
+    /// digital changes from the sampler (see the type docs). It never asks
+    /// for boundaries.
+    pub fn sampled(w: W, nets: &[(&str, VcdKind)], period: Time) -> io::Result<Self> {
+        if period.is_zero() {
+            return Err(invalid("VCD sample period must be > 0".into()));
+        }
+        let mut v = VcdWriter::new(w, nets);
+        v.period = Some(period);
+        Ok(v)
     }
 
     pub fn into_inner(self) -> W {
         self.w
+    }
+
+    /// Write `changes` (time, var index, text) in time order; stamps never
+    /// go backwards.
+    fn write_changes(&mut self, mut changes: Vec<(Time, usize, String)>) -> io::Result<()> {
+        changes.sort_by_key(|c| (c.0, c.1));
+        for (t, i, text) in changes {
+            let t = self.last_t.map_or(t, |l| t.max(l));
+            if self.last_t != Some(t) {
+                writeln!(self.w, "#{}", t.as_fs())?;
+                self.last_t = Some(t);
+            }
+            writeln!(self.w, "{text}")?;
+            self.vars[i].last = Some(text);
+        }
+        Ok(())
     }
 
     fn write_header(&mut self) -> io::Result<()> {
@@ -270,6 +319,28 @@ impl<W: Write> VcdWriter<W> {
     }
 }
 
+fn wire_text(v: &VcdVar, sig: &PinSignal) -> io::Result<(Time, String)> {
+    match sig {
+        PinSignal::Digital { level, edge_time } => {
+            Ok((*edge_time, format!("{}{}", level.as_bit(), v.id)))
+        }
+        other => Err(invalid(format!(
+            "VCD net {} declared Wire but got {other:?}",
+            v.net
+        ))),
+    }
+}
+
+fn real_text(v: &VcdVar, sig: &PinSignal) -> io::Result<String> {
+    match sig {
+        PinSignal::Analog { volts } => Ok(format!("r{} {}", format_volts(*volts), v.id)),
+        other => Err(invalid(format!(
+            "VCD net {} declared Real but got {other:?}",
+            v.net
+        ))),
+    }
+}
+
 impl<W: Write> Probe for VcdWriter<W> {
     fn next_sample_time(&self, _now: Time) -> Option<Time> {
         None
@@ -285,19 +356,9 @@ impl<W: Write> Probe for VcdWriter<W> {
             let Some(sig) = nets.get(&v.net) else {
                 continue;
             };
-            let (t, text) = match (v.kind, sig) {
-                (VcdKind::Wire, PinSignal::Digital { level, edge_time }) => {
-                    (*edge_time, format!("{}{}", level.as_bit(), v.id))
-                }
-                (VcdKind::Real, PinSignal::Analog { volts }) => {
-                    (now, format!("r{} {}", format_volts(*volts), v.id))
-                }
-                (kind, sig) => {
-                    return Err(invalid(format!(
-                        "VCD net {} declared {kind:?} but got {sig:?}",
-                        v.net
-                    )))
-                }
+            let (t, text) = match v.kind {
+                VcdKind::Wire => wire_text(v, sig)?,
+                VcdKind::Real => (now, real_text(v, sig)?),
             };
             if v.last.as_deref() != Some(text.as_str()) {
                 changes.push((t, i, text));
@@ -305,17 +366,71 @@ impl<W: Write> Probe for VcdWriter<W> {
         }
         // Stamps never go backwards: an initial value is written at the first
         // boundary, later edges lie in (prev, now].
-        changes.sort_by_key(|c| (c.0, c.1));
-        for (t, i, text) in changes {
-            let t = self.last_t.map_or(t, |l| t.max(l));
-            if self.last_t != Some(t) {
-                writeln!(self.w, "#{}", t.as_fs())?;
-                self.last_t = Some(t);
-            }
-            writeln!(self.w, "{text}")?;
-            self.vars[i].last = Some(text);
+        self.write_changes(changes)
+    }
+
+    fn on_window(
+        &mut self,
+        prev: Time,
+        now: Time,
+        nets: &NetValues,
+        sampler: &dyn NetSampler,
+    ) -> io::Result<()> {
+        let Some(period) = self.period else {
+            return self.on_boundary(prev, now, nets);
+        };
+        if !self.header_done {
+            self.write_header()?;
+            self.header_done = true;
         }
-        Ok(())
+        // Analog sample instants due in [prev, now] (earlier ones were
+        // written at earlier boundaries).
+        let mut instants = Vec::new();
+        while self.next <= now {
+            instants.push(self.next);
+            match self.next.checked_add(period) {
+                Some(t) => self.next = t,
+                None => {
+                    self.next = Time::MAX;
+                    break;
+                }
+            }
+        }
+        let mut changes: Vec<(Time, usize, String)> = Vec::new();
+        for (i, v) in self.vars.iter().enumerate() {
+            let mut last = v.last.clone();
+            let mut push = |t: Time, text: String| {
+                if last.as_deref() != Some(text.as_str()) {
+                    last = Some(text.clone());
+                    changes.push((t, i, text));
+                }
+            };
+            match v.kind {
+                VcdKind::Wire => {
+                    let ch = sampler.digital_changes(&v.net);
+                    if ch.is_empty() {
+                        // No change in the window: the boundary value (an
+                        // initial value, or a net first driven now).
+                        if let Some(sig) = nets.get(&v.net) {
+                            let (t, text) = wire_text(v, sig)?;
+                            push(t, text);
+                        }
+                    }
+                    for sig in &ch {
+                        let (t, text) = wire_text(v, sig)?;
+                        push(t, text);
+                    }
+                }
+                VcdKind::Real => {
+                    for &s in &instants {
+                        if let Some(sig) = sampler.sample(&v.net, s) {
+                            push(s, real_text(v, &sig)?);
+                        }
+                    }
+                }
+            }
+        }
+        self.write_changes(changes)
     }
 
     fn finish(&mut self) -> io::Result<()> {

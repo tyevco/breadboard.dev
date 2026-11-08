@@ -87,6 +87,18 @@ impl PinSignal {
     }
 }
 
+/// One change of an output (or, delivered to a consumer, input) pin inside a
+/// grant (ADR-003 D3): from `t` on, `pin` has the value `signal`. A digital
+/// transition's `edge_time` equals `t`. An engine that reports a trace
+/// ([`crate::Engine::read_output_trace`]) may report any number of
+/// transitions per pin and grant.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Transition {
+    pub t: Time,
+    pub pin: String,
+    pub signal: PinSignal,
+}
+
 /// A set of pin signals keyed by pin name (engine side) or net name (kernel
 /// side). A `BTreeMap` so that iteration order, and therefore every output
 /// derived from it, is deterministic.

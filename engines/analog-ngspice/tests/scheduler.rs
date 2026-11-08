@@ -182,7 +182,8 @@ impl Engine for OneEdge {
 }
 
 /// v(a) at 1 ms and 2 ms for an edge at 0.3 ms, with the driver registered
-/// before (`cpu_first`) or after the ngspice engine.
+/// before (`cpu_first`) or after the ngspice engine (the plan order is the
+/// same either way, ADR-003 D3).
 fn mid_grant_run(cpu_first: bool) -> (f64, f64) {
     let mut cfg = NgspiceConfig::new("C1 a 0 1u\n", Time::from_ms(10), Time::from_us(10));
     cfg.handoff_spin = spin_from_env();
@@ -235,10 +236,10 @@ fn mid_grant_run(cpu_first: bool) -> (f64, f64) {
     (v1, v2)
 }
 
-/// ADR-002 Amendment 2: an edge inside a grant, from an engine registered
-/// before ngspice, is applied at its true edge_time (Gauss-Seidel). From an
-/// engine registered after ngspice it is applied at the next boundary
-/// (Jacobi, D4.4).
+/// ADR-002 Amendment 2 with ADR-003 D3: an edge inside a grant is applied at
+/// its true edge_time, whichever engine is registered first: the plan order
+/// comes from the bindings, so the driver always advances before ngspice
+/// (the Phase 0 "Jacobi" case of a consumer registered first is gone).
 #[test]
 fn mid_grant_edge_is_applied_at_its_true_time() {
     let _g = NGSPICE.lock().unwrap_or_else(|e| e.into_inner());
@@ -254,12 +255,14 @@ fn mid_grant_edge_is_applied_at_its_true_time() {
         "v(2ms) = {v2}, want {}",
         rc(1.7)
     );
-    let (j1, j2) = mid_grant_run(false);
-    assert!(j1.abs() < 1e-3, "Jacobi: v(1ms) = {j1}, want 0");
-    assert!(
-        ((j2 - rc(1.0)) / rc(1.0)).abs() < 0.01,
-        "Jacobi: v(2ms) = {j2}, want {}",
-        rc(1.0)
+    // ngspice registered first: bit-identical, not one grant late.
+    let (r1, r2) = mid_grant_run(false);
+    assert_eq!(
+        (r1.to_bits(), r2.to_bits()),
+        (v1.to_bits(), v2.to_bits()),
+        "registration order changed the result: {r1} {r2} vs {v1} {v2}"
     );
-    println!("gauss-seidel v(1ms)={v1:.6} v(2ms)={v2:.6}; jacobi v(1ms)={j1:.6} v(2ms)={j2:.6}");
+    println!(
+        "driver first v(1ms)={v1:.6} v(2ms)={v2:.6}; ngspice first v(1ms)={r1:.6} v(2ms)={r2:.6}"
+    );
 }

@@ -41,7 +41,8 @@ pub enum Event {
     Grant {
         t_fs: Time,
         until_fs: Time,
-        /// What bounded the grant: `engine:<name>`, `sample`, `max_quantum` or `t_end`.
+        /// What bounded the grant: `engine:<name>`, `sample`, `loop_quantum`,
+        /// `max_quantum` or `t_end` (schema version 1, ADR-003 D4).
         limited_by: String,
     },
     /// A digital net changed level at `t_fs`.

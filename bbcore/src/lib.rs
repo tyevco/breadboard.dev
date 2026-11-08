@@ -22,7 +22,8 @@ pub use event::{Event, EventSink, LogLevel, LogRecord};
 pub use pin::{DigitalIn, DigitalOut, PinModel, Power};
 pub use probe::{format_volts, CsvWriter, NetSampler, Probe, VcdKind, VcdWriter};
 pub use scheduler::{
-    Direction, EngineId, EventSampling, Phase, RunSummary, SchedError, Scheduler, SchedulerConfig,
+    Direction, EngineId, EventSampling, Phase, Plan, RunSummary, SchedError, Scheduler,
+    SchedulerConfig,
 };
-pub use signal::{volts_to_microvolts, Level, NetValues, PinSignal, PinSignals};
+pub use signal::{volts_to_microvolts, Level, NetValues, PinSignal, PinSignals, Transition};
 pub use time::{Time, TimeParseError};

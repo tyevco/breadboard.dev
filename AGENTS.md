@@ -16,12 +16,14 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make build` | `cargo build --workspace --all-targets` |
 | `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden` (about 5 min) |
 | `make cargo-test` | `cargo test --workspace` only |
-| `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike`, check it (`scripts/check_spike.py`) |
+| `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
 | `make lattice-check` | ADR-003 D2 gate: the spike in 1 ms grants on the 10 µs lattice must give `out/spike`'s `nets.csv` and non-grant records byte for byte, and a 1 kHz CSV must sample the 100 kHz waveform exactly (`scripts/check_resample.py`) |
+| `make partition` | ADR-003 step 3 gate: the spike at `--max-quantum` 10 µs, 100 µs, 10 ms, 50 ms and 500 ms must give the committed baseline `nets.csv`, `nets.vcd` and non-grant records (`tests/golden/spike/partition.sha256`) byte for byte (`scripts/partition.sh`; CI job `partition`) |
+| `make perf` | ADR-003 performance gate with the measurement protocol: interleaved 10 µs vs 10 ms grant runs, N = 5 (`PERF_N`), medians; 10 ms must take exactly 50 grants, ≤ 2 s simulation and be ≥ 15× faster (`scripts/perf.sh`). Run it on an otherwise idle host |
 | `make determinism` | 10 spike runs (`DET_RUNS`, `DET_JOBS` in parallel); sha256 of `nets.csv`, `events.jsonl`, `nets.vcd` must match |
 | `make golden` | Diff `out/spike` LED_A against `tests/golden/spike/led_a.csv` (1 mV / 1 sample) |
-| `make golden-update` | Regenerate the golden snapshot from a fresh, checked spike run. Review the diff before committing it |
+| `make golden-update` | Regenerate the golden snapshot and the partition hashes from a fresh, checked spike run. Review the diff before committing it |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
@@ -39,7 +41,8 @@ examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindin
 tests/golden/spike/     led_a.csv waveform snapshot
 spec/                   normative protocol and schema docs; changing them needs an ADR
 docs/adr/               architecture decision records
-scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh
+scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh,
+                        partition.sh, perf.sh, check_resample.py
 ```
 
 ## The three invariants
@@ -59,7 +62,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
 3. **No engine free-runs.** Engines advance only on kernel grants:
    `advance_to(g)` with `now < g <= t_safe`, stopping at exactly `g`. No engine
    runs in the background between calls, and no engine's time ever passes the
-   latest grant.
+   latest grant. `t_safe = Time::MAX` means "I report every change in my
+   trace", not "I am idle"; `--max-quantum` (default 10 ms) caps every grant.
 
 ## Rules
 
@@ -90,9 +94,12 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
   only at a sync point; earlier is acausal, later than that is a skew.
 - **Parsing KiCad files with regex.** Use a real S-expression parser.
 - Using float seconds for scheduling. Convert at the engine's FFI boundary only.
-- Registering a consumer engine before its producer. The Advance phase is
-  Gauss-Seidel (ADR-002 Amendment 2), so only engines registered *after* a
-  producer see its edges inside the same grant, at their true time.
+- Assuming engines advance in registration order. They advance in the plan
+  order the kernel builds from the bindings (producers first, ADR-003 D3);
+  registration order only breaks ties and orders the event records.
+- Collapsing an engine's output changes to one per grant, or dropping
+  intermediate input transitions. Producers report every change in their
+  trace; consumers apply every transition, in order (ADR-003 D3).
 - Iterating a `HashMap` into any output, or putting `$date`/timestamps/PIDs/
   absolute paths in output files.
 - Silently clamping a protocol violation. The scheduler reports `Causality` /

@@ -36,16 +36,16 @@ Run the simulation by hand:
 make firmware bb
 ~/.cache/bb-target/release/bb run --netlist examples/spike/board.cir \
     --firmware examples/spike/firmware/build/blinky.elf --target U1 --for 500ms \
-    --probe net:LED_A --probe net:PA5 --out out/spike   # [--max-quantum 10us] [--sample-rate 100kHz] [--verify edges]
+    --probe net:LED_A --probe net:PA5 --out out/spike   # [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--verify edges]
 ```
 
 The run writes these files to `out/spike/`:
 
 | File | Contents |
 | --- | --- |
-| `events.jsonl` | One `grant` record per grant, plus `pin_edge` records with Renode's exact edge times (`spec/event-stream.md`) |
-| `nets.csv` | `t_fs,LED_A,PA5` sampled every 10 µs, in volts with 6 decimals. Samples never add grant boundaries; at the default quantum they coincide with boundaries, otherwise analog values are interpolated between solver points (ADR-002 Amendment 3) |
-| `nets.vcd` | The probed analog nets as `real`, and the MCU pin net `U1.PA5` as a wire (timescale 1 fs) |
+| `events.jsonl` | One `grant` record per grant, plus `pin_edge` records with Renode's exact edge times (`spec/event-stream.md`, schema version 1) |
+| `nets.csv` | `t_fs,LED_A,PA5` sampled every 10 µs, in volts with 6 decimals. Samples never add grant boundaries: inside each grant, analog values are read from ngspice's solver points (one lands on every 10 µs lattice point) and digital values from the edge trace (ADR-002 Amendment 3, ADR-003 D3) |
+| `nets.vcd` | The probed analog nets as `real`, sampled at `--sample-rate`, and the MCU pin net `U1.PA5` as a wire with every edge (timescale 1 fs) |
 
 `bb` prints the wall-clock time to the terminal, never into the outputs.
 
@@ -81,9 +81,10 @@ LED_A in `nets.csv` is a clean 10 Hz square wave:
   rounding in Renode. That drift is deterministic and is well inside the
   ±0.1 ms tolerance.
 - **LED_A transitions:** each one has completed by the next 10 µs sample. The
-  5 ns pin ramp is applied at Renode's exact edge timestamp: the CPU engine
-  advances first in every grant, and its edges reach ngspice before ngspice
-  advances through the same grant (ADR-002 Amendment 2).
+  5 ns pin ramp is applied at Renode's exact edge timestamp: the kernel
+  advances the CPU engine first in every grant because it drives ngspice's
+  input (the plan order, ADR-003 D3), and every edge of the grant reaches
+  ngspice before ngspice advances through it (ADR-002 Amendment 2).
 
 `out/spike/nets.vcd` opens in GTKWave. Plot `LED_A` and `PA5` (real) together
 with `U1.PA5` (wire) to see this.
@@ -91,33 +92,36 @@ with `U1.PA5` (wire) to see this.
 ## Measured cost (the "co-sim is slow" risk)
 
 These figures were measured in WSL2 Ubuntu 24.04 on the development machine,
-for 500 ms of simulated time at the default 10 µs quantum. That is 50 000
-grants with the per-grant Renode time/GPIO cross-check enabled.
+for 500 ms of simulated time, with `make perf` (ADR-003's measurement
+protocol: interleaved runs, N = 5, medians, startup reported separately; load
+average 3–12 from other work on the host).
 
-| Run | Wall clock |
-| --- | --- |
-| `make spike`, a single run | **39.1 s** total: 2.8 s engine startup plus 36.3 s simulation, about 0.73 ms per grant. An earlier run took 45.7 s |
-| `make determinism`, 5 runs in parallel | 80–87 s per run |
-| `make test`, the whole gate | about 4 minutes |
+| Run | Grants | Simulation (median) | Total wall (median) |
+| --- | --- | --- | --- |
+| `--max-quantum 10us` (the Phase 0 setting: one-cell lockstep) | 50 000 | 45.9 s | 54.0 s |
+| default `--max-quantum 10ms` (`make spike`) | 50 | **1.42 s** (32×) | 9.2 s, mostly 4.9 s of engine startup |
 
-Almost all of the time goes to Renode's pause/resume per `RUN_FOR` grant. The
-lever is lookahead, a larger `t_safe` while the MCU is idle (see
-`spec/time-grant.md`, example 2). Phase 0 does not use it yet. A coarser
-setting is much cheaper: `--max-quantum 1ms --sample-rate 1kHz` runs 500
-grants in **3.7 s** total (0.9 s of simulation), with the same 10 edges at the
-same times. The CSV is then sampled only every 1 ms.
+The cost of a co-simulation is almost all fixed cost per grant (Renode's
+pause/resume per `RUN_FOR`), so the lever is fewer grants. Since ADR-003 the
+grant length is a pure cap and changes no output: Renode reports every edge
+of a grant in a trace, its quantum (the lattice) stays 10 µs, and ngspice
+lands on every lattice point. The spike gives byte-identical `nets.csv`,
+`nets.vcd` and `pin_edge` records at 10 µs, 100 µs, 10 ms, 50 ms and 500 ms
+grants (`make partition`). A board with a feedback loop (an analog net read
+back by the MCU) runs in one-cell grants; ADR-003 Part B lifts that while the
+MCU sleeps. The full cost table is refreshed in ADR-003 plan step 10.
 
 **Edge times depend on the Renode quantum, not on the grant partition**
 (ADR-003 D2). Renode's quantum (`--renode-quantum`, default 10 µs) is a grid
 that every grant boundary must sit on; it is run configuration, like the seed.
 Renode stamps a pin change with the sync point that opens the slice it ran
 in; a stamp on the grid is reported 1 fs later, a timer-driven stamp exactly.
-With every `RUN_FOR` ending on the grid, 10 µs, 70 µs, 100 µs and 1 ms grants
-give the identical edge list (`engines/cpu-renode/tests/blinky.rs`), and
-`--max-quantum 1ms` gives the spike's `nets.csv` byte for byte
-(`make lattice-check`). MCU inputs take effect at the next grid point, never
-earlier. `--max-quantum` (a multiple of the quantum) still caps how many
-edges can fall into one grant: one per pin.
+With every `RUN_FOR` ending on the grid, 10 µs, 70 µs and 100 µs, and 1, 10,
+50 and 500 ms grants give the identical edge list
+(`engines/cpu-renode/tests/blinky.rs`), and the spike's outputs do not depend
+on `--max-quantum` (a multiple of the quantum; `make lattice-check`,
+`make partition`). A grant may hold any number of edges per pin. MCU inputs
+take effect at the next grid point, never earlier.
 
 ## Layout
 

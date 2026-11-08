@@ -3,7 +3,7 @@
 //! Protocol: `docs/adr/002-time-grant-protocol.md` and `spec/time-grant.md`.
 
 use crate::event::LogRecord;
-use crate::signal::{PinSignal, PinSignals};
+use crate::signal::{PinSignal, PinSignals, Transition};
 use crate::time::Time;
 
 /// Error returned by an engine.
@@ -27,18 +27,23 @@ pub enum EngineError {
 /// 1. `next_safe_time(now)`: the largest grant this engine accepts next. It
 ///    promises that if it is advanced to any `g <= t_safe`, every output
 ///    change in `(now, g]` is reported at the boundary `g` with its exact
-///    `edge_time`, at most one change per digital pin (ADR-002 Amendment 3).
-///    It does **not** promise that outputs stay constant inside the grant: a
-///    CPU may toggle a pin at any instruction. Consumers registered *after*
-///    the producer receive the change before they advance and apply it at
-///    `edge_time` (Gauss-Seidel); consumers registered *before* it receive it
-///    one grant late, at the boundary (Jacobi). Must be strictly greater than
-///    `now`. Return [`Time::MAX`] when idle.
+///    `edge_time`: as an ordered trace ([`Engine::read_output_trace`], any
+///    number of changes per pin) or, for an engine without one, at most one
+///    change per digital pin (ADR-002 Amendment 3, ADR-003 D3/D4). It does
+///    **not** promise that outputs stay constant inside the grant: a CPU may
+///    toggle a pin at any instruction. Consumers that come after the
+///    producer in the kernel's plan order (built from the bindings, ADR-003
+///    D3) receive the changes before they advance and apply them at
+///    `edge_time`; a consumer before it (only possible inside a feedback
+///    loop) receives them at the boundary. Must be strictly greater than
+///    `now`. [`Time::MAX`] means "I report everything", not "I am idle".
 /// 2. `advance_to(g)`: advance internal time from `now` to exactly `g`, where
 ///    `now < g <= t_safe`. The engine must not simulate past `g` (no free-run).
-/// 3. `read_outputs()`: values of the engine's output pins at `g`.
-/// 4. `apply_inputs(..)`: values of the engine's input pins at `g`; they take
-///    effect for the next grant.
+/// 3. `read_outputs()` (and `read_output_trace()`): values of the engine's
+///    output pins at `g` (and every change in `(now, g]`).
+/// 4. `apply_inputs(..)` / `apply_input_trace(..)`: input values; changes
+///    inside the coming grant take effect at their time (a lattice-bound
+///    engine: at `ceil_L(t)`), changes delivered at a boundary from then on.
 ///
 /// Engines must be deterministic: identical calls produce identical results.
 pub trait Engine {
@@ -59,6 +64,43 @@ pub trait Engine {
     /// Input pin values at the current time, keyed by pin name. Always the full
     /// set of bound, driven input pins (a snapshot, not a delta).
     fn apply_inputs(&mut self, inputs: &PinSignals) -> Result<(), EngineError>;
+
+    /// Every output change in `(p, now]` since the previous boundary `p`, as
+    /// an ordered trace (ADR-003 D3): sorted by `t`, any number of entries
+    /// per pin, per pin strictly increasing in `t` with digital levels
+    /// alternating, and the last entry of a pin equal to its
+    /// [`Engine::read_outputs`] value. A digital output absent from the
+    /// trace did not change. An analog output absent from it is reported
+    /// by its boundary value only. Called after `advance_to` (never at the
+    /// initial exchange), possibly more than once: it must return the same
+    /// trace until the next advance. `None` (the default): the engine keeps
+    /// the one-change-per-digital-pin rule and the kernel derives one
+    /// transition per changed pin from `read_outputs`.
+    fn read_output_trace(&mut self) -> Result<Option<Vec<Transition>>, EngineError> {
+        Ok(None)
+    }
+
+    /// Deliver the changes `trace` (sorted by `t`; pins are this engine's
+    /// input pins) that happened on this engine's inputs in the current
+    /// grant (ADR-003 D3). `base` is the full input snapshot before the
+    /// first of them. Before an advance, entries with `t > now` must take
+    /// effect at `t` (a lattice-bound engine: at `ceil_L(t)`, every entry in
+    /// order, never earlier); at a boundary (`t <= now`) they take effect at
+    /// once, in order. Default: for each entry in order, `apply_inputs` with
+    /// the snapshot as of that entry (`base` updated by every entry up to and
+    /// including it), so engines without trace support keep working.
+    fn apply_input_trace(
+        &mut self,
+        base: &PinSignals,
+        trace: &[Transition],
+    ) -> Result<(), EngineError> {
+        let mut snapshot = base.clone();
+        for tr in trace {
+            snapshot.insert(tr.pin.clone(), tr.signal);
+            self.apply_inputs(&snapshot)?;
+        }
+        Ok(())
+    }
 
     /// The grant lattice `L` this engine requires (ADR-003 D2): every grant
     /// boundary must be a multiple of it, because the engine's results

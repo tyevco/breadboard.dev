@@ -12,7 +12,7 @@ use std::rc::Rc;
 use bbcore::{
     CsvWriter, Direction, Engine, EngineError, Event, EventSampling, EventSink, Level, LogLevel,
     LogRecord, Phase, PinSignal, PinSignals, Probe, SchedError, Scheduler, SchedulerConfig, Time,
-    VcdKind, VcdWriter,
+    Transition, VcdKind, VcdWriter,
 };
 
 /// One call made by the scheduler to a mock.
@@ -193,6 +193,7 @@ fn grants(evs: &[Event]) -> Vec<(Time, Time, String)> {
 fn cfg(max_quantum: Time) -> SchedulerConfig {
     SchedulerConfig {
         max_quantum,
+        loop_quantum: None,
         log_grants: true,
         event_sampling: None,
     }
@@ -354,6 +355,7 @@ fn blinky_run(t_end: Time) -> (Vec<u8>, Vec<u8>, Vec<u8>, Journal) {
     let j: Journal = Rc::default();
     let config = SchedulerConfig {
         max_quantum: Time::from_ms(5),
+        loop_quantum: None,
         log_grants: true,
         event_sampling: Some(EventSampling {
             period: Time::from_ms(10),
@@ -556,11 +558,12 @@ fn rejects_protocol_violations() {
     assert!(matches!(err, SchedError::Causality { .. }), "{err}");
 }
 
-/// ADR-002 Amendment 2: in a grant where an earlier engine changes a net,
-/// a later engine bound to it gets `apply_inputs` before its `advance_to`;
-/// an engine registered earlier than the driver only sees it at the boundary.
+/// ADR-002 Amendment 2 with ADR-003 D3: in a grant where a producer changes
+/// a net, every consumer bound to it gets the change before its
+/// `advance_to`, with the true `edge_time`, including a consumer registered
+/// *before* the producer (the plan order comes from the bindings).
 #[test]
-fn gauss_seidel_delivers_edges_before_later_engines_advance() {
+fn consumers_get_edges_before_they_advance_whatever_the_registration_order() {
     let j: Journal = Rc::default();
     let mut s = Scheduler::new(cfg(Time::from_ms(50))).unwrap();
     let early = Mock::new("early", &j, |_| Time::MAX);
@@ -589,29 +592,38 @@ fn gauss_seidel_delivers_edges_before_later_engines_advance() {
             to: Time::from_ms(60),
         }
     };
-    // late: the high edge arrives before its advance to 60 ms, with the true
-    // edge_time 50 ms.
-    assert!(pos("late", &high) < pos("late", &adv60));
-    let edge_time = journal.iter().find_map(|(n, c)| match c {
-        Call::Apply(p) if n == "late" => p.get("IN").and_then(|v| match v {
-            PinSignal::Digital {
-                level: Level::High,
-                edge_time,
-            } => Some(*edge_time),
+    assert_eq!(s.plan().unwrap().order, vec![1, 0, 2]);
+    assert!(!s.plan().unwrap().cyclic);
+    for name in ["early", "late"] {
+        // The high edge arrives before the advance to 60 ms, with the true
+        // edge_time 50 ms.
+        assert!(pos(name, &high) < pos(name, &adv60), "{name}");
+        let edge_time = journal.iter().find_map(|(n, c)| match c {
+            Call::Apply(p) if n == name => p.get("IN").and_then(|v| match v {
+                PinSignal::Digital {
+                    level: Level::High,
+                    edge_time,
+                } => Some(*edge_time),
+                _ => None,
+            }),
             _ => None,
-        }),
-        _ => None,
-    });
-    assert_eq!(edge_time, Some(Time::from_ms(50)));
-    // early: only at the 60 ms boundary, after it advanced.
-    assert!(pos("early", &high) > pos("early", &adv60));
-    // The pre-advance delivery happens only in grants where the net changed:
-    // late gets one Apply per boundary (initial + 2) plus one pre-advance.
-    let applies = journal
+        });
+        assert_eq!(edge_time, Some(Time::from_ms(50)), "{name}");
+        // The pre-advance delivery happens only in grants where the net
+        // changed: one Apply per boundary (initial + 2) plus one pre-advance.
+        let applies = journal
+            .iter()
+            .filter(|(n, c)| n == name && matches!(c, Call::Apply(_)))
+            .count();
+        assert_eq!(applies, 4, "{name}");
+    }
+    // The producer advances first in every grant.
+    let advances: Vec<&str> = journal
         .iter()
-        .filter(|(n, c)| n == "late" && matches!(c, Call::Apply(_)))
-        .count();
-    assert_eq!(applies, 4);
+        .filter(|(_, c)| matches!(c, Call::Advance { .. }))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(advances, ["mcu", "early", "late", "mcu", "early", "late"]);
 }
 
 /// ADR-003 Amendment 1: `end_of_run` is called once per engine, in
@@ -811,4 +823,319 @@ fn lattice_config_and_progress_errors() {
     s.add_engine(cpu(&j, "a", None)).unwrap();
     s.run(Time::from_us(105), &mut sink, &mut []).unwrap();
     assert_eq!(s.lattice(), None);
+}
+
+/// An engine with a trace (ADR-003 D3): output `P` toggles (from Low) at
+/// every time in `edges`, any number per grant. `t_safe` is `Time::MAX`.
+struct Tracer {
+    name: String,
+    now: Time,
+    edges: Vec<Time>,
+    level: Level,
+    edge_time: Time,
+    trace: Vec<Transition>,
+    /// Corrupt the trace: `Some(true)` repeats a level, `Some(false)` stamps
+    /// the first entry at the previous boundary.
+    corrupt: Option<bool>,
+}
+
+impl Tracer {
+    fn new(name: &str, edges: &[Time]) -> Tracer {
+        Tracer {
+            name: name.into(),
+            now: Time::ZERO,
+            edges: edges.to_vec(),
+            level: Level::Low,
+            edge_time: Time::ZERO,
+            trace: Vec::new(),
+            corrupt: None,
+        }
+    }
+}
+
+impl Engine for Tracer {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn next_safe_time(&mut self, _now: Time) -> Time {
+        Time::MAX
+    }
+    fn advance_to(&mut self, t: Time) -> Result<(), EngineError> {
+        self.trace.clear();
+        for &e in self.edges.iter().filter(|&&e| self.now < e && e <= t) {
+            self.level = self.level.toggled();
+            self.edge_time = e;
+            self.trace.push(Transition {
+                t: e,
+                pin: "P".into(),
+                signal: PinSignal::digital(self.level, e),
+            });
+        }
+        match self.corrupt {
+            Some(true) if !self.trace.is_empty() => {
+                // A second entry right after the first, with the same level.
+                let mut dup = self.trace[0].clone();
+                dup.t = dup.t + Time::from_fs(1);
+                if let PinSignal::Digital { edge_time, .. } = &mut dup.signal {
+                    *edge_time = dup.t;
+                }
+                self.trace.insert(1, dup);
+            }
+            Some(false) if !self.trace.is_empty() => {
+                self.trace[0].t = self.now;
+            }
+            _ => {}
+        }
+        self.now = t;
+        Ok(())
+    }
+    fn read_outputs(&mut self) -> Result<PinSignals, EngineError> {
+        let mut m = PinSignals::new();
+        m.insert("P".into(), PinSignal::digital(self.level, self.edge_time));
+        Ok(m)
+    }
+    fn read_output_trace(&mut self) -> Result<Option<Vec<Transition>>, EngineError> {
+        Ok(Some(self.trace.clone()))
+    }
+    fn apply_inputs(&mut self, _: &PinSignals) -> Result<(), EngineError> {
+        Ok(())
+    }
+}
+
+/// ADR-003 D3 gate: a traced engine reports three edges on one pin in one
+/// grant; a consumer registered *before* it gets all three, in order, at
+/// their true times, before it advances; every edge is a `pin_edge`, and the
+/// sampled CSV and VCD read the levels from the trace.
+#[test]
+fn traces_carry_three_edges_per_pin_per_grant() {
+    let j: Journal = Rc::default();
+    let mut s = Scheduler::new(cfg(Time::from_ms(10))).unwrap();
+    let tenth_ms = |x: u64| Time::from_us(x * 100);
+    let edges = [tenth_ms(15), tenth_ms(35), tenth_ms(70), tenth_ms(120)];
+    let c = s
+        .add_engine(Box::new(Mock::new("c", &j, |_| Time::MAX)))
+        .unwrap();
+    let t = s.add_engine(Box::new(Tracer::new("t", &edges))).unwrap();
+    s.bind(t, "P", "P", Direction::Output).unwrap();
+    s.bind(c, "IN", "P", Direction::Input).unwrap();
+    let mut csv = CsvWriter::sampled(Vec::new(), Time::from_us(500), vec!["P".into()]).unwrap();
+    let mut vcd =
+        VcdWriter::sampled(Vec::new(), &[("P", VcdKind::Wire)], Time::from_us(500)).unwrap();
+    let mut sink = EventSink::new(Vec::new());
+    {
+        let mut probes: [&mut dyn Probe; 2] = [&mut csv, &mut vcd];
+        s.run(Time::from_ms(20), &mut sink, &mut probes).unwrap();
+    }
+    assert_eq!(s.plan().unwrap().order, vec![1, 0]);
+    let evs = events(sink);
+    assert_eq!(grants(&evs).len(), 2);
+    let pin_edges: Vec<(Time, u8)> = evs
+        .iter()
+        .filter_map(|e| match e {
+            Event::PinEdge { t_fs, level, .. } => Some((*t_fs, *level)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        pin_edges,
+        vec![
+            (tenth_ms(15), 1),
+            (tenth_ms(35), 0),
+            (tenth_ms(70), 1),
+            (tenth_ms(120), 0)
+        ]
+    );
+    // The consumer's calls up to its first advance: the initial snapshot,
+    // then one Apply per transition, in order, with the true edge times.
+    let journal = j.borrow();
+    let applied: Vec<Option<(Level, Time)>> = journal
+        .iter()
+        .filter(|(n, c)| n == "c" && !matches!(c, Call::Safe { .. }))
+        .map(|(_, c)| c)
+        .take_while(|c| !matches!(c, Call::Advance { .. }))
+        .map(|c| match c {
+            Call::Apply(p) => match p.get("IN") {
+                Some(PinSignal::Digital { level, edge_time }) => Some((*level, *edge_time)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        applied,
+        vec![
+            Some((Level::Low, Time::ZERO)),
+            Some((Level::High, tenth_ms(15))),
+            Some((Level::Low, tenth_ms(35))),
+            Some((Level::High, tenth_ms(70))),
+        ]
+    );
+    let csv = String::from_utf8(csv.into_inner()).unwrap();
+    let rows: Vec<&str> = csv.lines().collect();
+    assert_eq!(rows.len(), 1 + 41);
+    assert_eq!(rows[3], "1000000000000,0"); // 1.0 ms
+    assert_eq!(rows[4], "1500000000000,1"); // 1.5 ms: the edge instant
+    assert_eq!(rows[7], "3000000000000,1");
+    assert_eq!(rows[8], "3500000000000,0");
+    assert_eq!(rows[15], "7000000000000,1");
+    assert_eq!(rows[25], "12000000000000,0");
+    let vcd = String::from_utf8(vcd.into_inner()).unwrap();
+    assert!(
+        vcd.ends_with(
+            "#0\n0!\n#1500000000000\n1!\n#3500000000000\n0!\n#7000000000000\n1!\n#12000000000000\n0!\n"
+        ),
+        "{vcd}"
+    );
+}
+
+/// Invariant 5 for traces: a repeated level or an entry outside the grant is
+/// a causality violation.
+#[test]
+fn bad_traces_are_rejected() {
+    for corrupt in [true, false] {
+        let mut s = Scheduler::new(cfg(Time::from_ms(10))).unwrap();
+        let mut t = Tracer::new("t", &[Time::from_ms(1), Time::from_ms(2)]);
+        t.corrupt = Some(corrupt);
+        let id = s.add_engine(Box::new(t)).unwrap();
+        s.bind(id, "P", "P", Direction::Output).unwrap();
+        let mut sink = EventSink::new(Vec::new());
+        let e = s.run(Time::from_ms(10), &mut sink, &mut []).unwrap_err();
+        assert!(matches!(e, SchedError::Causality { .. }), "{e}");
+    }
+}
+
+/// ADR-003 D4: a binding graph with a cycle caps every grant at
+/// `loop_quantum` (default: the lattice), labelled `loop_quantum`; so does a
+/// self-loop. An acyclic graph is not capped.
+#[test]
+fn a_cycle_caps_grants_at_loop_quantum() {
+    let j: Journal = Rc::default();
+    let l = Time::from_us(10);
+    let run = |loop_quantum: Option<Time>, cyclic: bool, self_loop: bool| {
+        let mut s = Scheduler::new(SchedulerConfig {
+            loop_quantum,
+            ..cfg(Time::from_ms(1))
+        })
+        .unwrap();
+        let mut a = Mock::new("a", &j, |_| Time::MAX);
+        a.lattice = Some(l);
+        let a = s.add_engine(Box::new(a)).unwrap();
+        let b = s
+            .add_engine(Box::new(Mock::new("b", &j, |_| Time::MAX)))
+            .unwrap();
+        let t = s.add_engine(Box::new(Tracer::new("t", &[]))).unwrap();
+        // t feeds a; with `cyclic`, a and b feed each other. Mocks report no
+        // value for these extra pins, which only shape the graph.
+        s.bind(t, "P", "P", Direction::Output).unwrap();
+        s.bind(a, "IN", "P", Direction::Input).unwrap();
+        if cyclic {
+            s.bind(b, "OUT", "R", Direction::Output).unwrap();
+            s.bind(a, "IN2", "R", Direction::Input).unwrap();
+            s.bind(a, "OUT", "Q", Direction::Output).unwrap();
+            s.bind(b, "IN", "Q", Direction::Input).unwrap();
+        }
+        if self_loop {
+            s.bind(b, "SELF", "S", Direction::Output).unwrap();
+            s.bind(b, "SELF_IN", "S", Direction::Input).unwrap();
+        }
+        let mut sink = EventSink::new(Vec::new());
+        s.run(Time::from_ms(1), &mut sink, &mut []).unwrap();
+        (s.plan().unwrap().clone(), grants(&events(sink)))
+    };
+    let (plan, gs) = run(None, true, false);
+    assert!(plan.cyclic);
+    // t feeds the cycle {a, b}; inside it the lattice-bound a comes first.
+    assert_eq!(plan.order, vec![2, 0, 1]);
+    assert_eq!(gs.len(), 100);
+    assert!(gs
+        .iter()
+        .all(|(f, u, by)| *u - *f == l && by == "loop_quantum"));
+    let (_, gs) = run(Some(Time::from_us(50)), true, false);
+    assert_eq!(gs.len(), 20);
+    assert!(gs.iter().all(|(_, _, by)| by == "loop_quantum"));
+    let (plan, gs) = run(None, false, true);
+    assert!(plan.cyclic);
+    assert_eq!(gs.len(), 100);
+    let (plan, gs) = run(None, false, false);
+    assert!(!plan.cyclic);
+    // Kahn with index ties: b and t are ready first, a waits for t.
+    assert_eq!(plan.order, vec![1, 2, 0]);
+    assert_eq!(gs.len(), 1);
+    assert_eq!(gs[0].2, "max_quantum");
+
+    // A cycle without any lattice needs an explicit loop_quantum.
+    let mut s = Scheduler::new(cfg(Time::from_ms(1))).unwrap();
+    let a = s
+        .add_engine(Box::new(Mock::new("a", &j, |_| Time::MAX)))
+        .unwrap();
+    s.bind(a, "O", "N", Direction::Output).unwrap();
+    s.bind(a, "I", "N", Direction::Input).unwrap();
+    let mut sink = EventSink::new(Vec::new());
+    let e = s.run(Time::from_ms(1), &mut sink, &mut []).unwrap_err();
+    assert!(
+        matches!(e, SchedError::Config(ref m) if m.contains("loop_quantum")),
+        "{e}"
+    );
+    // loop_quantum off the lattice.
+    let mut s = Scheduler::new(SchedulerConfig {
+        loop_quantum: Some(Time::from_us(15)),
+        ..cfg(Time::from_ms(1))
+    })
+    .unwrap();
+    let mut m = Mock::new("a", &j, |_| Time::MAX);
+    m.lattice = Some(l);
+    s.add_engine(Box::new(m)).unwrap();
+    let e = s.run(Time::from_ms(1), &mut sink, &mut []).unwrap_err();
+    assert!(
+        matches!(e, SchedError::Config(ref m) if m.contains("loop_quantum")),
+        "{e}"
+    );
+}
+
+/// ADR-003 D3: boundary records are sorted by (t_fs, registration index,
+/// pin), never by plan order. Two toggling engines with edges and logs at
+/// the same instants give the same records whichever of them the plan puts
+/// first.
+#[test]
+fn record_tie_order_does_not_depend_on_plan_order() {
+    let run = |a_reads_b: bool| {
+        let j: Journal = Rc::default();
+        let mut s = Scheduler::new(cfg(Time::from_ms(10))).unwrap();
+        let mk = |name: &str| {
+            let mut m = Mock::new(name, &j, |now| {
+                let p = Time::from_ms(5).as_fs();
+                Time::from_fs((now.as_fs() / p + 1) * p)
+            });
+            m.toggle = Some(("P".into(), Time::from_ms(5)));
+            Box::new(m)
+        };
+        let a = s.add_engine(mk("a")).unwrap();
+        let b = s.add_engine(mk("b")).unwrap();
+        s.bind(a, "P", "NA", Direction::Output).unwrap();
+        s.bind(b, "P", "NB", Direction::Output).unwrap();
+        if a_reads_b {
+            s.bind(a, "IN", "NB", Direction::Input).unwrap();
+        } else {
+            s.bind(b, "IN", "NA", Direction::Input).unwrap();
+        }
+        let mut sink = EventSink::new(Vec::new());
+        s.run(Time::from_ms(20), &mut sink, &mut []).unwrap();
+        let order = s.plan().unwrap().order.clone();
+        (order, String::from_utf8(sink.into_inner()).unwrap())
+    };
+    let (o1, e1) = run(true);
+    let (o2, e2) = run(false);
+    assert_eq!(o1, vec![1, 0]);
+    assert_eq!(o2, vec![0, 1]);
+    assert_eq!(e1, e2);
+    // At each instant: a's log and edge, then b's.
+    let at5: Vec<&str> = e1
+        .lines()
+        .filter(|l| l.contains("\"t_fs\":5000000000000,") && !l.contains("grant"))
+        .collect();
+    assert_eq!(at5.len(), 4, "{e1}");
+    assert!(at5[0].contains("\"source\":\"a\""), "{at5:?}");
+    assert!(at5[1].contains("\"driver\":\"a.P\""), "{at5:?}");
+    assert!(at5[2].contains("\"source\":\"b\""), "{at5:?}");
+    assert!(at5[3].contains("\"driver\":\"b.P\""), "{at5:?}");
 }

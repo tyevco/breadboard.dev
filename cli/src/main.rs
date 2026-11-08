@@ -5,7 +5,7 @@
 //! ```text
 //! bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
 //!        --probe net:<NET> [--probe net:<NET> ...] --out <dir>
-//!        [--max-quantum 10us] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
+//!        [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
 //!        [--renode <path>] [--verify edges] [--no-verify]
 //! ```
 //!
@@ -13,10 +13,11 @@
 //! prints the wall-clock time to stdout (never into the output files, which
 //! must stay byte-identical across runs).
 //!
-//! Engines are registered CPU first, analog second, so under the Gauss-Seidel
-//! advance (ADR-002 Amendment 2) every MCU edge reaches ngspice before ngspice
-//! advances through the grant that contains it, and is applied at its exact
-//! Renode timestamp.
+//! The kernel advances engines in the plan order it builds from the bindings
+//! (ADR-003 D3): the MCU drives the analog engine's inputs, so it advances
+//! first, and every MCU edge of a grant (its trace) reaches ngspice before
+//! ngspice advances through it, at its exact Renode timestamp. The
+//! registration order does not matter.
 
 mod board;
 
@@ -36,7 +37,7 @@ use bbcore::{
 const USAGE: &str = "\
 usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
-              [--max-quantum 10us] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
+              [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify]
 
   --netlist      board file: SPICE body plus *bb directives (examples/spike/board.cir)
@@ -46,17 +47,22 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
   --probe        net to record; a circuit net (analog volts) or an MCU pin net
                  <ref>.<pin> (digital level). Repeatable; order = CSV column order
   --out          output directory (events.jsonl, nets.csv, nets.vcd)
-  --max-quantum  upper bound on one grant (default 10us); a multiple of the
-                 Renode quantum. It no longer sets Renode's quantum
+  --max-quantum  cap on the length of one grant (default 10ms); a multiple of
+                 the Renode quantum. A pure cap: it bounds the wall time of
+                 one Renode RUN_FOR, buffered edges and output latency, and
+                 never changes results. It no longer sets Renode's quantum
+                 (ADR-003 D2, D4). A board with a feedback loop runs in grants
+                 of one Renode quantum whatever this is
   --renode-quantum
                  Renode's global quantum, the grant lattice L (default 10us):
                  every grant boundary is a multiple of it, firmware timing,
                  edge stamps and MCU inputs resolve to it, and ngspice steps at
                  most L and lands on every multiple of it. Run configuration:
                  changing it changes results (ADR-003 D2)
-  --sample-rate  nets.csv sample rate (default 100kHz). Samples never change
-                 the grant partition; between boundaries analog nets are
-                 interpolated between solver points
+  --sample-rate  nets.csv and nets.vcd sample rate (default 100kHz). Samples
+                 never change the grant partition; inside a grant analog nets
+                 are interpolated between solver points and digital nets read
+                 from the edge trace
   --seed         Renode emulation seed (default 0)
   --renode       path to the renode launcher (default: $BB_RENODE, PATH, ~/.local/bin)
   --verify       when to cross-check Renode's virtual time and pin states against
@@ -131,7 +137,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut duration = None;
     let mut probes = Vec::new();
     let mut out = None;
-    let mut max_quantum = Time::from_us(10);
+    let mut max_quantum = Time::from_ms(10);
     let mut renode_quantum = Time::from_us(10);
     let mut sample_period = Time::from_us(10);
     let mut seed = 0i32;
@@ -250,7 +256,7 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
     let digital_nets: Vec<String> = mcu_pins.iter().map(|p| p.kernel_net()).collect();
 
-    // --- CPU engine (registered first: it advances first in every grant).
+    // --- CPU engine.
     let renode = match &a.renode {
         Some(p) => p.clone(),
         None => find_renode().ok_or("renode not found (run `make setup` or pass --renode)")?,
@@ -258,7 +264,6 @@ fn run(a: RunArgs) -> Result<(), String> {
     let mut rcfg = RenodeConfig::stm32f103(renode, a.firmware.clone());
     rcfg.name = part.reference.clone();
     rcfg.quantum = a.renode_quantum;
-    rcfg.max_grant = a.max_quantum;
     rcfg.seed = a.seed;
     rcfg.verify = a.verify;
     rcfg.pins = mcu_pins
@@ -305,6 +310,7 @@ fn run(a: RunArgs) -> Result<(), String> {
 
     let mut sched = Scheduler::new(SchedulerConfig {
         max_quantum: a.max_quantum,
+        loop_quantum: None, // one Renode quantum (ADR-003 D4)
         log_grants: true,
         event_sampling: None,
     })
@@ -337,10 +343,10 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
 
     let mut sink = EventSink::new(create(&a.out.join("events.jsonl"))?);
-    // Sampled, not aligned: CSV sample instants must not become grant
-    // boundaries, because the RUN_FOR partition changes when Renode runs
-    // timer ISRs (ADR-002 Amendment 3). The partition is set by the quantum
-    // alone; rows are interpolated inside each grant window.
+    // Sampled, not aligned: sample instants never become grant boundaries
+    // (ADR-002 Amendment 3), and both files are taken at fixed instants
+    // inside each grant window, so they do not depend on the grant
+    // partition (ADR-003 D3).
     let mut csv = CsvWriter::sampled(
         create(&a.out.join("nets.csv"))?,
         a.sample_period,
@@ -361,15 +367,19 @@ fn run(a: RunArgs) -> Result<(), String> {
             vcd_vars.push((n.as_str(), VcdKind::Wire));
         }
     }
-    let mut vcd = VcdWriter::new(create(&a.out.join("nets.vcd"))?, &vcd_vars);
+    let mut vcd = VcdWriter::sampled(create(&a.out.join("nets.vcd"))?, &vcd_vars, a.sample_period)
+        .map_err(|e| e.to_string())?;
 
     let t_run = Instant::now();
     let summary = {
         let mut probes: [&mut dyn Probe; 2] = [&mut csv, &mut vcd];
         let r = sched.run(a.duration, &mut sink, &mut probes);
+        // On an error, the records of every completed grant are written
+        // before the error is reported (ADR-003 D4).
         for p in probes.iter_mut() {
             p.finish().map_err(|e| format!("write outputs: {e}"))?;
         }
+        sink.flush().map_err(|e| format!("write events: {e}"))?;
         r.map_err(|e| format!("simulation failed: {e}"))?
     };
     sink.flush().map_err(|e| format!("write events: {e}"))?;
@@ -438,7 +448,7 @@ mod tests {
         let a = parse_args(&v).unwrap();
         assert_eq!(a.duration, Time::from_ms(500));
         assert_eq!(a.probes, vec!["LED_A", "PA5"]);
-        assert_eq!(a.max_quantum, Time::from_us(10));
+        assert_eq!(a.max_quantum, Time::from_ms(10));
         assert_eq!(a.renode_quantum, Time::from_us(10));
         let mut q = v.clone();
         q.extend([

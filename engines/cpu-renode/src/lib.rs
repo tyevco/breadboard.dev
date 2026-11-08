@@ -57,8 +57,13 @@
 //! 4. so a write that genuinely happens on a lattice point is reported 1 fs
 //!    late (an accepted convention).
 //!
-//! More than one edge on a pin inside one grant is a protocol error (the
-//! one-change-per-pin rule; lower `--max-quantum`). Stamps before the
+//! Every change of a grant is reported as an ordered trace
+//! ([`bbcore::Engine::read_output_trace`], ADR-003 D3), with any number of
+//! edges per pin, so the engine's `t_safe` is [`Time::MAX`] ("I report
+//! everything", D4): the grant length is set by the kernel (`max_quantum`,
+//! the loop cap), never by the firmware. Two changes of one pin stamped in
+//! the same slice would get the same time and are a protocol error (lower
+//! `--renode-quantum`); the same holds in any partition. Stamps before the
 //! previous boundary or after the grant are protocol errors.
 //!
 //! # Inputs
@@ -95,7 +100,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use bbcore::time::FS_PER_NS;
-use bbcore::{Engine, EngineError, Level, PinSignal, PinSignals, Time};
+use bbcore::{Engine, EngineError, Level, PinSignal, PinSignals, Time, Transition};
 
 use protocol::{Client, ProtocolError};
 
@@ -224,12 +229,6 @@ pub struct RenodeConfig {
     /// of the run configuration: changing it changes results. Must be a
     /// positive whole number of nanoseconds.
     pub quantum: Time,
-    /// Lookahead horizon: `t_safe = now + max_grant`. It bounds a grant so
-    /// that the one-change-per-pin rule can hold, and is not a promise that
-    /// outputs stay constant. Must be a positive multiple of `quantum`. (The
-    /// interim rule of ADR-003 step 2, Amendment 2; step 3 reports traces
-    /// and returns `Time::MAX`.)
-    pub max_grant: Time,
     /// `emulation SetSeed`.
     pub seed: i32,
     /// When to check Renode's virtual time and the output pin states against
@@ -243,8 +242,8 @@ pub struct RenodeConfig {
 }
 
 impl RenodeConfig {
-    /// STM32F103 with PA5 as an output, quantum (lattice) and `max_grant`
-    /// 10 us: the Phase 0 spike setup.
+    /// STM32F103 with PA5 as an output and a 10 us quantum (lattice): the
+    /// Phase 0 spike setup.
     pub fn stm32f103(renode: PathBuf, firmware: PathBuf) -> RenodeConfig {
         RenodeConfig {
             name: ENGINE_NAME.to_string(),
@@ -254,7 +253,6 @@ impl RenodeConfig {
             machine: "bb".to_string(),
             pins: vec![PinSpec::stm32("PA5", PinDirection::Output).expect("valid pin")],
             quantum: Time::from_us(10),
-            max_grant: Time::from_us(10),
             seed: 0,
             verify: Verify::Edges,
             startup_timeout: Duration::from_secs(120),
@@ -319,8 +317,9 @@ pub struct RenodeEngine {
     renode_ns: u64,
     promised: Time,
     pins: Vec<PinState>,
-    /// `t_safe` horizon ([`RenodeConfig::max_grant`]).
-    max_grant: Time,
+    /// Every output change of the last advance, in emulation order (ADR-003
+    /// D3).
+    trace: Vec<Transition>,
     /// Input transitions queued for a lattice point inside the next advance,
     /// sorted by `at_ns` (stable: delivery order within a point).
     pending: Vec<PendingInput>,
@@ -391,12 +390,6 @@ impl RenodeEngine {
             return Err(EngineError::Other(format!(
                 "quantum {} must be a positive whole number of ns",
                 cfg.quantum
-            )));
-        }
-        if cfg.max_grant.is_zero() || !cfg.max_grant.as_fs().is_multiple_of(cfg.quantum.as_fs()) {
-            return Err(EngineError::Other(format!(
-                "max_grant {} must be a positive multiple of the quantum {}",
-                cfg.max_grant, cfg.quantum
             )));
         }
         let firmware = std::fs::canonicalize(&cfg.firmware)
@@ -472,6 +465,14 @@ impl RenodeEngine {
                 }
             }
             match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+                // TCP self-connect: while nothing listens on the port yet, the
+                // kernel can pick the port itself as this socket's ephemeral
+                // source port, and the connection then reaches itself. Seen
+                // with many engines starting at once (ADR-003 Amendment 3).
+                Ok(s) if s.local_addr().ok() == s.peer_addr().ok() && Instant::now() < deadline => {
+                    drop(s);
+                    std::thread::sleep(Duration::from_millis(100));
+                }
                 Ok(s) => break s,
                 Err(_) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(100))
@@ -532,7 +533,7 @@ impl RenodeEngine {
             renode_ns: 0,
             promised: Time::ZERO,
             pins,
-            max_grant: cfg.max_grant,
+            trace: Vec::new(),
             pending: Vec::new(),
             carried: Vec::new(),
             run_for_calls: 0,
@@ -656,14 +657,17 @@ impl Engine for RenodeEngine {
     }
 
     fn next_safe_time(&mut self, _now: Time) -> Time {
-        // A fixed horizon past the current time. This is not a promise that
-        // outputs stay constant: the firmware may change an output at any
-        // instruction. It bounds the grant so at most one edge per pin falls
-        // inside it; the edge carries its lattice-rule time, and consumers
-        // registered after this engine apply it at that time (ADR-002
-        // Amendment 3, ADR-003 D2).
-        self.promised = self.now.saturating_add(self.max_grant);
+        // ADR-003 D4: every change of a grant is reported in the trace with
+        // its lattice-rule time, so any grant is safe. This is not a promise
+        // that outputs stay constant (the firmware may change an output at
+        // any instruction); consumers later in the plan order apply each
+        // change at its time.
+        self.promised = Time::MAX;
         self.promised
+    }
+
+    fn read_output_trace(&mut self) -> Result<Option<Vec<Transition>>, EngineError> {
+        Ok(Some(self.trace.clone()))
     }
 
     fn grant_lattice(&self) -> Option<Time> {
@@ -829,7 +833,9 @@ impl RenodeEngine {
         if check {
             self.verify_time()?;
         }
-        let mut edges = vec![0u32; self.pins.len()];
+        self.trace.clear();
+        // Per pin: the time of its last change in this grant.
+        let mut last_change: Vec<Option<Time>> = vec![None; self.pins.len()];
         for ev in events {
             let i = usize::try_from(ev.descriptor)
                 .ok()
@@ -863,16 +869,23 @@ impl RenodeEngine {
             if edge_time.as_fs() % (self.quantum_ns * FS_PER_NS) == 1 {
                 self.boundary_edges += 1;
             }
-            edges[i] += 1;
-            if edges[i] > 1 {
+            // Two changes stamped in one slice would share a time: Renode's
+            // stamps cannot order them (ADR-003 D2/D3).
+            if last_change[i].is_some_and(|t| edge_time <= t) {
                 return Err(EngineError::Protocol(format!(
-                    "{}: more than one edge inside grant ({start_ns}, {target_ns}] ns; \
-                     reduce --max-quantum (the engine's max_grant)",
-                    pin.spec.name
+                    "{}: two changes stamped in the same Renode slice ({} ns); the edge-stamp \
+                     resolution is the quantum, lower --renode-quantum",
+                    pin.spec.name, ev.time_ns
                 )));
             }
+            last_change[i] = Some(edge_time);
             pin.level = level;
             pin.edge_time = edge_time;
+            self.trace.push(Transition {
+                t: edge_time,
+                pin: pin.spec.name.clone(),
+                signal: PinSignal::digital(level, edge_time),
+            });
         }
         self.now = t;
         if check {

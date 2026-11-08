@@ -1030,3 +1030,127 @@ NOT do") is updated in the same change. The other spec edits listed under
 - **Process note.** The step 1 commit accidentally included early draft
   lattice text for `spec/time-grant.md`; the next commit restored the step 1
   version, and the text lands with this step.
+
+### Amendment 3: step 3 (D3, D4) as implemented (2026-11-08)
+
+**Status:** Accepted with step 3. `spec/time-grant.md` (header; Definitions:
+`t_safe`, trace, binding graph and plan order, `max_quantum` as a pure cap,
+`loop_quantum`; state machine and table; invariants 2, 3, 4, 5, 7; Advance;
+Exchange steps 2 and 4; sampled probes and the sampled VCD; examples 1–3;
+"What engines MUST NOT do"), `spec/event-stream.md` (schema version 1) and
+`spec/pin-model.md` (`digital_out` ramp start) are updated in the same change.
+The `digital_in` text of `spec/pin-model.md` belongs to step 4.
+
+- **What landed.** `bbcore::Transition`; `Engine::read_output_trace` and
+  `Engine::apply_input_trace` (defaulted); `SchedulerConfig::loop_quantum`;
+  `Scheduler::plan()` returning `Plan { order, cyclic }`; `Limiter::LoopQuantum`;
+  records sorted by registration index; `VcdWriter::sampled` and
+  `NetSampler::digital_changes`. The Renode engine reports a trace and
+  returns `t_safe = Time::MAX`; `RenodeConfig::max_grant` (the interim rule
+  of Amendment 2) is removed. `bb run` defaults to `--max-quantum 10ms` and
+  writes a sampled VCD at `--sample-rate`. Part B items (`quiet_until`,
+  `advance_until`, `Limiter::Stop`, `SchedulerConfig::lookahead`) are not
+  added yet.
+- **`apply_input_trace(base, trace)`.** The ADR sketch has
+  `apply_input_trace(&mut self, trace)` with a default of "`apply_inputs`
+  (snapshot as of that entry)". `apply_inputs` takes the full snapshot of the
+  engine's bound inputs, which the trace alone cannot rebuild, so the method
+  also takes `base`, the full input snapshot before the first entry; the
+  default applies `base` updated by every entry up to and including the
+  current one. Renode and ngspice use the default: both already queue one
+  change per call (Renode at `ceil_L(t)`, every transition in order; ngspice
+  one ramp per edge at its `edge_time`).
+- **Boundary delivery inside a loop.** D3 says consumers receive the
+  transitions on their inputs "before they advance". A consumer before its
+  producer in the plan order (only inside a cycle, or a self-loop) cannot.
+  Exchange step 2 therefore first calls `apply_input_trace` with the changes
+  of this grant from engines at or after the consumer in the plan, then the
+  snapshot. That delivers every transition of a sub-cell pulse to a
+  lattice-bound consumer in a loop too, at `ceil_L(t) = g` (approver decision
+  2), instead of only the final level.
+- **Trace scope.** A digital pin that a traced engine leaves out of its trace
+  must be unchanged (otherwise `Causality`). An analog output left out of the
+  trace is reported by its boundary value, as before: ngspice's analog
+  outputs (LED_A) change at every solver point and stay out of traces;
+  sampled probes read them through `sample_output`. The sampler reads a
+  digital net from the window's changes; an analog net of an engine without
+  `sample_output` keeps the old rule (its value at `g`).
+- **Two changes of one pin in one Renode slice.** Renode stamps both with the
+  same sync point, so the lattice rule gives them the same time and a trace
+  cannot order them. The engine reports a protocol error (lower
+  `--renode-quantum`). The error depends only on the stamps, so it is the same
+  in every partition, as the one-change rule of Phase 0 was in one-cell runs.
+- **Record order.** The key is `(t_fs, registration index, class, index)`:
+  per engine its logs (emission order) before its edges (output-binding
+  order), and the kernel's `net_sample`s after every engine. This keeps the
+  Phase 0 order for every existing stream and never uses the plan order.
+- **A cycle without a lattice.** `loop_quantum = None` means "the lattice";
+  with no lattice-bound engine a cyclic graph has no cell, so it is a
+  `Config` error unless `loop_quantum` is set. `loop_quantum` must be a
+  multiple of `L`.
+- **Flush on error (D4).** The scheduler flushes the event sink when a run
+  fails, and `bb run` writes all three outputs before it reports a
+  simulation error.
+- **Grant labels.** In the spike every grant but the last is `max_quantum`.
+  The last says `engine:ngspice`: ngspice's `t_safe` is its transient end,
+  500 ms, which ties `t_end`, and engines win ties (invariant 2).
+- **Test changes required by D3.** The Phase 0 tests that expected a consumer
+  registered before its producer to get edges one grant late (the bbcore
+  Gauss-Seidel mock test and the ngspice `mid_grant_edge_is_applied_at_its_true_time`
+  "Jacobi" half) now assert the opposite: true-time delivery whatever the
+  registration order (ngspice: bit-identical values for both orders).
+- **Renode startup robustness (no protocol change).** The first full test
+  run, with about 20 Renode instances starting at once, failed one start with
+  "Connection reset by peer" during the External Control handshake and an
+  empty Renode log. A likely cause, not verified, is a TCP self-connect: while
+  the reserved port has no listener yet, the client's ephemeral source port
+  can be that same port. The engine now drops a connection whose local and
+  peer addresses are equal and retries. The failure did not recur in later
+  runs.
+- **Gates.**
+  - Mocks (`bbcore/tests/scheduler.rs`, `bbcore/src/scheduler.rs` unit tests):
+    three edges per pin in one grant reach a consumer registered before the
+    producer as three ordered deliveries at their true times, with four
+    `pin_edge` records and a sampled CSV and VCD read from the trace
+    (`traces_carry_three_edges_per_pin_per_grant`); bad traces are
+    `Causality` errors; Kahn and SCC order for a DAG, a backwards chain, ties,
+    a cycle (lattice-bound first), a producer feeding a cycle and a
+    self-loop; a cycle and a self-loop cap grants at `loop_quantum` (default
+    the lattice, or an explicit 50 µs), an acyclic graph does not, and a
+    lattice-free cycle or an off-lattice `loop_quantum` is a `Config` error;
+    two engines with logs and edges at the same instants give byte-identical
+    streams under the plan orders [b, a] and [a, b]
+    (`record_tie_order_does_not_depend_on_plan_order`); a consumer
+    registered before its producer gets the edge before it advances
+    (`consumers_get_edges_before_they_advance_whatever_the_registration_order`).
+  - Renode (`engines/cpu-renode/tests/blinky.rs`): 10, 70 and 100 µs and 1,
+    10, 50 and 500 ms grants on the 10 µs lattice give the golden edge list,
+    identical non-grant records and an identical sampled CSV; the 500 ms run
+    is one grant whose trace holds all ten edges. The copy firmware follows
+    inputs at `ceil_L(t) + 1 fs` with the driver registered after Renode, and
+    with all three inputs inside one 3 ms grant.
+  - **`make partition`** (`scripts/partition.sh`, CI job `partition`): the
+    spike at `max_quantum` 10 µs, 100 µs, 10 ms, 50 ms and 500 ms (50 000,
+    5 000, 50, 10 and 1 grants) gives `nets.csv` 09fed4ac…, `nets.vcd`
+    da42656b… and non-grant records 55e9991c…, the step 2 baseline. The hashes
+    are committed in `tests/golden/spike/partition.sha256`, which
+    `make golden-update` regenerates. The gate is not part of `make test`
+    (five runs, about a minute in parallel); CI runs it as its own job.
+  - `make determinism` (10 runs of the new default) is part of `make check`.
+    The earlier gates still pass against the 10 ms default: `make
+    lattice-check` (1 ms grants, 1 kHz resample) and `make
+    spike-verify-every`.
+  - The `events.jsonl` hash of the spike changes only in its `grant` records
+    (approver decision 5): 95775a08… at the 10 ms default.
+  - **Performance** (`make perf`, `scripts/perf.sh`, the measurement
+    protocol: interleaved A/B, N = 5, medians, startup reported separately,
+    user+sys CPU and load average recorded; both sides `--verify edges`):
+    A = `--max-quantum 10us` (50 000 grants), B = the 10 ms default, exactly
+    50 grants in all five runs. Median simulation time A 45.89 s, B 1.42 s,
+    a **32.3×** speed-up (gates: B ≤ 2.0 s, ≥ 15×). Median startup A 6.67 s,
+    B 4.92 s; median total A 53.95 s, B 9.20 s; median user+sys CPU A
+    49.92 s, B 11.25 s. Load average 3.0–11.8 (other work shared the host,
+    including an orphaned Renode from the profiling harness at 100 % of one
+    core). Two of the five B runs took 3.13 s and 4.13 s of simulation, so
+    the 2 s bound holds for the median, as the protocol states it, not for
+    every run under that load. Per-run numbers: `out/perf/results.tsv`.

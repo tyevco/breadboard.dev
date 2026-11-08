@@ -1,7 +1,8 @@
 # Pin model (pin-boundary contract)
 
 Status: normative. Implementation: `bbcore::pin`, `bbcore::signal`. Changing
-this file requires an ADR.
+this file requires an ADR. `digital_out` ramp start: ADR-003 D3 (plan step 3,
+Amendment 3).
 
 Every component pin has **exactly one** pin model, supplied by its package (in
 Phase 0, hand-written in the board netlist). The kernel connects pins to nets
@@ -48,8 +49,12 @@ models the pin as:
 The value of the `EXTERNAL` source at analog time `t` is
 `DigitalOut::ramp_volts(from, to, t_start, t)`: a linear ramp from
 `v(from)` to `v(to)` over `rise` (for a transition to High) or `fall` (for a
-transition to Low). It starts at `t_start`, the boundary at which the edge was
-delivered (ADR-002 D4.4). Before `t_start` the value is `v(from)`; after
+transition to Low). It starts at `t_start = max(edge_time, now)`: the edge's
+`edge_time` when the edge is delivered before the analog engine advances
+through it, which the plan order guarantees for every producer outside a
+feedback loop (ADR-002 Amendment 2, ADR-003 D3), otherwise the boundary at
+which it was delivered (ADR-002 D4.4). Every transition of a producer's trace
+gets its own ramp. Before `t_start` the value is `v(from)`; after
 `t_start + rise|fall` it is `v(to)`. The function is pure in its integer-time
 arguments.
 
