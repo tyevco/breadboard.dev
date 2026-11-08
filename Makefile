@@ -10,7 +10,8 @@ CARGO ?= cargo
         bb spike spike-verify-every lattice-check partition perf determinism golden \
         golden-update feedback-run feedback feedback-order feedback-determinism \
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
-        feedback-ref lookahead-equiv lookahead-perf
+        feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
+        adc-equiv adc-renode
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -46,6 +47,20 @@ FEEDBACK_OPEN_OUT    ?= out/feedback-open
 FEEDBACK_OPEN_HASHES := tests/golden/feedback-open/partition.sha256
 FEEDBACK_OPEN_QUANTA ?= 10us,100us,1ms,10ms,50ms,500ms
 
+# --- ADR-003 step 9: adc_in and the ADC boards (STM32F072) -----------------
+ADC_ELF     := examples/adc/firmware/build/adc_board.elf
+ADC_FOR     ?= 300ms
+ADC_OUT     ?= out/adc-board
+ADC_PROBES   = --probe net:ADC_IN --probe net:U1.PA4 --probe net:U1.PA5 \
+               --probe net:U1.PA6 --probe net:U1.PA7
+ADC_ARGS     = --netlist examples/adc/board.cir --firmware $(ADC_ELF) --target U1 \
+               --for $(ADC_FOR) $(ADC_PROBES) --probe net:LED
+ADC_OPEN_ARGS = --netlist examples/adc/board-open.cir --firmware $(ADC_ELF) --target U1 \
+               --for $(ADC_FOR) $(ADC_PROBES)
+ADC_GOLDEN  := tests/golden/adc
+ADC_HASHES  := $(ADC_GOLDEN)/outputs.sha256
+ADC_OPEN_HASHES := tests/golden/adc-open/outputs.sha256
+
 setup:
 	bash scripts/setup.sh
 
@@ -58,6 +73,7 @@ firmware:
 	$(MAKE) -C examples/spike/firmware
 	$(MAKE) -C examples/feedback/firmware
 	$(MAKE) -C engines/cpu-renode/tests/firmware
+	$(MAKE) -C examples/adc/firmware
 
 build:
 	$(CARGO) build --workspace --all-targets
@@ -76,6 +92,7 @@ test:
 	$(MAKE) golden
 	$(MAKE) feedback
 	$(MAKE) feedback-order
+	$(MAKE) adc
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -147,7 +164,7 @@ golden:
 # the hashes of the feedback boards' one-cell references (`--lookahead off`,
 # EXTI and polling firmware), and the feedback-open partition hashes (from
 # its one-cell reference).
-golden-update: spike feedback-run feedback-ref feedback-open-ref
+golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-open-ref
 	mkdir -p $(dir $(GOLDEN))
 	$(PYTHON) scripts/golden.py write $(SPIKE_OUT)/nets.csv $(GOLDEN)
 	cd $(SPIKE_OUT) && grep -v '"type":"grant"' events.jsonl > non-grant-records \
@@ -162,6 +179,13 @@ golden-update: spike feedback-run feedback-ref feedback-open-ref
 	    && rm non-grant-records
 	cd $(FEEDBACK_OPEN_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv nets.vcd non-grant-records > $(CURDIR)/$(FEEDBACK_OPEN_HASHES) \
+	    && rm non-grant-records
+	mkdir -p $(ADC_GOLDEN) $(dir $(ADC_OPEN_HASHES))
+	cd $(ADC_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_HASHES) \
+	    && rm non-grant-records
+	cd $(ADC_OUT)-open-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_OPEN_HASHES) \
 	    && rm non-grant-records
 
 # ADR-003 step 4: examples/feedback, a board with a feedback loop (U1.PA5 ->
@@ -276,6 +300,49 @@ lookahead-startup: firmware
 feedback-open-ref: firmware bb
 	$(BB) run $(FEEDBACK_OPEN_ARGS) --max-quantum 10us --out $(FEEDBACK_OPEN_OUT)-ref
 	$(PYTHON) scripts/check_feedback.py $(FEEDBACK_OPEN_OUT)-ref --open
+
+# ADR-003 step 9 (D6): examples/adc, an STM32F072 that reads back through
+# its ADC (PA1, adc_in) the RC-filtered divider it drives (PA4); TIM3 starts
+# a conversion every 999 us, the analog watchdog drives ALARM (PA5) and the
+# code bits 4 and 8 go to PA6/PA7. A feedback loop, so lookahead is on by
+# default: ngspice pushes ADC_IN at the lattice points where its whole
+# millivolts change and stops early there (the code-change watch).
+# check_adc.py: every conversion's edges as the firmware model predicts from
+# ADC_IN.
+adc-run: firmware bb
+	$(BB) run $(ADC_ARGS) --out $(ADC_OUT)
+	$(PYTHON) scripts/check_adc.py $(ADC_OUT)
+
+# ... and nets.csv, nets.vcd and the non-grant records byte-identical to the
+# committed one-cell reference that pushes at every lattice point
+# ($(ADC_HASHES), `make adc-ref`). In `make test`.
+adc: adc-run
+	cd $(ADC_OUT) && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && grep -v ' events.jsonl$$' $(CURDIR)/$(ADC_HASHES) | sha256sum -c
+	@echo "adc: PASS (identical to the one-cell every-lattice-point reference except grant records)"
+
+# The references: one cell, the ADC value pushed at every lattice point
+# (their hashes: make golden-update).
+adc-ref: firmware bb
+	$(BB) run $(ADC_ARGS) --lookahead off --adc-push every --out $(ADC_OUT)-ref
+	$(PYTHON) scripts/check_adc.py $(ADC_OUT)-ref
+adc-open-ref: firmware bb
+	$(BB) run $(ADC_OPEN_ARGS) --max-quantum 10us --adc-push every --out $(ADC_OUT)-open-ref
+	$(PYTHON) scripts/check_adc.py $(ADC_OUT)-open-ref
+
+# ADR-003 step 9 gates (scripts/adc_equiv.sh): Part A (one cell) and Part B
+# (lookahead, 1 ms and 10 ms) on the cyclic board, and the open board in
+# long grants, all byte-identical to the every-lattice-point references
+# (committed hashes) except grant records; no promise broken; early stops at
+# pushes. CI job `adc`.
+ADC_EQUIV_OUT ?= out/adc-equiv
+adc-equiv: firmware bb
+	bash scripts/adc_equiv.sh $(BB) $(ADC_EQUIV_OUT) $(ADC_HASHES) $(ADC_OPEN_HASHES) \
+	    "$(ADC_ARGS)" -- "$(ADC_OPEN_ARGS)"
+
+# The Renode-only ADC platform test of ADR-003 Amendment 5 (about 15 s).
+adc-renode:
+	$(MAKE) -C examples/adc test
 
 fmt:
 	$(CARGO) fmt --all

@@ -42,6 +42,11 @@
 //! consumer's `digital_in` model at every accepted solver point and report
 //! each level change in the output trace (ADR-003 D3): the analog → digital
 //! crossing of a feedback loop or of an analog-driven MCU input.
+//! [`AdcOutputBinding`]s push a node to a consumer's ADC (`adc_in`, ADR-003
+//! D6): at the lattice points where the delivered whole millivolts change
+//! (or, [`AdcPush::EveryLattice`], at every lattice point), as `Analog`
+//! transitions at those lattice points; `advance_until` stops at the first
+//! push of a watched ADC pin.
 //!
 //! # Process-global state
 //!
@@ -60,7 +65,8 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use bbcore::{
-    DigitalIn, DigitalOut, Engine, EngineError, Level, PinSignal, PinSignals, Time, Transition,
+    AdcIn, DigitalIn, DigitalOut, Engine, EngineError, Level, PinSignal, PinSignals, Time,
+    Transition,
 };
 
 /// Name this engine reports through [`bbcore::Engine::name`] by default.
@@ -144,6 +150,41 @@ pub struct DigitalOutputBinding {
     pub model: DigitalIn,
 }
 
+/// Binds a kernel output pin to a circuit node through the `adc_in` pin
+/// model of the consuming (CPU) engine's ADC (ADR-003 D6, Amendment 10,
+/// `spec/pin-model.md`).
+///
+/// A push model: at every lattice point `kL` (the engine needs a grant
+/// lattice, and the lattice clamp puts a solver point on each) the engine
+/// reads the node, delivers [`AdcIn::delivered_microvolts`] of it and, by
+/// [`NgspiceConfig::adc_push`], emits an `Analog` transition at `kL` of its
+/// output trace. The pin's boundary value is the last delivered value.
+/// Adds no glue: the ADC input is ideal (no load).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdcOutputBinding {
+    /// Engine-side pin name (what the kernel binds the ADC input net to).
+    pub pin: String,
+    /// Circuit node the ADC reads.
+    pub node: String,
+    /// The consumer's ADC input model.
+    pub model: AdcIn,
+}
+
+/// When an `adc_in` output emits a transition (ADR-003 Amendment 10).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum AdcPush {
+    /// At the lattice points where the push key ([`AdcIn::push_key`],
+    /// whole millivolts) changes, delivering exactly that many millivolts.
+    /// The default.
+    #[default]
+    OnChange,
+    /// At every lattice point, delivering the clamped value in whole
+    /// microvolts: the reference the step 9 equivalence gate compares with
+    /// (`bb run --adc-push every`). A trace entry per pin per lattice point,
+    /// so an early-stop watch on such a pin stops at the first lattice point.
+    EveryLattice,
+}
+
 /// Configuration of an [`NgspiceEngine`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct NgspiceConfig {
@@ -171,6 +212,13 @@ pub struct NgspiceConfig {
     /// through a consumer's `digital_in` model, reported as an ordered trace
     /// of level changes.
     pub digital_outputs: Vec<DigitalOutputBinding>,
+    /// ADC output pins (ADR-003 D6): a node voltage pushed to a consumer's
+    /// ADC at lattice points, as `Analog` transitions of the output trace.
+    /// Needs [`NgspiceConfig::lattice`].
+    pub adc_outputs: Vec<AdcOutputBinding>,
+    /// When the ADC outputs emit transitions (default: on a change of the
+    /// delivered whole millivolts).
+    pub adc_push: AdcPush,
     /// Extra nodes whose voltages are recorded for [`NgspiceEngine::voltage`]
     /// and [`NgspiceEngine::sample`].
     pub probes: Vec<String>,
@@ -204,6 +252,8 @@ impl NgspiceConfig {
             inputs: Vec::new(),
             outputs: Vec::new(),
             digital_outputs: Vec::new(),
+            adc_outputs: Vec::new(),
+            adc_push: AdcPush::OnChange,
             probes: Vec::new(),
             handoff_spin: Duration::ZERO,
             lattice: None,
@@ -358,7 +408,11 @@ struct Until {
     /// The grant start (the previous boundary), exact.
     from_fs: u64,
     pins: Vec<UntilPin>,
-    /// `<plot>.time` and `<plot>.<node>` per pin, built at the first point.
+    /// Watched ADC outputs (ADR-003 D6): a push at a lattice point is a
+    /// change, so the stop is that lattice point.
+    adcs: Vec<UntilAdc>,
+    /// `<plot>.time`, then `<plot>.<node>` per pin and per ADC, built at
+    /// the first point.
     vecs: Option<(CString, Vec<CString>)>,
     /// The previous accepted point: raw time (s) and time in fs as the
     /// window history stores it.
@@ -373,6 +427,27 @@ struct UntilPin {
     model: DigitalIn,
     level: Level,
     prev_v: f64,
+}
+
+struct UntilAdc {
+    node: String,
+    model: AdcIn,
+    /// The push key at the grant start.
+    key: u32,
+    push: AdcPush,
+}
+
+/// The lattice point (fs) that the solver time `time` (s) is on, if any:
+/// the same predicate as the lattice clamp (`next_lattice_s`), so the
+/// accepted point the clamp put on `kL` is recognised as `kL`. A pure
+/// function of `time`.
+fn lattice_point_of(time: f64, lattice_fs: u64) -> Option<u64> {
+    if lattice_fs == 0 {
+        return None;
+    }
+    let near = (secs_to_fs(time) + lattice_fs / 2) / lattice_fs * lattice_fs;
+    let near_s = Time::from_fs(near).as_secs_f64();
+    ((time - near_s).abs() <= grant_tolerance_s(near_s)).then_some(near)
 }
 
 impl Until {
@@ -390,6 +465,7 @@ impl Until {
                 .pins
                 .iter()
                 .map(|p| name(&p.node))
+                .chain(self.adcs.iter().map(|a| name(&a.node)))
                 .collect::<Result<_, _>>()?;
             self.vecs = Some((name("time")?, nodes));
         }
@@ -424,6 +500,21 @@ impl Until {
             secs_to_fs(t1).clamp(self.from_fs, target_fs)
         };
         let mut first: Option<u64> = None;
+        // ADC pushes happen at lattice points only (ADR-003 D6), exactly as
+        // `NgspiceEngine::adc_window` later reads the same points.
+        let mut adc_stop: Option<u64> = None;
+        if let Some(lp) =
+            lattice_point_of(t1, self.lattice_fs).filter(|&lp| lp > self.from_fs && lp <= target_fs)
+        {
+            for (a, v) in self.adcs.iter_mut().zip(&nodes[self.pins.len()..]) {
+                let uv = a.model.delivered_microvolts(last(v)?);
+                let key = AdcIn::push_key(uv);
+                if a.push == AdcPush::EveryLattice || key != a.key {
+                    adc_stop = Some(lp);
+                }
+                a.key = key;
+            }
+        }
         for (p, v) in self.pins.iter_mut().zip(nodes) {
             let v1 = last(v)?;
             let new = p.model.threshold(p.level, v1);
@@ -445,8 +536,9 @@ impl Until {
         }
         self.prev_s = t1;
         self.prev_fs = t1_fs;
-        if let Some(at) = first {
-            let stop = (at.div_ceil(self.lattice_fs) * self.lattice_fs).min(target_fs);
+        let digital_stop =
+            first.map(|at| (at.div_ceil(self.lattice_fs) * self.lattice_fs).min(target_fs));
+        if let Some(stop) = [digital_stop, adc_stop].into_iter().flatten().min() {
             self.stop_fs = Some(stop);
         }
         Ok(self.stop_fs)
@@ -956,6 +1048,19 @@ struct DigitalOutput {
     edge_time: Time,
 }
 
+/// An ADC output (ADR-003 D6).
+struct AdcOutput {
+    /// Index into `NgspiceEngine::watch`.
+    watch: usize,
+    model: AdcIn,
+    /// Push key of the last delivered value.
+    key: u32,
+    /// Last delivered value (µV): the pin's boundary value.
+    uv: u32,
+    /// The delivered value at the previous boundary (for `sample_output`).
+    start_uv: u32,
+}
+
 /// The ngspice analog engine. See the crate docs.
 pub struct NgspiceEngine {
     name: String,
@@ -967,8 +1072,13 @@ pub struct NgspiceEngine {
     outputs: BTreeMap<String, String>,
     /// Thresholded digital outputs by pin name.
     digital: BTreeMap<String, DigitalOutput>,
-    /// Level changes of the digital outputs in the last grant, by time
-    /// (ties in pin order).
+    /// ADC outputs by pin name.
+    adc: BTreeMap<String, AdcOutput>,
+    /// [`NgspiceConfig::adc_push`].
+    adc_push: AdcPush,
+    /// Level changes of the digital outputs and ADC pushes in the last
+    /// grant, by time (ties: digital pins, then ADC pins, each in pin
+    /// order).
     trace: Vec<Transition>,
     /// Watched node names (lower case), in vector-copy order.
     watch: Vec<String>,
@@ -1104,6 +1214,47 @@ impl NgspiceEngine {
                 )
             })
             .collect();
+        let mut adc = BTreeMap::new();
+        for a in &cfg.adc_outputs {
+            let m = a.model;
+            if !(m.vref.is_finite() && m.vref > 0.0) || !(1..=16).contains(&m.bits) {
+                return Err(other(format!(
+                    "ADC output {}: need vref > 0 and 1 <= bits <= 16 (got vref {}, bits {})",
+                    a.pin, m.vref, m.bits
+                )));
+            }
+            if cfg.lattice.is_none() {
+                return Err(other(format!(
+                    "ADC output {}: needs a grant lattice (pushes are at lattice points, \
+                     ADR-003 D6)",
+                    a.pin
+                )));
+            }
+            if outputs.contains_key(&a.pin)
+                || digital.contains_key(&a.pin)
+                || adc.contains_key(&a.pin)
+            {
+                return Err(other(format!("output pin {} bound twice", a.pin)));
+            }
+            let node = a.node.to_ascii_lowercase();
+            let w = match watch.iter().position(|n| *n == node) {
+                Some(w) => w,
+                None => {
+                    watch.push(node);
+                    watch.len() - 1
+                }
+            };
+            adc.insert(
+                a.pin.clone(),
+                AdcOutput {
+                    watch: w,
+                    model: m,
+                    key: 0,
+                    uv: 0,
+                    start_uv: 0,
+                },
+            );
+        }
 
         // Netlist.
         let mut lines = vec![format!("* breadboard engine {}", cfg.name)];
@@ -1159,6 +1310,8 @@ impl NgspiceEngine {
             inputs,
             outputs,
             digital,
+            adc,
+            adc_push: cfg.adc_push,
             trace: Vec::new(),
             hist: History {
                 times_fs: Vec::new(),
@@ -1328,7 +1481,82 @@ impl NgspiceEngine {
             *last = t.as_fs();
         }
         self.threshold_window(t, t.is_zero());
+        if let Err(e) = self.adc_window(t, t.is_zero()) {
+            self.failed = true;
+            return Err(other(e));
+        }
+        self.trace.sort_by_key(|tr| tr.t);
         self.now = t;
+        Ok(())
+    }
+
+    /// Push the ADC outputs over the window just taken (ADR-003 D6): at
+    /// every lattice point `kL` in `(now, t]`, the solver point on it gives
+    /// the delivered value; a transition at `kL` is emitted by
+    /// [`NgspiceConfig::adc_push`]. At t = 0 only the initial value is set.
+    /// Every lattice point of the window must have its solver point (the
+    /// lattice clamp, D2), or this is an error.
+    fn adc_window(&mut self, t: Time, initial: bool) -> Result<(), String> {
+        if self.adc.is_empty() {
+            return Ok(());
+        }
+        let l = self.lattice.expect("ADC outputs need a lattice").as_fs();
+        let h = &self.hist;
+        let from = self.now.as_fs();
+        // The solver point of every lattice point in (from, t], in order:
+        // the first accepted point recognised as on it.
+        let mut points: Vec<(u64, usize)> = Vec::new();
+        if !initial {
+            for k in 1..h.times_s.len() {
+                let Some(lp) = lattice_point_of(h.times_s[k], l) else {
+                    continue;
+                };
+                if lp > from && lp <= t.as_fs() && points.last().is_none_or(|&(p, _)| lp > p) {
+                    points.push((lp, k));
+                }
+            }
+            let want = (t.as_fs() - from) / l;
+            if points.len() as u64 != want
+                || points.last().is_some_and(|&(p, _)| p != t.as_fs())
+                || !from.is_multiple_of(l)
+            {
+                return Err(format!(
+                    "ADC outputs: {} solver points on the {want} lattice points of ({}, {t}]",
+                    points.len(),
+                    self.now
+                ));
+            }
+        }
+        for (pin, a) in self.adc.iter_mut() {
+            let vals = &h.values[a.watch];
+            a.start_uv = a.uv;
+            if initial {
+                let v = *vals.last().ok_or("no sample at t = 0")?;
+                a.uv = a.model.delivered_microvolts(v);
+                a.key = AdcIn::push_key(a.uv);
+                if self.adc_push == AdcPush::OnChange {
+                    a.uv = a.key * 1000;
+                }
+                a.start_uv = a.uv;
+                continue;
+            }
+            for &(lp, k) in &points {
+                let uv = a.model.delivered_microvolts(vals[k]);
+                let key = AdcIn::push_key(uv);
+                let delivered = match self.adc_push {
+                    AdcPush::EveryLattice => uv,
+                    AdcPush::OnChange if key != a.key => key * 1000,
+                    AdcPush::OnChange => continue,
+                };
+                a.key = key;
+                a.uv = delivered;
+                self.trace.push(Transition {
+                    t: Time::from_fs(lp),
+                    pin: pin.clone(),
+                    signal: PinSignal::analog(f64::from(delivered) / 1e6),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -1376,7 +1604,6 @@ impl NgspiceEngine {
                 });
             }
         }
-        self.trace.sort_by_key(|tr| tr.t);
     }
 
     fn watch_index(&self, node: &str) -> Result<usize, EngineError> {
@@ -1598,9 +1825,10 @@ impl Engine for NgspiceEngine {
         self.grant(t, None).map(|_| ())
     }
 
-    /// With a grant lattice and at least one thresholded digital output.
+    /// With a grant lattice and at least one thresholded digital output or
+    /// ADC output.
     fn can_stop_early(&self) -> bool {
-        self.lattice.is_some() && !self.digital.is_empty()
+        self.lattice.is_some() && !(self.digital.is_empty() && self.adc.is_empty())
     }
 
     /// ADR-003 D5: advance towards `t`, but at the first level change of a
@@ -1608,7 +1836,8 @@ impl Engine for NgspiceEngine {
     /// park there. The solver takes the same steps as in any other
     /// partition (D2), so this is exactly the state a run with a grant
     /// ending at `ceil_L(t_x)` reaches. `watch` must name thresholded
-    /// digital outputs.
+    /// digital outputs or ADC outputs; an ADC output's change (a push,
+    /// ADR-003 D6) is at a lattice point, where the engine then stops.
     fn advance_until(&mut self, t: Time, watch: &[String]) -> Result<Time, EngineError> {
         let Some(l) = self.lattice else {
             return Err(EngineError::Protocol(
@@ -1616,17 +1845,29 @@ impl Engine for NgspiceEngine {
             ));
         };
         let mut pins = Vec::new();
+        let mut adcs = Vec::new();
         let mut names: Vec<&str> = Vec::new();
         for w in watch {
-            let d = self.digital.get(w).ok_or_else(|| {
-                EngineError::Protocol(format!(
-                    "advance_until: {w} is not a thresholded digital output of {}",
-                    self.name
-                ))
-            })?;
             if names.contains(&w.as_str()) {
                 continue;
             }
+            if let Some(a) = self.adc.get(w) {
+                names.push(w);
+                adcs.push(UntilAdc {
+                    node: self.watch[a.watch].clone(),
+                    model: a.model,
+                    key: a.key,
+                    push: self.adc_push,
+                });
+                continue;
+            }
+            let d = self.digital.get(w).ok_or_else(|| {
+                EngineError::Protocol(format!(
+                    "advance_until: {w} is not a thresholded digital output or an ADC output \
+                     of {}",
+                    self.name
+                ))
+            })?;
             names.push(w);
             pins.push(UntilPin {
                 node: self.watch[d.watch].clone(),
@@ -1635,13 +1876,14 @@ impl Engine for NgspiceEngine {
                 prev_v: self.hist.values[d.watch].last().copied().unwrap_or(0.0),
             });
         }
-        if pins.is_empty() {
+        if pins.is_empty() && adcs.is_empty() {
             return self.grant(t, None);
         }
         let until = Until {
             lattice_fs: l.as_fs(),
             from_fs: self.now.as_fs(),
             pins,
+            adcs,
             vecs: None,
             prev_s: self.hist.times_s.last().copied().unwrap_or(0.0),
             prev_fs: self.now.as_fs(),
@@ -1675,21 +1917,37 @@ impl Engine for NgspiceEngine {
         for (pin, d) in &self.digital {
             out.insert(pin.clone(), PinSignal::digital(d.level, d.edge_time));
         }
+        for (pin, a) in &self.adc {
+            out.insert(pin.clone(), PinSignal::analog(f64::from(a.uv) / 1e6));
+        }
         Ok(out)
     }
 
     /// With thresholded digital outputs, every level change of the grant
-    /// (ADR-003 D3). The analog outputs stay out of the trace: they are
-    /// reported by their boundary values and sampled through
-    /// [`Engine::sample_output`]. Without digital outputs: `None`, as before.
+    /// (ADR-003 D3), and with ADC outputs, every push (D6). The analog
+    /// outputs stay out of the trace: they are reported by their boundary
+    /// values and sampled through [`Engine::sample_output`]. Without either:
+    /// `None`, as before.
     fn read_output_trace(&mut self) -> Result<Option<Vec<Transition>>, EngineError> {
-        if self.digital.is_empty() {
+        if self.digital.is_empty() && self.adc.is_empty() {
             return Ok(None);
         }
         Ok(Some(self.trace.clone()))
     }
 
+    /// Analog outputs: interpolated between solver points. ADC outputs: the
+    /// value delivered as of `t` (the last push at or before `t`).
     fn sample_output(&self, pin: &str, t: Time) -> Option<PinSignal> {
+        if let Some(a) = self.adc.get(pin) {
+            let uv = self
+                .trace
+                .iter()
+                .rev()
+                .find(|tr| tr.pin == pin && tr.t <= t)
+                .and_then(|tr| tr.signal.volts())
+                .unwrap_or(f64::from(a.start_uv) / 1e6);
+            return Some(PinSignal::analog(uv));
+        }
         let node = self.outputs.get(pin)?;
         self.sample(node, t).ok().map(PinSignal::analog)
     }

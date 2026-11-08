@@ -128,3 +128,33 @@ jobs:
       # for the WFI firmware (<= 200 grants) and a polling variant.
       - name: Lookahead equivalence
         run: make lookahead-equiv
+
+  # ADR-003 step 9: adc_in on examples/adc (STM32F072). Part A (one cell),
+  # Part B (lookahead, 1 ms and 10 ms) and the open board in long grants must
+  # give the every-lattice-point references byte for byte (non-grant
+  # records), and Renode's ADC model must behave as Amendment 5 pins it.
+  adc:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/bb-target
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .cache/bb-target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+
+      - name: Setup toolchain (make setup)
+        run: make setup
+
+      - name: ADC equivalence (Part A, Part B, open board)
+        run: make adc-equiv
+
+      - name: Renode ADC platform test
+        run: make adc-renode

@@ -56,6 +56,7 @@ const CMD_CHECK_VERSION: u16 = 0;
 const CMD_RUN_FOR: u16 = 1;
 const CMD_GET_TIME: u16 = 2;
 const CMD_GET_MACHINE: u16 = 3;
+const CMD_ADC: u16 = 4;
 const CMD_GPIO: u16 = 5;
 const CMD_SYSTEM_BUS: u16 = 6;
 
@@ -68,6 +69,12 @@ const TYPE_ERROR: u8 = 4;
 const GPIO_GET_STATE: i8 = 0;
 const GPIO_SET_STATE: i8 = 1;
 const GPIO_REGISTER_EVENT: i8 = 2;
+
+// ADC sub-commands (Renode 1.17.0 `ADC.cs`; `renode_api.h`
+// renode_get_adc_channel_count / _value / renode_set_adc_channel_value).
+const ADC_GET_CHANNEL_COUNT: u8 = 0;
+const ADC_GET_CHANNEL_VALUE: u8 = 1;
+const ADC_SET_CHANNEL_VALUE: u8 = 2;
 
 const SYSBUS_READ: u8 = 0;
 const SYSBUS_WRITE: u8 = 1;
@@ -184,6 +191,49 @@ impl Client {
         let mut d = gpio_header(gpio, GPIO_REGISTER_EVENT, pin);
         d.extend_from_slice(&descriptor.to_le_bytes());
         self.request(CMD_GPIO, &d)?;
+        Ok(())
+    }
+
+    /// Descriptor of the ADC peripheral `name` (e.g. `adc`, an `IADC`) in
+    /// machine `md`.
+    pub fn get_adc(&mut self, md: i32, name: &str) -> Result<i32> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&(-1i32).to_le_bytes());
+        d.extend_from_slice(&md.to_le_bytes());
+        d.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        d.extend_from_slice(name.as_bytes());
+        let r = self.request(CMD_ADC, &d)?;
+        read_i32(&r, "ADC instance")
+    }
+
+    /// Number of channels of ADC `adc`.
+    pub fn adc_channel_count(&mut self, adc: i32) -> Result<i32> {
+        let mut d = adc.to_le_bytes().to_vec();
+        d.push(ADC_GET_CHANNEL_COUNT);
+        let r = self.request(CMD_ADC, &d)?;
+        read_i32(&r, "ADC channel count")
+    }
+
+    /// The value (µV) of channel `channel` of ADC `adc`.
+    pub fn adc_get_value(&mut self, adc: i32, channel: i32) -> Result<u32> {
+        let mut d = adc.to_le_bytes().to_vec();
+        d.push(ADC_GET_CHANNEL_VALUE);
+        d.extend_from_slice(&channel.to_le_bytes());
+        let r = self.request(CMD_ADC, &d)?;
+        let b: [u8; 4] = r.as_slice().try_into().map_err(|_| {
+            ProtocolError::Server(format!("ADC get value: expected 4 bytes, got {}", r.len()))
+        })?;
+        Ok(u32::from_le_bytes(b))
+    }
+
+    /// Set channel `channel` of ADC `adc` to `microvolts` (the channel's
+    /// default sample, `IADCExtensions.SetVoltage`).
+    pub fn adc_set_value(&mut self, adc: i32, channel: i32, microvolts: u32) -> Result<()> {
+        let mut d = adc.to_le_bytes().to_vec();
+        d.push(ADC_SET_CHANNEL_VALUE);
+        d.extend_from_slice(&channel.to_le_bytes());
+        d.extend_from_slice(&microvolts.to_le_bytes());
+        self.request(CMD_ADC, &d)?;
         Ok(())
     }
 

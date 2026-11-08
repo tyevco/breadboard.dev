@@ -92,6 +92,65 @@ impl DigitalIn {
     }
 }
 
+/// An ADC input (ADR-003 D6, Amendment 5, Amendment 10). A *push* model:
+/// the producing analog engine reads the net at every lattice point and
+/// emits an `Analog` transition, at that lattice point, whenever the value
+/// the consumer's ADC can see changes. For Renode's STM32 ADC
+/// (`STM32_ADC_Common`) that value is the whole number of millivolts of
+/// the delivered voltage: [`AdcIn::delivered_microvolts`] clamps to
+/// `[0, vref]` (real silicon saturates; the model does not) and the model
+/// converts `floor(uV / 1000)`. So the push rule "emit when
+/// [`AdcIn::push_key`] changes" is exact whatever resolution or alignment
+/// the firmware selects, and the value delivered is
+/// [`AdcIn::key_volts`] of that key.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AdcIn {
+    /// Reference voltage (V), the full-scale input.
+    pub vref: f64,
+    /// Converter resolution (bits); documents the code mapping
+    /// ([`AdcIn::code`]), never the push rule.
+    pub bits: u32,
+}
+
+impl AdcIn {
+    /// The STM32 12-bit ADC at 3.3 V.
+    pub const STM32_12BIT_3V3: AdcIn = AdcIn {
+        vref: 3.3,
+        bits: 12,
+    };
+
+    /// The voltage delivered to the ADC, in integer microvolts: `volts`
+    /// rounded half away from zero ([`crate::volts_to_microvolts`]) and
+    /// clamped to `[0, vref]`.
+    pub fn delivered_microvolts(&self, volts: f64) -> u32 {
+        let max = crate::signal::volts_to_microvolts(self.vref).max(0);
+        let uv = crate::signal::volts_to_microvolts(volts).clamp(0, max);
+        u32::try_from(uv).unwrap_or(u32::MAX)
+    }
+
+    /// The push key of a delivered value: whole millivolts,
+    /// `floor(uV / 1000)`, which is all the converter sees.
+    pub const fn push_key(uv: u32) -> u32 {
+        uv / 1000
+    }
+
+    /// The voltage a key is delivered as: `key` millivolts exactly
+    /// (`key * 1000` µV once rounded back to microvolts).
+    pub fn key_volts(key: u32) -> f64 {
+        f64::from(key) / 1000.0
+    }
+
+    /// The conversion of `uv` by Renode 1.17.0's `STM32_ADC_Common`
+    /// (Amendment 5, fact 1): `round_half_even(floor(uV / 1000) / (vref *
+    /// 1000) * (2^bits - 1))` in IEEE double. For checks and documentation;
+    /// the engines never convert.
+    pub fn code(&self, uv: u32) -> u32 {
+        let mv = f64::from(Self::push_key(uv));
+        let full = f64::from((1u32 << self.bits) - 1);
+        (mv / (self.vref * 1000.0) * full).round_ties_even() as u32
+    }
+}
+
 /// A power pin.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Power {
@@ -106,6 +165,8 @@ pub struct Power {
 pub enum PinModel {
     DigitalOut(DigitalOut),
     DigitalIn(DigitalIn),
+    /// ADC input: pushed `Analog` transitions at lattice points.
+    AdcIn(AdcIn),
     /// Bidirectional analog node; value exchanged as volts.
     Analog,
     Power(Power),
@@ -149,5 +210,33 @@ mod tests {
         assert_eq!(i.threshold(Level::Low, 2.0), Level::High);
         assert_eq!(i.threshold(Level::High, 1.5), Level::High);
         assert_eq!(i.threshold(Level::High, 0.9), Level::Low);
+    }
+
+    #[test]
+    fn adc_push_key_and_code() {
+        let a = AdcIn::STM32_12BIT_3V3;
+        // Clamped to [0, vref]; rounded to whole microvolts.
+        assert_eq!(a.delivered_microvolts(-0.2), 0);
+        assert_eq!(a.delivered_microvolts(3.4), 3_300_000);
+        assert_eq!(a.delivered_microvolts(1.2345674), 1_234_567);
+        assert_eq!(a.delivered_microvolts(0.0019999996), 2_000);
+        // Whole millivolts, and back.
+        assert_eq!(AdcIn::push_key(2_000_999), 2000);
+        assert_eq!(AdcIn::push_key(999_999), 999);
+        let v = AdcIn::key_volts(2531);
+        assert_eq!(a.delivered_microvolts(v), 2_531_000);
+        // Amendment 5's pinned conversions.
+        for (uv, code) in [
+            (1_500_000, 1861),
+            (600_000, 745),
+            (1_650_000, 2048),
+            (2_500_000, 3102),
+            (2_000_999, 2482),
+            (999_999, 1240),
+            (1_000_000, 1241),
+            (0, 0),
+        ] {
+            assert_eq!(a.code(uv), code, "{uv} uV");
+        }
     }
 }

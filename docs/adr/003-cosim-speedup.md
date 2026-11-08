@@ -1943,3 +1943,207 @@ of theirs is unchanged. On `examples/feedback` the default run's
   corrects the README and AGENTS.md text that the new default made wrong
   (the feedback board "correct but slow until Part B", the make targets),
   and adds one cost-table row for the default feedback run.
+
+### Amendment 10: step 9 (ADC, D6) as implemented (2026-11-08)
+
+**Status:** Accepted with step 9. It builds on Amendment 5 (the platform:
+Renode 1.17.0's STM32F072 and its `STM32F0_ADC`). `spec/pin-model.md` is
+updated in the same change: the header, a new `adc_in` row and section, and
+glue rule 6. `spec/time-grant.md` is updated too: the header; the **trace**
+definition (an `adc_in` pin is a traced analog pin, and an engine that must
+apply an `Analog` entry at its time implements `apply_input_trace`); the
+**early stop** definition (the code-change watch); Advance step 1 (a push
+is applied at its lattice point, never earlier); and "What engines MUST NOT
+do". `spec/event-stream.md` does not change: pushes are `Analog` changes and
+produce no record. The kernel does not change either: its trace checks,
+pre-advance delivery, early-stop check and audit already handle `Analog`
+entries. `make golden-update` reproduces every committed golden file byte
+for byte. Its only new outputs are the ADC reference hashes, so the spike
+and feedback hashes do not change.
+
+- **What landed.**
+  - **bbcore:** `pin::AdcIn { vref, bits }` and `PinModel::AdcIn`, with
+    `delivered_microvolts` (round to µV, clamp to `[0, vref]`), `push_key`
+    (whole millivolts), `key_volts` and `code` (the model's conversion,
+    Amendment 5 fact 1, for checks).
+  - **ngspice:** `AdcOutputBinding` and `NgspiceConfig::adc_outputs`, plus
+    `NgspiceConfig::adc_push: AdcPush::{OnChange, EveryLattice}`.
+    - An ADC output needs the lattice. It adds no glue.
+    - At every boundary the engine finds the solver point on each lattice
+      point of the window, using the same predicate as the lattice clamp. A
+      missing point is an error.
+    - It emits an `Analog` transition at that lattice point when the push
+      key changes, delivering `key * 1000` µV. `EveryLattice` emits one at
+      every lattice point with the raw clamped µV.
+    - The boundary value is the last delivered value. `sample_output`
+      returns the value in effect at `t`.
+    - `can_stop_early` holds with ADC outputs alone. `advance_until`
+      watches ADC pins: the solver-thread callback evaluates the push rule
+      at the point on each lattice point and stops right there.
+  - **Renode:** `PinDirection::Adc`, `PinSpec::adc(name, adc, channel)`,
+    and the External Control `ADC` command in `protocol.rs` (`get_adc`,
+    `adc_channel_count`, `adc_get_value`, `adc_set_value`; the wire format
+    of `renode_api.h` and of the Amendment 5 test).
+    - Startup checks the channel against the model's count (19).
+    - A value is set with `SetValue` at `ceil_L(t)`. Inside an advance this
+      is the D2 `RUN_FOR` split, so the value is set while Renode is paused
+      on the push's lattice point.
+    - The `Verify` cross-check also reads each ADC channel back with
+      `GetValue`.
+  - **bb:**
+    - `platform=stm32f072` loads `platforms/cpus/stm32f072.repl`.
+    - The board pin `model=adc_in vref= bits=` takes its ADC channel from
+      the pin (`PA0`–`PA7`, `PB0`–`PB1`, `PC0`–`PC5`). It is rejected on
+      `stm32f103`, which has no ADC model.
+    - An `adc_in` pin counts as an MCU input for the cyclic-board rule, so
+      the lookahead plugin is loaded for it.
+    - New test knob `--adc-push change|every`.
+    - The ADC pin's kernel net is not added to `nets.vcd` unless it is
+      probed (as a `real`). Its pushed values differ between the two push
+      modes by design.
+  - **Firmware:** `adc_board.elf` (`-DADC_BOARD`).
+    - The TIM3 ISR toggles PA4 every 50 updates, then starts the conversion.
+    - The ADC ISR copies code bits 4 and 8 to PA6 and PA7.
+    - The `ADC_BOARD` code is compiled only into this build: `adc.elf`
+      and `adc_hwtrig.elf` are byte-identical before and after the change
+      (sha256 3890153…, fe7340c…), so the Renode-only test still pins
+      them.
+  - **Boards:**
+    - `examples/adc/board.cir`: PA4 → 25 Ω → 10 kΩ → ADC_IN, with 33 kΩ and
+      470 nF to ground (τ = 3.614 ms, settling at 2.531 V, code 3141); ALARM
+      (PA5) → 330 Ω → LED. The loop is U1 → ngspice (PA4, PA5) and
+      ngspice → U1 (PA1).
+    - `examples/adc/board-open.cir`: the same divider, driven by a PULSE
+      source with PA4's timing; every MCU output is unconnected, so the
+      graph is ngspice → U1 only.
+  - **Checks:** `scripts/check_adc.py` models the firmware conversion by
+    conversion from `nets.csv`. ADC_IN is sampled on every lattice point in
+    µV, rounded like the delivered value. The model predicts every edge of
+    PA4–PA7, its level and its Renode stamp, and the run must match it
+    exactly. The script also reports which grant ended at each push that
+    moved ADC_IN across the watchdog window.
+  - **Make and CI:**
+    - `adc` and `adc-run` (`make adc` is in `make test`).
+    - `adc-ref`, `adc-open-ref` and `adc-equiv` (`scripts/adc_equiv.sh`),
+      and `adc-renode` (Amendment 5's `make -C examples/adc test`). The last
+      two run in a new CI job, `adc`.
+    - `make firmware` builds `examples/adc/firmware`.
+    - `golden-update` writes `tests/golden/adc/outputs.sha256` and
+      `tests/golden/adc-open/outputs.sha256`.
+- **Deviation: the push rule is a whole-millivolt change, not D6's code
+  change.** Amendment 5 fact 1 settled this: the model converts
+  `floor(uV / 1000)`, so the rule is exact whatever resolution or alignment
+  the firmware selects. `bits` documents the code mapping only. The
+  delivered value is `key` mV exactly (`key * 1000` µV), and the
+  every-lattice-point reference delivers the raw clamped µV. Both give the
+  converter the same millivolts at every lattice point. That is the
+  equivalence the first gate tests.
+- **Deviation: Renode implements `apply_input_trace`.** An `Analog` value
+  carries no time. With the default (`apply_inputs` per entry), a push at
+  `t` delivered before the advance would take effect at the engine's `now`,
+  up to a grant *early*. That violates the never-early rule. Renode's
+  override applies every entry at its own `t`, digital entries included
+  (their `edge_time` is `t`), so digital behaviour is unchanged. The spec
+  (trace definition) now says so.
+- **How the gates were read.**
+  1. **"Equivalence with a reference that pushes the value at every
+     lattice point."** The reference is one-cell (`--lookahead off`) with
+     `--adc-push every`. Its hashes are committed (`tests/golden/adc/`;
+     the open board's reference, `--max-quantum 10us`, in
+     `tests/golden/adc-open/`). Every other run must match it in
+     `nets.csv`, `nets.vcd` and every non-grant record.
+  2. **"Timer-triggered ADC firmware equivalent in Part A and Part B."**
+     The firmware starts each conversion from the TIM3 ISR. Hardware
+     triggers are not modelled (Amendment 5 fact 4).
+     - **Part A:** the cyclic board with `--lookahead off` (the loop cap,
+       one cell), and the open board in long grants (1, 10 and 50 ms),
+       where Renode splits each `RUN_FOR` at the pushes in it.
+     - **Part B:** the cyclic board with lookahead at `max_quantum` 1 ms
+       and 10 ms.
+     - Every run also passes `check_adc.py`.
+  3. **"An analog-watchdog wake inside a quiet window is caught by the
+     watch, not the audit."**
+     - **Why it cannot happen literally on Renode.** In Renode 1.17.0 a
+       `SetValue` never wakes the CPU: it only replaces the channel's
+       default sample (Amendment 5 fact 3). The watchdog compares only at
+       a conversion, and every conversion runs at a clock limit: the TIM3
+       update, or for `EXTEN`/continuous mode the model's managed thread.
+       That thread is a `ClockEntry` on the machine's clock source
+       (`Machine.ObtainManagedThread`), so `NearestLimitIn` covers it.
+       Every quiet promise therefore ends at the next conversion, and the
+       watchdog wake on the real board comes at the end of a promise,
+       never inside one.
+     - **The real board.** The gate is read as: the push that moves ADC_IN
+       across the window lands inside a promised window, and the
+       code-change watch cuts the quiet grant there (`stop:ngspice`).
+       `check_adc.py --require-stops` checks this on the Part B runs.
+     - **The literal case, with mock engines.**
+       `bbcore/tests/adc_watch.rs` uses a CPU whose watchdog acts like a
+       continuous comparator: an out-of-window value applied at its
+       lattice point wakes it at `ceil_L(t) + 1 fs`, inside the promise.
+       - `an_awd_wake_inside_a_quiet_window_is_caught_by_the_watch`: both
+         wakes (3.21 ms and 31.05 ms, inside the promises to 10 ms and
+         40 ms) end a quiet grant at their push (`stop:n`). There is no
+         `PromiseBroken`, and the 5 edges equal the one-cell run's (5000
+         grants) in fewer than 60 grants.
+       - `ignoring_the_adc_watch_fails_the_run` (the control): a producer
+         that ignores the watch fails the run at the kernel's early-stop
+         check (invariant 8, D5.3), right after its advance and before the
+         quiet CPU advances. The audit is never reached.
+- **Renode facts measured on the way** (pinned by `check_adc.py`):
+  - The TIM3 ISR's write is stamped at the TIM3 limit `T_k = k * 999 us`,
+    or `T_k + 1 fs` on a lattice point.
+  - The ADC ISR's writes are stamped `T_k + 180 ns`. `STM32_ADC_Common`
+    samples at the `ADSTART` write but completes the conversion in
+    `ExecuteInNearestSyncedState`, and the ISR runs in the slice of that
+    synced state.
+  - The conversion sees the value pushed at `floor_L(T_k)`. No run had a
+    conversion on a lattice point where the previous cell's value would
+    have given a different code (the check counts them: 0), so that
+    ordering is not exercised.
+  - The lookahead plugin at 0x5FFF0000 is unused on the F072, and its
+    self-test passes there (Cortex-M0, one NVIC).
+- **Gates (measured).** All runs are 300 ms, with `L` = 10 µs and the eight
+  `adc-equiv` runs in parallel. Every run passes `check_adc.py`: 300
+  conversions and 109 edges (PA4 6, ALARM 11, bit 4 62, bit 8 30).
+
+  | Run | Grants | `limited_by` | Simulation |
+  | --- | --- | --- | --- |
+  | reference: one cell, `--adc-push every` | 30 000 | 29 999 `loop_quantum`, 1 `engine:ngspice` | 42.5 s |
+  | Part A: `--lookahead off` | 30 000 | as the reference | 32.9 s |
+  | Part B: lookahead, 1 ms and 10 ms | 6 344 each | 5 140 `stop:ngspice`, 903 `loop_quantum`, 300 `engine:U1`, 1 `engine:ngspice` | 20.0 s |
+  | open board: reference, `--max-quantum 10us --adc-push every` | 30 000 | | 41.6 s |
+  | open board: 1, 10 and 50 ms | 300, 30, 6 | `max_quantum` (and the last grant `engine:ngspice`) | 10.6, 10.1, 9.9 s |
+
+  - **Equivalence:** every Part A and Part B run matches the reference, and
+    every open-board run matches its reference, in `nets.csv`, `nets.vcd`
+    and the non-grant records. The references match their committed
+    hashes.
+  - **Part B:** 0 promises broken (5 741 Queries, 5 440 quiet grants). Of
+    the 11 window crossings, 10 end a `stop:ngspice` grant. The eleventh is
+    conversion 1 at t = 0+, when ADC_IN is still 0 V. In the Part A runs the
+    same crossings end `loop_quantum` grants.
+  - **Speed:** in the Part B runs `max_quantum` 1 ms and 10 ms give the same
+    6 344 grants, because TIM3's 1 ms limit bounds every promise. That is
+    4.7× fewer grants than one-cell. While ADC_IN moves, every millivolt
+    change stops a grant (the ADR's "no gain while the analog side moves").
+    These are single runs on a loaded host, not a speed gate. Step 9 has
+    none.
+  - `engines/analog-ngspice/tests/adc.rs`
+    (`pushes_are_partition_independent_and_stop_the_watch`):
+    - On the divider, the default pushes are exactly the reference's
+      lattice points where the whole millivolts change (2128 pushes in
+      60 ms).
+    - The pushes and the raw solver points are bit-identical at one cell,
+      1 ms and 10 ms, and with `advance_until` watching the ADC pin.
+    - `advance_until` stops exactly at the first push of each grant.
+    - Two runs are bit-identical.
+    - `adc_output_contract` checks the contract: a lattice is required,
+      `vref` must be > 0, and an unknown watch is an error.
+  - The unit tests cover `AdcIn` (Amendment 5's pinned conversions) and the
+    board grammar (`adc_pins`).
+- **Not changed.**
+  - The README cost table is step 10. This step adds the ADC example
+    section and the `make test` item.
+  - `make test` grows by `make adc`, one 300 ms run of about 20 s
+    simulation.

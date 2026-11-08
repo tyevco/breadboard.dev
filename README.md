@@ -25,7 +25,7 @@ Run these inside WSL Ubuntu 24.04 or Linux, from the repo root:
 
 ```sh
 make setup   # pinned toolchain: Rust, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42
-make test    # cargo tests + 500 ms spike + 10-run determinism + golden diff + feedback board
+make test    # cargo tests + 500 ms spike + 10-run determinism + golden diff + feedback and ADC boards
 ```
 
 From Windows: `wsl -d Ubuntu-24.04 -- bash -lc 'cd /mnt/c/source/tyevco/breadboard.dev && make setup && make test'`.
@@ -70,11 +70,16 @@ The run writes these files to `out/spike/`:
    changes only `grant` records).
 6. `make feedback-order`: the same run with the engines registered in the
    other order must be byte-identical.
+7. `make adc`: 300 ms of `examples/adc`, an STM32F072 that reads back
+   through its ADC the divider it drives (below), then `scripts/check_adc.py`
+   and the hashes of the one-cell reference that pushes the ADC value at
+   every lattice point (lookahead changes only `grant` records).
 
 `make feedback-determinism` (10 runs), `make feedback-open` (the partition
 gate of the open-loop variant), `make lookahead-inert` and
 `make lookahead-equiv` (the lookahead equivalence gate) run in their own CI
-job.
+job, and `make adc-equiv` (the ADC gates) and `make adc-renode` (the
+Renode-only ADC model test) in another.
 
 ## Feedback example
 
@@ -104,6 +109,27 @@ crossing, and the run takes 117 grants instead of 50 000 with byte-identical
 (the polling variant `feedback_poll.elf`) gets no promise and stays in
 one-cell grants. Opening the loop (`examples/feedback-open`, SENSE driven by
 a circuit source) gives long grants with byte-identical outputs too.
+
+## ADC example
+
+`examples/adc` (ADR-003 Part C) runs on Renode's stock STM32F072, whose ADC
+model (`STM32F0_ADC`) External Control can drive:
+
+```
+U1.PA4 ─ 25 Ω ─ R1 10 kΩ ─ ADC_IN ─ R2 33 kΩ ∥ C1 470 nF ─ GND
+                           ADC_IN ──▶ U1.PA1 adc_in {vref 3.3 V, 12 bits}
+U1.PA5 (ALARM) ─ 25 Ω ─ R3 330 Ω ─ LED ─ D1 (red) ─ GND
+```
+
+TIM3 starts a conversion every 999 µs (Renode counts ARR ticks) and toggles
+PA4 every 50th time. The analog watchdog ([1.0 V, 2.0 V]) drives ALARM, and
+code bits 4 and 8 go to PA6/PA7. ngspice pushes ADC_IN to the ADC at the
+10 µs lattice points where its whole millivolts change, which is all
+Renode's ADC converts; Renode sets each value while paused on that lattice
+point. With lookahead the sleeping MCU's promise lets ngspice run ahead
+until the next millivolt change: 6 344 grants for 300 ms instead of 30 000,
+with byte-identical outputs (`make adc-equiv`). `board-open.cir` drives the
+divider from a circuit source instead (no loop): 30 grants of 10 ms.
 
 ## Result
 

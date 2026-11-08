@@ -26,6 +26,12 @@
  *   conversion inside the window drives PA5 low again.
  * - Everything the host checks is in `status` at 0x20000000 (linker
  *   script), plus the PA5 edges.
+ * - -DADC_BOARD (adc_board.elf, ADR-003 plan step 9, examples/adc/board.cir):
+ *   the default build plus a drive and two code pins. The TIM3 ISR toggles
+ *   PA4 (DRIVE, into the board's RC-filtered divider that feeds PA1) every
+ *   DRIVE_UPDATES updates, before it starts the conversion; the ADC ISR
+ *   copies bit 4 of every code to PA6 and bit 8 to PA7, so the code
+ *   sequence is visible as pin edges.
  */
 #include <stdint.h>
 
@@ -46,6 +52,13 @@
 #define GPIOA_BSRR REG(GPIOA_BASE + 0x18u)
 #define ALARM_PIN 5u
 #define ADC_PIN 1u
+#define DRIVE_PIN 4u
+#define CODE4_PIN 6u
+#define CODE8_PIN 7u
+
+#ifndef DRIVE_UPDATES
+#define DRIVE_UPDATES 50u
+#endif
 
 /* TIM3 (RM0091 section 17.4) */
 #define TIM3_BASE 0x40000400u
@@ -135,6 +148,16 @@ void TIM3_IRQHandler(void)
 {
     TIM3_SR = ~TIM_SR_UIF; /* rc_w0 */
     status.tim_updates++;
+#ifdef ADC_BOARD
+    /* Cortex-M0 has no divider: count down instead of tim_updates % N. */
+    static uint32_t drive_left = DRIVE_UPDATES;
+    static uint32_t drive_high;
+    if (--drive_left == 0u) {
+        drive_left = DRIVE_UPDATES;
+        drive_high ^= 1u;
+        GPIOA_BSRR = drive_high ? (1u << DRIVE_PIN) : (1u << (DRIVE_PIN + 16u));
+    }
+#endif
 #ifndef ADC_HW_TRIGGER
     ADC_CR = ADC_CR_ADSTART;
 #endif
@@ -154,6 +177,10 @@ void ADC1_COMP_IRQHandler(void)
         ADC_ISR = ADC_ISR_EOSMP | ADC_ISR_EOSEQ | ADC_ISR_OVR;
         status.last_code = code;
         status.conversions++;
+#ifdef ADC_BOARD
+        GPIOA_BSRR = ((code & (1u << 4)) ? (1u << CODE4_PIN) : (1u << (CODE4_PIN + 16u))) |
+                     ((code & (1u << 8)) ? (1u << CODE8_PIN) : (1u << (CODE8_PIN + 16u)));
+#endif
         if (status.alarm && code >= AWD_LT && code <= AWD_HT) {
             GPIOA_BSRR = 1u << (ALARM_PIN + 16u);
             status.alarm = 0u;
@@ -171,6 +198,13 @@ int main(void)
     GPIOA_BSRR = 1u << (ALARM_PIN + 16u);
     GPIOA_MODER = (GPIOA_MODER & ~((3u << (2u * ADC_PIN)) | (3u << (2u * ALARM_PIN)))) |
                   (3u << (2u * ADC_PIN)) | (1u << (2u * ALARM_PIN));
+#ifdef ADC_BOARD
+    /* PA4 (DRIVE), PA6 and PA7 (code bits 4 and 8): outputs, low. */
+    GPIOA_BSRR = (1u << (DRIVE_PIN + 16u)) | (1u << (CODE4_PIN + 16u)) | (1u << (CODE8_PIN + 16u));
+    GPIOA_MODER = (GPIOA_MODER & ~((3u << (2u * DRIVE_PIN)) | (3u << (2u * CODE4_PIN)) |
+                                   (3u << (2u * CODE8_PIN)))) |
+                  (1u << (2u * DRIVE_PIN)) | (1u << (2u * CODE4_PIN)) | (1u << (2u * CODE8_PIN));
+#endif
 
     /* Calibrate with the ADC disabled, then enable it and wait for ADRDY. */
     ADC_CR = ADC_CR_ADCAL;

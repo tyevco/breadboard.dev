@@ -14,7 +14,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order` (about 6–7 min) |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc` (about 7–8 min) |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -30,13 +30,16 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make lookahead-inert` | ADR-003 step 5: Renode's lookahead plugin is inert. `examples/feedback` without the plugin (`--lookahead-plugin never`, so lookahead off) must give the committed hashes (`tests/golden/feedback/outputs.sha256`), with the plugin armed and `--lookahead off` byte-identical, with lookahead on (the default) identical except `grant` records; the spike with the plugin forced on must give its partition hashes (CI job `feedback`) |
 | `make lookahead-equiv` | ADR-003 step 8 equivalence gate: `examples/feedback` and its polling-firmware variant (`feedback_poll.elf`) with lookahead on at `--max-quantum` 1 ms and 10 ms must give the one-cell `--lookahead off` reference (the committed `tests/golden/feedback/outputs.sha256`) byte for byte in `nets.csv`, `nets.vcd` and every non-grant record, with no broken promise and at most 200 grants per 500 ms at 10 ms (`scripts/lookahead_equiv.sh`; CI job `feedback`) |
 | `make lookahead-perf` | ADR-003 step 8 performance gates with the measurement protocol (`scripts/perf_ab.sh`, interleaved, N = `PERF_N`, medians): `examples/feedback` with lookahead on vs step 4 (one-cell, no plugin) at most 200 grants and >= 10x less simulation time; the polling firmware with lookahead on vs off at most 10 % slower. Run it on an otherwise idle host |
+| `make adc` | ADR-003 step 9: `examples/adc` (STM32F072; U1.PA4 → RC-filtered divider → ADC_IN → U1.PA1 `adc_in`; TIM3 converts every 999 µs, the analog watchdog drives ALARM on PA5, code bits 4 and 8 on PA6/PA7), 300 ms with lookahead on. `scripts/check_adc.py`: every conversion's edges as the firmware model predicts from ADC_IN; then `nets.csv`, `nets.vcd` and the non-grant records byte-identical to the one-cell reference that pushes at every lattice point (`tests/golden/adc/outputs.sha256`; `make adc-ref`) |
+| `make adc-equiv` | ADR-003 step 9 gates (`scripts/adc_equiv.sh`): Part A (one cell) and Part B (lookahead, 1 ms and 10 ms) on `examples/adc`, and `board-open.cir` (acyclic) at 1, 10 and 50 ms, all identical except `grant` records to the every-lattice-point references (`tests/golden/adc*/outputs.sha256`); no promise broken; the watchdog's window crossings stop quiet grants (`stop:ngspice`) (CI job `adc`) |
+| `make adc-renode` | The Renode-only ADC model test of ADR-003 Amendment 5 (`make -C examples/adc test`, about 15 s; CI job `adc`) |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
-| `make golden-update` | Regenerate the golden snapshots and the partition hashes (spike, feedback, feedback-open) and the feedback one-cell reference hashes from fresh, checked runs. Review the diff before committing it |
+| `make golden-update` | Regenerate the golden snapshots and the partition hashes (spike, feedback, feedback-open), the feedback one-cell reference hashes and the ADC reference hashes from fresh, checked runs. Review the diff before committing it |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
 
-`make firmware` builds the firmware ELFs (spike, feedback and the Renode
+`make firmware` builds the firmware ELFs (spike, feedback, ADC and the Renode
 lookahead gate firmware in `engines/cpu-renode/tests/firmware`) on their own.
 
 ## Repo map
@@ -50,14 +53,17 @@ cli/                    `bb` binary (`bb run`, board-file parser)
 examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings)
 examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware and a polling variant
 examples/feedback-open/ the same with the loop opened (acyclic, long grants)
+examples/adc/           STM32F072 ADC board (adc_in PA1 reads the divider PA4 drives; board.cir,
+                        board-open.cir), its firmware, and the Renode-only ADC model test
 tests/golden/spike/     led_a.csv waveform snapshot, partition hashes
 tests/golden/feedback/  SENSE / LED_B snapshots, exact pin_edge list, one-cell reference hashes
 tests/golden/feedback-open/ partition hashes of the one-cell reference
+tests/golden/adc/, adc-open/ hashes of the every-lattice-point one-cell ADC references
 spec/                   normative protocol and schema docs; changing them needs an ADR
 docs/adr/               architecture decision records
 scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh,
                         partition.sh, perf.sh, perf_ab.sh, check_resample.py, check_feedback.py,
-                        lookahead_inert.sh, lookahead_equiv.sh
+                        lookahead_inert.sh, lookahead_equiv.sh, check_adc.py, adc_equiv.sh
 ```
 
 ## The three invariants

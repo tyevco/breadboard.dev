@@ -16,12 +16,25 @@
 //!   an MCU input reading circuit node `<net>` through the `digital_in` model
 //!   (hysteresis, `vil < vih`; `cin` in farads, e.g. `5e-12`). The analog
 //!   engine thresholds the node and adds `cin` as glue (ADR-003 D3).
+//! - `*bb pin <ref>.<pin> net=<net> model=adc_in vref=<V> bits=<n>`: an
+//!   MCU ADC input reading circuit node `<net>` (ADR-003 D6). The analog
+//!   engine pushes the node's value at lattice points; the ADC channel
+//!   follows from the pin ([`adc_channel`]). Only on platforms with an ADC
+//!   model (`stm32f072`).
+//!
+//! Platforms: `stm32f103` (Renode's STM32F103 without the SVD download, the
+//! Phase 0 platform; no ADC) and `stm32f072` (Renode's
+//! `platforms/cpus/stm32f072.repl`, whose ADC is `Analog.STM32F0_ADC`,
+//! ADR-003 Amendment 5).
 //!
 //! The parser is a tokenizer over a line-oriented grammar; no regex.
 
 use std::collections::BTreeMap;
 
-use bbcore::{DigitalIn, DigitalOut, Time};
+use bbcore::{AdcIn, DigitalIn, DigitalOut, Time};
+
+/// The platforms `bb run` supports.
+pub const PLATFORMS: [&str; 2] = ["stm32f103", "stm32f072"];
 
 /// A part simulated by a CPU engine.
 #[derive(Clone, Debug, PartialEq)]
@@ -29,6 +42,25 @@ pub struct Part {
     pub reference: String,
     pub engine: String,
     pub platform: String,
+}
+
+/// The ADC channel that reads pin `pin` on `platform`, if any. STM32F0x2
+/// (RM0091, DS9826 pinout): ADC_IN0..7 are PA0..PA7, ADC_IN8..9 PB0..PB1
+/// and ADC_IN10..15 PC0..PC5.
+pub fn adc_channel(platform: &str, pin: &str) -> Option<i32> {
+    if platform != "stm32f072" {
+        return None;
+    }
+    let rest = pin.strip_prefix('P')?;
+    let mut chars = rest.chars();
+    let port = chars.next()?;
+    let n: i32 = chars.as_str().parse().ok()?;
+    match (port, n) {
+        ('A', 0..=7) => Some(n),
+        ('B', 0..=1) => Some(8 + n),
+        ('C', 0..=5) => Some(10 + n),
+        _ => None,
+    }
 }
 
 /// How an MCU pin meets the circuit.
@@ -40,6 +72,12 @@ pub enum PinKind {
     OutUnconnected,
     /// `digital_in` reading circuit node `net`.
     In { net: String, model: DigitalIn },
+    /// `adc_in` reading circuit node `net` on ADC channel `channel`.
+    Adc {
+        net: String,
+        model: AdcIn,
+        channel: i32,
+    },
 }
 
 /// An MCU pin bound through its pin model.
@@ -150,9 +188,10 @@ pub fn parse(text: &str) -> Result<Board, String> {
                         "line {lineno}: engine={engine} not supported (Phase 0: renode)"
                     ));
                 }
-                if platform != "stm32f103" {
+                if !PLATFORMS.contains(&platform.as_str()) {
                     return Err(format!(
-                        "line {lineno}: platform={platform} not supported (Phase 0: stm32f103)"
+                        "line {lineno}: platform={platform} not supported ({})",
+                        PLATFORMS.join(", ")
                     ));
                 }
                 parts.push(Part {
@@ -222,9 +261,41 @@ pub fn parse(text: &str) -> Result<Board, String> {
                     ("digital_in", None) => {
                         return Err(format!("line {lineno}: digital_in needs net="))
                     }
+                    ("adc_in", Some(net)) => {
+                        let platform = &parts
+                            .iter()
+                            .find(|p| p.reference == part)
+                            .expect("checked above")
+                            .platform;
+                        let channel = adc_channel(platform, pin).ok_or_else(|| {
+                            format!(
+                                "line {lineno}: {name}: no ADC channel on this pin of \
+                                 platform={platform} (adc_in needs stm32f072: PA0-7, PB0-1, PC0-5)"
+                            )
+                        })?;
+                        let vref = volts(lineno, "vref", take(lineno, &mut kv, "vref")?)?;
+                        if vref <= 0.0 {
+                            return Err(format!("line {lineno}: vref must be > 0"));
+                        }
+                        let bits = take(lineno, &mut kv, "bits")?;
+                        let bits: u32 = bits
+                            .parse()
+                            .ok()
+                            .filter(|b| (1..=16).contains(b))
+                            .ok_or_else(|| {
+                                format!("line {lineno}: bits={bits:?}: expected 1 to 16")
+                            })?;
+                        PinKind::Adc {
+                            net,
+                            model: AdcIn { vref, bits },
+                            channel,
+                        }
+                    }
+                    ("adc_in", None) => return Err(format!("line {lineno}: adc_in needs net=")),
                     (other, _) => {
                         return Err(format!(
-                            "line {lineno}: model={other} not supported (digital_out, digital_in)"
+                            "line {lineno}: model={other} not supported (digital_out, digital_in, \
+                             adc_in)"
                         ))
                     }
                 };
@@ -319,6 +390,38 @@ mod tests {
         .unwrap();
         assert_eq!(b.pins.len(), 3);
         assert!(ok(&format!("{out}\n{}", out.replace("PA5", "PA6"))).is_err());
+    }
+
+    #[test]
+    fn adc_pins() {
+        let f0 = "*bb part U1 engine=renode platform=stm32f072\n";
+        let ok = |s: &str| parse(&format!("{f0}{s}\n"));
+        let b = ok("*bb pin U1.PA1 net=ADC_IN model=adc_in vref=3.3 bits=12").unwrap();
+        assert_eq!(
+            b.pins[0].kind,
+            PinKind::Adc {
+                net: "ADC_IN".into(),
+                model: AdcIn::STM32_12BIT_3V3,
+                channel: 1
+            }
+        );
+        assert!(ok("*bb pin U1.PA1 model=adc_in vref=3.3 bits=12").is_err());
+        assert!(ok("*bb pin U1.PA1 net=X model=adc_in vref=0 bits=12").is_err());
+        assert!(ok("*bb pin U1.PA1 net=X model=adc_in vref=3.3 bits=17").is_err());
+        assert!(ok("*bb pin U1.PA1 net=X model=adc_in vref=3.3").is_err());
+        assert!(ok("*bb pin U1.PA8 net=X model=adc_in vref=3.3 bits=12").is_err());
+        // No ADC model on the F103 platform (ADR-003 Context fact 8).
+        let f1 = "*bb part U1 engine=renode platform=stm32f103\n";
+        assert!(parse(&format!(
+            "{f1}*bb pin U1.PA1 net=X model=adc_in vref=3.3 bits=12\n"
+        ))
+        .is_err());
+        assert_eq!(adc_channel("stm32f072", "PA0"), Some(0));
+        assert_eq!(adc_channel("stm32f072", "PB1"), Some(9));
+        assert_eq!(adc_channel("stm32f072", "PC5"), Some(15));
+        assert_eq!(adc_channel("stm32f072", "PC6"), None);
+        assert_eq!(adc_channel("stm32f103", "PA1"), None);
+        assert!(parse("*bb part U1 engine=renode platform=stm32f4\n").is_err());
     }
 
     #[test]

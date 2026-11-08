@@ -1,0 +1,26 @@
+* Breadboard ADC example, the loop opened (ADR-003 plan step 9): the same
+* divider as examples/adc/board.cir, but driven by a circuit PULSE source
+* with the firmware's PA4 timing (high from 49.95 ms for 49.95 ms, period
+* 99.9 ms), and every MCU output left unconnected. The binding graph is
+* ngspice -> U1 (PA1) only, so grants are long (--max-quantum) and Renode
+* splits each RUN_FOR at the lattice points of the pushes in it, setting the
+* ADC value while paused there (ADR-003 D2, D6).
+*
+* Same firmware: examples/adc/firmware/build/adc_board.elf.
+*
+*bb part U1 engine=renode platform=stm32f072
+*bb pin U1.PA1 net=ADC_IN model=adc_in vref=3.3 bits=12
+*bb pin U1.PA4 model=digital_out
+*bb pin U1.PA5 model=digital_out
+*bb pin U1.PA6 model=digital_out
+*bb pin U1.PA7 model=digital_out
+
+* Circuit body. Node 0 is GND.
+VDRV DRV_INT 0 PULSE(0 3.3 49.95m 5n 5n 49.95m 99.9m)
+RZ DRV_INT DRIVE 25
+R1 DRIVE ADC_IN 10k
+R2 ADC_IN 0 33k
+C1 ADC_IN 0 470n
+
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

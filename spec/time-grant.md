@@ -12,7 +12,10 @@ traces of example 3, is ADR-003 D3 (plan step 4, Amendment 4); CPU
 lookahead (`quiet_until`), the per-grant plan, the early stop
 (`advance_until`), the promise audit and the query back-off are ADR-003 D5
 (kernel side: plan step 6, Amendment 6); lookahead on by default and
-the Part B half of example 3 are ADR-003 plan step 8 (Amendment 9).
+the Part B half of example 3 are ADR-003 plan step 8 (Amendment 9); ADC
+pushes (`Analog` trace entries at lattice points), their delivery at their
+own time and the code-change watch are ADR-003 D6 (plan step 9, Amendment
+10).
 Implementation: `bbcore::Scheduler`. Changing this file requires an ADR (see
 `AGENTS.md`).
 
@@ -41,9 +44,15 @@ touch an engine adapter.
   its `t`, levels alternate, and the last entry equals the pin's
   `read_outputs()` value. A digital pin absent from the trace did not
   change; an analog pin absent from it is reported by its boundary value.
+  An `adc_in` output (ADR-003 D6, `spec/pin-model.md`) is an analog pin that
+  *is* traced: each push is an `Analog` entry at a lattice point, and a pin
+  absent from the trace did not change.
   Consumers receive the changes on their inputs through
   `apply_input_trace(base, trace)`; its default applies `apply_inputs` once
-  per entry, in order, with the snapshot as of that entry.
+  per entry, in order, with the snapshot as of that entry. An `Analog`
+  value carries no time of its own, so an engine that must apply an analog
+  entry at its time (a lattice-bound ADC consumer) implements
+  `apply_input_trace` and takes the time from the entry's `t`.
 - **binding graph, plan order** (ADR-003 D3): an edge j→i when an output of
   engine *j* drives a net that engine *i* reads. At the first `run` the
   kernel computes its strongly connected components and orders them with
@@ -93,7 +102,9 @@ touch an engine adapter.
 - **early stop:** `advance_until(t, watch)` on an engine with
   `can_stop_early()`: it advances towards `t` and, at the first change of a
   pin in `watch` at `t_x`, stops at `r = ceil_L(t_x)` (at most `t`) and
-  returns `r`; with no such change it returns `t`.
+  returns `r`; with no such change it returns `t`. A watched `adc_in` pin
+  changes only at lattice points (its pushes), so it stops at the push
+  itself: the code-change watch of ADR-003 D6.
 - **t_end:** end of the run.
 
 ## State machine
@@ -220,6 +231,9 @@ For each engine *i* in plan order:
    Renode), at `ceil_L(edge_time)`, the first lattice point at or after it,
    and **never earlier**. Several transitions of one pin inside one lattice
    cell are all applied, in order, at `ceil_L` (ADR-003 approver decision 2).
+   An ADC push (an `Analog` entry of an `adc_in` pin) is at a lattice point
+   `t` and is applied at `t` (Renode: `ADC SetValue` while paused there),
+   never earlier.
    An engine whose inputs did not change in this grant gets no pre-advance
    call.
 2. `advance_to(g)`.
@@ -469,9 +483,9 @@ at `ceil_L(t_x)`, so the outputs equal the one-cell run's byte for byte.
   `emulation SetGlobalAdvanceImmediately true` (ADR-003 D1.1, D2).
 - Return `t_safe <= now`.
 - Apply an input before its `edge_time` (a lattice-bound engine: before
-  `ceil_L(edge_time)`), apply a pre-advance input later than that, drop an
-  intermediate transition of a trace, or treat a repeated identical snapshot
-  as a new edge.
+  `ceil_L(edge_time)`; an ADC push: before its `t`), apply a pre-advance
+  input later than that, drop an intermediate transition of a trace, or
+  treat a repeated identical snapshot as a new edge.
 - Report a digital `edge_time` outside `(p, g]`, hide a change from the trace
   (a traced engine), or hide a second edge inside a grant (a legacy engine).
 - Step ngspice per CPU instruction.

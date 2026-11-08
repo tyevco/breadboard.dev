@@ -30,6 +30,12 @@
 //! step 8): the kernel lifts the loop cap while the sleeping MCU promises to
 //! stay quiet (`quiet_until`); lookahead changes only the grant partition,
 //! never the results. `--lookahead off` gives the one-cell reference.
+//!
+//! An `adc_in` pin (ADR-003 D6; `platform=stm32f072`, `examples/adc`) is an
+//! MCU input too: ngspice pushes the node at the lattice points where the
+//! delivered whole millivolts change (`--adc-push every`: at every lattice
+//! point, the reference) and Renode sets each value on the ADC channel
+//! while paused there. With lookahead, a push stops ngspice early.
 
 mod board;
 
@@ -40,10 +46,11 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use bb_analog_ngspice::{
-    DigitalOutputBinding, Drive, InputBinding, NgspiceConfig, NgspiceEngine, OutputBinding,
+    AdcOutputBinding, AdcPush, DigitalOutputBinding, Drive, InputBinding, NgspiceConfig,
+    NgspiceEngine, OutputBinding,
 };
 use bb_cpu_renode::{
-    find_renode, LookaheadCfg, PinDirection, PinSpec, RenodeConfig, RenodeEngine, Verify,
+    find_renode, LookaheadCfg, PinDirection, PinSpec, Platform, RenodeConfig, RenodeEngine, Verify,
 };
 use bbcore::{
     CsvWriter, Direction, Engine, EventSink, Level, Probe, Scheduler, SchedulerConfig, Time,
@@ -56,7 +63,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
-              [--lookahead on|off]
+              [--lookahead on|off] [--adc-push change|every]
 
   --netlist    board file: SPICE body plus *bb directives (examples/spike/board.cir)
   --firmware     ELF loaded into the target MCU
@@ -101,7 +108,13 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  boards load Renode's lookahead plugin in both modes
   --lookahead-plugin
                  auto (default: boards with a feedback loop), always or never.
-                 The plugin is inert, so outputs are identical (a test knob)";
+                 The plugin is inert, so outputs are identical (a test knob)
+  --adc-push     when an adc_in pin's value reaches the MCU's ADC (ADR-003
+                 D6): change (default), at the lattice points where its whole
+                 millivolts change, which is all Renode's ADC converts; or
+                 every lattice point, with the value in whole microvolts
+                 (the reference of the equivalence gate). The MCU sees the
+                 same conversions either way (a test knob)";
 
 struct RunArgs {
     netlist: PathBuf,
@@ -121,6 +134,15 @@ struct RunArgs {
     /// loaded (ADR-003 plan step 8).
     lookahead: Option<bool>,
     plugin: PluginMode,
+    adc_push: AdcPush,
+}
+
+fn parse_adc_push(s: &str) -> Result<AdcPush, String> {
+    match s {
+        "change" => Ok(AdcPush::OnChange),
+        "every" => Ok(AdcPush::EveryLattice),
+        _ => Err(format!("{s:?}: expected change or every")),
+    }
 }
 
 /// When to load Renode's lookahead plugin (`--lookahead-plugin`). The plugin
@@ -232,6 +254,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut engine_order = EngineOrder::McuFirst;
     let mut lookahead = None;
     let mut plugin = PluginMode::Auto;
+    let mut adc_push = AdcPush::OnChange;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -288,6 +311,9 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
                     .parse()
                     .map_err(|e| format!("--lookahead-plugin: {e}"))?
             }
+            "--adc-push" => {
+                adc_push = parse_adc_push(&val(a)?).map_err(|e| format!("--adc-push: {e}"))?
+            }
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -330,6 +356,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         engine_order,
         lookahead,
         plugin,
+        adc_push,
     })
 }
 
@@ -362,7 +389,18 @@ fn run(a: RunArgs) -> Result<(), String> {
     if mcu_pins.is_empty() {
         return Err(format!("part {} has no *bb pin bindings", part.reference));
     }
-    let digital_nets: Vec<String> = mcu_pins.iter().map(|p| p.kernel_net()).collect();
+    // MCU pin nets carrying a digital level, and those carrying an ADC
+    // input's pushed value (ADR-003 D6).
+    let digital_nets: Vec<String> = mcu_pins
+        .iter()
+        .filter(|p| !matches!(p.kind, PinKind::Adc { .. }))
+        .map(|p| p.kernel_net())
+        .collect();
+    let adc_nets: Vec<String> = mcu_pins
+        .iter()
+        .filter(|p| matches!(p.kind, PinKind::Adc { .. }))
+        .map(|p| p.kernel_net())
+        .collect();
 
     // --- CPU engine.
     let renode = match &a.renode {
@@ -374,14 +412,19 @@ fn run(a: RunArgs) -> Result<(), String> {
     rcfg.quantum = a.renode_quantum;
     rcfg.seed = a.seed;
     rcfg.verify = a.verify;
+    if part.platform == "stm32f072" {
+        // Renode 1.17.0's stock STM32F072 (ADC = Analog.STM32F0_ADC,
+        // instance `adc`; it loads offline). ADR-003 Amendment 5.
+        rcfg.platform = Platform::Repl("platforms/cpus/stm32f072.repl".into());
+    }
     rcfg.pins = mcu_pins
         .iter()
-        .map(|p| {
-            let dir = match p.kind {
-                PinKind::In { .. } => PinDirection::Input,
-                PinKind::Out { .. } | PinKind::OutUnconnected => PinDirection::Output,
-            };
-            PinSpec::stm32(&p.pin, dir)
+        .map(|p| match p.kind {
+            PinKind::In { .. } => PinSpec::stm32(&p.pin, PinDirection::Input),
+            PinKind::Out { .. } | PinKind::OutUnconnected => {
+                PinSpec::stm32(&p.pin, PinDirection::Output)
+            }
+            PinKind::Adc { channel, .. } => Ok(PinSpec::adc(&p.pin, "adc", channel)),
         })
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
@@ -392,7 +435,7 @@ fn run(a: RunArgs) -> Result<(), String> {
     // platform. Checked against the kernel's plan after the run.
     let cyclic = mcu_pins
         .iter()
-        .any(|p| matches!(p.kind, PinKind::In { .. }))
+        .any(|p| matches!(p.kind, PinKind::In { .. } | PinKind::Adc { .. }))
         && mcu_pins
             .iter()
             .any(|p| matches!(p.kind, PinKind::Out { .. }));
@@ -436,13 +479,21 @@ fn run(a: RunArgs) -> Result<(), String> {
                 node: net.clone(),
                 model: *model,
             }),
+            // An MCU ADC input: ngspice pushes the node's value at lattice
+            // points (ADR-003 D6).
+            PinKind::Adc { net, model, .. } => ncfg.adc_outputs.push(AdcOutputBinding {
+                pin: p.kernel_net(),
+                node: net.clone(),
+                model: *model,
+            }),
             PinKind::OutUnconnected => {}
         }
     }
+    ncfg.adc_push = a.adc_push;
     let analog_probes: Vec<&String> = a
         .probes
         .iter()
-        .filter(|n| !digital_nets.contains(n))
+        .filter(|n| !digital_nets.contains(n) && !adc_nets.contains(n))
         .collect();
     for n in &analog_probes {
         ncfg.outputs.push(OutputBinding {
@@ -498,7 +549,7 @@ fn run(a: RunArgs) -> Result<(), String> {
                 bind(&mut sched, an_id, &k, &k, Direction::Input)?;
             }
             PinKind::OutUnconnected => bind(&mut sched, cpu_id, &p.pin, &k, Direction::Output)?,
-            PinKind::In { .. } => {
+            PinKind::In { .. } | PinKind::Adc { .. } => {
                 bind(&mut sched, an_id, &k, &k, Direction::Output)?;
                 bind(&mut sched, cpu_id, &p.pin, &k, Direction::Input)?;
             }

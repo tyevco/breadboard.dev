@@ -78,6 +78,13 @@
 //! so this is not a free-run. A transition delivered at a boundary
 //! (`edge_time <= now`) takes effect at once, at `now`.
 //!
+//! ADC inputs ([`PinDirection::Adc`], ADR-003 D6) work the same way: the
+//! producer pushes `Analog` values at lattice points, and the engine sets
+//! each one with the External Control `ADC` command (`SetValue`, whole
+//! microvolts, on the channel's default sample) while Renode is paused on
+//! that lattice point. [`bbcore::Engine::apply_input_trace`] takes each
+//! entry's time from the trace, because an `Analog` value carries none.
+//!
 //! # Determinism
 //!
 //! Renode is deterministic for a single machine given the same ELF, platform,
@@ -293,6 +300,12 @@ pub enum PinDirection {
     Output,
     /// The kernel drives the pin into the MCU (`SET_STATE`).
     Input,
+    /// An ADC input (ADR-003 D6): the kernel pushes `Analog` values, which
+    /// the engine applies with the External Control `ADC` command
+    /// (`SetValue`, whole microvolts) at their lattice points. For such a
+    /// pin [`PinSpec::gpio`] names the ADC peripheral (e.g. `adc`) and
+    /// [`PinSpec::index`] is the channel.
+    Adc,
 }
 
 /// One MCU pin exposed to the kernel.
@@ -300,9 +313,10 @@ pub enum PinDirection {
 pub struct PinSpec {
     /// Pin name on the engine side, e.g. `PA5`.
     pub name: String,
-    /// Renode GPIO controller name, e.g. `gpioPortA`.
+    /// Renode GPIO controller name, e.g. `gpioPortA` (an ADC input: the ADC
+    /// peripheral's name).
     pub gpio: String,
-    /// Pin index within the controller.
+    /// Pin index within the controller (an ADC input: the channel).
     pub index: i32,
     pub direction: PinDirection,
 }
@@ -327,6 +341,17 @@ impl PinSpec {
             index,
             direction,
         })
+    }
+
+    /// An ADC input: pin `name` (e.g. `PA1`) read by channel `channel` of
+    /// the ADC peripheral `adc` (e.g. `adc` on `stm32f072.repl`).
+    pub fn adc(name: &str, adc: &str, channel: i32) -> PinSpec {
+        PinSpec {
+            name: name.to_string(),
+            gpio: adc.to_string(),
+            index: channel,
+            direction: PinDirection::Adc,
+        }
     }
 }
 
@@ -526,13 +551,24 @@ struct PinState {
     edge_time: Time,
     /// Input pin: the last level driven or queued to be driven.
     scheduled: Option<Level>,
+    /// ADC input: the last value (µV) set or queued to be set.
+    scheduled_uv: Option<u32>,
+    /// ADC input: the last value (µV) set (for the cross-check).
+    applied_uv: Option<u32>,
+}
+
+/// What an input transition drives.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum InputValue {
+    Level(Level),
+    Microvolts(u32),
 }
 
 /// An input transition waiting for its lattice point `ceil_L(t)`.
 struct PendingInput {
     at_ns: u64,
     pin: usize,
-    level: Level,
+    value: InputValue,
 }
 
 /// A [`bbcore::Engine`] backed by one headless Renode process.
@@ -805,6 +841,26 @@ impl RenodeEngine {
             let md = client.get_machine(&cfg.machine)?;
             let mut pins = Vec::new();
             for (i, spec) in cfg.pins.iter().enumerate() {
+                if spec.direction == PinDirection::Adc {
+                    let adc = client.get_adc(md, &spec.gpio)?;
+                    let n = client.adc_channel_count(adc)?;
+                    if !(0..n).contains(&spec.index) {
+                        return Err(ProtocolError::Server(format!(
+                            "{}: ADC {} has {n} channels, no channel {}",
+                            spec.name, spec.gpio, spec.index
+                        )));
+                    }
+                    pins.push(PinState {
+                        spec: spec.clone(),
+                        gpio: adc,
+                        level: Level::Low,
+                        edge_time: Time::ZERO,
+                        scheduled: None,
+                        scheduled_uv: None,
+                        applied_uv: None,
+                    });
+                    continue;
+                }
                 let gpio = client.get_gpio(md, &spec.gpio)?;
                 let level = Level::from_bool(client.gpio_get_state(gpio, spec.index)?);
                 if spec.direction == PinDirection::Output {
@@ -816,6 +872,8 @@ impl RenodeEngine {
                     level,
                     edge_time: Time::ZERO,
                     scheduled: None,
+                    scheduled_uv: None,
+                    applied_uv: None,
                 });
             }
             let t0 = client.get_time()?;
@@ -1201,6 +1259,15 @@ impl Engine for RenodeEngine {
         self.apply_inner(inputs).map_err(|e| self.failure(e))
     }
 
+    fn apply_input_trace(
+        &mut self,
+        base: &PinSignals,
+        trace: &[Transition],
+    ) -> Result<(), EngineError> {
+        self.apply_trace_inner(base, trace)
+            .map_err(|e| self.failure(e))
+    }
+
     /// The end-of-run cross-check of [`Verify::Edges`] and [`Verify::Final`]
     /// (with [`Verify::Every`] the last advance has just been checked).
     fn end_of_run(&mut self) -> Result<(), EngineError> {
@@ -1231,6 +1298,22 @@ impl RenodeEngine {
     /// rule 3), the level of its last carried event: Renode already shows it.
     fn verify_pins(&mut self) -> Result<(), EngineError> {
         for (i, p) in self.pins.iter().enumerate() {
+            if p.spec.direction == PinDirection::Adc {
+                // ADC GetValue must read back the last value set.
+                if let Some(want) = p.applied_uv {
+                    let got = self
+                        .client
+                        .adc_get_value(p.gpio, p.spec.index)
+                        .map_err(proto)?;
+                    if got != want {
+                        return Err(EngineError::Protocol(format!(
+                            "verify: {}: ADC channel {} reads {got} uV at {} ns, set {want} uV",
+                            p.spec.name, p.spec.index, self.renode_ns
+                        )));
+                    }
+                }
+                continue;
+            }
             if p.spec.direction != PinDirection::Output {
                 continue;
             }
@@ -1278,11 +1361,20 @@ impl RenodeEngine {
         Ok(())
     }
 
-    fn set_input(&mut self, i: usize, level: Level) -> Result<(), EngineError> {
-        let p = &self.pins[i];
-        self.client
-            .gpio_set_state(p.gpio, p.spec.index, level == Level::High)
-            .map_err(proto)?;
+    fn set_input(&mut self, i: usize, value: InputValue) -> Result<(), EngineError> {
+        let p = &mut self.pins[i];
+        match value {
+            InputValue::Level(level) => self
+                .client
+                .gpio_set_state(p.gpio, p.spec.index, level == Level::High)
+                .map_err(proto)?,
+            InputValue::Microvolts(uv) => {
+                self.client
+                    .adc_set_value(p.gpio, p.spec.index, uv)
+                    .map_err(proto)?;
+                p.applied_uv = Some(uv);
+            }
+        }
         self.input_applied = true;
         // The input may wake the CPU (EXTI -> NVIC): a cached lookahead
         // snapshot no longer describes Renode.
@@ -1306,7 +1398,7 @@ impl RenodeEngine {
             self.run_to(at_ns, &mut events)?;
             while self.pending.first().is_some_and(|p| p.at_ns == at_ns) {
                 let p = self.pending.remove(0);
-                self.set_input(p.pin, p.level)?;
+                self.set_input(p.pin, p.value)?;
             }
         }
         self.run_to(target_ns, &mut events)?;
@@ -1390,44 +1482,101 @@ impl RenodeEngine {
 
     fn apply_inner(&mut self, inputs: &PinSignals) -> Result<(), EngineError> {
         for (name, sig) in inputs {
-            let i = self
-                .pin_index(name)
-                .filter(|i| self.pins[*i].spec.direction == PinDirection::Input)
-                .ok_or_else(|| {
-                    EngineError::Protocol(format!("{} has no input pin {name:?}", self.name))
-                })?;
-            let level = sig.level().ok_or_else(|| {
-                EngineError::Protocol(format!(
-                    "{}.{name}: analog input needs a DigitalIn threshold, not supported yet",
-                    self.name
-                ))
-            })?;
-            if self.pins[i].scheduled == Some(level) {
-                continue; // a snapshot already applied or queued: no-op
-            }
-            self.pins[i].scheduled = Some(level);
-            // ADR-003 D2: Renode observes an input at its next sync point, so
-            // a transition at `t` takes effect at ceil_L(t), never earlier.
-            // One already in the past (delivered at a boundary) takes effect
-            // now.
+            // A snapshot: a digital value takes effect at its edge_time, an
+            // ADC value (which carries no time) at once.
             let t = match sig {
-                PinSignal::Digital { edge_time, .. } => (*edge_time).max(self.now),
+                PinSignal::Digital { edge_time, .. } => *edge_time,
                 PinSignal::Analog { .. } => self.now,
             };
-            let at_ns = ceil_lattice_ns(t, self.quantum_ns);
-            if at_ns <= self.renode_ns {
-                self.set_input(i, level)?;
-            } else {
-                let k = self.pending.partition_point(|p| p.at_ns <= at_ns);
-                self.pending.insert(
-                    k,
-                    PendingInput {
-                        at_ns,
-                        pin: i,
-                        level,
-                    },
-                );
+            self.apply_one(name, sig, t)?;
+        }
+        Ok(())
+    }
+
+    /// Apply one input value that holds from `t` on.
+    fn apply_one(&mut self, name: &str, sig: &PinSignal, t: Time) -> Result<(), EngineError> {
+        let i = self
+            .pin_index(name)
+            .filter(|i| {
+                matches!(
+                    self.pins[*i].spec.direction,
+                    PinDirection::Input | PinDirection::Adc
+                )
+            })
+            .ok_or_else(|| {
+                EngineError::Protocol(format!("{} has no input pin {name:?}", self.name))
+            })?;
+        let value = match (self.pins[i].spec.direction, sig) {
+            (PinDirection::Input, PinSignal::Digital { level, .. }) => {
+                if self.pins[i].scheduled == Some(*level) {
+                    return Ok(()); // a snapshot already applied or queued: no-op
+                }
+                self.pins[i].scheduled = Some(*level);
+                InputValue::Level(*level)
             }
+            (PinDirection::Adc, PinSignal::Analog { volts }) => {
+                // The producer delivers whole microvolts in [0, vref]
+                // (ADR-003 D6); SetValue takes them as a u32.
+                if !volts.is_finite() || *volts < 0.0 || *volts > f64::from(u32::MAX) / 1e6 {
+                    return Err(EngineError::Protocol(format!(
+                        "{}.{name}: ADC value {volts} V is out of range",
+                        self.name
+                    )));
+                }
+                let uv = (volts * 1e6).round() as u32;
+                if self.pins[i].scheduled_uv == Some(uv) {
+                    return Ok(());
+                }
+                self.pins[i].scheduled_uv = Some(uv);
+                InputValue::Microvolts(uv)
+            }
+            (PinDirection::Input, PinSignal::Analog { .. }) => {
+                return Err(EngineError::Protocol(format!(
+                    "{}.{name}: an analog value on a digital input needs a DigitalIn \
+                     threshold in the producer",
+                    self.name
+                )))
+            }
+            _ => {
+                return Err(EngineError::Protocol(format!(
+                    "{}.{name}: an ADC input takes analog values (adc_in), got {sig:?}",
+                    self.name
+                )))
+            }
+        };
+        // ADR-003 D2: Renode observes an input at its next sync point, so a
+        // transition at `t` takes effect at ceil_L(t), never earlier. One
+        // already in the past (delivered at a boundary) takes effect now.
+        let at_ns = ceil_lattice_ns(t.max(self.now), self.quantum_ns);
+        if at_ns <= self.renode_ns {
+            self.set_input(i, value)?;
+        } else {
+            let k = self.pending.partition_point(|p| p.at_ns <= at_ns);
+            self.pending.insert(
+                k,
+                PendingInput {
+                    at_ns,
+                    pin: i,
+                    value,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// ADR-003 D3: every transition of the trace at its own time (digital:
+    /// its `edge_time`, which equals `t`; ADC: `t`, a lattice point), so an
+    /// ADC push inside the coming grant is set while Renode is paused on its
+    /// lattice point (D6). The default would apply a snapshot, and an
+    /// `Analog` value in a snapshot carries no time.
+    fn apply_trace_inner(
+        &mut self,
+        base: &PinSignals,
+        trace: &[Transition],
+    ) -> Result<(), EngineError> {
+        self.apply_inner(base)?;
+        for tr in trace {
+            self.apply_one(&tr.pin, &tr.signal, tr.t)?;
         }
         Ok(())
     }

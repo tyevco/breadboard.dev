@@ -3,7 +3,8 @@
 Status: normative. Implementation: `bbcore::pin`, `bbcore::signal`. Changing
 this file requires an ADR. `digital_out` ramp start: ADR-003 D3 (plan step 3,
 Amendment 3). `digital_in` thresholding by the producing analog engine and its
-glue: ADR-003 D3 (plan step 4, Amendment 4).
+glue: ADR-003 D3 (plan step 4, Amendment 4). `adc_in`: ADR-003 D6 (plan step
+9, Amendments 5 and 10).
 
 Every component pin has **exactly one** pin model, supplied by its package (in
 Phase 0, hand-written in the board netlist). The kernel connects pins to nets
@@ -33,6 +34,7 @@ enum PinSignal {
 | --- | --- | --- |
 | `digital_out` | `voh` V, `vol` V, `rise` Time, `fall` Time, `zout` Ω | **yes** (STM32 PA5) |
 | `digital_in` | `vih` V, `vil` V, `cin` F | **yes** (STM32 PB0 in `examples/feedback`) |
+| `adc_in` | `vref` V, `bits` | **yes** (STM32F072 PA1, ADC channel 1, in `examples/adc`) |
 | `analog` | none; bidirectional node, exchanged as volts | not yet (as a probe target only) |
 | `power` | `vmin` V, `vmax` V, `imax` A | not yet |
 | `passive` | none; exists only inside the analog engine (R, C, LED...) | **yes** (330 Ω, LED) |
@@ -87,10 +89,44 @@ thresholds it (ADR-003 D3) and the value crosses the boundary as `Digital`:
 `cin` is added to the analog netlist as a capacitor to ground on the net.
 A lattice-bound consumer (Renode) applies each transition at `ceil_L(t)`.
 
+### `adc_in{vref, bits}`
+
+An MCU ADC input reading an analog net. It is a **push** model (ADR-003 D6):
+the *producing* analog engine reads the net and the value crosses the
+boundary as `Analog` transitions of its trace, only at lattice points:
+
+- At every lattice point `kL` the producer reads the net at the solver point
+  there (the grant lattice puts one on every lattice point, ADR-003 D2) and
+  delivers `uV = clamp(round(volts * 1e6), 0, round(vref * 1e6))`, whole
+  microvolts clamped to `[0, vref]` (real converters saturate; Renode's
+  model does not).
+- It emits a transition at `kL` only where the push key `floor(uV / 1000)`
+  (whole millivolts) changes, delivering exactly that many millivolts. That
+  is all Renode 1.17.0's `STM32_ADC_Common` converts:
+  `code = round_half_even(floor(uV / 1000) / (vref * 1000) * (2^bits - 1))`
+  (ADR-003 Amendment 5). So the rule is exact whatever resolution or
+  alignment the firmware selects, and `bits` documents the code mapping
+  only. A reference mode pushes `uV` at every lattice point; the converter
+  sees the same values (`bb run --adc-push every`).
+- The value at t = 0 is the value delivered at the initial solver point.
+- The pin's boundary value is the last delivered value; a pin without a
+  transition in the grant did not change.
+- The consumer applies a push at its lattice point `t`, never earlier
+  (Renode: External Control `ADC SetValue` on the channel while paused at
+  `t`, splitting its advance there). A conversion therefore sees the value
+  of the latest lattice point, at most `L` old, in every partition.
+- A watched `adc_in` pin (`advance_until`, CPU lookahead) stops the
+  producer at its first push: a change of the converted value is an input
+  change of the CPU (the code-change watch).
+
+No glue: the input is ideal (no load). The ADC channel follows from the pin
+and the platform (STM32F0x2: `PA0`..`PA7` are channels 0..7, `PB0`..`PB1`
+8..9, `PC0`..`PC5` 10..15); only platforms with an ADC model accept it.
+
 ### `analog`
 
-The pin reads or drives an analog value directly, for example an ADC input or
-DAC output. ADC inputs are sampled at boundaries.
+The pin reads or drives an analog value directly, for example a DAC output.
+ADC inputs use `adc_in`.
 
 ### `power{vmin, vmax, imax}`
 
@@ -120,3 +156,6 @@ boundary; the analog engine handles it entirely.
    directives (the analog engine writes it into the netlist). The automatic
    generator from schematics arrives with the KiCad importer, which must not
    parse KiCad with regex.
+6. A net driven by an analog engine and loaded by an `adc_in` gets no glue;
+   its value crosses the boundary as the pushed `Analog` trace above
+   (ADR-003 D6).

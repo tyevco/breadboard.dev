@@ -1,0 +1,51 @@
+* Breadboard ADC example (ADR-003 Part C, plan step 9): an STM32F072 that
+* reads back, through its ADC, an RC-filtered divider it drives itself.
+*
+*   U1.PA4 (DRIVE) -> 25 ohm (zout glue) -> R1 10k -> ADC_IN
+*   ADC_IN -> R2 33k -> GND, C1 470 nF -> GND
+*   ADC_IN -> U1.PA1 (adc_in: vref 3.3 V, 12 bits; ADC channel 1)
+*   U1.PA5 (ALARM) -> R3 330 ohm -> LED -> D1 (red LED) -> GND
+*   U1.PA6, U1.PA7: code bits 4 and 8 (not connected, probed)
+*
+* Firmware (examples/adc/firmware/adc.c, build/adc_board.elf): TIM3 updates
+* every 999 us on Renode (ARR ticks, ADR-003 Amendment 5 fact 5); its ISR
+* toggles PA4 every 50 updates and starts one conversion. Analog watchdog 1
+* watches [1241, 2482] = [1.0 V, 2.0 V]: an out-of-window conversion drives
+* ALARM high, the next in-window one drives it low. The ADC ISR copies code
+* bits 4 and 8 to PA6 and PA7.
+*
+* ADC_IN settles to 3.3 V * 33k / (25 + 10k + 33k) = 2.531087 V (code 3141,
+* above the window) with tau = (10025 || 33000) ohm * 470 nF = 3.614 ms, and
+* back to 0 V (code 0, below it): ALARM drops while ADC_IN crosses the
+* window and rises again after.
+*
+* The binding graph is U1 -> ngspice (PA4, PA5) and ngspice -> U1 (PA1): a
+* feedback loop. ngspice pushes ADC_IN to the ADC at the lattice points
+* where its whole millivolts change (ADR-003 D6, Amendment 10); Renode sets
+* each value (External Control ADC SetValue) while paused on that lattice
+* point. With lookahead (the default) the grants grow while the MCU sleeps
+* and ADC_IN is flat; a millivolt change stops ngspice at its lattice point
+* (the code-change watch).
+*
+* Directive grammar: see examples/spike/board.cir and cli/src/board.rs.
+*
+*bb part U1 engine=renode platform=stm32f072
+*bb pin U1.PA4 net=DRIVE model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb pin U1.PA1 net=ADC_IN model=adc_in vref=3.3 bits=12
+*bb pin U1.PA5 net=ALARM model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb pin U1.PA6 model=digital_out
+*bb pin U1.PA7 model=digital_out
+
+* Circuit body. Node 0 is GND.
+R1 DRIVE ADC_IN 10k
+R2 ADC_IN 0 33k
+C1 ADC_IN 0 470n
+R3 ALARM LED 330
+D1 LED 0 LED_RED
+
+* Red LED: the spike's model (examples/spike/board.cir).
+.model LED_RED D(IS=1e-18 N=2 RS=2 CJO=10p)
+
+* Solver tolerances, as in the spike.
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end
