@@ -388,6 +388,14 @@ impl Scheduler {
             self.phase = Phase::Exchange;
             self.exchange(now, events, sink, probes)?;
         }
+        // Done: end-of-run self-checks (ADR-003 Amendment 1).
+        for e in self.engines.iter_mut() {
+            e.end_of_run().map_err(|source| SchedError::Engine {
+                engine: e.name().to_string(),
+                phase: Phase::Done,
+                source,
+            })?;
+        }
         Ok(())
     }
 

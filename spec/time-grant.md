@@ -2,7 +2,10 @@
 
 Status: normative. Rationale: `docs/adr/002-time-grant-protocol.md`
 (Advance ordering: Amendment 2, Gauss-Seidel intra-grant delivery;
-`t_safe` wording and sampled probes: Amendment 3).
+`t_safe` wording and sampled probes: Amendment 3). The grant lattice,
+`edge_time` at the producer's resolution and the never-early input rule are
+`docs/adr/003-cosim-speedup.md` D2 (implemented in plan step 2, Amendment 2);
+the end-of-run hook (`end_of_run`) is ADR-003 Amendment 1.
 Implementation: `bbcore::Scheduler`. Changing this file requires an ADR (see
 `AGENTS.md`).
 
@@ -24,6 +27,21 @@ touch an engine adapter.
   registered before it see it one grant late (Jacobi). It must satisfy
   `t_safe_i > now`. `Time::MAX` means idle. (ADR-002 Amendment 3.)
 - **grant g:** the time every engine advances to in one iteration.
+- **lattice L** (ADR-003 D2): the step on which every grant boundary must
+  fall. An engine declares it through `grant_lattice()` (Renode: its global
+  quantum, `--renode-quantum`, default 10 µs); engines that declare none are
+  not lattice-bound. All declared lattices must be equal. Without one, `L`
+  is 1 fs and every rounding below is the identity. `L` is run
+  configuration, like the seed: it sets the CPU's firmware-timing, edge-stamp
+  and input resolution, and changing it changes results. `floor_L(t)` and
+  `ceil_L(t)` round to multiples of `L`.
+- **edge_time:** the producer's reported time of a change, at the producer's
+  resolution. For Renode that is the sync point that opens the slice in which
+  the write executed (at most `L` before the true instruction time), with the
+  lattice +1 fs rule of ADR-003 D2: a stamp `s` that is a multiple of `L` is
+  reported as `s + 1 fs`, any other stamp (a timer-driven sync) exactly; a
+  change stamped exactly at the grant end belongs to the next grant. "Applied
+  at its true time" below means "applied at the producer's `edge_time`".
 - **boundary:** the instant `g` at which pin signals are exchanged.
 - **max_quantum:** configured upper bound on `g - now`, which must be greater than 0.
 - **t_end:** end of the run.
@@ -39,7 +57,8 @@ touch an engine adapter.
    +-------> Query ---- t_safe_i <= now -------------------------+
    |           |                                                   |
    |           v                                                   |
-   |         Grant     g = min(t_safe_i, next_sample, now+max_quantum, t_end)
+   |         Grant     g = floor_L(min(t_safe_i, next_sample, now+max_quantum, t_end))
+   |           |       (floor_L(..) <= now: Lattice error)            |
    |           |       emit {"type":"grant", t_fs: now, until_fs: g}  |
    |           v                                                   |
    |        Advance    per engine i, in registration order:  ------+-- engine error
@@ -55,36 +74,47 @@ touch an engine adapter.
            now == t_end                                         | Error | (terminal)
                v                                                +-------+
             +------+
-            | Done |  run(t_end') with t_end' > now resumes at Query
+            | Done |  end_of_run() per engine; run(t_end') with t_end' > now resumes at Query
             +------+
 ```
 
 | State | Entry action | Exit to | Condition |
 | --- | --- | --- | --- |
-| Init | none | Exchange (initial) | first `run()`, at least 1 engine |
+| Init | check the lattice: declared lattices equal; `max_quantum`, `t_end` and the `event_sampling` period multiples of `L` (`Config` error otherwise) | Exchange (initial) | first `run()`, at least 1 engine |
 | Query | `t_safe_i = next_safe_time(now)` for every *i* | Grant | every `t_safe_i > now` |
 | Query | | Error | any `t_safe_i <= now` (`NoProgress`) |
-| Grant | compute `g`, emit `grant` | Advance | always |
+| Grant | compute `g`, emit `grant` | Advance | `g > now` |
+| Grant | | Error | `floor_L(min(..)) <= now` (`Lattice`) |
 | Advance | for every *i* in order: pre-advance delivery, `advance_to(g)`, collect (see "Advance"); `now := g` | Exchange | every call returned Ok |
 | Advance | | Error | any engine error or causality violation |
 | Exchange | see "Exchange" below | Query | `now < t_end` |
 | Exchange | | Done | `now == t_end` |
 | Exchange | | Error | causality violation, engine error or I/O error |
-| Done | none | Query | `run(t_end')` with `t_end' > now` |
+| Done | `end_of_run()` for every engine, in registration order (ADR-003 Amendment 1) | Error | any `end_of_run` error |
+| Done | | Query | `run(t_end')` with `t_end' > now` |
 | Error | none | none | every later call returns `Halted` |
 
 ## Invariants (MUST)
 
 1. **No free-run:** an engine's internal time never exceeds the latest grant.
    `advance_to(t)` is called only with `now < t <= t_safe` (the engine's most
-   recent promise), and the engine stops at exactly `t`.
-2. **Grant = min:** `g` is exactly the minimum in the Grant row. When several
-   bounds tie, `limited_by` names the first in this order: engines in
-   registration order, then `sample`, then `max_quantum`, then `t_end`.
+   recent promise) and `t` on the lattice, and the engine stops at exactly
+   `t`. An engine may split its own advance into steps that each end on the
+   lattice at or before `t` (Renode, to apply inputs at `ceil_L`); that is
+   not a free-run.
+2. **Grant = min:** `g` is exactly the minimum in the Grant row, rounded
+   down to the lattice after the min. When several bounds tie, `limited_by`
+   names the first in this order: engines in registration order, then
+   `sample`, then `max_quantum`, then `t_end`. Rounding never changes the
+   label.
 3. **Lockstep:** every engine is advanced to the same `g` in every iteration.
    Engines advance one after another in registration order (Gauss-Seidel),
    never concurrently.
-4. **Progress:** `g > now`, which holds because every term is greater than `now`.
+4. **Progress:** `g > now`. Every term is greater than `now`, and `now`,
+   `max_quantum`, `t_end` and aligned sample instants are on the lattice, so
+   only an engine with `t_safe < now + L` can make `floor_L(g) <= now`. That
+   is `SchedError::Lattice { engine, now, t_safe }`, never a silent clamp; the
+   remedy is a smaller `L` or a fix to that engine's `t_safe`.
 5. **Digital transitions:** at boundary `g`, after previous boundary `p`:
    - level changed: `p < edge_time <= g`, and `pin_edge` is emitted at `edge_time`;
    - level unchanged: `edge_time` is unchanged. A moved `edge_time` means
@@ -92,6 +122,8 @@ touch an engine adapter.
    - `edge_time > g` is always an error.
 6. **Determinism:** the order of every call and every emitted record is a pure
    function of the inputs. See ADR-002 D6.
+7. **Lattice:** every boundary, `max_quantum`, `t_end` and every aligned
+   sample instant is a multiple of `L` (ADR-003 D2).
 
 ## Advance (grant `g`, previous boundary `p`)
 
@@ -103,8 +135,10 @@ For each engine *i* in registration order:
    snapshot is the same full snapshot as in Exchange step 2. A digital signal
    in it may carry an `edge_time` with `p < edge_time <= g`. The consumer is
    still at `p` and **must apply the transition at `edge_time`**, its true
-   time. An engine whose inputs did not change in this grant gets no
-   pre-advance call.
+   time, or, if it can only observe inputs at its lattice points
+   (lattice-bound, Renode), at `ceil_L(edge_time)`, the first lattice point
+   at or after it, and **never earlier**. An engine whose inputs did not
+   change in this grant gets no pre-advance call.
 2. `advance_to(g)`.
 3. **Collect** at `g`: `drain_logs()` (a record with `t > g` is an error; a
    record with `t < p` is clamped to `p`), then `read_outputs()`. For each
@@ -238,3 +272,5 @@ Either way the result is identical; only the cost differs.
 - Report a digital `edge_time` outside `(p, g]`, or hide a second edge inside a grant.
 - Step ngspice per CPU instruction.
 - Depend on wall-clock time, thread timing or unseeded randomness.
+- Change anything that affects results in `end_of_run`: it is for pure
+  self-checks (e.g. the Renode cross-check), and a later `run` may resume.

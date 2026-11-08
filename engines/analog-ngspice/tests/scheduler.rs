@@ -42,11 +42,22 @@ impl Engine for Toggler {
     }
 }
 
+/// `BB_NGSPICE_HANDOFF_SPIN_US=<n>` runs these with the ADR-003 D1.4 handoff
+/// spin on; default off.
+fn spin_from_env() -> std::time::Duration {
+    std::env::var("BB_NGSPICE_HANDOFF_SPIN_US")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(std::time::Duration::from_micros)
+        .unwrap_or_default()
+}
+
 /// ngspice is a process singleton: tests in this binary take turns.
 static NGSPICE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn run_once() -> (String, String, f64) {
     let mut cfg = NgspiceConfig::new("C1 a 0 1u\n", Time::from_ms(10), Time::from_us(10));
+    cfg.handoff_spin = spin_from_env();
     cfg.inputs.push(InputBinding {
         pin: "DRV".into(),
         source: "V_DRV".into(),
@@ -174,6 +185,7 @@ impl Engine for OneEdge {
 /// before (`cpu_first`) or after the ngspice engine.
 fn mid_grant_run(cpu_first: bool) -> (f64, f64) {
     let mut cfg = NgspiceConfig::new("C1 a 0 1u\n", Time::from_ms(10), Time::from_us(10));
+    cfg.handoff_spin = spin_from_env();
     cfg.inputs.push(InputBinding {
         pin: "DRV".into(),
         source: "V_DRV".into(),

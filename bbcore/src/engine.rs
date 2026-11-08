@@ -74,4 +74,14 @@ pub trait Engine {
     fn drain_logs(&mut self) -> Vec<LogRecord> {
         Vec::new()
     }
+
+    /// Called once, in registration order, each time a `Scheduler::run`
+    /// reaches its `t_end` (entry to Done). Only for engine self-checks,
+    /// such as the Renode engine's end-of-run cross-check (ADR-003
+    /// Amendment 1): it must not change anything that affects results,
+    /// because a later `run` may resume. An error fails the run. Default:
+    /// nothing.
+    fn end_of_run(&mut self) -> Result<(), EngineError> {
+        Ok(())
+    }
 }

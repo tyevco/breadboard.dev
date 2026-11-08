@@ -4,6 +4,7 @@
 //! first: tests in this binary run one at a time.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use bb_analog_ngspice::{Drive, InputBinding, NgspiceConfig, NgspiceEngine, OutputBinding};
 use bbcore::{DigitalOut, Engine, Level, PinSignal, PinSignals, Time};
@@ -12,6 +13,16 @@ static NGSPICE: Mutex<()> = Mutex::new(());
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
     NGSPICE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `BB_NGSPICE_HANDOFF_SPIN_US=<n>` runs the suite with the ADR-003 D1.4
+/// handoff spin on (the gate runs it 20 times); default off.
+fn spin_from_env() -> Duration {
+    std::env::var("BB_NGSPICE_HANDOFF_SPIN_US")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_micros)
+        .unwrap_or_default()
 }
 
 const RC_TAU_S: f64 = 1e3 * 1e-6; // 1 kOhm * 1 uF = 1 ms
@@ -31,6 +42,7 @@ fn rc_config() -> NgspiceConfig {
         Time::from_ms(5),
         Time::from_us(10),
     );
+    cfg.handoff_spin = spin_from_env();
     cfg.inputs.push(InputBinding {
         pin: "IN".into(),
         source: "V_IN".into(),
@@ -138,7 +150,11 @@ fn rc_step_via_apply_inputs_and_falling_edge() {
 
 /// One full run: boundary values plus 50 us interpolated samples, as bits.
 fn run_bits() -> (Vec<u64>, usize) {
-    let mut e = NgspiceEngine::new(rc_config()).expect("engine");
+    run_bits_with(rc_config())
+}
+
+fn run_bits_with(cfg: NgspiceConfig) -> (Vec<u64>, usize) {
+    let mut e = NgspiceEngine::new(cfg).expect("engine");
     e.push_edge("IN", Level::High, Time::ZERO).unwrap();
     let mut bits = Vec::new();
     let mut prev = Time::ZERO;
@@ -199,6 +215,7 @@ fn generated_glue_uses_zout_and_grant_can_end_at_t_stop() {
     let _g = lock();
     // Same RC, but the 1 kOhm is the pin model's zout in the generated glue.
     let mut cfg = NgspiceConfig::new("C1 out 0 1u\n", Time::from_ms(3), Time::from_us(10));
+    cfg.handoff_spin = spin_from_env();
     cfg.inputs.push(InputBinding {
         pin: "IN".into(),
         source: "V_DRV".into(),
@@ -246,6 +263,7 @@ fn long_run_past_ten_seconds_in_1ms_grants() {
         Time::from_secs(12),
         Time::from_ms(1),
     );
+    cfg.handoff_spin = spin_from_env();
     cfg.inputs = rc_config().inputs;
     cfg.outputs = rc_config().outputs;
     let mut e = NgspiceEngine::new(cfg).expect("engine");
@@ -275,4 +293,30 @@ fn long_run_past_ten_seconds_in_1ms_grants() {
         now = g;
     }
     assert_eq!(now, Time::from_secs(12));
+}
+
+/// ADR-003 D1.4: the handoff spin changes only when threads wake, never
+/// what the solver computes. Spin off and spin on (200 us, long enough that
+/// most handoffs complete while spinning) give bit-identical values and the
+/// same solver points. Prints a digest so repeated suite runs can be
+/// compared.
+#[test]
+fn handoff_spin_is_bit_identical() {
+    let _g = lock();
+    let mut off = rc_config();
+    off.handoff_spin = Duration::ZERO;
+    let mut on = rc_config();
+    on.handoff_spin = Duration::from_micros(200);
+    let (a, na) = run_bits_with(off);
+    let (b, nb) = run_bits_with(on);
+    assert_eq!(na, nb, "solver point count differs with the spin on");
+    assert_eq!(a, b, "values differ with the spin on");
+    // FNV-1a over the bits: a stable digest of the run.
+    let digest = a.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, v| {
+        (h ^ v).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    println!(
+        "handoff spin: {} values, {na} solver points, digest {digest:016x}",
+        a.len()
+    );
 }

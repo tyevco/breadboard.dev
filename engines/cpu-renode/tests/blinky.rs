@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
-use bb_cpu_renode::{find_renode, RenodeConfig, RenodeEngine};
+use bb_cpu_renode::{find_renode, Fault, RenodeConfig, RenodeEngine, Verify};
 use bbcore::{
-    CsvWriter, Direction, Engine, Event, EventSink, Level, PinSignal, Probe, Scheduler,
+    CsvWriter, Direction, Engine, Event, EventSink, Level, PinSignal, Probe, SchedError, Scheduler,
     SchedulerConfig, Time,
 };
 
@@ -317,4 +317,147 @@ fn csv_sample_rate_does_not_change_edges() {
             "rows (period {p})"
         );
     }
+}
+
+/// Blinky in 100 us grants to `t_end` with an injected fault; returns the
+/// run result and the last completed boundary.
+fn run_faulty(
+    cfg: &RenodeConfig,
+    verify: Verify,
+    fault: Fault,
+    t_end: Time,
+) -> (Result<u64, SchedError>, Time) {
+    let grant = Time::from_us(100);
+    let mut cfg = cfg.clone();
+    cfg.quantum = grant;
+    cfg.verify = verify;
+    let mut engine = RenodeEngine::start(&cfg).expect("start renode");
+    engine.inject_fault(fault);
+    let mut sched = Scheduler::new(SchedulerConfig {
+        max_quantum: grant,
+        log_grants: false,
+        event_sampling: None,
+    })
+    .unwrap();
+    let id = sched.add_engine(Box::new(engine)).unwrap();
+    sched.bind(id, "PA5", "PA5", Direction::Output).unwrap();
+    let mut sink = EventSink::new(Vec::new());
+    let r = sched.run(t_end, &mut sink, &mut []).map(|s| s.grants);
+    (r, sched.now())
+}
+
+/// ADR-003 D1.2 gate: an injected time mismatch (one RUN_FOR 1 ns too long)
+/// and an injected GPIO mismatch (a lost edge event) are caught by every
+/// verify mode: `Every` at the faulty grant, `Edges` at the next grant with
+/// an edge or at the end of the run, `Final` at the end of the run. Without
+/// a fault, all three modes complete with identical event streams.
+#[test]
+fn verify_modes_catch_injected_mismatches() {
+    let Some(cfg) = setup() else { return };
+    let t_end = Time::from_ms(70);
+    let time_fault = Fault::RunForExtraNs {
+        at: Time::from_ms(20),
+        ns: 1,
+    };
+    let gpio_fault = Fault::DropGpioEvent { at_ns: 40_000_000 };
+    let cases = [
+        (Verify::Every, time_fault),
+        (Verify::Edges, time_fault),
+        (Verify::Final, time_fault),
+        (Verify::Every, gpio_fault),
+        (Verify::Edges, gpio_fault),
+        (Verify::Final, gpio_fault),
+    ];
+    let handles: Vec<_> = cases
+        .iter()
+        .map(|&(v, f)| {
+            let cfg = cfg.clone();
+            std::thread::spawn(move || run_faulty(&cfg, v, f, t_end))
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    for ((v, f), (r, now)) in cases.iter().zip(&results) {
+        let err = match r {
+            Ok(g) => panic!("{v:?} / {f:?}: run completed ({g} grants), fault not caught"),
+            Err(e) => e.to_string(),
+        };
+        eprintln!("{v:?} / {f:?}: caught after boundary {now}: {err:.160}");
+        let at_end = *now == t_end;
+        match (v, f) {
+            // Caught at the faulty grant itself: the advance to 20 ms.
+            (Verify::Every, Fault::RunForExtraNs { .. }) => {
+                assert_eq!(*now, Time::from_ms(20) - Time::from_us(100));
+                assert!(err.contains("verify: Renode virtual time"), "{err}");
+            }
+            // Caught at the grant that carries the 50 ms edge.
+            (Verify::Edges, Fault::RunForExtraNs { .. }) => {
+                assert!(*now >= Time::from_ms(49) && *now < Time::from_ms(51));
+                assert!(err.contains("verify: Renode virtual time"), "{err}");
+            }
+            // The lost 50 ms edge is caught at its own grant.
+            (Verify::Every, Fault::DropGpioEvent { .. }) => {
+                assert!(*now >= Time::from_ms(49) && *now < Time::from_ms(51));
+                assert!(err.contains("verify: PA5: Renode reports true"), "{err}");
+            }
+            // No event reached the engine, so only the end-of-run check sees it.
+            (Verify::Edges, Fault::DropGpioEvent { .. }) => {
+                assert!(at_end, "{now}");
+                assert!(err.contains("verify: PA5: Renode reports true"), "{err}");
+                assert!(err.contains("Done"), "{err}");
+            }
+            (Verify::Final, Fault::RunForExtraNs { .. }) => {
+                assert!(at_end, "{now}");
+                assert!(err.contains("verify: Renode virtual time"), "{err}");
+            }
+            (Verify::Final, Fault::DropGpioEvent { .. }) => {
+                assert!(at_end, "{now}");
+                assert!(err.contains("verify: PA5: Renode reports true"), "{err}");
+            }
+        }
+    }
+}
+
+/// Every verify mode gives the same event stream (the checks are pure
+/// reads), and `Edges`/`Final` run far fewer checks than `Every`.
+#[test]
+fn verify_modes_do_not_change_results() {
+    let Some(cfg) = setup() else { return };
+    let grant = Time::from_us(10);
+    let t_end = Time::from_ms(120);
+    let handles: Vec<_> = [Verify::Every, Verify::Edges, Verify::Final]
+        .into_iter()
+        .map(|v| {
+            let mut cfg = cfg.clone();
+            cfg.verify = v;
+            std::thread::spawn(move || run_blinky(&cfg, grant, t_end, None))
+        })
+        .collect();
+    let runs: Vec<Run> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    for (r, v) in runs.iter().zip(["every", "edges", "final"]) {
+        eprintln!("verify {v}: {} grants, wall {:.2} s", r.grants, r.wall_s);
+    }
+    assert_eq!(runs[0].events, runs[1].events, "every vs edges");
+    assert_eq!(runs[0].events, runs[2].events, "every vs final");
+    let got: Vec<u64> = runs[0].edges.iter().map(|e| e.0.as_fs()).collect();
+    assert_eq!(got, GOLDEN_10US[..2]);
+}
+
+/// The SYSTEM_BUS helpers (ADR-003 D1.3, for Part B) against real Renode:
+/// read the SysTick reload value the firmware programmed, and write then
+/// read back a word of SRAM.
+#[test]
+fn sysbus_helpers_read_and_write() {
+    let Some(mut cfg) = setup() else { return };
+    cfg.quantum = Time::from_ms(1);
+    let mut e = RenodeEngine::start(&cfg).expect("start renode");
+    let t_safe = e.next_safe_time(Time::ZERO);
+    e.advance_to(t_safe).unwrap();
+    // SYST_RVR = 72 MHz / 1000 * 50 - 1.
+    assert_eq!(e.sysbus_read_u32s(0xE000_E014, 1).unwrap(), vec![3_599_999]);
+    e.sysbus_write_u32(0x2000_1000, 0xC0FF_EE00).unwrap();
+    e.sysbus_write_u32(0x2000_1004, 7).unwrap();
+    assert_eq!(
+        e.sysbus_read_u32s(0x2000_1000, 2).unwrap(),
+        vec![0xC0FF_EE00, 7]
+    );
 }

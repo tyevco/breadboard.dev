@@ -17,6 +17,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden` (about 5 min) |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike`, check it (`scripts/check_spike.py`) |
+| `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
 | `make determinism` | 10 spike runs (`DET_RUNS`, `DET_JOBS` in parallel); sha256 of `nets.csv`, `events.jsonl`, `nets.vcd` must match |
 | `make golden` | Diff `out/spike` LED_A against `tests/golden/spike/led_a.csv` (1 mV / 1 sample) |
 | `make golden-update` | Regenerate the golden snapshot from a fresh, checked spike run. Review the diff before committing it |

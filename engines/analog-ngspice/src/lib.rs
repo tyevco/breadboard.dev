@@ -46,6 +46,7 @@ mod ffi;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -134,6 +135,13 @@ pub struct NgspiceConfig {
     /// Extra nodes whose voltages are recorded for [`NgspiceEngine::voltage`]
     /// and [`NgspiceEngine::sample`].
     pub probes: Vec<String>,
+    /// How long each side of a kernel <-> solver handoff busy-waits on an
+    /// atomic sequence number before blocking on the condvar (ADR-003
+    /// D1.4). Zero (the default) never spins. Spinning only changes *when*
+    /// a thread wakes, never what it computes, so results do not depend on
+    /// it; it saves the condvar wake-up latency when grants are short (one-
+    /// cell lockstep) at the cost of burning a core while waiting.
+    pub handoff_spin: Duration,
 }
 
 impl NgspiceConfig {
@@ -148,6 +156,7 @@ impl NgspiceConfig {
             inputs: Vec::new(),
             outputs: Vec::new(),
             probes: Vec::new(),
+            handoff_spin: Duration::ZERO,
         }
     }
 }
@@ -276,6 +285,8 @@ struct State {
     new_bkpts: Vec<f64>,
     /// First fatal problem seen by a callback.
     error: Option<String>,
+    /// [`NgspiceConfig::handoff_spin`].
+    handoff_spin: Duration,
 }
 
 impl State {
@@ -297,6 +308,7 @@ impl State {
             corners: Vec::new(),
             new_bkpts: Vec::new(),
             error: None,
+            handoff_spin: Duration::ZERO,
         }
     }
 
@@ -325,6 +337,38 @@ const CORNER_MIN_S: f64 = 1e-12;
 
 static STATE: Mutex<State> = Mutex::new(State::new());
 static WAKE: Condvar = Condvar::new();
+/// Mirrors of `State::seq` and of the grant the solver is parked at
+/// (`NOT_PARKED` if none), written under the `STATE` lock, read lock-free by
+/// the optional handoff spin (ADR-003 D1.4). Every decision is still taken
+/// under the lock; the mirrors only tell a spinning thread when to stop.
+static GRANT_SEQ: AtomicU64 = AtomicU64::new(0);
+static PARKED_SEQ: AtomicU64 = AtomicU64::new(NOT_PARKED);
+const NOT_PARKED: u64 = u64::MAX;
+
+/// Reset the shared state (and its atomic mirrors) for a new engine or
+/// after teardown.
+fn reset_state(st: &mut State) {
+    *st = State::new();
+    GRANT_SEQ.store(0, Ordering::Release);
+    PARKED_SEQ.store(NOT_PARKED, Ordering::Release);
+}
+
+/// Busy-wait until `done()` or until `limit` has passed (wall clock; it only
+/// decides when a thread goes to sleep, never what is computed).
+fn spin_until(limit: Duration, done: impl Fn() -> bool) {
+    if limit.is_zero() {
+        return;
+    }
+    let start = Instant::now();
+    let mut n = 0u32;
+    while !done() {
+        std::hint::spin_loop();
+        n = n.wrapping_add(1);
+        if n.is_multiple_of(64) && start.elapsed() >= limit {
+            return;
+        }
+    }
+}
 /// ngspice text output (stdout/stderr lines), kept separately from `STATE`
 /// because ngspice prints from inside calls the engine makes.
 static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -488,7 +532,15 @@ unsafe extern "C" fn cb_get_sync(
             }
             st.parked_time_s = time;
             st.parked = Some(st.seq);
+            PARKED_SEQ.store(st.seq, Ordering::Release);
             WAKE.notify_all();
+            let spin = st.handoff_spin;
+            if !spin.is_zero() && !st.abort {
+                let parked = st.seq;
+                drop(st);
+                spin_until(spin, || GRANT_SEQ.load(Ordering::Acquire) != parked);
+                st = state();
+            }
             while st.parked == Some(st.seq) && !st.abort {
                 st = WAKE.wait(st).unwrap_or_else(|e| e.into_inner());
             }
@@ -764,10 +816,11 @@ impl NgspiceEngine {
                     "another NgspiceEngine is alive in this process (ngspice is a singleton)",
                 ));
             }
-            *st = State::new();
+            reset_state(&mut st);
             st.active = true;
             st.watch = watch.clone();
             st.sources = sources;
+            st.handoff_spin = cfg.handoff_spin;
         }
         let mut engine = NgspiceEngine {
             name: cfg.name.clone(),
@@ -1115,7 +1168,14 @@ impl Engine for NgspiceEngine {
         st.target_fs = t.as_fs();
         st.target_s = t.as_secs_f64();
         let seq = st.seq;
+        GRANT_SEQ.store(seq, Ordering::Release);
         WAKE.notify_all();
+        let spin = st.handoff_spin;
+        if !spin.is_zero() {
+            drop(st);
+            spin_until(spin, || PARKED_SEQ.load(Ordering::Acquire) == seq);
+            st = state();
+        }
         while st.parked != Some(seq) && st.error.is_none() && st.bg_running {
             st = WAKE.wait(st).unwrap_or_else(|e| e.into_inner());
         }
@@ -1185,7 +1245,7 @@ impl Drop for NgspiceEngine {
         let _ = command(self.lib, "remcirc");
         let _ = command(self.lib, "destroy all");
         let mut st = state();
-        *st = State::new();
+        reset_state(&mut st);
     }
 }
 

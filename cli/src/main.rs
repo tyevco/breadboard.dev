@@ -6,7 +6,7 @@
 //! bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
 //!        --probe net:<NET> [--probe net:<NET> ...] --out <dir>
 //!        [--max-quantum 10us] [--sample-rate 100kHz] [--seed 0]
-//!        [--renode <path>] [--no-verify]
+//!        [--renode <path>] [--verify edges] [--no-verify]
 //! ```
 //!
 //! Writes `<out>/events.jsonl`, `<out>/nets.csv` and `<out>/nets.vcd`, and
@@ -27,7 +27,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use bb_analog_ngspice::{Drive, InputBinding, NgspiceConfig, NgspiceEngine, OutputBinding};
-use bb_cpu_renode::{find_renode, PinDirection, PinSpec, RenodeConfig, RenodeEngine};
+use bb_cpu_renode::{find_renode, PinDirection, PinSpec, RenodeConfig, RenodeEngine, Verify};
 use bbcore::{
     CsvWriter, Direction, Engine, EventSink, Level, Probe, Scheduler, SchedulerConfig, Time,
     VcdKind, VcdWriter,
@@ -37,7 +37,7 @@ const USAGE: &str = "\
 usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
               [--max-quantum 10us] [--sample-rate 100kHz] [--seed 0]
-              [--renode <path>] [--no-verify]
+              [--renode <path>] [--verify edges] [--no-verify]
 
   --netlist      board file: SPICE body plus *bb directives (examples/spike/board.cir)
   --firmware     ELF loaded into the target MCU
@@ -52,7 +52,11 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  interpolated between solver points
   --seed         Renode emulation seed (default 0)
   --renode       path to the renode launcher (default: $BB_RENODE, PATH, ~/.local/bin)
-  --no-verify    skip the per-grant Renode time/GPIO cross-check (faster)";
+  --verify       when to cross-check Renode's virtual time and pin states against
+                 the engine: every (each grant), edges (grants with an edge or
+                 input, and the end; default) or final (end only). Pure reads:
+                 outputs are identical in every mode
+  --no-verify    alias for --verify final";
 
 struct RunArgs {
     netlist: PathBuf,
@@ -65,7 +69,7 @@ struct RunArgs {
     sample_period: Time,
     seed: i32,
     renode: Option<PathBuf>,
-    verify: bool,
+    verify: Verify,
 }
 
 /// Parse `<number>[.<frac>]<unit>` with unit Hz, kHz, MHz or GHz into an exact
@@ -123,7 +127,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut sample_period = Time::from_us(10);
     let mut seed = 0i32;
     let mut renode = None;
-    let mut verify = true;
+    let mut verify = Verify::Edges;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -160,7 +164,8 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
                     .map_err(|_| "--seed: expected an i32".to_string())?
             }
             "--renode" => renode = Some(PathBuf::from(val(a)?)),
-            "--no-verify" => verify = false,
+            "--verify" => verify = val(a)?.parse().map_err(|e| format!("--verify: {e}"))?,
+            "--no-verify" => verify = Verify::Final,
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -406,7 +411,15 @@ mod tests {
         assert_eq!(a.probes, vec!["LED_A", "PA5"]);
         assert_eq!(a.max_quantum, Time::from_us(10));
         assert_eq!(a.sample_period, Time::from_us(1));
-        assert!(a.verify);
+        assert_eq!(a.verify, Verify::Edges);
+        let mut v2 = v.clone();
+        v2.extend(["--verify".to_string(), "every".to_string()]);
+        assert_eq!(parse_args(&v2).unwrap().verify, Verify::Every);
+        v2.push("--no-verify".into());
+        assert_eq!(parse_args(&v2).unwrap().verify, Verify::Final);
+        let mut v3 = v.clone();
+        v3.extend(["--verify".to_string(), "sometimes".to_string()]);
+        assert!(parse_args(&v3).is_err());
         let mut bad = v.clone();
         bad.push("--bogus".into());
         assert!(parse_args(&bad).is_err());

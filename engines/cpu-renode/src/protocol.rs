@@ -7,10 +7,15 @@
 //!
 //! ```text
 //! envelope : u16 id, u32 size, then `size` payload bytes
-//!            id has bit 15 set for client-initiated requests and their
-//!            responses; server-initiated event requests have it clear.
+//!            id bit 15 tells which side's request counter the id comes
+//!            from, *not* the kind of message: Renode stamps it per handler
+//!            thread (`CommunicationHandler`), so a server-initiated event
+//!            can carry e.g. 0x8001 (ADR-003 Context fact 7).
 //! payload  : u16 command, u8 type, then command data
 //!            type: 0 request, 1 event request, 2 success, 3 invalid command, 4 error
+//!            Messages are classified by this type (ADR-003 D1.3): 0 and 1
+//!            are server requests the client must answer; 2, 3 and 4 answer
+//!            the client's outstanding request.
 //! commands : 0 CHECK_VERSION(u32 version = 0)
 //!            1 RUN_FOR(u64 ns)                     -> success when the run is done
 //!            2 GET_TIME(u64 ignored)               -> u64 ns
@@ -20,6 +25,11 @@
 //!                op 0 GET_STATE                    -> u8 state
 //!                op 1 SET_STATE + u8 state
 //!                op 2 REGISTER_EVENT + i32 event descriptor
+//!            6 SYSTEM_BUS instance(i32 -1, i32 md, u32 len, name) -> i32 bus descriptor
+//!            6 SYSTEM_BUS op(i32 bus, u8 op, u8 width, u64 address, u32 count [, data])
+//!                op 0 READ                         -> count * width bytes
+//!                op 1 WRITE + count * width bytes
+//!                width 4 = double word (`SystemBus.cs`, `renode_api.c`)
 //! events   : type 1, command 5: i32 event descriptor, u64 time_ns, u8 state,
 //!            7 padding bytes (the C struct `renode_gpio_event_data_t`).
 //!            The client must answer each with (command, success) under the
@@ -47,6 +57,7 @@ const CMD_RUN_FOR: u16 = 1;
 const CMD_GET_TIME: u16 = 2;
 const CMD_GET_MACHINE: u16 = 3;
 const CMD_GPIO: u16 = 5;
+const CMD_SYSTEM_BUS: u16 = 6;
 
 const TYPE_REQUEST: u8 = 0;
 const TYPE_EVENT_REQUEST: u8 = 1;
@@ -57,6 +68,10 @@ const TYPE_ERROR: u8 = 4;
 const GPIO_GET_STATE: i8 = 0;
 const GPIO_SET_STATE: i8 = 1;
 const GPIO_REGISTER_EVENT: i8 = 2;
+
+const SYSBUS_READ: u8 = 0;
+const SYSBUS_WRITE: u8 = 1;
+const SYSBUS_WIDTH_DOUBLE_WORD: u8 = 4;
 
 /// A GPIO state change reported by Renode while it was running.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -172,6 +187,47 @@ impl Client {
         Ok(())
     }
 
+    /// Descriptor of the bus context `name` in machine `md` (`"sysbus"` for
+    /// global, absolute-address accesses).
+    pub fn get_sysbus(&mut self, md: i32, name: &str) -> Result<i32> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&(-1i32).to_le_bytes());
+        d.extend_from_slice(&md.to_le_bytes());
+        d.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        d.extend_from_slice(name.as_bytes());
+        let r = self.request(CMD_SYSTEM_BUS, &d)?;
+        read_i32(&r, "SYSTEM_BUS instance")
+    }
+
+    /// Read `count` consecutive 32-bit words from `address` through bus
+    /// context `bus` (double-word accesses, like `sysbus ReadDoubleWord`).
+    pub fn sysbus_read_u32s(&mut self, bus: i32, address: u64, count: u32) -> Result<Vec<u32>> {
+        let r = self.request(
+            CMD_SYSTEM_BUS,
+            &sysbus_header(bus, SYSBUS_READ, SYSBUS_WIDTH_DOUBLE_WORD, address, count),
+        )?;
+        if r.len() != count as usize * 4 {
+            return Err(ProtocolError::Server(format!(
+                "SYSTEM_BUS read: expected {} bytes, got {}",
+                count as usize * 4,
+                r.len()
+            )));
+        }
+        Ok(r.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
+            .collect())
+    }
+
+    /// Write one 32-bit word to `address` through bus context `bus`.
+    pub fn sysbus_write_u32(&mut self, bus: i32, address: u64, value: u32) -> Result<()> {
+        let mut d = sysbus_header(bus, SYSBUS_WRITE, SYSBUS_WIDTH_DOUBLE_WORD, address, 1);
+        d.extend_from_slice(&value.to_le_bytes());
+        self.request(CMD_SYSTEM_BUS, &d)?;
+        Ok(())
+    }
+
     /// Run the emulation for exactly `ns` nanoseconds of virtual time and
     /// block until Renode has paused again.
     pub fn run_for(&mut self, ns: u64) -> Result<()> {
@@ -214,7 +270,9 @@ impl Client {
             let rcmd = u16::from_le_bytes([body[0], body[1]]);
             let rtype = body[2];
             let rdata = &body[3..];
-            if mid & CLIENT_INITIATED == 0 {
+            // Classify by message type, never by id bit 15 (ADR-003 D1.3):
+            // Renode can stamp its own event requests with bit 15 set.
+            if matches!(rtype, TYPE_REQUEST | TYPE_EVENT_REQUEST) {
                 self.server_request(mid, rcmd, rtype, rdata)?;
                 continue;
             }
@@ -298,6 +356,16 @@ fn gpio_header(gpio: i32, op: i8, pin: i32) -> Vec<u8> {
     d
 }
 
+fn sysbus_header(bus: i32, op: u8, width: u8, address: u64, count: u32) -> Vec<u8> {
+    let mut d = Vec::with_capacity(18);
+    d.extend_from_slice(&bus.to_le_bytes());
+    d.push(op);
+    d.push(width);
+    d.extend_from_slice(&address.to_le_bytes());
+    d.extend_from_slice(&count.to_le_bytes());
+    d
+}
+
 fn response_header(cmd: u16, rtype: u8) -> [u8; 3] {
     let c = cmd.to_le_bytes();
     [c[0], c[1], rtype]
@@ -326,5 +394,114 @@ mod tests {
     #[test]
     fn response_header_layout() {
         assert_eq!(response_header(CMD_GPIO, TYPE_SUCCESS), [5, 0, 2]);
+    }
+
+    fn frame(id: u16, cmd: u16, rtype: u8, data: &[u8]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&id.to_le_bytes());
+        b.extend_from_slice(&(3 + data.len() as u32).to_le_bytes());
+        b.extend_from_slice(&cmd.to_le_bytes());
+        b.push(rtype);
+        b.extend_from_slice(data);
+        b
+    }
+
+    fn read_frame(s: &mut TcpStream) -> Vec<u8> {
+        let mut env = [0u8; 6];
+        s.read_exact(&mut env).unwrap();
+        let size = u32::from_le_bytes(env[2..6].try_into().unwrap()) as usize;
+        let mut body = vec![0u8; size];
+        s.read_exact(&mut body).unwrap();
+        let mut all = env.to_vec();
+        all.extend(body);
+        all
+    }
+
+    /// ADR-003 D1.3 gate: replay a server byte stream in which a GPIO event
+    /// carries id 0x8001, which is also the id of the client's outstanding
+    /// RUN_FOR. Classifying by id bit 15 would take the event for the
+    /// RUN_FOR response (and fail on the command mismatch); classifying by
+    /// message type acknowledges it as an event and then accepts the real
+    /// response. Also checks the SYSTEM_BUS read/write wire format.
+    #[test]
+    fn event_with_bit15_id_is_classified_by_type() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            // CHECK_VERSION, id 0x8000.
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x8000, CMD_CHECK_VERSION, TYPE_REQUEST, &[0, 0, 0, 0])
+            );
+            s.write_all(&frame(0x8000, CMD_CHECK_VERSION, TYPE_SUCCESS, &[]))
+                .unwrap();
+            // RUN_FOR(10 us), id 0x8001.
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x8001, CMD_RUN_FOR, TYPE_REQUEST, &10_000u64.to_le_bytes())
+            );
+            // A GPIO event stamped 0x8001 (bit 15 set), as Renode's own
+            // handler threads can produce.
+            let mut ev = Vec::new();
+            ev.extend_from_slice(&7i32.to_le_bytes());
+            ev.extend_from_slice(&1234u64.to_le_bytes());
+            ev.push(1);
+            ev.extend_from_slice(&[0u8; 7]);
+            s.write_all(&frame(0x8001, CMD_GPIO, TYPE_EVENT_REQUEST, &ev))
+                .unwrap();
+            // The client must acknowledge it under the same id ...
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x8001, CMD_GPIO, TYPE_SUCCESS, &[])
+            );
+            // ... and then take the real RUN_FOR response.
+            s.write_all(&frame(0x8001, CMD_RUN_FOR, TYPE_SUCCESS, &[]))
+                .unwrap();
+            // SYSTEM_BUS read of 2 double words at 0x5FFF0000 via bus 3.
+            let mut rd = Vec::new();
+            rd.extend_from_slice(&3i32.to_le_bytes());
+            rd.extend_from_slice(&[SYSBUS_READ, 4]);
+            rd.extend_from_slice(&0x5FFF_0000u64.to_le_bytes());
+            rd.extend_from_slice(&2u32.to_le_bytes());
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x8002, CMD_SYSTEM_BUS, TYPE_REQUEST, &rd)
+            );
+            let mut words = 0xDEAD_BEEFu32.to_le_bytes().to_vec();
+            words.extend_from_slice(&42u32.to_le_bytes());
+            s.write_all(&frame(0x8002, CMD_SYSTEM_BUS, TYPE_SUCCESS, &words))
+                .unwrap();
+            // SYSTEM_BUS write of one double word.
+            let mut wr = Vec::new();
+            wr.extend_from_slice(&3i32.to_le_bytes());
+            wr.extend_from_slice(&[SYSBUS_WRITE, 4]);
+            wr.extend_from_slice(&0x2000_1000u64.to_le_bytes());
+            wr.extend_from_slice(&1u32.to_le_bytes());
+            wr.extend_from_slice(&5u32.to_le_bytes());
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x8003, CMD_SYSTEM_BUS, TYPE_REQUEST, &wr)
+            );
+            s.write_all(&frame(0x8003, CMD_SYSTEM_BUS, TYPE_SUCCESS, &[]))
+                .unwrap();
+        });
+        let stream = TcpStream::connect(addr).unwrap();
+        let mut c = Client::handshake(stream, Duration::from_secs(10)).unwrap();
+        c.run_for(10_000).unwrap();
+        assert_eq!(
+            c.take_events(),
+            vec![GpioEvent {
+                descriptor: 7,
+                time_ns: 1234,
+                state: true
+            }]
+        );
+        assert_eq!(
+            c.sysbus_read_u32s(3, 0x5FFF_0000, 2).unwrap(),
+            vec![0xDEAD_BEEF, 42]
+        );
+        c.sysbus_write_u32(3, 0x2000_1000, 5).unwrap();
+        server.join().unwrap();
     }
 }

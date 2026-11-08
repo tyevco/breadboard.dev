@@ -10,8 +10,16 @@
 //! `RUN_FOR(n ns)` with `n = floor(g) - floor(now)` for each kernel grant `g`
 //! (times floored to Renode's 1 ns resolution). `RUN_FOR` returns once Renode
 //! has paused again, so Renode never runs between grants and its virtual time
-//! never passes the grant. With [`RenodeConfig::verify`] (the default) every
-//! advance is followed by `GET_TIME`, and a mismatch is a protocol error.
+//! never passes the grant. [`RenodeConfig::verify`] cross-checks Renode's
+//! virtual time (`GET_TIME`) and the output pin states (`GPIO GET_STATE`)
+//! against what the engine tracked, and a mismatch is a protocol error. The
+//! checks are pure reads, so they never change results; [`Verify`] picks how
+//! often they run (ADR-003 D1.2).
+//!
+//! The emulation always runs with `emulation SetGlobalAdvanceImmediately
+//! true` (ADR-003 D1.1). Without it Renode sleeps on the host while the CPU
+//! is in WFI and then skips instructions by the host's measured sleep time
+//! (`BaseCPU.cs`), which is a host-timing dependence. It is not optional.
 //!
 //! Known bad idea: never let Renode's virtual time run ahead of the kernel
 //! grant; never `start` the emulation and try to catch up.
@@ -48,17 +56,20 @@
 //! Renode is deterministic for a single machine given the same ELF, platform,
 //! quantum and sequence of `RUN_FOR` calls. The engine fixes everything it
 //! can: `emulation SetSeed`, `emulation SetGlobalQuantum` (= `quantum`),
-//! `emulation SetGlobalSerialExecution true`, an offline platform file (no SVD
+//! `emulation SetGlobalSerialExecution true`,
+//! `emulation SetGlobalAdvanceImmediately true`, an offline platform file (no SVD
 //! download) and a fixed machine name. GPIO events are acknowledged inline on a
 //! single connection, so they are seen in emulation order.
 
 pub mod protocol;
 
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use bbcore::time::FS_PER_NS;
@@ -131,6 +142,47 @@ impl PinSpec {
     }
 }
 
+/// How often the engine cross-checks Renode's virtual time and output pin
+/// states against its own tracking (ADR-003 D1.2). The checks are pure reads
+/// (`GET_TIME`, `GPIO GET_STATE`): every mode gives byte-identical outputs,
+/// and they differ only in cost and in how soon a mismatch is reported.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Verify {
+    /// After every advance (the Phase 0 behaviour; one CI job runs it).
+    Every,
+    /// After an advance whose grant carried a GPIO event or an applied
+    /// input, and at the end of the run ([`bbcore::Engine::end_of_run`]).
+    #[default]
+    Edges,
+    /// Only at the end of the run.
+    Final,
+}
+
+impl std::str::FromStr for Verify {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Verify, String> {
+        match s {
+            "every" => Ok(Verify::Every),
+            "edges" => Ok(Verify::Edges),
+            "final" => Ok(Verify::Final),
+            _ => Err(format!("{s:?}: expected every, edges or final")),
+        }
+    }
+}
+
+/// A deliberately injected engine fault, for testing that [`Verify`]
+/// catches a desynchronised engine. Never used outside tests.
+#[doc(hidden)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Fault {
+    /// The first `RUN_FOR` of an advance to a grant `>= at` runs `ns`
+    /// nanoseconds longer than the engine tracks (a time mismatch).
+    RunForExtraNs { at: Time, ns: u64 },
+    /// The first GPIO event stamped at or after `at` ns is discarded, so the
+    /// tracked pin level goes stale (a GPIO mismatch).
+    DropGpioEvent { at_ns: u64 },
+}
+
 /// Configuration of a [`RenodeEngine`].
 #[derive(Clone, Debug)]
 pub struct RenodeConfig {
@@ -149,10 +201,9 @@ pub struct RenodeConfig {
     pub quantum: Time,
     /// `emulation SetSeed`.
     pub seed: i32,
-    /// After every advance, check Renode's virtual time and the output pin
-    /// states against what the engine tracked. Costs round trips; does not
-    /// change emulation results.
-    pub verify: bool,
+    /// When to check Renode's virtual time and the output pin states against
+    /// what the engine tracked. Costs round trips; never changes results.
+    pub verify: Verify,
     /// How long to wait for Renode to start and open its server (wall clock;
     /// never affects results).
     pub startup_timeout: Duration,
@@ -172,7 +223,7 @@ impl RenodeConfig {
             pins: vec![PinSpec::stm32("PA5", PinDirection::Output).expect("valid pin")],
             quantum: Time::from_us(10),
             seed: 0,
-            verify: true,
+            verify: Verify::Edges,
             startup_timeout: Duration::from_secs(120),
             io_timeout: Duration::from_secs(120),
         }
@@ -212,7 +263,15 @@ struct PinState {
 pub struct RenodeEngine {
     name: String,
     quantum_ns: u64,
-    verify: bool,
+    verify: Verify,
+    /// An input was driven (`SET_STATE`) since the last advance.
+    input_applied: bool,
+    /// Number of cross-checks run (time + GPIO counted as one).
+    verifications: u64,
+    fault: Option<Fault>,
+    machine: i32,
+    /// `"sysbus"` bus-context descriptor, fetched on first use.
+    sysbus: Option<i32>,
     child: Child,
     workdir: PathBuf,
     client: Client,
@@ -246,9 +305,23 @@ fn ns_to_seconds_str(ns: u64) -> String {
     format!("{}.{:09}", ns / 1_000_000_000, ns % 1_000_000_000)
 }
 
+/// Ports already handed to a Renode instance of this process. The OS may
+/// hand the same ephemeral port to two `bind(0)` calls once the first probe
+/// socket is closed; two engines started concurrently would then race for
+/// one server port and one would connect to the other's Renode.
+static PORTS: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+
 fn free_port() -> Result<u16, EngineError> {
-    let l = TcpListener::bind("127.0.0.1:0")?;
-    Ok(l.local_addr()?.port())
+    for _ in 0..64 {
+        let l = TcpListener::bind("127.0.0.1:0")?;
+        let port = l.local_addr()?.port();
+        if PORTS.lock().unwrap_or_else(|e| e.into_inner()).insert(port) {
+            return Ok(port);
+        }
+    }
+    Err(EngineError::Other(
+        "no unused local port for the External Control server".into(),
+    ))
 }
 
 fn log_tail(path: &Path) -> String {
@@ -297,6 +370,7 @@ impl RenodeEngine {
              emulation SetSeed {seed}\n\
              emulation SetGlobalQuantum \"{quantum}\"\n\
              emulation SetGlobalSerialExecution true\n\
+             emulation SetGlobalAdvanceImmediately true\n\
              logLevel 2\n\
              emulation CreateExternalControlServer \"bb\" {port}\n",
             machine = cfg.machine,
@@ -356,7 +430,7 @@ impl RenodeEngine {
             }
         };
 
-        let setup = || -> Result<(Client, Vec<PinState>, u64), ProtocolError> {
+        let setup = || -> Result<(Client, i32, Vec<PinState>, u64), ProtocolError> {
             let mut client = Client::handshake(stream, cfg.io_timeout)?;
             let md = client.get_machine(&cfg.machine)?;
             let mut pins = Vec::new();
@@ -375,9 +449,9 @@ impl RenodeEngine {
                 });
             }
             let t0 = client.get_time()?;
-            Ok((client, pins, t0))
+            Ok((client, md, pins, t0))
         };
-        let (client, pins, t0) = match setup() {
+        let (client, machine, pins, t0) = match setup() {
             Ok(v) => v,
             Err(e) => return Err(fail(&mut engine_child, format!("setup failed: {e}"))),
         };
@@ -391,6 +465,11 @@ impl RenodeEngine {
             name: cfg.name.clone(),
             quantum_ns,
             verify: cfg.verify,
+            input_applied: false,
+            verifications: 0,
+            fault: None,
+            machine,
+            sysbus: None,
             child: engine_child.take().expect("child present"),
             workdir,
             client,
@@ -424,6 +503,48 @@ impl RenodeEngine {
     /// 1 fs after that boundary instead (see `advance_to`).
     pub fn boundary_edges(&self) -> u64 {
         self.boundary_edges
+    }
+
+    /// Number of time/GPIO cross-checks run so far (see [`Verify`]).
+    pub fn verifications(&self) -> u64 {
+        self.verifications
+    }
+
+    /// Arm a test fault (see [`Fault`]). Replaces any armed fault.
+    #[doc(hidden)]
+    pub fn inject_fault(&mut self, fault: Fault) {
+        self.fault = Some(fault);
+    }
+
+    fn sysbus_id(&mut self) -> Result<i32, EngineError> {
+        if let Some(id) = self.sysbus {
+            return Ok(id);
+        }
+        let id = self
+            .client
+            .get_sysbus(self.machine, "sysbus")
+            .map_err(proto)?;
+        self.sysbus = Some(id);
+        Ok(id)
+    }
+
+    /// Read `count` 32-bit words at absolute address `address` over the
+    /// External Control `SYSTEM_BUS` command (global bus context). A pure
+    /// read for memory and for peripherals whose reads have no side effects.
+    pub fn sysbus_read_u32s(&mut self, address: u64, count: u32) -> Result<Vec<u32>, EngineError> {
+        let id = self.sysbus_id()?;
+        self.client
+            .sysbus_read_u32s(id, address, count)
+            .map_err(proto)
+    }
+
+    /// Write one 32-bit word at absolute address `address` (global bus
+    /// context). Changes emulation state: never called by the kernel path.
+    pub fn sysbus_write_u32(&mut self, address: u64, value: u32) -> Result<(), EngineError> {
+        let id = self.sysbus_id()?;
+        self.client
+            .sysbus_write_u32(id, address, value)
+            .map_err(proto)
     }
 
     fn pin_index(&self, name: &str) -> Option<usize> {
@@ -509,26 +630,86 @@ impl Engine for RenodeEngine {
     fn apply_inputs(&mut self, inputs: &PinSignals) -> Result<(), EngineError> {
         self.apply_inner(inputs).map_err(|e| self.failure(e))
     }
+
+    /// The end-of-run cross-check of [`Verify::Edges`] and [`Verify::Final`]
+    /// (with [`Verify::Every`] the last advance has just been checked).
+    fn end_of_run(&mut self) -> Result<(), EngineError> {
+        if self.verify == Verify::Every {
+            return Ok(());
+        }
+        let r = self.verify_time().and_then(|()| self.verify_pins());
+        self.verifications += 1;
+        r.map_err(|e| self.failure(e))
+    }
 }
 
 impl RenodeEngine {
+    /// `GET_TIME` must equal the tracked time.
+    fn verify_time(&mut self) -> Result<(), EngineError> {
+        let vt = self.client.get_time().map_err(proto)?;
+        if vt != self.renode_ns {
+            return Err(EngineError::Protocol(format!(
+                "verify: Renode virtual time {vt} ns, expected {} ns",
+                self.renode_ns
+            )));
+        }
+        Ok(())
+    }
+
+    /// `GPIO GET_STATE` of every output pin must equal the tracked level.
+    fn verify_pins(&mut self) -> Result<(), EngineError> {
+        for p in self
+            .pins
+            .iter()
+            .filter(|p| p.spec.direction == PinDirection::Output)
+        {
+            let s = self
+                .client
+                .gpio_get_state(p.gpio, p.spec.index)
+                .map_err(proto)?;
+            if Level::from_bool(s) != p.level {
+                return Err(EngineError::Protocol(format!(
+                    "verify: {}: Renode reports {s} at {} ns but events say {:?}",
+                    p.spec.name, self.renode_ns, p.level
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn advance_inner(&mut self, t: Time) -> Result<(), EngineError> {
         let start_ns = self.renode_ns;
         let target_ns = t.as_fs() / FS_PER_NS;
         if target_ns > start_ns {
-            self.client.run_for(target_ns - start_ns).map_err(proto)?;
+            let mut ns = target_ns - start_ns;
+            if let Some(Fault::RunForExtraNs { at, ns: extra }) = self.fault {
+                if t >= at {
+                    ns += extra;
+                    self.fault = None;
+                }
+            }
+            self.client.run_for(ns).map_err(proto)?;
             self.run_for_calls += 1;
         }
-        if self.verify {
-            let vt = self.client.get_time().map_err(proto)?;
-            if vt != target_ns {
-                return Err(EngineError::Protocol(format!(
-                    "Renode virtual time {vt} ns after RUN_FOR, expected {target_ns} ns (grant {t})"
-                )));
+        let mut events = self.client.take_events();
+        if let Some(Fault::DropGpioEvent { at_ns }) = self.fault {
+            if let Some(k) = events.iter().position(|e| e.time_ns >= at_ns) {
+                events.remove(k);
+                self.fault = None;
             }
         }
+        let check = match self.verify {
+            Verify::Every => true,
+            Verify::Edges => !events.is_empty() || self.input_applied,
+            Verify::Final => false,
+        };
+        self.input_applied = false;
+        self.renode_ns = target_ns;
+        if check {
+            self.verify_time()?;
+        }
         let mut edges = vec![0u32; self.pins.len()];
-        for ev in self.client.take_events() {
+        for ev in events {
             let i = usize::try_from(ev.descriptor)
                 .ok()
                 .filter(|i| *i < self.pins.len())
@@ -570,26 +751,11 @@ impl RenodeEngine {
             pin.level = level;
             pin.edge_time = edge_time;
         }
-        if self.verify {
-            for p in self
-                .pins
-                .iter()
-                .filter(|p| p.spec.direction == PinDirection::Output)
-            {
-                let s = self
-                    .client
-                    .gpio_get_state(p.gpio, p.spec.index)
-                    .map_err(proto)?;
-                if Level::from_bool(s) != p.level {
-                    return Err(EngineError::Protocol(format!(
-                        "{}: Renode reports {s} at {target_ns} ns but events say {:?}",
-                        p.spec.name, p.level
-                    )));
-                }
-            }
-        }
-        self.renode_ns = target_ns;
         self.now = t;
+        if check {
+            self.verify_pins()?;
+            self.verifications += 1;
+        }
         Ok(())
     }
 
@@ -613,6 +779,7 @@ impl RenodeEngine {
                     .gpio_set_state(p.gpio, p.spec.index, level == Level::High)
                     .map_err(proto)?;
                 p.applied = Some(level);
+                self.input_applied = true;
             }
         }
         Ok(())

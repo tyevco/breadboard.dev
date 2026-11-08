@@ -7,7 +7,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/.local/bin:$(PATH)
 CARGO ?= cargo
 
 .PHONY: setup doctor build test cargo-test fmt fmt-check clippy check firmware \
-        bb spike determinism golden golden-update
+        bb spike spike-verify-every determinism golden golden-update
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -56,6 +56,16 @@ bb:
 spike: firmware bb
 	$(BB) run $(SPIKE_ARGS) --out $(SPIKE_OUT)
 	$(PYTHON) scripts/check_spike.py $(SPIKE_OUT)
+
+# The spike with the Renode cross-check after every grant (ADR-003 D1.2; CI
+# job `verify-every`). The checks are pure reads, so the outputs must be
+# byte-identical to the default (`--verify edges`) spike run.
+VERIFY_EVERY_OUT ?= out/spike-verify-every
+spike-verify-every: spike
+	$(BB) run $(SPIKE_ARGS) --verify every --out $(VERIFY_EVERY_OUT)
+	$(PYTHON) scripts/check_spike.py $(VERIFY_EVERY_OUT)
+	set -e; for f in nets.csv events.jsonl nets.vcd; do cmp $(SPIKE_OUT)/$$f $(VERIFY_EVERY_OUT)/$$f; done
+	@echo "spike-verify-every: outputs identical to $(SPIKE_OUT)"
 
 determinism: firmware bb
 	bash scripts/determinism.sh $(BB) out/determinism $(DET_RUNS) $(DET_JOBS) -- $(SPIKE_ARGS)

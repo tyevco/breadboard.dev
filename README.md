@@ -36,7 +36,7 @@ Run the simulation by hand:
 make firmware bb
 ~/.cache/bb-target/release/bb run --netlist examples/spike/board.cir \
     --firmware examples/spike/firmware/build/blinky.elf --target U1 --for 500ms \
-    --probe net:LED_A --probe net:PA5 --out out/spike   # [--max-quantum 10us] [--sample-rate 100kHz]
+    --probe net:LED_A --probe net:PA5 --out out/spike   # [--max-quantum 10us] [--sample-rate 100kHz] [--verify edges]
 ```
 
 The run writes these files to `out/spike/`:

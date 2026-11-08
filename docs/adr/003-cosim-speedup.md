@@ -915,3 +915,45 @@ including `determinism` and `golden`.
    0x5FFF0000 acceptable?
 10. **Scope.** Approve Part A now and Part B after step 4 shows the feedback
     example's one-cell cost? The proposal recommends this.
+
+## Amendments
+
+### Amendment 1: step 1 (D1) as implemented (2026-11-08)
+
+**Status:** Accepted with step 1. `spec/time-grant.md` (state machine, "What
+engines MUST NOT do") is updated in the same change.
+
+- **End-of-run hook.** D1.2 says `Edges` and `Final` check "at the end of the
+  run", but the Engine trait had no call at the end of a run: the engine
+  never learns `t_end`. `bbcore::Engine` gains a defaulted
+  `end_of_run(&mut self) -> Result<(), EngineError>`. The scheduler calls it
+  for every engine, in registration order, each time `run` reaches its
+  `t_end` (entry to Done); an error is `SchedError::Engine { phase: Done }`.
+  It is for pure self-checks only and must not change anything that affects
+  results, because a later `run` may resume. The Renode engine runs its
+  `GET_TIME` + `GET_STATE` check there for `Edges` and `Final`. Existing
+  engines and mocks compile unchanged.
+- **What `Edges` counts as "an edge or an input".** Any GPIO event received
+  during the grant (including a rewrite of the same level), or any
+  `SET_STATE` sent since the previous advance.
+- **Fault injection.** `RenodeEngine::inject_fault` (`#[doc(hidden)]`) arms a
+  `RUN_FOR` that is 1 ns too long or drops one GPIO event, so the
+  verify gate tests a real desynchronisation. Measured: `Every` catches the
+  time fault at the faulty grant (19.9 ms boundary), `Edges` at the grant of
+  the next edge (50 ms), `Final` at the end (70 ms); the lost 50 ms edge is
+  caught by `Every` at its grant and by `Edges`/`Final` at the end of the run
+  (no event reached the engine, so `Edges` has no reason to check earlier).
+- **`--verify every` CI job.** `make spike-verify-every` re-runs the spike
+  with `--verify every` and `cmp`s all three outputs against `out/spike`;
+  the CI job `verify-every` runs it.
+- **ngspice handoff spin gate.** "Suite 20× bit-identical with the spin on"
+  is implemented as: the test helpers read `BB_NGSPICE_HANDOFF_SPIN_US`, the
+  whole `bb-analog-ngspice` suite is run 20 times with it set, and the new
+  test `handoff_spin_is_bit_identical` compares spin off against spin on
+  within each run and prints a digest of the values, which must be the same
+  in all 20 runs.
+- **Port reservation (robustness, no protocol change).** Starting many Renode
+  engines concurrently in one process (the verify gate starts six) exposed a
+  race in `free_port`: the OS can hand the same ephemeral port to two
+  `bind(0)` probes, and one engine then connected to the other's server. The
+  engine now never reuses a port within a process.

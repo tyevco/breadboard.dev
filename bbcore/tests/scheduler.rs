@@ -21,6 +21,7 @@ enum Call {
     Safe { now: Time, t_safe: Time },
     Advance { to: Time },
     Apply(PinSignals),
+    EndOfRun,
 }
 
 type Journal = Rc<RefCell<Vec<(String, Call)>>>;
@@ -53,6 +54,8 @@ struct Mock {
     follow: Option<(String, String)>,
     input_high: bool,
     logs: Vec<LogRecord>,
+    /// `end_of_run` fails (to test that the error fails the run).
+    fail_end: bool,
 }
 
 impl Mock {
@@ -69,6 +72,7 @@ impl Mock {
             follow: None,
             input_high: false,
             logs: Vec::new(),
+            fail_end: false,
         }
     }
     fn record(&self, c: Call) {
@@ -147,6 +151,14 @@ impl Engine for Mock {
 
     fn drain_logs(&mut self) -> Vec<LogRecord> {
         std::mem::take(&mut self.logs)
+    }
+
+    fn end_of_run(&mut self) -> Result<(), EngineError> {
+        self.record(Call::EndOfRun);
+        if self.fail_end {
+            return Err(EngineError::Protocol("end-of-run check failed".into()));
+        }
+        Ok(())
     }
 }
 
@@ -275,7 +287,7 @@ fn no_engine_advances_past_grant_or_t_safe() {
                     let ts = last_safe.take().expect("advance without a fresh t_safe");
                     assert!(*to <= ts);
                 }
-                Call::Apply(_) => {}
+                Call::Apply(_) | Call::EndOfRun => {}
             }
         }
     }
@@ -593,4 +605,59 @@ fn gauss_seidel_delivers_edges_before_later_engines_advance() {
         .filter(|(n, c)| n == "late" && matches!(c, Call::Apply(_)))
         .count();
     assert_eq!(applies, 4);
+}
+
+/// ADR-003 Amendment 1: `end_of_run` is called once per engine, in
+/// registration order, after the last grant of each `run`, and an error
+/// from it fails the run.
+#[test]
+fn end_of_run_is_called_after_the_last_grant() {
+    let j: Journal = Rc::default();
+    let mut s = Scheduler::new(cfg(Time::from_ms(1))).unwrap();
+    s.add_engine(Box::new(Mock::new("a", &j, |_| Time::MAX)))
+        .unwrap();
+    s.add_engine(Box::new(Mock::new("b", &j, |_| Time::MAX)))
+        .unwrap();
+    let mut sink = EventSink::new(Vec::new());
+    s.run(Time::from_ms(2), &mut sink, &mut []).unwrap();
+    s.run(Time::from_ms(3), &mut sink, &mut []).unwrap();
+    let journal = j.borrow();
+    let ends: Vec<(usize, &str)> = journal
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, c))| *c == Call::EndOfRun)
+        .map(|(k, (n, _))| (k, n.as_str()))
+        .collect();
+    assert_eq!(
+        ends.iter().map(|e| e.1).collect::<Vec<_>>(),
+        ["a", "b", "a", "b"]
+    );
+    // The first pair follows the last advance to 2 ms, before any 3 ms call.
+    let adv = |t: Time| {
+        journal
+            .iter()
+            .rposition(|(_, c)| *c == Call::Advance { to: t })
+            .unwrap()
+    };
+    assert!(adv(Time::from_ms(2)) < ends[0].0);
+    assert!(ends[1].0 < adv(Time::from_ms(3)));
+    assert!(adv(Time::from_ms(3)) < ends[2].0);
+    drop(journal);
+
+    let mut s = Scheduler::new(cfg(Time::from_ms(1))).unwrap();
+    let mut m = Mock::new("bad", &j, |_| Time::MAX);
+    m.fail_end = true;
+    s.add_engine(Box::new(m)).unwrap();
+    let err = s.run(Time::from_ms(2), &mut sink, &mut []).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SchedError::Engine {
+                phase: Phase::Done,
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(s.phase(), Phase::Error);
 }
