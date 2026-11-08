@@ -30,8 +30,13 @@ static BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// `examples/spike/firmware/build/<name>.elf`, built on demand.
 fn firmware(name: &str) -> Option<PathBuf> {
+    firmware_in("../../examples/spike/firmware", name)
+}
+
+/// `<dir>/build/<name>.elf` (`dir` relative to this crate), built on demand.
+fn firmware_in(dir: &str, name: &str) -> Option<PathBuf> {
     let _g = BUILD.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/spike/firmware");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(dir);
     let elf = dir.join(format!("build/{name}.elf"));
     if !elf.is_file() {
         let ok = Command::new("make")
@@ -69,11 +74,15 @@ fn setup() -> Option<RenodeConfig> {
 }
 
 fn setup_fw(name: &str) -> Option<RenodeConfig> {
+    setup_elf(|| firmware(name))
+}
+
+fn setup_elf(elf: impl FnOnce() -> Option<PathBuf>) -> Option<RenodeConfig> {
     let Some(renode) = find_renode() else {
         skip("renode not installed (run `make setup`, or set BB_RENODE)");
         return None;
     };
-    let elf = firmware(name)?;
+    let elf = elf()?;
     Some(RenodeConfig::stm32f103(renode, elf))
 }
 
@@ -766,4 +775,60 @@ fn inputs_take_effect_at_ceil_lattice_never_early() {
             assert!(*t_out > t_in, "PA6 at {t_out} before the input at {t_in}");
         }
     }
+}
+
+/// ADR-003 approver decision 2 (D2, Amendment 12): every transition of a
+/// pulse shorter than one lattice cell is delivered, in order, at
+/// `ceil_L(t)`. Renode gets PB0 High then Low as two SET_STATEs while it is
+/// paused on the same lattice point, and STM32 EXTI latches the rising
+/// edge: the `exti_pulse` firmware's ISR runs once per pulse and toggles
+/// PA6, stamped `ceil_L(t) + 1 fs`, in one-cell, 1 ms and 3 ms grants, with
+/// the driver registered before or after Renode. The polling copy firmware
+/// only ever sees the final (low) level, so PA6 never moves.
+#[test]
+fn sub_cell_pulse_is_latched_by_edge_triggered_exti() {
+    let Some(mut exti) = setup_elf(|| firmware_in("tests/firmware", "exti_pulse")) else {
+        return;
+    };
+    let Some(mut copy) = setup_fw("copy") else {
+        return;
+    };
+    exti.quantum = L;
+    copy.quantum = L;
+    let ns = Time::from_ns;
+    // Two pulses, each 3-4 us long inside one 10 us cell; the second pulse
+    // starts 3 ns past the 2 ms lattice point.
+    let edges = [
+        (Time::from_us(1002), Level::High),
+        (Time::from_us(1005), Level::Low),
+        (Time::from_ms(2) + ns(3), Level::High),
+        (Time::from_ms(2) + ns(7), Level::Low),
+    ];
+    let fs1 = Time::from_fs(1);
+    let want = vec![
+        (Time::from_us(1010) + fs1, 1u8),
+        (Time::from_us(2010) + fs1, 0u8),
+    ];
+    let cases = [
+        (L, true),
+        (Time::from_ms(1), true),
+        (Time::from_ms(1), false),
+        (Time::from_ms(3), false),
+    ];
+    // One engine at a time: the other tests of this binary already start
+    // several Renodes at once.
+    let runs: Vec<Vec<(Time, u8)>> = cases
+        .iter()
+        .map(|&(g, first)| run_copy(&exti, g, first, &edges))
+        .collect();
+    let polled = run_copy(&copy, Time::from_ms(1), true, &edges);
+    for ((g, first), run) in cases.iter().zip(&runs) {
+        eprintln!("exti_pulse PA6 edges, {g} grants, driver first: {first}: {run:?}");
+        assert_eq!(run, &want, "{g} grants, driver first: {first}");
+    }
+    eprintln!("copy (polling) PA6 edges: {polled:?}");
+    assert!(
+        polled.is_empty(),
+        "polling sees only the final level: {polled:?}"
+    );
 }

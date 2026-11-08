@@ -76,8 +76,12 @@ thresholds it (ADR-003 D3) and the value crosses the boundary as `Digital`:
 - At a level change, the crossing time is linearly interpolated between the
   two straddling solver points, through `vih` (rising) or `vil` (falling),
   and rounded up to whole femtoseconds, but kept strictly after the earlier
-  point and not after the later one. It is reported as a `Digital`
-  transition of the producer's trace (`spec/time-grant.md`), so any number
+  point and not after the later one. A solver point's time in fs is exactly
+  `kL` when the point is on a lattice point (within the grant tolerance of
+  it, the lattice clamp's own test), whether or not a grant ends there, and
+  its time rounded to fs otherwise (ADR-003 Amendment 12). It is reported
+  as a `Digital` transition of the producer's trace (`spec/time-grant.md`),
+  so any number
   of changes per grant reach the consumer, each at its time. This is a pure
   function of the solver points, which the grant lattice makes partition
   independent (ADR-003 D2).

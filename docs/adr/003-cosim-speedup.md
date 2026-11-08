@@ -2228,3 +2228,96 @@ event-stream version 1.
   - `make golden` gains the spike output-hash check. The plan says only
     "`make golden-update` for the new `events.jsonl` hash", but no
     committed file held that hash for `golden-update` to write.
+
+### Amendment 12: verification findings after step 10 (2026-11-08)
+
+**Status:** Accepted. A verification pass after step 10 raised two
+findings. Both were re-checked against the code and real runs.
+
+- **Finding 1 (major, fixed): a `digital_in` crossing on a lattice point
+  depended on the grant partition after ~2.3 s.**
+  - *What was wrong.* The ngspice engine stored a solver point's fs time in
+    two ways. A point that ended a grant was stored as exactly the grant
+    end `kL`. A point inside a longer grant was stored as its raw `f64`
+    time rounded to fs. Past ~2.3 s one ulp exceeds 0.5 fs, so a point the
+    lattice clamp put on `kL` can sit one or more ulps away from `f64(kL)`.
+    It is still on `kL` for the clamp and the park test (within
+    `grant_tolerance_s`, 4 ulps), but it rounds to `kL + 1 fs`. The crossing
+    is clamped to "not after the later point". A threshold reached exactly
+    at `kL` was therefore reported at `kL` in one-cell grants and at
+    `kL + 1 fs` in long grants, and `ceil_L` then delivered it to the MCU
+    one cell later. The early-stop watch (`Until::step`) had the same
+    split, so `advance_until` stopped one cell later too. Sampled analog
+    values at `kL` changed as well: inside a long grant, `kL` fell between
+    two stored points and was interpolated rather than read from the point.
+    This broke D2's "partition independent by construction" for long runs.
+    The solver points themselves were identical; only their fs labels
+    differed.
+  - *Reproduced* before the fix, with an ngspice-only board: a PULSE whose
+    fall ends exactly on `vil` at 4.153 s. In one-cell grants PB0 fell at
+    4153000000000000 fs; in 10 ms grants it fell at 4153000000000001 fs. The
+    original report saw the same on the full board at 4.137 s and 4.153 s:
+    PA6 one lattice cell later in 10 ms and 1 s grants, 8 differing
+    non-grant record lines and 4 differing `nets.csv` rows. All boards
+    whose golden files are committed end before 2.3 s, where 4 ulps is
+    still below 0.5 fs. That is why no earlier gate caught it.
+  - *Fix.* A new `point_fs(time, L)` gives a solver point's fs time as a
+    pure function of its raw time. If `lattice_point_of` recognises the
+    point as on `kL` (the same predicate as the clamp and the ADC window),
+    its time is exactly `kL`. Otherwise it is the raw time rounded to fs.
+    The window history (`take_boundary`) and the early-stop watch
+    (`Until::step`) both use it. The grant end is still stored as exactly
+    `t`, which `point_fs` also gives, since `t` is a lattice point. Without
+    a lattice nothing changes.
+  - *Spec.* `spec/pin-model.md` ("Analog to digital: thresholding") now
+    says a solver point on a lattice point has the fs time `kL`.
+  - *Regression tests.*
+    - `engines/analog-ngspice/tests/threshold.rs`,
+      `lattice_point_crossings_after_2s_are_partition_independent`. It
+      runs the PULSE board to 4.17 s in four partitions: one-cell grants
+      over [4.12 s, 4.16 s], 10 ms grants, 1 s grants, and 1 s grants with
+      `advance_until` watching PB0. The trace, the samples at all 4001
+      lattice points of [4.12 s, 4.16 s], and the early stops must be
+      identical, and the fall must be exactly at 4.153 s. Before the fix
+      the 10 ms partition failed. With only the window history fixed, the
+      `advance_until` partition failed at the engine's early-stop check
+      ("early stop at 4153010us, but the trace's first watched transition
+      gives 4153ms").
+    - The unit test `solver_point_on_a_lattice_point_is_exactly_that_point`
+      in `engines/analog-ngspice/src/lib.rs` takes raw times -3 to +3
+      ulps from `f64(4.153 s)`.
+  - *Deviation.* The suggested full-stack gate (the board under `bb run`
+    to 4.2 s, one-cell against 10 ms against 1 s) was not added. Its
+    one-cell run is 420 000 Renode grants, several minutes. The
+    engine-level test covers the code path that was wrong in every
+    partition shape, including the early stop, and runs in `make test`.
+    The committed goldens and `make partition` hashes are unchanged, as
+    expected for runs shorter than 2.3 s.
+- **Finding 2 (minor, fixed: a test gap, not a code bug): approver
+  decision 2 was not tested against real Renode.**
+  - *What was missing.* Approver decision 2 says every transition of a
+    pulse shorter than one cell is delivered, in order, at `ceil_L(t)`, so
+    that an edge-triggered EXTI latches it. This was tested only with mock
+    engines.
+  - *New test.* `engines/cpu-renode/tests/blinky.rs`,
+    `sub_cell_pulse_is_latched_by_edge_triggered_exti`, with new gate
+    firmware `engines/cpu-renode/tests/firmware/exti_pulse.c`. The
+    firmware's EXTI0 takes PB0 rising edges, and its ISR toggles PA6 and
+    counts itself.
+    - A driver sends two pulses, each inside one 10 us cell: High at
+      1.002 ms and Low at 1.005 ms, then High at 2 ms + 3 ns and Low at
+      2 ms + 7 ns.
+    - Renode gets each pair as two SET_STATEs while paused on the same
+      lattice point, in order. `scheduled` de-duplication keeps both,
+      because the levels differ.
+    - Renode 1.17.0's STM32 EXTI latches the rising edge, and PA6 toggles
+      once per pulse, at exactly 1.01 ms + 1 fs and 2.01 ms + 1 fs. The
+      result is identical in 10 us, 1 ms and 3 ms grants, with the driver
+      registered before or after Renode.
+    - The polling `copy` firmware never sees PB0 high and never moves PA6.
+
+    The engine did not need to change. The test's five Renode runs go one
+    at a time. The first `make check` with them in parallel hit the known
+    Renode startup flake ("Connection reset by peer" during setup) in
+    another test of the same binary, which already starts several Renodes
+    at once.

@@ -6,6 +6,8 @@
 #   build/la_sleeponexit.elf  SLEEPONEXIT: SysTick ISR only (PA5)
 #   build/la_wfe.elf          WFE/SEV main loop (PA5 in the ISR, PA6 in main)
 #   build/la_silent.elf       silent SysTick wakes, PA5 every 10th
+# and, for tests/blinky.rs (ADR-003 Amendment 12):
+#   build/exti_pulse.elf      EXTI0 on PB0 rising edges toggles PA6
 # Same flags and linker script as examples/spike/firmware. Deterministic
 # build: no timestamps or absolute paths end up in the ELFs.
 
@@ -13,7 +15,7 @@ CC      := arm-none-eabi-gcc
 SIZE    := arm-none-eabi-size
 BUILD   := build
 LDSCRIPT := ../../../../examples/spike/firmware/stm32f103c8.ld
-PROGS   := la_tim1pwm la_dma la_uart la_sleeponexit la_wfe la_silent
+PROGS   := la_tim1pwm la_dma la_uart la_sleeponexit la_wfe la_silent exti_pulse
 TARGETS := $(PROGS:%=$(BUILD)/%.elf)
 
 CFLAGS  := -mcpu=cortex-m3 -mthumb -Os -std=c11 -Wall -Wextra -Werror \

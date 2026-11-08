@@ -450,6 +450,19 @@ fn lattice_point_of(time: f64, lattice_fs: u64) -> Option<u64> {
     ((time - near_s).abs() <= grant_tolerance_s(near_s)).then_some(near)
 }
 
+/// The fs time of the accepted solver point at `time` (s): exactly `kL` if
+/// the point is on a lattice point ([`lattice_point_of`]), otherwise
+/// `time` rounded to fs. A pure function of the raw time, never of whether
+/// a grant ends at the point, so the window history, the crossing clamp and
+/// the early-stop watch give the same fs in every grant partition (ADR-003
+/// D2, Amendment 12). Past ~2.3 s the point the clamp put on `kL` can sit
+/// more than 0.5 fs from it while still within the grant tolerance, so
+/// rounding alone would give `kL + 1` inside a long grant but `kL` where a
+/// grant ends.
+fn point_fs(time: f64, lattice_fs: u64) -> u64 {
+    lattice_point_of(time, lattice_fs).unwrap_or_else(|| secs_to_fs(time))
+}
+
 impl Until {
     /// Threshold the point just accepted at `time` (the grant currently
     /// ends at `target_fs`). Returns the stop once a watched pin changes
@@ -492,12 +505,12 @@ impl Until {
             ));
         }
         // The point's fs as the window history will store it: the grant
-        // end exactly if it is at the grant, otherwise rounded and kept
-        // inside the grant.
+        // end exactly if it is at the grant, otherwise `point_fs` (a lattice
+        // point exactly) kept inside the grant.
         let t1_fs = if target_s - t1 <= grant_tolerance_s(target_s) {
             target_fs
         } else {
-            secs_to_fs(t1).clamp(self.from_fs, target_fs)
+            point_fs(t1, self.lattice_fs).clamp(self.from_fs, target_fs)
         };
         let mut first: Option<u64> = None;
         // ADC pushes happen at lattice points only (ADR-003 D6), exactly as
@@ -685,8 +698,8 @@ fn grant_tolerance_s(target_s: f64) -> f64 {
 }
 
 /// Seconds (ngspice) to integer femtoseconds (kernel), rounding to nearest.
-/// Only for points strictly inside a grant (diagnostics, sample lookup); a
-/// boundary is always stored as the exact kernel time.
+/// Only for points strictly inside a grant and off the lattice
+/// ([`point_fs`]); a boundary is always stored as the exact kernel time.
 fn secs_to_fs(t: f64) -> u64 {
     if t <= 0.0 {
         0
@@ -1465,13 +1478,16 @@ impl NgspiceEngine {
         for v in &mut h.values {
             v.drain(..keep_from);
         }
-        // Interior points are rounded to fs and kept inside [previous
-        // boundary, t] (rounding can push a point within one ulp of a
-        // boundary past it once ulp > 1 fs).
+        // Interior points: a point on a lattice point is stored as exactly
+        // that point, as it is when a grant ends there (`point_fs`, ADR-003
+        // Amendment 12); others are rounded to fs. All are kept inside
+        // [previous boundary, t] (rounding can push a point within one ulp
+        // of a boundary past it once ulp > 1 fs).
         let lo = self.now.as_fs();
         let hi = t.as_fs();
+        let l = self.lattice.map_or(0, Time::as_fs);
         h.times_fs
-            .extend(r.times.iter().map(|&s| secs_to_fs(s).clamp(lo, hi)));
+            .extend(r.times.iter().map(|&s| point_fs(s, l).clamp(lo, hi)));
         h.times_s.extend_from_slice(&r.times);
         for (dst, src) in h.values.iter_mut().zip(r.values) {
             dst.extend(src);
@@ -2092,5 +2108,38 @@ mod tests {
         assert_eq!(grant_tolerance_s(1e-3), 0.5e-15);
         // A real overshoot (a whole step) is still caught.
         assert!(1e-6 > grant_tolerance_s(10_000.0));
+    }
+
+    #[test]
+    fn solver_point_on_a_lattice_point_is_exactly_that_point() {
+        // ADR-003 Amendment 12: at 4.153 s one ulp is 0.888 fs, so a point
+        // one or two ulps above f64(kL) rounds to kL + 1 or kL + 2 fs, yet
+        // the lattice clamp and the park test treat it as on kL. Its fs must
+        // be kL, as it is when a grant ends there.
+        let l = 10_000_000_000; // 10 us
+        let k = Time::from_ms(4153);
+        let ks = k.as_secs_f64();
+        for d in [-3i64, -2, -1, 0, 1, 2, 3] {
+            let s = f64::from_bits(ks.to_bits().wrapping_add_signed(d));
+            assert!((s - ks).abs() <= grant_tolerance_s(ks), "{d} ulps");
+            assert_eq!(point_fs(s, l), k.as_fs(), "{d} ulps from kL");
+            assert_eq!(lattice_point_of(s, l), Some(k.as_fs()));
+        }
+        assert_ne!(
+            secs_to_fs(f64::from_bits(ks.to_bits() + 1)),
+            k.as_fs(),
+            "rounding alone gives kL + 1 here (the bug)"
+        );
+        // Off the lattice: rounded to fs, unchanged. Without a lattice:
+        // rounded to fs.
+        let mid = Time::from_ms(4153) + Time::from_us(5);
+        assert_eq!(
+            point_fs(mid.as_secs_f64(), l),
+            secs_to_fs(mid.as_secs_f64())
+        );
+        let up = f64::from_bits(ks.to_bits() + 1);
+        assert_eq!(point_fs(up, 0), secs_to_fs(up));
+        // Small times: the half-fs tolerance, as before.
+        assert_eq!(point_fs(1e-3, l), 1_000_000_000_000);
     }
 }

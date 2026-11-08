@@ -318,6 +318,119 @@ fn pulse_board_is_partition_independent() {
     assert_eq!(t1, t2);
 }
 
+/// ADR-003 Amendment 12: past ~2.3 s one ulp of the solver time exceeds
+/// 0.5 fs, so the solver point the lattice clamp puts on `kL` can sit a
+/// fraction of a fs (or more) away from `kL` while still being recognised
+/// as on it. Its fs time must be `kL` whether or not a grant ends there, or
+/// a threshold reached exactly at `kL` is reported at `kL` in one-cell
+/// grants and at `kL + 1 fs` (one lattice cell later at the consumer) in
+/// long grants. A PULSE whose ramps end exactly at vih and at vil on lattice
+/// points after 4 s: the trace, the samples at every lattice point and the
+/// early stops of `advance_until` are identical for one-cell, 10 ms and 1 s
+/// grants, and the transitions are exactly at the lattice points.
+#[test]
+fn lattice_point_crossings_after_2s_are_partition_independent() {
+    let _g = NGSPICE.lock().unwrap_or_else(|e| e.into_inner());
+    let t_end = Time::from_ms(4170);
+    let (from, to) = (Time::from_ms(4120), Time::from_ms(4160));
+    let body = "V_N n 0 PULSE(0.8 2.0 4.13 7m 7m 9m 1)\nR_LOAD n 0 1meg\n";
+    let cfg = || {
+        let mut cfg = NgspiceConfig::new(body, t_end, L);
+        cfg.lattice = Some(L);
+        cfg.outputs.push(OutputBinding {
+            pin: "N".into(),
+            node: "n".into(),
+        });
+        cfg.digital_outputs.push(DigitalOutputBinding {
+            pin: "U1.PB0".into(),
+            node: "n".into(),
+            model: DigitalIn { cin: 0.0, ..PB0 },
+        });
+        cfg
+    };
+    // `next(now)` is the next grant end; `until` uses advance_until on PB0
+    // inside [from, to]. Returns the trace, the samples of N at every
+    // lattice point of [from, to] and the grant ends inside [from, to].
+    let dump = |next: &dyn Fn(Time) -> Time, until: bool| {
+        let mut e = NgspiceEngine::new(cfg()).expect("engine");
+        let watch = ["U1.PB0".to_string()];
+        let (mut trace, mut samples, mut ends) = (Vec::new(), Vec::new(), Vec::new());
+        let mut now = Time::ZERO;
+        let mut next_sample = from;
+        while now < t_end {
+            let g = next(now).min(t_end);
+            let r = if until && now >= from && now < to {
+                e.advance_until(g, &watch).unwrap()
+            } else {
+                e.advance_to(g).unwrap();
+                g
+            };
+            while next_sample <= r && next_sample <= to {
+                if next_sample > now {
+                    let v = e.sample_output("N", next_sample).unwrap();
+                    samples.push((next_sample, v.volts().unwrap().to_bits()));
+                }
+                next_sample = next_sample + L;
+            }
+            if r > from && r <= to {
+                ends.push(r);
+            }
+            trace.extend(e.read_output_trace().unwrap().unwrap());
+            now = r;
+        }
+        (trace, samples, ends)
+    };
+    let one_cell = |now: Time| {
+        if now >= from && now < to {
+            now + L
+        } else {
+            now + Time::from_ms(10)
+        }
+    };
+    let (t1, s1, _) = dump(&one_cell, false);
+    let (t2, s2, _) = dump(&|now| now + Time::from_ms(10), false);
+    let (t3, s3, _) = dump(&|now| now + Time::from_secs(1), false);
+    let (t4, s4, stops) = dump(
+        &|now| {
+            let g = now + Time::from_secs(1);
+            if now < from {
+                g.min(from)
+            } else {
+                g
+            }
+        },
+        true,
+    );
+    println!("one-cell trace {t1:?}");
+    // The rise's corner value comes out a hair under 2.0 V, so PB0 rises
+    // at the next solver point, inside the cell after 4.137 s. The fall ends
+    // on V1 = 0.8 V exactly: vil is reached exactly on the lattice point.
+    let got: Vec<(Time, Level)> = t1
+        .iter()
+        .map(|tr| (tr.t, tr.signal.level().unwrap()))
+        .collect();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got[0].1, Level::High);
+    assert!(got[0].0 > Time::from_ms(4137) && got[0].0 <= Time::from_ms(4137) + L);
+    assert_eq!(
+        got[1],
+        (Time::from_ms(4153), Level::Low),
+        "vil reached exactly at the lattice point"
+    );
+    let want: Vec<Time> = got.iter().map(|&(t, _)| t).collect();
+    assert_eq!(t1, t2, "10 ms grants change the trace");
+    assert_eq!(t1, t3, "1 s grants change the trace");
+    assert_eq!(t1, t4, "advance_until changes the trace");
+    assert_eq!(s1.len(), 4001);
+    assert_eq!(s1, s2, "10 ms grants change the samples");
+    assert_eq!(s1, s3, "1 s grants change the samples");
+    assert_eq!(s1, s4, "advance_until changes the samples");
+    // The early stops are the transitions' lattice points (ceil_L of
+    // exactly kL is kL), not one cell later.
+    let want_stops: Vec<Time> = want.iter().map(|&t| ceil_l(t)).collect();
+    assert_eq!(&stops[..2], &want_stops[..], "early stops {stops:?}");
+}
+
 /// The engine adds `cin` as a capacitor to ground and rejects bad models.
 #[test]
 fn cin_glue_and_model_checks() {
