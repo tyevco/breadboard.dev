@@ -1,0 +1,13 @@
+// Renode's stock STM32F103 platform with the network-dependent init removed.
+//
+// platforms/cpus/stm32f103.repl in Renode 1.17.0 ends with
+//     sysbus: init: ApplySVD @https://dl.antmicro.com/projects/renode/svd/STM32F103.svd.gz
+// which downloads the SVD on every load. The SVD only names unimplemented
+// registers in log messages; it does not change behaviour. A run must not
+// depend on the network, so this file replaces the sysbus init block and keeps
+// only the RCC_CR tag from the stock file (PLL/HSE/HSI ready bits read as 1).
+using "platforms/cpus/stm32f103.repl"
+
+sysbus:
+    init:
+        Tag <0x40021000, 0x40021003> "RCC_CR" 0x0A020083
