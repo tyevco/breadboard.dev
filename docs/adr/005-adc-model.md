@@ -1,9 +1,10 @@
 # ADR-005: An in-repo STM32 ADC peripheral model (hardware triggers, conversion timing, sampled inputs)
 
-- **Status:** Proposed (2026-11-08). Not approved yet; nothing in this ADR
-  is implemented. Written before implementation because it changes the
-  kernel time-grant protocol (the quiet-grant watch, "D3" below) and
-  `spec/` (`time-grant.md`, `pin-model.md`).
+- **Status:** Accepted (2026-11-08), with the approver decisions below,
+  including the protocol change of D3 in its generic form. Written before
+  implementation because it changes the kernel time-grant protocol (the
+  quiet-grant watch, "D3" below) and `spec/` (`time-grant.md`,
+  `pin-model.md`).
 - **Amends:** ADR-003 D6 (the code-change watch on `adc_in` pins) and
   Amendment 10 (the whole-millivolt push key); supersedes ADR-003
   approver decision 4 ("prefer an existing Renode ADC model") for the
@@ -23,6 +24,31 @@
   characteristics) and RM0008 Rev 6 (ADC chapter 10, `ADC_CR2`). All
   scratch work lives in `~/bbscratch-adc` (measurement scripts `m1.sh`,
   `m2.py`, `count_pushes.py`; prototype `proto/`), outside the repo.
+
+## Approver decisions (2026-11-08)
+
+Recorded after the human approver reviewed this ADR and ADR-004.
+
+1. **The ADR is approved, including its protocol change in the generic
+   form (open question 5):** `Engine::input_is_sampled` and the "sampled
+   input" definitions in `spec/time-grant.md` and `spec/pin-model.md`,
+   the amendments to ADR-003 D6 and Amendment 10, and superseding ADR-003
+   approver decision 4 for the STM32F072 board.
+2. **Transfer function (open question 1):** `round_half_up(uV · 4095 /
+   Vref)`, saturating at 4095, as proposed.
+3. **`CKMODE = 00` latency (open question 2):** a fixed 2.625 ADC cycles,
+   no jitter, as proposed.
+4. **Stock path (open question 3):** kept for now behind
+   `--adc-model stock` (with `make adc-renode`, the Amendment 5 test).
+5. **Timer period (open question 4):** the `STM32_Timer` `ARR`-tick
+   period and fixed 10 MHz clock stay as they are in `BbStm32Timer`, and
+   are documented.
+6. **DMA one-shot (D1.4):** `DMACFG = 0` is treated as circular, with a
+   warning, as proposed.
+7. **`TIM1_CC4` (TRG1, D1.3):** unsupported, with a warning, as proposed.
+8. **STM32F1 front-end (open question 6, step 7):** deferred until an
+   F103 board needs an ADC. D1.6 records whether the design generalises to
+   the nRF52840 SAADC (it does, for the core; see there).
 
 ## Context
 
