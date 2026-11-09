@@ -1,8 +1,16 @@
 // Breadboard's STM32F072 (ADR-005 D6): Renode 1.17.0's stock
-// platforms/cpus/stm32f072.repl with the timers that can trigger the ADC
-// (RM0091 Table 45: TRG0 TIM1_TRGO, TRG2 TIM2_TRGO, TRG3 TIM3_TRGO, TRG4
-// TIM15_TRGO) replaced by Timers.BbStm32Timer (STM32_Timer plus TRGO,
-// engines/cpu-renode/platforms/bb_stm32_timer.cs). A repl overlay cannot
+// platforms/cpus/stm32f072.repl with
+//   - the ADC replaced by Analog.BbStm32F0Adc (bbAdc, RM0091 chapter 13:
+//     hardware triggers, conversion timing, analog watchdog;
+//     engines/cpu-renode/platforms/bb_stm32f0_adc.cs) and its host-only
+//     port Miscellaneous.BbAdcHostPort (bbAdcPort, at 0x5FFF0100, next to
+//     the lookahead block at 0x5FFF0000);
+//   - the timers that can trigger the ADC (RM0091 Table 45: TRG0 TIM1_TRGO,
+//     TRG2 TIM2_TRGO, TRG3 TIM3_TRGO, TRG4 TIM15_TRGO) replaced by
+//     Timers.BbStm32Timer (STM32_Timer plus TRGO,
+//     engines/cpu-renode/platforms/bb_stm32_timer.cs), TRGO wired to the
+//     ADC's trigger input n = TRGn. TRG1 (TIM1_CC4) is not wired (ADR-005
+//     D1.3). A repl overlay cannot
 // redeclare a variable's type, so the stock objects are unregistered
 // (`@none`, their default interrupt `-> none`) and new ones are declared at
 // the same addresses with the stock frequency, limit, interrupt and DMA
@@ -26,6 +34,21 @@ timer3: @none
 timer15: @none
     -> none
 
+adc: @none
+    -> none
+
+// PCLK: the HSI after reset (8 MHz); STM32F0_RCC models no clock tree.
+bbAdc: Analog.BbStm32F0Adc @ sysbus 0x40012400
+    referenceVoltage: 3.3
+    pclkFrequency: 8000000
+    asyncClockFrequency: 14000000
+    dmaPeripheral: dma
+    dmaChannel: 1
+    -> nvic@12
+
+bbAdcPort: Miscellaneous.BbAdcHostPort @ sysbus 0x5FFF0100
+    adc: bbAdc
+
 bbTimer1: Timers.BbStm32Timer @ sysbus 0x40012C00
     frequency: 10000000
     initialLimit: 0xFFFF
@@ -35,11 +58,13 @@ bbTimer1: Timers.BbStm32Timer @ sysbus 0x40012C00
     BreakInterrupt -> nvic@13
     CaptureCompareInterrupt -> nvic@14
     [0, 1, 3, 2] -> dma@[2-5]
+    TRGO -> bbAdc@0
 
 bbTimer2: Timers.BbStm32Timer @ sysbus 0x40000000
     frequency: 10000000
     initialLimit: 0xFFFFFFFF
     -> nvic@15
+    TRGO -> bbAdc@2
 
 bbTimer3: Timers.BbStm32Timer @ sysbus 0x40000400
     frequency: 10000000
@@ -50,12 +75,14 @@ bbTimer3: Timers.BbStm32Timer @ sysbus 0x40000400
     0 -> dma@4
     UpdateInterrupt -> dma@3
     TriggerInterrupt -> dma@4
+    TRGO -> bbAdc@3
 
 bbTimer15: Timers.BbStm32Timer @ sysbus 0x40014000
     frequency: 10000000
     initialLimit: 0xFFFF
     -> nvic@20
     [0, UpdateInterrupt, TriggerInterrupt, CommutationInterrupt] -> dma@[5, 5, 5, 5]
+    TRGO -> bbAdc@4
 
 // Alternate functions (stm32f0.repl), restated for the new timers.
 bbTimer1:

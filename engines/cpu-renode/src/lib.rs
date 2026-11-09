@@ -170,18 +170,23 @@ pub const BB_LOOKAHEAD_CS: &str = include_str!("../platforms/bb_lookahead.cs");
 /// Source of `Timers.BbStm32Timer`, STM32_Timer plus TRGO (ADR-005 D1.2).
 pub const BB_STM32_TIMER_CS: &str = include_str!("../platforms/bb_stm32_timer.cs");
 
+/// Source of `Analog.BbStm32F0Adc` and `Miscellaneous.BbAdcHostPort`, the
+/// STM32F0 ADC model and its host port (ADR-005 D1-D5).
+pub const BB_STM32F0_ADC_CS: &str = include_str!("../platforms/bb_stm32f0_adc.cs");
+
 /// Breadboard's STM32F072 overlay (ADR-005 D6), written next to the
 /// generated script for [`Platform::Stm32f072Bb`].
 pub const STM32F072_BB_REPL: &str = include_str!("../platforms/stm32f072-bb.repl");
 
 /// Monitor name of the ADC on [`Platform::Stm32f072Bb`].
-pub const BB_ADC_NAME: &str = "adc";
+pub const BB_ADC_NAME: &str = "bbAdc";
 
 /// Every C# source of Breadboard's Renode plugins, compiled together into
 /// one cached assembly (ADR-005 D6): `(file name, source)`.
 pub const PLUGIN_SOURCES: &[(&str, &str)] = &[
     ("bb_lookahead.cs", BB_LOOKAHEAD_CS),
     ("bb_stm32_timer.cs", BB_STM32_TIMER_CS),
+    ("bb_stm32f0_adc.cs", BB_STM32F0_ADC_CS),
 ];
 
 /// Default address of the lookahead block: unused on the STM32F103.

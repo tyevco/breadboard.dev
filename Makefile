@@ -11,7 +11,7 @@ CARGO ?= cargo
         golden-update feedback-run feedback feedback-order feedback-determinism \
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
-        adc-equiv adc-renode cost-table cost-table-runs startup-perf \
+        adc-equiv adc-renode adc-model cost-table cost-table-runs startup-perf \
         pool-equiv pool-perf \
         pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
 
@@ -116,6 +116,7 @@ pooled-test:
 	$(MAKE) feedback
 	$(MAKE) feedback-order
 	$(MAKE) adc
+	$(MAKE) adc-model
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -442,6 +443,12 @@ pooled-adc-equiv: firmware bb
 	    "$(ADC_ARGS)" -- "$(ADC_OPEN_ARGS)"
 
 # The Renode-only ADC platform test of ADR-003 Amendment 5 (about 15 s).
+# ADR-005 test plan 1-3: Renode-only tests of Breadboard's STM32F072 ADC
+# model and BbStm32Timer TRGO (examples/adc/bb_adc_test.py: pwm, trgo,
+# registers, firmware; about 80 s). In `make test`.
+adc-model: firmware
+	$(MAKE) -C examples/adc model-test
+
 adc-renode:
 	$(MAKE) -C examples/adc test
 
