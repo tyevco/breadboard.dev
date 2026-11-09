@@ -11,7 +11,7 @@ CARGO ?= cargo
         golden-update feedback-run feedback feedback-order feedback-determinism \
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
-        adc-equiv adc-renode adc-model adc-stock adc-order adc-determinism pooled-adc-determinism adc-stock-ref adc-open-stock-ref adc-speed \
+        adc-equiv adc-renode adc-model adc-startup adc-stock adc-order adc-determinism pooled-adc-determinism adc-stock-ref adc-open-stock-ref adc-speed \
         cost-table cost-table-runs startup-perf \
         pool-equiv pool-perf \
         pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
@@ -364,6 +364,17 @@ cost-table-runs:
 # The two models give different (each self-consistent) outputs, so the A/B
 # equivalence is not checked here (it is make adc / make adc-stock). Run it
 # on an otherwise idle host.
+# ADR-005 D6 startup gate (scripts/plugin_startup.sh, fresh Renode,
+# interleaved, N = ADC_STARTUP_N, medians of the engine startup, 20 ms runs):
+# the ADC board on Breadboard's STM32F072 with a warm plugin cache within
+# 0.3 s of the stock STM32F072 with the lookahead plugin, and a cold start
+# (the plugin assembly compiled) within 3 s of a warm one. Run it on an
+# otherwise idle host.
+ADC_STARTUP_N ?= 5
+adc-startup: firmware bb
+	STOCK_FLAGS="$(ADC_STOCK_FLAGS)" bash scripts/plugin_startup.sh $(BB) out/adc-startup $(ADC_STARTUP_N) \
+	    0.3 3 -- $(ADC_ARGS) --for 20ms
+
 ADC_SPEED_OUT ?= out/adc-speed
 adc-speed: firmware bb
 	env -u BB_RENODE_POOL PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) $(ADC_SPEED_OUT) $(PERF_N) \

@@ -196,11 +196,18 @@ fresh runs.
 | `examples/feedback`, defaults (`make feedback`: CPU lookahead on) | 500 ms | 117 | **1.19 s** (21×) | 2.22 s | **0.39 s** | 3.49 s | 1.78 s |
 | `examples/feedback-open` (the loop opened), `--max-quantum 10us` | 500 ms | 50 000 | 24.36 s | 2.25 s | 0.08 s | 26.86 s | 22.63 s |
 | `examples/feedback-open`, defaults (10 ms grants) | 500 ms | 50 | **0.56 s** (44×) | 2.05 s | **0.10 s** | 2.66 s | 0.50 s |
-| `examples/adc --lookahead off` (one-cell grants) | 300 ms | 30 000 | 23.80 s | 2.26 s | 0.09 s | 26.12 s | 14.96 s |
-| `examples/adc`, defaults (`make adc`: lookahead on) | 300 ms | 6 344 | **10.09 s** (2.4×) | 2.28 s | **0.12 s** | 14.06 s | 6.75 s |
+| `examples/adc --lookahead off` (one-cell grants; Breadboard's ADC model) | 300 ms | 30 000 | 11.50 s | 1.46 s | 0.09 s | 13.00 s | 11.26 s |
+| `examples/adc`, defaults (`make adc`: lookahead on, Breadboard's ADC model) | 300 ms | 1 209 | **1.11 s** (10.4×) | 1.43 s | **0.09 s** | 2.61 s | 0.97 s |
+| `examples/adc --adc-model stock` (the ADR-003 default: Renode's ADC, lookahead on) | 300 ms | 6 344 | 5.08 s | 1.38 s | | 6.53 s | |
 
 Measured on 2026-11-09 (ADR-004 Amendment 7), load average 2.3–6.6
-while another agent's job ran on the host, so the figures are noisy. They
+while another agent's job ran on the host, so the figures are noisy. The
+three `examples/adc` rows were measured again later that day with the
+same protocol (`scripts/perf_ab.sh`, N = 5, interleaved, medians;
+ADR-005 Amendment 4): the first two as `make cost-table`'s ADC row, fresh
+(load 3.1–7.5) and on a one-slot pool (load 1.8–2.7), and the stock row as
+`make adc-speed`'s A case on an idle host (load 1.2), where the defaults
+took 1.07 s (4.75× less than the stock model). They
 are not comparable with the figures of earlier sessions (ADR-003 step 10,
 ADR-004 Amendments 5 and 6), which ran with 8 KiB output buffers: with
 `out/` on WSL's `/mnt/c`, writing `nets.csv` then cost up to about 2 s of
@@ -224,11 +231,16 @@ Renode process instead of starting one, and startup falls to 0.08–0.39 s.
 `make test` and the gate targets run on a pool by default (`POOL=0` runs
 them fresh).
 
-The ADC board gains least: the firmware converts every 999 µs and every
-change of ADC_IN by a whole millivolt stops a quiet grant, so while the RC
-node moves grants stay short (ADR-003 D6, "no gain while the analog side
-moves"). Per-run numbers are in `out/cost-table/{fresh,pool}/*/results.tsv`
-after a run.
+On Breadboard's ADC model (ADR-005) the ADC board gains 10× over its
+one-cell run: the model reads ADC_IN only at its sample instants, so the
+ADC pin is a sampled input and a quiet grant runs from one TIM3 trigger to
+the next whatever the RC node does (four grants per conversion: the quiet
+grant, the cell holding the trigger and the end of conversion, and two
+cells whose Queries the back-off skips). Renode's stock model kept ADR-003's
+code-change watch, which stopped a quiet grant at every millivolt change
+(6 344 grants). Per-run numbers are in `out/cost-table/{fresh,pool}/*/results.tsv`
+after a run (`out/cost-adc` and `out/adc-speed` for the ADR-005
+measurements).
 `make perf` and `make lookahead-perf` are the speed gates of plan steps 3
 and 8; `make cost-table` only reports.
 

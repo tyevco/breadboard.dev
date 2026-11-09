@@ -1,7 +1,9 @@
 # ADR-005: An in-repo STM32 ADC peripheral model (hardware triggers, conversion timing, sampled inputs)
 
 - **Status:** Accepted (2026-11-08), with the approver decisions below,
-  including the protocol change of D3 in its generic form. Written before
+  including the protocol change of D3 in its generic form. Implemented
+  (steps 1-6, 2026-11-09; Amendments 1-4); step 7 (the STM32F1 front-end)
+  deferred by approver decision 8. Written before
   implementation because it changes the kernel time-grant protocol (the
   quiet-grant watch, "D3" below) and `spec/` (`time-grant.md`,
   `pin-model.md`).
@@ -1008,3 +1010,64 @@ existing equivalence gates apply unchanged.
   passed when rerun alone and in the next full `make check`. It is the
   ADR-004 Amendment 6 profile test (a graceful `SIGTERM` under load) and
   does not touch the ADC; recorded, not changed.
+
+### Amendment 4: step 6 (speed and startup gates, cost table) measured (2026-11-09)
+
+Measured with the ADR-003 protocol (`scripts/perf_ab.sh`: interleaved A/B,
+N = 5 of each, medians; engine startup reported separately). The host
+(WSL2, 24 logical CPUs) was idle for the gate runs (load average 0.5–1.3)
+and partly loaded for the cost-table rows (noted). Raw numbers:
+`out/adc-speed-2/results.tsv`, `out/adc-startup/results.tsv`,
+`out/cost-adc/{fresh,pool}/results.tsv`, `out/adc-open-speed/results.tsv`.
+
+**Speed gate (`make adc-speed`, fresh Renode, load 1.1–1.3): PASS.**
+
+| `examples/adc`, 300 ms | Grants | Simulation (median) | Engine startup | Total wall |
+| --- | --- | --- | --- | --- |
+| A: `--adc-model stock` (the ADR-003 default, `adc_board_isr.elf`) | 6 344 | 5.08 s | 1.38 s | 6.53 s |
+| B: defaults (Breadboard's model, lookahead on) | **1 209** | **1.07 s** | 1.45 s | 2.61 s |
+
+1 209 grants (gate: at most 2 000) and **4.75× less simulation** than the
+ADR-003 default in the same protocol run (gate: at least 3×). A first
+`make adc-speed` on a loaded host (load 8.6–14.3) gave 4.60× with the same
+grant counts.
+
+**Against the ADR's expectation** ("Expected speed-up"):
+
+| Quantity | Expected | Measured |
+| --- | --- | --- |
+| Grants per 300 ms | about 1 200–1 500 | 1 209 (300 `engine:U1`, 908 `loop_quantum`, 1 `engine:ngspice`, 0 `stop:ngspice`) |
+| Simulation, defaults | about 1.0–1.8 s | 1.07 s (idle), 1.11 s (cost-table run, load 3–7) |
+| vs the ADR-003 default | about 4–7× | 4.75× (same protocol run) |
+| vs one cell | 9–15× | 10.4× fresh (11.50 s → 1.11 s), 13.2× on the pool |
+| Open board (`board-open.cir`) | about 0.6–0.9 s | 0.39 s against 1.95 s on the stock model (N = 3, idle; 30 grants each) |
+| `RUN_FOR` splits for pushes | 0 | 0 (the timed inputs) |
+
+The grants follow the ADR's description exactly: per TIM3 period one quiet
+grant to `floor_L(T_k)` (`engine:U1`), then three one-cell grants (the cell
+holding `T_k` and `c_k`, and two whose Queries the back-off skips). The 1
+ms and 10 ms caps give the same partition (the promise always ends at the
+next update, 999 µs away). "What remains" stands: removing the silent
+TIM3-update limit from the promise and the back-off cells would need a
+plugin or kernel change, a follow-up.
+
+**Cost table (README), `examples/adc` rows (N = 5):**
+
+| Run | Grants | Simulation | Startup fresh | Startup pool | Total fresh | Total pool |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--lookahead off` (model) | 30 000 | 11.50 s | 1.46 s | 0.09 s | 13.00 s | 11.26 s |
+| defaults (model) | 1 209 | 1.11 s (10.4×) | 1.43 s | 0.09 s | 2.61 s | 0.97 s |
+
+Fresh runs at load 3.1–7.5, pool runs at load 1.8–2.7 (all 10 pool runs
+leased); every B run byte-identical to A in `nets.csv`, `nets.vcd` and the
+non-grant records. The README's stock row is the `make adc-speed` A case.
+The other rows of the README table were not re-measured in this step.
+
+**Startup gate (`make adc-startup`, D6; fresh Renode, 20 ms runs, N = 5,
+load 0.9–1.1): PASS.** Engine startup medians: stock STM32F072 with the
+lookahead plugin 1.39 s; Breadboard's STM32F072 with a warm plugin cache
+1.47 s (**+0.08 s**, gate 0.3 s); with an empty plugin cache (the assembly
+of three sources compiled by `AdHocCompiler`, the JIT profile cache kept)
+2.64 s (**+1.17 s** over warm, gate 3 s). On the pool the ADC board starts
+in 0.09 s (cost table). ADR-004's startup work is unaffected: one assembly,
+one `ScanFile` per fresh start, nothing per lease.
