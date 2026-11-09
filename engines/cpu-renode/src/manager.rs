@@ -41,8 +41,8 @@ use crate::console::{Console, COMMAND_ERROR};
 use crate::pool::{canonical_renode, PROTOCOL};
 use crate::protocol::Client;
 use crate::{
-    free_port, plugin_cache_path, write_plugin_loader, LOOKAHEAD_ADDRESS, LOOKAHEAD_NAME,
-    STM32F103_OFFLINE_REPL,
+    free_port, plugin_cache_path, write_plugin_loader, BB_ADC_NAME, LOOKAHEAD_ADDRESS,
+    LOOKAHEAD_NAME, PLUGIN_ERR, PLUGIN_LOADER, STM32F072_BB_REPL, STM32F103_OFFLINE_REPL,
 };
 
 /// Configuration of a [`Manager`].
@@ -209,11 +209,12 @@ impl Manager {
         let _ = std::fs::remove_dir_all(&work);
         std::fs::create_dir_all(&work)?;
         std::fs::write(work.join("platform.repl"), STM32F103_OFFLINE_REPL)?;
+        std::fs::write(work.join("platform-f072-bb.repl"), STM32F072_BB_REPL)?;
         std::fs::write(work.join("bbwarm.elf"), warm_elf())?;
         let plugin_cache = if cfg.plugin {
             let cache = plugin_cache_path(&cfg.renode, cfg.plugin_cache_dir.as_deref())
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
-            write_plugin_loader(&work, &cache, &work.join("bb_lookahead.err"))
+            write_plugin_loader(&work, &cache, &work.join(PLUGIN_ERR))
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             Some(cache)
         } else {
@@ -462,15 +463,14 @@ fn warm_process(inner: &Inner) -> Result<Console, String> {
     };
     let mut plugin = false;
     if let Some(cache) = &inner.plugin_cache {
-        let loader = inner.work.join("bb_lookahead_load.py");
+        let loader = inner.work.join(PLUGIN_LOADER);
         match con.run(&[&format!("include @{}", loader.display())], t) {
             Ok(out) if !out.contains(COMMAND_ERROR) => {
                 plugin = true;
                 *lock(&inner.plugin_key) = Some(cache.to_string_lossy().into_owned());
             }
             r => {
-                let err = std::fs::read_to_string(inner.work.join("bb_lookahead.err"))
-                    .unwrap_or_default();
+                let err = std::fs::read_to_string(inner.work.join(PLUGIN_ERR)).unwrap_or_default();
                 eprintln!(
                     "bb pool: loading the lookahead plugin failed ({}); \
                      runs that use it start Renode fresh",
@@ -489,11 +489,17 @@ fn warm_process(inner: &Inner) -> Result<Console, String> {
     }
     let warm_elf = inner.work.join("bbwarm.elf");
     let f103 = inner.work.join("platform.repl");
-    let platforms = [
-        (f103.to_string_lossy().into_owned(), false),
-        ("platforms/cpus/stm32f072.repl".to_string(), true),
+    let f072 = inner.work.join("platform-f072-bb.repl");
+    // (platform, ADC instance): the F103, the stock F072 (`--adc-model
+    // stock`) and, with the plugin assembly, Breadboard's F072 (ADR-005).
+    let mut platforms = vec![
+        (f103.to_string_lossy().into_owned(), None),
+        ("platforms/cpus/stm32f072.repl".to_string(), Some("adc")),
     ];
-    for (repl, has_adc) in &platforms {
+    if plugin {
+        platforms.push((f072.to_string_lossy().into_owned(), Some(BB_ADC_NAME)));
+    }
+    for (repl, adc) in &platforms {
         let port = free_port().map_err(|e| e.to_string())?;
         let mut lines = vec![
             "Clear".to_string(),
@@ -530,7 +536,7 @@ fn warm_process(inner: &Inner) -> Result<Console, String> {
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let out = con.run(&refs, t).map_err(|e| e.to_string())?;
         ok(&out, repl)?;
-        warm_external_control(port, *has_adc, plugin, t)
+        warm_external_control(port, *adc, plugin, t)
             .map_err(|e| format!("pre-warm {repl}: {e}"))?;
         end_session(&mut con, port, t)?;
     }
@@ -636,7 +642,7 @@ pub fn warm_elf() -> Vec<u8> {
 /// The External Control calls an engine makes, once, so they are compiled.
 fn warm_external_control(
     port: u16,
-    adc: bool,
+    adc: Option<&str>,
     plugin: bool,
     t: Duration,
 ) -> Result<(), crate::protocol::ProtocolError> {
@@ -647,8 +653,8 @@ fn warm_external_control(
     let _ = c.gpio_get_state(gpio, 5)?;
     c.gpio_register_event(gpio, 5, 0)?;
     c.gpio_set_state(gpio, 0, true)?;
-    if adc {
-        let a = c.get_adc(md, "adc")?;
+    if let Some(name) = adc {
+        let a = c.get_adc(md, name)?;
         if c.adc_channel_count(a)? > 1 {
             c.adc_set_value(a, 1, 1_000_000)?;
             let _ = c.adc_get_value(a, 1)?;

@@ -435,7 +435,7 @@ fn plugin_is_compiled_once_and_cached() {
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .collect();
     assert_eq!(cached.len(), 1, "{cached:?}");
-    assert!(cached[0].starts_with("bb_lookahead-") && cached[0].ends_with(".dll"));
+    assert!(cached[0].starts_with("bb_plugins-") && cached[0].ends_with(".dll"));
     let t0 = Instant::now();
     let mut second = RenodeEngine::start(&c).expect("start (cached)");
     let cached_s = t0.elapsed().as_secs_f64();

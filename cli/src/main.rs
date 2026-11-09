@@ -447,9 +447,9 @@ fn run(a: RunArgs) -> Result<(), String> {
         None
     };
     if part.platform == "stm32f072" {
-        // Renode 1.17.0's stock STM32F072 (ADC = Analog.STM32F0_ADC,
-        // instance `adc`; it loads offline). ADR-003 Amendment 5.
-        rcfg.platform = Platform::Repl("platforms/cpus/stm32f072.repl".into());
+        // Breadboard's STM32F072 (ADR-005 D6): Renode 1.17.0's stock
+        // platform with BbStm32Timer (TRGO) for the ADC trigger timers.
+        rcfg.platform = Platform::Stm32f072Bb;
     }
     rcfg.pins = mcu_pins
         .iter()
@@ -458,7 +458,9 @@ fn run(a: RunArgs) -> Result<(), String> {
             PinKind::Out { .. } | PinKind::OutUnconnected => {
                 PinSpec::stm32(&p.pin, PinDirection::Output)
             }
-            PinKind::Adc { channel, .. } => Ok(PinSpec::adc(&p.pin, "adc", channel)),
+            PinKind::Adc { channel, .. } => {
+                Ok(PinSpec::adc(&p.pin, bb_cpu_renode::BB_ADC_NAME, channel))
+            }
         })
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;

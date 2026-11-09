@@ -53,7 +53,7 @@ FEEDBACK_OPEN_HASHES := tests/golden/feedback-open/partition.sha256
 FEEDBACK_OPEN_QUANTA ?= 10us,100us,1ms,10ms,50ms,500ms
 
 # --- ADR-003 step 9: adc_in and the ADC boards (STM32F072) -----------------
-ADC_ELF     := examples/adc/firmware/build/adc_board.elf
+ADC_ELF     := examples/adc/firmware/build/adc_board_isr.elf
 ADC_FOR     ?= 300ms
 ADC_OUT     ?= out/adc-board
 ADC_PROBES   = --probe net:ADC_IN --probe net:U1.PA4 --probe net:U1.PA5 \

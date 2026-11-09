@@ -1,0 +1,102 @@
+// Breadboard's STM32F072 (ADR-005 D6): Renode 1.17.0's stock
+// platforms/cpus/stm32f072.repl with the timers that can trigger the ADC
+// (RM0091 Table 45: TRG0 TIM1_TRGO, TRG2 TIM2_TRGO, TRG3 TIM3_TRGO, TRG4
+// TIM15_TRGO) replaced by Timers.BbStm32Timer (STM32_Timer plus TRGO,
+// engines/cpu-renode/platforms/bb_stm32_timer.cs). A repl overlay cannot
+// redeclare a variable's type, so the stock objects are unregistered
+// (`@none`, their default interrupt `-> none`) and new ones are declared at
+// the same addresses with the stock frequency, limit, interrupt and DMA
+// lines, and the stock alternate-function wiring restated for the new
+// names. The unregistered stock objects still exist but are unreachable
+// from the bus and never run.
+//
+// Needs the Breadboard plugin assembly loaded before
+// LoadPlatformDescription (bb-cpu-renode does that).
+using "platforms/cpus/stm32f072.repl"
+
+timer1: @none
+    -> none
+
+timer2: @none
+    -> none
+
+timer3: @none
+    -> none
+
+timer15: @none
+    -> none
+
+bbTimer1: Timers.BbStm32Timer @ sysbus 0x40012C00
+    frequency: 10000000
+    initialLimit: 0xFFFF
+    TriggerInterrupt -> nvic@13 | dma@4
+    CommutationInterrupt -> nvic@13 | dma@4
+    UpdateInterrupt -> nvic@13 | dma@5
+    BreakInterrupt -> nvic@13
+    CaptureCompareInterrupt -> nvic@14
+    [0, 1, 3, 2] -> dma@[2-5]
+
+bbTimer2: Timers.BbStm32Timer @ sysbus 0x40000000
+    frequency: 10000000
+    initialLimit: 0xFFFFFFFF
+    -> nvic@15
+
+bbTimer3: Timers.BbStm32Timer @ sysbus 0x40000400
+    frequency: 10000000
+    initialLimit: 0xFFFF
+    -> nvic@16
+    2 -> dma@2
+    3 -> dma@3
+    0 -> dma@4
+    UpdateInterrupt -> dma@3
+    TriggerInterrupt -> dma@4
+
+bbTimer15: Timers.BbStm32Timer @ sysbus 0x40014000
+    frequency: 10000000
+    initialLimit: 0xFFFF
+    -> nvic@20
+    [0, UpdateInterrupt, TriggerInterrupt, CommutationInterrupt] -> dma@[5, 5, 5, 5]
+
+// Alternate functions (stm32f0.repl), restated for the new timers.
+bbTimer1:
+    0 -> gpioPortA#07@2 | gpioPortA#08@2 | gpioPortB#13@2
+    1 -> gpioPortA#09@2 | gpioPortB#00@2 | gpioPortB#14@2
+    2 -> gpioPortA#10@2 | gpioPortB#01@2 | gpioPortB#15@2
+    3 -> gpioPortA#11@2
+
+bbTimer3:
+    0 -> gpioPortA#06@1 | gpioPortB#04@1 | gpioPortC#06@1
+    1 -> gpioPortA#07@1 | gpioPortB#05@1 | gpioPortC#07@1
+    2 -> gpioPortB#00@1 | gpioPortC#08@1
+    3 -> gpioPortB#01@1 | gpioPortC#09@1
+
+bbTimer15:
+    0 -> gpioPortA#01@5 | gpioPortA#02@0 | gpioPortB#14@1 | gpioPortB#15@3
+    1 -> gpioPortA#03@0 | gpioPortB#15@1
+
+gpioPortA:
+    1 -> bbTimer15@00
+    2 -> bbTimer15@00
+    3 -> bbTimer15@01
+    4 -> timer14@00
+    6 -> bbTimer3@00 | timer16@00
+    7 -> bbTimer1@00 | bbTimer3@01 | timer14@00 | timer17@00
+    8 -> bbTimer1@00
+    9 -> bbTimer1@01
+    10 -> bbTimer1@02
+    11 -> bbTimer1@03
+
+gpioPortB:
+    0 -> bbTimer1@01 | bbTimer3@02
+    1 -> bbTimer1@02 | bbTimer3@03 | timer14@00
+    4 -> bbTimer3@00
+    5 -> bbTimer3@01
+    13 -> bbTimer1@00
+    14 -> bbTimer1@01 | bbTimer15@00
+    15 -> bbTimer1@02 | bbTimer15@00 | bbTimer15@01
+
+gpioPortC:
+    6 -> bbTimer3@00
+    7 -> bbTimer3@01
+    8 -> bbTimer3@02
+    9 -> bbTimer3@03

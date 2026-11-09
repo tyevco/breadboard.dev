@@ -163,9 +163,26 @@ pub const STM32F103_OFFLINE_REPL: &str = include_str!("../platforms/stm32f103-of
 /// Renode's virtual-time resolution.
 pub const RENODE_RESOLUTION: Time = Time::from_ns(1);
 
-/// Source of the lookahead register block (ADR-003 D5), loaded when
+/// Source of the lookahead register block (ADR-003 D5), mapped when
 /// [`LookaheadCfg::plugin`] is set.
 pub const BB_LOOKAHEAD_CS: &str = include_str!("../platforms/bb_lookahead.cs");
+
+/// Source of `Timers.BbStm32Timer`, STM32_Timer plus TRGO (ADR-005 D1.2).
+pub const BB_STM32_TIMER_CS: &str = include_str!("../platforms/bb_stm32_timer.cs");
+
+/// Breadboard's STM32F072 overlay (ADR-005 D6), written next to the
+/// generated script for [`Platform::Stm32f072Bb`].
+pub const STM32F072_BB_REPL: &str = include_str!("../platforms/stm32f072-bb.repl");
+
+/// Monitor name of the ADC on [`Platform::Stm32f072Bb`].
+pub const BB_ADC_NAME: &str = "adc";
+
+/// Every C# source of Breadboard's Renode plugins, compiled together into
+/// one cached assembly (ADR-005 D6): `(file name, source)`.
+pub const PLUGIN_SOURCES: &[(&str, &str)] = &[
+    ("bb_lookahead.cs", BB_LOOKAHEAD_CS),
+    ("bb_stm32_timer.cs", BB_STM32_TIMER_CS),
+];
 
 /// Default address of the lookahead block: unused on the STM32F103.
 pub const LOOKAHEAD_ADDRESS: u64 = 0x5FFF_0000;
@@ -300,10 +317,22 @@ pub struct LookaheadStats {
 pub enum Platform {
     /// [`STM32F103_OFFLINE_REPL`]: stock STM32F103 without the SVD download.
     Stm32f103Offline,
+    /// [`STM32F072_BB_REPL`]: Renode's stock STM32F072 with Breadboard's
+    /// timers (TRGO) and ADC model (ADR-005). Loads the plugin assembly
+    /// before the platform, whatever [`LookaheadCfg::plugin`] says.
+    Stm32f072Bb,
     /// A path understood by Renode's `LoadPlatformDescription`, e.g. the stock
     /// `platforms/cpus/stm32f103.repl` (relative to the Renode install) or an
     /// absolute path.
     Repl(String),
+}
+
+impl Platform {
+    /// The platform names types from Breadboard's plugin assembly, which
+    /// must then be loaded before `LoadPlatformDescription`.
+    pub fn needs_plugins(&self) -> bool {
+        matches!(self, Platform::Stm32f072Bb)
+    }
 }
 
 /// Direction of an engine pin, seen from the MCU.
@@ -477,39 +506,51 @@ impl RenodeConfig {
     }
 }
 
-/// Where the compiled lookahead block for `renode` is cached (ADR-003
-/// Amendment 8): `<cache_dir>/bb_lookahead-<key>.dll`, the key a hash of
-/// the source and the canonical Renode launcher.
+/// Where the compiled plugin assembly for `renode` is cached (ADR-003
+/// Amendment 8, ADR-005 D6): `<cache_dir>/bb_plugins-<key>.dll`, the key a
+/// hash of every source in [`PLUGIN_SOURCES`] and the canonical Renode
+/// launcher.
 pub fn plugin_cache_path(renode: &Path, cache_dir: Option<&Path>) -> Result<PathBuf, EngineError> {
     let cache_dir = cache_dir
         .map(Path::to_path_buf)
         .or_else(default_cache_dir)
         .ok_or_else(|| {
             EngineError::Other(
-                "no cache directory for the lookahead plugin (set BB_CACHE_DIR or HOME)".into(),
+                "no cache directory for the Renode plugins (set BB_CACHE_DIR or HOME)".into(),
             )
         })?;
     let renode_id = pool::canonical_renode(renode);
-    let key = fnv1a64(&[
-        BB_LOOKAHEAD_CS.as_bytes(),
-        renode_id.to_string_lossy().as_bytes(),
-    ]);
-    Ok(cache_dir.join(format!("bb_lookahead-{key:016x}.dll")))
+    let mut parts: Vec<&[u8]> = Vec::new();
+    for (name, src) in PLUGIN_SOURCES {
+        parts.push(name.as_bytes());
+        parts.push(src.as_bytes());
+    }
+    let id = renode_id.to_string_lossy();
+    parts.push(id.as_bytes());
+    let key = fnv1a64(&parts);
+    Ok(cache_dir.join(format!("bb_plugins-{key:016x}.dll")))
 }
 
-/// Write the lookahead source and its loader into `dir`; returns the
+/// Name of the plugin loader the engine and the pool write into their work
+/// directory.
+pub(crate) const PLUGIN_LOADER: &str = "bb_plugins_load.py";
+
+/// Name of the loader's error file in the work directory.
+pub(crate) const PLUGIN_ERR: &str = "bb_plugins.err";
+
+/// Write the plugin sources and their loader into `dir`; returns the
 /// loader (a Python file the monitor `include`s).
 pub fn write_plugin_loader(dir: &Path, cache: &Path, err: &Path) -> Result<PathBuf, EngineError> {
-    let src = dir.join("bb_lookahead.cs");
-    std::fs::write(&src, BB_LOOKAHEAD_CS)?;
-    let loader = dir.join("bb_lookahead_load.py");
+    let mut srcs = Vec::new();
+    for (name, src) in PLUGIN_SOURCES {
+        let p = dir.join(name);
+        std::fs::write(&p, src)?;
+        srcs.push(monitor_path(&p)?);
+    }
+    let loader = dir.join(PLUGIN_LOADER);
     std::fs::write(
         &loader,
-        plugin_loader_py(
-            &monitor_path(&src)?,
-            &monitor_path(cache)?,
-            &monitor_path(err)?,
-        ),
+        plugin_loader_py(&srcs, &monitor_path(cache)?, &monitor_path(err)?),
     )?;
     Ok(loader)
 }
@@ -578,16 +619,22 @@ fn fnv1a64(parts: &[&[u8]]) -> u64 {
     h
 }
 
-/// Python run from the generated script: load the cached lookahead
-/// assembly, or compile `src` with Renode's compiler, load it and cache it.
-/// Any failure writes `err` and exits Renode (a failed monitor command would
-/// leave it waiting without a server until the startup timeout).
-fn plugin_loader_py(src: &str, cache: &str, err: &str) -> String {
+/// Python run from the generated script: load the cached plugin assembly,
+/// or compile `srcs` (together, into one assembly) with Renode's compiler,
+/// load it and cache it. Any failure writes `err` and exits Renode (a
+/// failed monitor command would leave it waiting without a server until the
+/// startup timeout).
+fn plugin_loader_py(srcs: &[String], cache: &str, err: &str) -> String {
+    let list = srcs
+        .iter()
+        .map(|s| format!("r\"{s}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
-        r#"# Generated by bb-cpu-renode: load the lookahead block (ADR-003 D5).
+        r#"# Generated by bb-cpu-renode: load Breadboard's Renode plugins (ADR-003 D5, ADR-005 D6).
 import System
 from Antmicro.Renode.Utilities import TypeManager, AdHocCompiler
-BB_SRC = r"{src}"
+BB_SRCS = [{list}]
 BB_CACHE = r"{cache}"
 BB_ERR = r"{err}"
 def bb_fail(msg):
@@ -602,7 +649,7 @@ def bb_load_cached():
         return False
 try:
     if not bb_load_cached():
-        dll = AdHocCompiler().Compile(System.Array[System.String]([BB_SRC]))
+        dll = AdHocCompiler().Compile(System.Array[System.String](BB_SRCS))
         System.Reflection.Assembly.LoadFrom(dll)
         if not TypeManager.Instance.ScanFile(dll):
             bb_fail("TypeManager.ScanFile(" + dll + ") failed")
@@ -613,10 +660,10 @@ try:
             System.IO.File.Move(tmp, BB_CACHE, True)
         except Exception as e:
             f = open(BB_ERR + ".cache", "w")
-            f.write("caching the compiled block failed: " + str(e))
+            f.write("caching the compiled plugins failed: " + str(e))
             f.close()
 except Exception as e:
-    bb_fail("loading the lookahead block failed: " + str(e))
+    bb_fail("loading the Breadboard plugins failed: " + str(e))
 "#
     )
 }
@@ -751,6 +798,7 @@ impl JitProfile {
         }
         let platform = match &cfg.platform {
             Platform::Stm32f103Offline => STM32F103_OFFLINE_REPL.as_bytes().to_vec(),
+            Platform::Stm32f072Bb => STM32F072_BB_REPL.as_bytes().to_vec(),
             // A path inside the Renode install (e.g. `platforms/cpus/...`)
             // is keyed by its name; the install is in the key already.
             Platform::Repl(p) => std::fs::read(p).unwrap_or_else(|_| p.as_bytes().to_vec()),
@@ -1028,6 +1076,11 @@ impl RenodeEngine {
                 std::fs::write(&p, STM32F103_OFFLINE_REPL)?;
                 monitor_path(&p)?
             }
+            Platform::Stm32f072Bb => {
+                let p = workdir.join("platform.repl");
+                std::fs::write(&p, STM32F072_BB_REPL)?;
+                monitor_path(&p)?
+            }
             Platform::Repl(p) => monitor_path(Path::new(p))?,
         };
         let port = free_port()?;
@@ -1037,8 +1090,10 @@ impl RenodeEngine {
                 "lookahead enabled without the lookahead plugin".into(),
             ));
         }
-        let plugin_err = workdir.join("bb_lookahead.err");
-        let plugin_cache = if la.plugin {
+        let plugin_err = workdir.join(PLUGIN_ERR);
+        // The plugin assembly holds the lookahead block and the platform's
+        // Breadboard peripherals (ADR-005 D6): loaded for either.
+        let plugin_cache = if la.plugin || cfg.platform.needs_plugins() {
             Some(plugin_cache_path(&cfg.renode, la.cache_dir.as_deref())?)
         } else {
             None
@@ -1065,18 +1120,20 @@ impl RenodeEngine {
             }
             None => None,
         };
-        let (plugin_load, plugin_arm) = if let Some(cache) = &plugin_cache {
-            // A pool process loaded the cached assembly at pre-warm, so a
-            // lease leaves the loader out (ADR-004 "Lease" 2).
-            let load = if lease.is_some() {
-                String::new()
-            } else {
+        // The loader runs before the platform, which may name the plugin's
+        // types (ADR-005 D6). A pool process loaded the cached assembly at
+        // pre-warm, so a lease leaves the loader out (ADR-004 "Lease" 2).
+        let plugin_load = match &plugin_cache {
+            Some(cache) if lease.is_none() => {
                 let loader = write_plugin_loader(&workdir, cache, &plugin_err)?;
                 format!("include @{}\n", monitor_path(&loader)?)
-            };
+            }
+            _ => String::new(),
+        };
+        let (lookahead_map, plugin_arm) = if la.plugin {
             (
                 format!(
-                    "{load}machine LoadPlatformDescriptionFromString \"{LOOKAHEAD_NAME}: Miscellaneous.BbLookahead @ sysbus {:#x}\"\n",
+                    "machine LoadPlatformDescriptionFromString \"{LOOKAHEAD_NAME}: Miscellaneous.BbLookahead @ sysbus {:#x}\"\n",
                     la.address
                 ),
                 format!("sysbus.{LOOKAHEAD_NAME} Arm\n"),
@@ -1086,9 +1143,10 @@ impl RenodeEngine {
         };
         let extra: String = cfg.extra_monitor.iter().map(|l| format!("{l}\n")).collect();
         let script = format!(
-            "mach create \"{machine}\"\n\
+            "{plugin_load}\
+             mach create \"{machine}\"\n\
              machine LoadPlatformDescription @{platform}\n\
-             {plugin_load}\
+             {lookahead_map}\
              sysbus LoadELF @{elf}\n\
              emulation SetSeed {seed}\n\
              emulation SetGlobalQuantum \"{quantum}\"\n\

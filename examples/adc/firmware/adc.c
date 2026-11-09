@@ -26,12 +26,20 @@
  *   conversion inside the window drives PA5 low again.
  * - Everything the host checks is in `status` at 0x20000000 (linker
  *   script), plus the PA5 edges.
- * - -DADC_BOARD (adc_board.elf, ADR-003 plan step 9, examples/adc/board.cir):
- *   the default build plus a drive and two code pins. The TIM3 ISR toggles
- *   PA4 (DRIVE, into the board's RC-filtered divider that feeds PA1) every
- *   DRIVE_UPDATES updates, before it starts the conversion; the ADC ISR
- *   copies bit 4 of every code to PA6 and bit 8 to PA7, so the code
- *   sequence is visible as pin edges.
+ * - -DADC_BOARD (adc_board_isr.elf, ADR-003 plan step 9, the stock-model
+ *   board, `bb run --adc-model stock`): the default build plus a drive and
+ *   two code pins. The TIM3 ISR toggles PA4 (DRIVE, into the board's
+ *   RC-filtered divider that feeds PA1) every DRIVE_UPDATES updates, before
+ *   it starts the conversion; the ADC ISR copies bit 4 of every code to PA6
+ *   and bit 8 to PA7, so the code sequence is visible as pin edges.
+ * - -DADC_BOARD -DADC_BB_MODEL (adc_board.elf, ADR-005 D7,
+ *   examples/adc/board.cir on Breadboard's ADC model): the hardware way.
+ *   CKMODE = 01 (PCLK/2: a deterministic trigger latency), SMP = 000,
+ *   12 bits, EXTSEL = TRG3 (TIM3_TRGO), EXTEN = rising, CONT = 0, ADSTART
+ *   once; TIM3 MMS = update and no TIM3 interrupt (UIE = 0). The ADC ISR
+ *   (EOC, AWD) handles the watchdog, copies the code bits and toggles PA4
+ *   every DRIVE_UPDATES conversions. The CPU sleeps in wfi from one end of
+ *   conversion to the next.
  */
 #include <stdint.h>
 
@@ -102,6 +110,7 @@
 #define ADC_CFGR1_AWDSGL (1u << 22)
 #define ADC_CFGR1_AWDEN (1u << 23)
 #define ADC_CFGR1_AWDCH(ch) ((uint32_t)(ch) << 26)
+#define ADC_CFGR2_CKMODE_PCLK_DIV2 (1u << 30)
 
 /* NVIC */
 #define NVIC_ISER REG(0xE000E100u)
@@ -117,7 +126,14 @@
 #define TIMER_CLOCK_HZ 10000000u
 #endif
 
-#ifdef ADC_HW_TRIGGER
+#if defined(ADC_BB_MODEL) && !defined(ADC_BOARD)
+#error "ADC_BB_MODEL is the board build: define ADC_BOARD too"
+#endif
+#ifdef ADC_BB_MODEL
+#define ADC_HW_TRIGGER
+#endif
+
+#if defined(ADC_HW_TRIGGER) && !defined(ADC_BB_MODEL)
 #define PERIOD_US 2000u
 #else
 #define PERIOD_US 1000u
@@ -144,6 +160,19 @@ struct status {
 
 __attribute__((section(".status"), used)) volatile struct status status;
 
+#ifdef ADC_BB_MODEL
+/* Toggle PA4 (DRIVE) every DRIVE_UPDATES conversions. */
+static void drive_step(void)
+{
+    static uint32_t drive_left = DRIVE_UPDATES;
+    static uint32_t drive_high;
+    if (--drive_left == 0u) {
+        drive_left = DRIVE_UPDATES;
+        drive_high ^= 1u;
+        GPIOA_BSRR = drive_high ? (1u << DRIVE_PIN) : (1u << (DRIVE_PIN + 16u));
+    }
+}
+#else
 void TIM3_IRQHandler(void)
 {
     TIM3_SR = ~TIM_SR_UIF; /* rc_w0 */
@@ -162,6 +191,7 @@ void TIM3_IRQHandler(void)
     ADC_CR = ADC_CR_ADSTART;
 #endif
 }
+#endif
 
 void ADC1_COMP_IRQHandler(void)
 {
@@ -180,6 +210,9 @@ void ADC1_COMP_IRQHandler(void)
 #ifdef ADC_BOARD
         GPIOA_BSRR = ((code & (1u << 4)) ? (1u << CODE4_PIN) : (1u << (CODE4_PIN + 16u))) |
                      ((code & (1u << 8)) ? (1u << CODE8_PIN) : (1u << (CODE8_PIN + 16u)));
+#endif
+#ifdef ADC_BB_MODEL
+        drive_step();
 #endif
         if (status.alarm && code >= AWD_LT && code <= AWD_HT) {
             GPIOA_BSRR = 1u << (ALARM_PIN + 16u);
@@ -206,6 +239,10 @@ int main(void)
                   (1u << (2u * DRIVE_PIN)) | (1u << (2u * CODE4_PIN)) | (1u << (2u * CODE8_PIN));
 #endif
 
+#ifdef ADC_BB_MODEL
+    /* The ADC clock (CKMODE) is selected before calibration and ADEN. */
+    REG(ADC_BASE + 0x10u) = ADC_CFGR2_CKMODE_PCLK_DIV2;
+#endif
     /* Calibrate with the ADC disabled, then enable it and wait for ADRDY. */
     ADC_CR = ADC_CR_ADCAL;
     while (ADC_CR & ADC_CR_ADCAL) {
@@ -238,9 +275,14 @@ int main(void)
     TIM3_CR1 = TIM_CR1_URS;
     TIM3_EGR = TIM_EGR_UG; /* load PSC/ARR; URS: no interrupt for it */
     TIM3_SR = ~TIM_SR_UIF;
+#ifdef ADC_BB_MODEL
+    /* TRGO only: no TIM3 interrupt. */
+    NVIC_ISER = 1u << ADC1_COMP_IRQN;
+#else
     TIM3_DIER = TIM_DIER_UIE;
 
     NVIC_ISER = (1u << ADC1_COMP_IRQN) | (1u << TIM3_IRQN);
+#endif
 
 #ifdef ADC_HW_TRIGGER
     ADC_CR = ADC_CR_ADSTART; /* arm: conversions now start on the trigger */
