@@ -1,0 +1,21 @@
+# A divider with an RKM-free D5 value: 4.7k (the view) over 10 k (circuit).
+schema = "bb-pkgtest/0"
+view = "ideal"
+circuit = "divider.cir"
+stop = "2ms"
+params = { value = "4.7k" }
+
+[ports]
+1 = "in"
+2 = "out"
+
+[[edge]]
+net = "in"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+at = [["1ms", "high"]]
+
+[[expect]]
+meas = { node = "out", at = "2ms" }
+value = "0.680272V"
+tol = "1uV"
+source = "analytic: 1 V x 10k / (4.7k + 10k)"

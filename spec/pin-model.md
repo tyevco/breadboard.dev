@@ -5,13 +5,22 @@ this file requires an ADR. `digital_out` ramp start: ADR-003 D3 (plan step 3,
 Amendment 3). `digital_in` thresholding by the producing analog engine and its
 glue: ADR-003 D3 (plan step 4, Amendment 4). `adc_in`: ADR-003 D6 (plan step
 9, Amendments 5 and 10), and ADR-005 D3/D5 (the code12 push key, raw
-microvolt delivery, timed inputs and the sampled-input rule).
+microvolt delivery, timed inputs and the sampled-input rule). Pin models
+from packages, named parameter sets and glue rule 7: ADR-006 (D4, Phase 1
+M3).
 
-Every component pin has **exactly one** pin model, supplied by its package (in
-Phase 0, hand-written in the board netlist). The kernel connects pins to nets
+Every component pin has **exactly one** pin model, supplied by its package
+from the package's `pins.toml` (ADR-006 D4, `spec/package.md`); `board.cir`
+directives remain a way to state them by hand. A pin model may attach a
+`pin_load` view to its own pad; the view's control and observe signals are
+internal to the binding, not pins. The kernel connects pins to nets
 and routes signals between engines. Each engine converts between its own domain
 and a `PinSignal`, using the pin model. IBIS buffer models map onto these
 models directly in later phases.
+
+A pin model's parameters may be a named set (`digital_out.H0H1`), chosen per
+binding by `set`; without `set` the set named `default` is used, and a
+binding's explicit parameters override the set's (ADR-006 D4, ADR-007 D9).
 
 ## Signals crossing the boundary
 
@@ -183,9 +192,13 @@ boundary; the analog engine handles it entirely.
    `net=`, e.g. `examples/feedback-open` U1.PA6) gets no glue and loads
    nothing; its digital net can still be probed.
 5. In Phase 0, `bb run` generates the glue from the board file's `*bb pin`
-   directives (the analog engine writes it into the netlist). The automatic
-   generator from schematics arrives with the KiCad importer, which must not
-   parse KiCad with regex.
+   directives (the analog engine writes it into the netlist), with the
+   parameters of the part's package where the part comes from one
+   (ADR-006). The automatic generator from schematics is the KiCad importer
+   (ADR-007), which must not parse KiCad with regex.
 6. A net driven by an analog engine and loaded by an `adc_in` gets no glue;
    its value crosses the boundary as the pushed `Analog` trace above
    (ADR-003 D6).
+7. An analog view's subckt ports and internal nodes never include `gnd`
+   (in any case): ngspice treats a node named `gnd` as global ground even
+   inside a subcircuit (ADR-006 Context 4; `bb pkg lint` refuses it).

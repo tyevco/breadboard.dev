@@ -27,11 +27,30 @@
 //! `platforms/cpus/stm32f072.repl`, whose ADC is `Analog.STM32F0_ADC`,
 //! ADR-003 Amendment 5).
 //!
+//! **Parts from packages** (ADR-006, Phase 1 M3; ADR-007 D9):
+//! - `*bb part <ref> package=<id>[@<version>]` takes the engine and platform
+//!   from the package's `[behavioral]` layer (`renode`, a platform identity
+//!   such as `stm32f103-offline@1`).
+//! - `*bb pin <ref>.<pin> net=<net> model=<model> [set=<name>] [<key>=<value> ...]`
+//!   on such a part takes the pin model's parameters from the package's
+//!   `pins.toml` parameter set `set` (default `default`). The pin must be in
+//!   `pins.toml` and allow the model. Explicit keys override the set, in the
+//!   package value grammar (ADR-006 D5: `3.3`, `3.3V`, `5ns`, `5pF`), and a
+//!   value that differs from the package's is reported as a warning. An
+//!   `adc_in` pin's channel is the package's `adc = { channel }`.
+//!
+//! [`parse`] reads boards without packages; [`parse_with`] resolves
+//! `package=` through a lookup (the package search path, ADR-006 D1).
+//!
 //! The parser is a tokenizer over a line-oriented grammar; no regex.
 
 use std::collections::BTreeMap;
 
 use bbcore::{AdcIn, DigitalIn, DigitalOut, Time};
+use bbpkg::package::{param_set, parse_param, pin_model_params, Package, Param, ParamKind};
+use bbpkg::value::{to_f64, Dim};
+
+use crate::platforms;
 
 /// The platforms `bb run` supports.
 pub const PLATFORMS: [&str; 2] = ["stm32f103", "stm32f072"];
@@ -42,6 +61,8 @@ pub struct Part {
     pub reference: String,
     pub engine: String,
     pub platform: String,
+    /// The package id when the part is given as `package=` (ADR-006).
+    pub package: Option<String>,
 }
 
 /// The ADC channel that reads pin `pin` on `platform`, if any. STM32F0x2
@@ -98,12 +119,98 @@ impl PinBinding {
 }
 
 /// A parsed board file.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Board {
     pub parts: Vec<Part>,
     pub pins: Vec<PinBinding>,
     /// The SPICE circuit body (directive lines included, as comments).
     pub spice: String,
+    /// The packages the parts use, one per id, in id order.
+    pub packages: Vec<Package>,
+    /// Lint warnings (an explicit pin parameter that differs from the
+    /// package's, ADR-007 D9).
+    pub warnings: Vec<String>,
+}
+
+impl PartialEq for Board {
+    fn eq(&self, o: &Board) -> bool {
+        self.parts == o.parts && self.pins == o.pins && self.spice == o.spice
+    }
+}
+
+/// Resolves `package=<spec>` to a loaded package.
+pub type Lookup<'a> = &'a dyn Fn(&str) -> Result<Package, String>;
+
+/// One pin-model parameter: the board file's own text (Phase 0 grammar), or
+/// a value from the package (or an explicit key on a package part, parsed in
+/// the package grammar).
+enum Val<'a> {
+    Text(&'a str),
+    Pkg(Param),
+}
+
+/// The parameters of one `*bb pin` line.
+struct Params<'a> {
+    lineno: usize,
+    map: BTreeMap<&'a str, Val<'a>>,
+}
+
+impl<'a> Params<'a> {
+    fn take(&mut self, key: &str) -> Result<Val<'a>, String> {
+        let lineno = self.lineno;
+        self.map
+            .remove(key)
+            .ok_or_else(|| format!("line {lineno}: missing {key}="))
+    }
+    fn volts(&mut self, key: &str) -> Result<f64, String> {
+        let lineno = self.lineno;
+        match self.take(key)? {
+            Val::Text(v) => volts(lineno, key, v),
+            Val::Pkg(Param::Quantity(q)) => Ok(to_f64(q, Dim::Voltage)),
+            Val::Pkg(Param::Supply { pin, .. }) => Err(format!(
+                "line {lineno}: {key} is the supply reference {pin}, which needs a bench to \
+                 resolve (a bb.toml project, ADR-007 D5); give {key}= a number here"
+            )),
+            Val::Pkg(Param::Name(n)) => Err(format!("line {lineno}: {key}={n}: not a number")),
+        }
+    }
+    fn quantity(&mut self, key: &str, dim: Dim) -> Result<f64, String> {
+        let lineno = self.lineno;
+        match self.take(key)? {
+            Val::Text(v) => volts(lineno, key, v),
+            Val::Pkg(Param::Quantity(q)) => Ok(to_f64(q, dim)),
+            Val::Pkg(_) => Err(format!("line {lineno}: {key}: expected a number")),
+        }
+    }
+    fn time(&mut self, key: &str) -> Result<Time, String> {
+        let lineno = self.lineno;
+        match self.take(key)? {
+            Val::Text(v) => time(lineno, key, v),
+            Val::Pkg(Param::Quantity(q)) => u64::try_from(q)
+                .map(Time::from_fs)
+                .map_err(|_| format!("line {lineno}: {key} out of range")),
+            Val::Pkg(_) => Err(format!("line {lineno}: {key}: expected a time")),
+        }
+    }
+    fn bits(&mut self, key: &str) -> Result<u32, String> {
+        let lineno = self.lineno;
+        let bad = |b: &str| format!("line {lineno}: bits={b:?}: expected 1 to 16");
+        match self.take(key)? {
+            Val::Text(b) => b
+                .parse()
+                .ok()
+                .filter(|b| (1..=16).contains(b))
+                .ok_or_else(|| bad(b)),
+            Val::Pkg(Param::Quantity(q)) => u32::try_from(q)
+                .ok()
+                .filter(|b| (1..=16).contains(b))
+                .ok_or_else(|| bad(&q.to_string())),
+            Val::Pkg(_) => Err(bad("?")),
+        }
+    }
+    fn first_key(&self) -> Option<&str> {
+        self.map.keys().next().copied()
+    }
 }
 
 fn parse_kv<'a>(
@@ -155,10 +262,30 @@ fn no_extra(lineno: usize, kv: &BTreeMap<&str, &str>) -> Result<(), String> {
     }
 }
 
-/// Parse a board file.
+/// Parse a board file without packages (`package=` is an error).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn parse(text: &str) -> Result<Board, String> {
+    parse_with(text, None)
+}
+
+/// The ADC channel an `adc_in` pin of a package reads: its `pins.toml`
+/// `adc = { channel = "IN<n>" }`.
+fn package_adc_channel(pkg: &Package, pin: &str) -> Option<i32> {
+    pkg.pins
+        .by_name(pin)?
+        .adc_channel
+        .as_deref()?
+        .strip_prefix("IN")?
+        .parse()
+        .ok()
+}
+
+/// Parse a board file, resolving `package=` parts through `lookup`.
+pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
     let mut parts: Vec<Part> = Vec::new();
     let mut pins: Vec<PinBinding> = Vec::new();
+    let mut packages: BTreeMap<String, Package> = BTreeMap::new();
+    let mut warnings: Vec<String> = Vec::new();
     for (i, line) in text.lines().enumerate() {
         let lineno = i + 1;
         let Some(rest) = line.trim_start().strip_prefix("*bb") else {
@@ -180,6 +307,45 @@ pub fn parse(text: &str) -> Result<Board, String> {
                 if parts.iter().any(|p| p.reference == name) {
                     return Err(format!("line {lineno}: part {name} declared twice"));
                 }
+                if let Some(spec) = kv.remove("package") {
+                    no_extra(lineno, &kv).map_err(|e| {
+                        format!(
+                            "{e} (a package part takes its engine and platform from the package)"
+                        )
+                    })?;
+                    let lookup = lookup.ok_or_else(|| {
+                        format!("line {lineno}: package={spec}: packages are not available here")
+                    })?;
+                    let pkg = lookup(spec).map_err(|e| format!("line {lineno}: {e}"))?;
+                    let b = pkg.part.behavioral.as_ref().ok_or_else(|| {
+                        format!(
+                            "line {lineno}: package {}: no [behavioral] layer, so it cannot be a CPU part",
+                            pkg.part.id
+                        )
+                    })?;
+                    if b.engine != "renode" {
+                        return Err(format!(
+                            "line {lineno}: package {}: engine {} (bb run supports renode parts)",
+                            pkg.part.id, b.engine
+                        ));
+                    }
+                    let pid = b.platform.as_deref().unwrap_or_default();
+                    let def = platforms::find(pid).ok_or_else(|| {
+                        format!(
+                            "line {lineno}: package {}: platform {pid} is not one this bb provides ({})",
+                            pkg.part.id,
+                            platforms::ids().join(", ")
+                        )
+                    })?;
+                    parts.push(Part {
+                        reference: name.to_string(),
+                        engine: "renode".into(),
+                        platform: def.board_name.to_string(),
+                        package: Some(pkg.part.id.clone()),
+                    });
+                    packages.entry(pkg.part.id.clone()).or_insert(pkg);
+                    continue;
+                }
                 let engine = take(lineno, &mut kv, "engine")?.to_string();
                 let platform = take(lineno, &mut kv, "platform")?.to_string();
                 no_extra(lineno, &kv)?;
@@ -198,6 +364,7 @@ pub fn parse(text: &str) -> Result<Board, String> {
                     reference: name.to_string(),
                     engine,
                     platform,
+                    package: None,
                 });
             }
             "pin" => {
@@ -214,6 +381,103 @@ pub fn parse(text: &str) -> Result<Board, String> {
                 }
                 let net = kv.remove("net").map(str::to_string);
                 let model_kind = take(lineno, &mut kv, "model")?;
+                let set = kv.remove("set");
+                let part_def = parts
+                    .iter()
+                    .find(|p| p.reference == part)
+                    .expect("checked above")
+                    .clone();
+                let pkg = part_def.package.as_ref().map(|id| &packages[id]);
+                if set.is_some() && pkg.is_none() {
+                    return Err(format!(
+                        "line {lineno}: set= needs a part given by package= (a parameter set of its pins.toml)"
+                    ));
+                }
+                // The parameters: the board's own text, or (a package part)
+                // the package's set overridden by explicit keys.
+                let mut params = Params {
+                    lineno,
+                    map: BTreeMap::new(),
+                };
+                match pkg {
+                    None => {
+                        for (k, v) in std::mem::take(&mut kv) {
+                            params.map.insert(k, Val::Text(v));
+                        }
+                    }
+                    Some(pkg) => {
+                        let pin_def = pkg.pins.by_name(pin).ok_or_else(|| {
+                            format!(
+                                "line {lineno}: {name}: {} has no pin {pin} in pins.toml",
+                                pkg.part.id
+                            )
+                        })?;
+                        if !pin_def.models.iter().any(|m| m == model_kind) {
+                            return Err(format!(
+                                "line {lineno}: {name}: pin {pin} of {} does not allow model {model_kind} (it allows: {})",
+                                pkg.part.id,
+                                if pin_def.models.is_empty() {
+                                    "none".to_string()
+                                } else {
+                                    pin_def.models.join(", ")
+                                }
+                            ));
+                        }
+                        let spec = pin_model_params(model_kind).ok_or_else(|| {
+                            format!(
+                                "line {lineno}: model={model_kind} not supported (digital_out, digital_in, adc_in)"
+                            )
+                        })?;
+                        // A digital_out without net= is unconnected: no
+                        // parameters from the package either.
+                        let connected = net.is_some() || model_kind != "digital_out";
+                        let mut from_pkg = if connected {
+                            param_set(pkg, model_kind, set)
+                                .map_err(|e| format!("line {lineno}: {e}"))?
+                        } else {
+                            BTreeMap::new()
+                        };
+                        // `model` and `load` (adc_in, ADR-008 D7) are not
+                        // Phase 0 parameters: refuse what bb run cannot honour.
+                        for k in ["model", "load"] {
+                            if from_pkg.remove(k).is_some() {
+                                return Err(format!(
+                                    "line {lineno}: {name}: the package's adc_in set has {k}=, which bb run does not support yet"
+                                ));
+                            }
+                        }
+                        for (k, v) in std::mem::take(&mut kv) {
+                            let pk = spec
+                                .iter()
+                                .find(|(p, ..)| *p == k)
+                                .map(|(_, kind, _)| *kind)
+                                .ok_or_else(|| format!("line {lineno}: unknown key {k:?}"))?;
+                            if matches!(pk, ParamKind::Name) {
+                                return Err(format!("line {lineno}: {k}= is not supported here"));
+                            }
+                            let explicit = parse_param(v, pk)
+                                .map_err(|e| format!("line {lineno}: {k}: {e}"))?;
+                            if let Some(pv) = from_pkg.get(k) {
+                                if *pv != explicit {
+                                    warnings.push(format!(
+                                        "line {lineno}: {name}: {k}={v} overrides {}'s value (set {})",
+                                        pkg.part.id,
+                                        set.unwrap_or("default")
+                                    ));
+                                }
+                            }
+                            from_pkg.insert(k.to_string(), explicit);
+                        }
+                        for (k, v) in from_pkg {
+                            let key: &'static str = spec
+                                .iter()
+                                .find(|(p, ..)| *p == k)
+                                .map(|(p, ..)| *p)
+                                .expect("a known parameter");
+                            params.map.insert(key, Val::Pkg(v));
+                        }
+                    }
+                }
                 let kind = match (model_kind, net) {
                     ("digital_out", Some(net)) => {
                         if pins.iter().any(|p| {
@@ -224,11 +488,11 @@ pub fn parse(text: &str) -> Result<Board, String> {
                             ));
                         }
                         let model = DigitalOut {
-                            voh: volts(lineno, "voh", take(lineno, &mut kv, "voh")?)?,
-                            vol: volts(lineno, "vol", take(lineno, &mut kv, "vol")?)?,
-                            rise: time(lineno, "rise", take(lineno, &mut kv, "rise")?)?,
-                            fall: time(lineno, "fall", take(lineno, &mut kv, "fall")?)?,
-                            zout: volts(lineno, "zout", take(lineno, &mut kv, "zout")?)?,
+                            voh: params.volts("voh")?,
+                            vol: params.volts("vol")?,
+                            rise: params.time("rise")?,
+                            fall: params.time("fall")?,
+                            zout: params.quantity("zout", Dim::Resistance)?,
                         };
                         if model.zout < 0.0 {
                             return Err(format!("line {lineno}: zout must be >= 0"));
@@ -236,7 +500,7 @@ pub fn parse(text: &str) -> Result<Board, String> {
                         PinKind::Out { net, model }
                     }
                     ("digital_out", None) => {
-                        if let Some(k) = kv.keys().next() {
+                        if let Some(k) = params.first_key() {
                             return Err(format!(
                                 "line {lineno}: {k}=: a digital_out without net= is not \
                                  connected to the circuit and takes no electrical keys"
@@ -246,9 +510,9 @@ pub fn parse(text: &str) -> Result<Board, String> {
                     }
                     ("digital_in", Some(net)) => {
                         let model = DigitalIn {
-                            vih: volts(lineno, "vih", take(lineno, &mut kv, "vih")?)?,
-                            vil: volts(lineno, "vil", take(lineno, &mut kv, "vil")?)?,
-                            cin: volts(lineno, "cin", take(lineno, &mut kv, "cin")?)?,
+                            vih: params.volts("vih")?,
+                            vil: params.volts("vil")?,
+                            cin: params.quantity("cin", Dim::Capacitance)?,
                         };
                         if model.vil >= model.vih {
                             return Err(format!("line {lineno}: digital_in needs vil < vih"));
@@ -262,29 +526,22 @@ pub fn parse(text: &str) -> Result<Board, String> {
                         return Err(format!("line {lineno}: digital_in needs net="))
                     }
                     ("adc_in", Some(net)) => {
-                        let platform = &parts
-                            .iter()
-                            .find(|p| p.reference == part)
-                            .expect("checked above")
-                            .platform;
-                        let channel = adc_channel(platform, pin).ok_or_else(|| {
+                        let platform = &part_def.platform;
+                        let channel = match pkg {
+                            Some(pkg) if platform == "stm32f072" => package_adc_channel(pkg, pin),
+                            _ => adc_channel(platform, pin),
+                        }
+                        .ok_or_else(|| {
                             format!(
                                 "line {lineno}: {name}: no ADC channel on this pin of \
                                  platform={platform} (adc_in needs stm32f072: PA0-7, PB0-1, PC0-5)"
                             )
                         })?;
-                        let vref = volts(lineno, "vref", take(lineno, &mut kv, "vref")?)?;
+                        let vref = params.volts("vref")?;
                         if vref <= 0.0 {
                             return Err(format!("line {lineno}: vref must be > 0"));
                         }
-                        let bits = take(lineno, &mut kv, "bits")?;
-                        let bits: u32 = bits
-                            .parse()
-                            .ok()
-                            .filter(|b| (1..=16).contains(b))
-                            .ok_or_else(|| {
-                                format!("line {lineno}: bits={bits:?}: expected 1 to 16")
-                            })?;
+                        let bits = params.bits("bits")?;
                         PinKind::Adc {
                             net,
                             model: AdcIn {
@@ -303,6 +560,9 @@ pub fn parse(text: &str) -> Result<Board, String> {
                         ))
                     }
                 };
+                if let Some(k) = params.first_key() {
+                    return Err(format!("line {lineno}: unknown key {k:?}"));
+                }
                 no_extra(lineno, &kv)?;
                 pins.push(PinBinding {
                     part: part.to_string(),
@@ -317,16 +577,184 @@ pub fn parse(text: &str) -> Result<Board, String> {
         parts,
         pins,
         spice: text.to_string(),
+        packages: packages.into_values().collect(),
+        warnings,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bbpkg::schema::Registry;
+
+    /// Parse with the first-party packages (packages/).
+    fn parse_pkg(text: &str) -> Result<Board, String> {
+        let sp = bbpkg::SearchPath {
+            dirs: vec![bbpkg::first_party_dir()],
+        };
+        let reg = Registry::current();
+        let lookup = |spec: &str| sp.find(spec, &reg);
+        parse_with(text, Some(&lookup))
+    }
+
+    /// The Phase 0 directives of the examples, as committed before Phase 1
+    /// M3 expressed them through packages (every parameter written out).
+    const PHASE0_SPIKE: &str = "*bb part U1 engine=renode platform=stm32f103
+*bb pin U1.PA5 net=PA5 model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+";
+    const PHASE0_FEEDBACK: &str = "*bb part U1 engine=renode platform=stm32f103
+*bb pin U1.PA5 net=PA5 model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb pin U1.PB0 net=SENSE model=digital_in vih=2.0 vil=0.8 cin=5e-12
+*bb pin U1.PA6 net=PA6 model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+";
+    const PHASE0_FEEDBACK_OPEN: &str = "*bb part U1 engine=renode platform=stm32f103
+*bb pin U1.PB0 net=SENSE model=digital_in vih=2.0 vil=0.8 cin=5e-12
+*bb pin U1.PA6 model=digital_out
+";
+    const PHASE0_ADC: &str = "*bb part U1 engine=renode platform=stm32f072
+*bb pin U1.PA4 net=DRIVE model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb pin U1.PA1 net=ADC_IN model=adc_in vref=3.3 bits=12
+*bb pin U1.PA5 net=ALARM model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb pin U1.PA6 model=digital_out
+*bb pin U1.PA7 model=digital_out
+";
+    const PHASE0_ADC_OPEN: &str = "*bb part U1 engine=renode platform=stm32f072
+*bb pin U1.PA1 net=ADC_IN model=adc_in vref=3.3 bits=12
+*bb pin U1.PA4 model=digital_out
+*bb pin U1.PA5 model=digital_out
+*bb pin U1.PA6 model=digital_out
+*bb pin U1.PA7 model=digital_out
+";
+
+    /// ADR-006 G2 at the parser: every example expressed through packages
+    /// gives exactly the parts (but the package id), pins and pin models of
+    /// its Phase 0 directives, bit for bit (the f64 pin parameters too).
+    #[test]
+    fn examples_through_packages_equal_phase0_directives() {
+        for (file, text, phase0) in [
+            (
+                "spike",
+                include_str!("../../examples/spike/board.cir"),
+                PHASE0_SPIKE,
+            ),
+            (
+                "feedback",
+                include_str!("../../examples/feedback/board.cir"),
+                PHASE0_FEEDBACK,
+            ),
+            (
+                "feedback-open",
+                include_str!("../../examples/feedback-open/board.cir"),
+                PHASE0_FEEDBACK_OPEN,
+            ),
+            (
+                "adc",
+                include_str!("../../examples/adc/board.cir"),
+                PHASE0_ADC,
+            ),
+            (
+                "adc-open",
+                include_str!("../../examples/adc/board-open.cir"),
+                PHASE0_ADC_OPEN,
+            ),
+        ] {
+            let pkg = parse_pkg(text).unwrap_or_else(|e| panic!("{file}: {e}"));
+            let old = parse(phase0).unwrap();
+            assert_eq!(pkg.pins, old.pins, "{file}");
+            assert_eq!(pkg.parts.len(), 1);
+            assert_eq!(
+                (
+                    &pkg.parts[0].reference,
+                    &pkg.parts[0].engine,
+                    &pkg.parts[0].platform
+                ),
+                (
+                    &old.parts[0].reference,
+                    &old.parts[0].engine,
+                    &old.parts[0].platform
+                ),
+                "{file}"
+            );
+            assert!(
+                pkg.parts[0].package.is_some() && pkg.warnings.is_empty(),
+                "{file}"
+            );
+            // Bit-level equality of every f64 (PartialEq would accept -0.0 = 0.0).
+            for (a, b) in pkg.pins.iter().zip(&old.pins) {
+                assert_eq!(format!("{:?}", a.kind), format!("{:?}", b.kind), "{file}");
+                if let (PinKind::Out { model: x, .. }, PinKind::Out { model: y, .. }) =
+                    (&a.kind, &b.kind)
+                {
+                    assert_eq!(
+                        (x.voh.to_bits(), x.vol.to_bits(), x.zout.to_bits()),
+                        (y.voh.to_bits(), y.vol.to_bits(), y.zout.to_bits())
+                    );
+                }
+                if let (PinKind::In { model: x, .. }, PinKind::In { model: y, .. }) =
+                    (&a.kind, &b.kind)
+                {
+                    assert_eq!(
+                        (x.vih.to_bits(), x.vil.to_bits(), x.cin.to_bits()),
+                        (y.vih.to_bits(), y.vil.to_bits(), y.cin.to_bits())
+                    );
+                }
+                if let (PinKind::Adc { model: x, .. }, PinKind::Adc { model: y, .. }) =
+                    (&a.kind, &b.kind)
+                {
+                    assert_eq!(x.vref.to_bits(), y.vref.to_bits());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn package_parts_check_pins_models_and_overrides() {
+        let f1 = "*bb part U1 package=st/stm32f103c8\n";
+        let ok = |s: &str| parse_pkg(&format!("{f1}{s}\n"));
+        // Not a pin of the package; a model the pin does not allow; no ADC
+        // on the F103; an unknown set; set= on a Phase 0 part.
+        assert!(ok("*bb pin U1.PA16 net=X model=digital_out")
+            .unwrap_err()
+            .contains("no pin PA16"));
+        assert!(ok("*bb pin U1.NRST net=X model=digital_out")
+            .unwrap_err()
+            .contains("does not allow"));
+        assert!(ok("*bb pin U1.PA1 net=X model=adc_in").is_err());
+        assert!(ok("*bb pin U1.PA5 net=X model=digital_out set=H0H1")
+            .unwrap_err()
+            .contains("no parameter set"));
+        assert!(parse("*bb part U1 engine=renode platform=stm32f103\n*bb pin U1.PA5 net=X model=digital_out set=x\n").is_err());
+        // package= with engine= is refused; packages need a lookup.
+        assert!(parse_pkg("*bb part U1 package=st/stm32f103c8 engine=renode\n").is_err());
+        assert!(parse("*bb part U1 package=st/stm32f103c8\n").is_err());
+        assert!(parse_pkg("*bb part U1 package=st/nope\n")
+            .unwrap_err()
+            .contains("not found"));
+        assert!(parse_pkg("*bb part U1 package=st/stm32f103c8@9.9.9\n").is_err());
+        // An explicit key overrides the package's value, with a warning; the
+        // package grammar applies (units, no bare M).
+        let b = ok("*bb pin U1.PA5 net=X model=digital_out zout=50").unwrap();
+        assert!(matches!(&b.pins[0].kind, PinKind::Out { model, .. } if model.zout == 50.0));
+        assert_eq!(b.warnings.len(), 1, "{:?}", b.warnings);
+        let b = ok("*bb pin U1.PA5 net=X model=digital_out voh=3.3V rise=5ns").unwrap();
+        assert!(b.warnings.is_empty(), "same values: no warning");
+        assert!(ok("*bb pin U1.PA5 net=X model=digital_out zout=1M").is_err());
+        assert!(ok("*bb pin U1.PA5 net=X model=digital_out voh=3.3s").is_err());
+        assert!(ok("*bb pin U1.PA5 net=X model=digital_out colour=red").is_err());
+        // A generic passive has no behavioural layer: not a CPU part.
+        assert!(parse_pkg("*bb part R1 package=generic/resistor\n")
+            .unwrap_err()
+            .contains("behavioral"));
+        // The F072's ADC channel comes from pins.toml.
+        let b =
+            parse_pkg("*bb part U1 package=st/stm32f072rb\n*bb pin U1.PC5 net=X model=adc_in\n")
+                .unwrap();
+        assert!(matches!(b.pins[0].kind, PinKind::Adc { channel: 15, .. }));
+    }
 
     #[test]
     fn parses_spike_board() {
-        let b = parse(include_str!("../../examples/spike/board.cir")).unwrap();
+        let b = parse(PHASE0_SPIKE).unwrap();
         assert_eq!(b.parts.len(), 1);
         assert_eq!(b.parts[0].reference, "U1");
         assert_eq!(b.pins.len(), 1);
@@ -344,7 +772,7 @@ mod tests {
 
     #[test]
     fn parses_feedback_boards() {
-        let b = parse(include_str!("../../examples/feedback/board.cir")).unwrap();
+        let b = parse(PHASE0_FEEDBACK).unwrap();
         let kinds: Vec<(&str, &PinKind)> =
             b.pins.iter().map(|p| (p.pin.as_str(), &p.kind)).collect();
         assert_eq!(kinds.len(), 3);
@@ -363,7 +791,7 @@ mod tests {
             )
         );
         assert!(matches!(kinds[2], ("PA6", PinKind::Out { net, .. }) if net == "PA6"));
-        let open = parse(include_str!("../../examples/feedback-open/board.cir")).unwrap();
+        let open = parse(PHASE0_FEEDBACK_OPEN).unwrap();
         let kinds: Vec<(&str, &PinKind)> = open
             .pins
             .iter()

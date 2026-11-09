@@ -1,0 +1,433 @@
+# st/stm32f072rb pins (LQFP64): numbers and names as DS9826's pinout and
+# KiCad 10.0.8's MCU_ST_STM32F0:STM32F072RBTx give them (checked with
+# scripts/check_pins_kicad.py). ADC_IN0-7 are PA0-PA7, ADC_IN8-9 PB0-PB1,
+# ADC_IN10-15 PC0-PC5 (RM0091), the channels Breadboard's ADC model reads.
+
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "VBAT"
+role = "power_in"
+
+[[pin]]
+number = "2"
+name = "PC13"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "3"
+name = "PC14"
+role = "io"
+alt = ["OSC32_IN"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "4"
+name = "PC15"
+role = "io"
+alt = ["OSC32_OUT"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "5"
+name = "PF0"
+role = "io"
+alt = ["OSC_IN"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "6"
+name = "PF1"
+role = "io"
+alt = ["OSC_OUT"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "7"
+name = "NRST"
+role = "input"
+
+[[pin]]
+number = "8"
+name = "PC0"
+role = "io"
+alt = ["ADC_IN10"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN10" }
+
+[[pin]]
+number = "9"
+name = "PC1"
+role = "io"
+alt = ["ADC_IN11"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN11" }
+
+[[pin]]
+number = "10"
+name = "PC2"
+role = "io"
+alt = ["ADC_IN12"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN12" }
+
+[[pin]]
+number = "11"
+name = "PC3"
+role = "io"
+alt = ["ADC_IN13"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN13" }
+
+[[pin]]
+number = "12"
+name = "VSSA"
+role = "ground"
+
+[[pin]]
+number = "13"
+name = "VDDA"
+role = "power_in"
+
+[[pin]]
+number = "14"
+name = "PA0"
+role = "io"
+alt = ["ADC_IN0"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN0" }
+
+[[pin]]
+number = "15"
+name = "PA1"
+role = "io"
+alt = ["ADC_IN1"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN1" }
+
+[[pin]]
+number = "16"
+name = "PA2"
+role = "io"
+alt = ["ADC_IN2"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN2" }
+
+[[pin]]
+number = "17"
+name = "PA3"
+role = "io"
+alt = ["ADC_IN3"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN3" }
+
+[[pin]]
+number = "18"
+name = "VSS"
+role = "ground"
+
+[[pin]]
+number = "19"
+name = "VDD"
+role = "power_in"
+
+[[pin]]
+number = "20"
+name = "PA4"
+role = "io"
+alt = ["ADC_IN4"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN4" }
+
+[[pin]]
+number = "21"
+name = "PA5"
+role = "io"
+alt = ["ADC_IN5"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN5" }
+
+[[pin]]
+number = "22"
+name = "PA6"
+role = "io"
+alt = ["ADC_IN6"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN6" }
+
+[[pin]]
+number = "23"
+name = "PA7"
+role = "io"
+alt = ["ADC_IN7"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN7" }
+
+[[pin]]
+number = "24"
+name = "PC4"
+role = "io"
+alt = ["ADC_IN14"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN14" }
+
+[[pin]]
+number = "25"
+name = "PC5"
+role = "io"
+alt = ["ADC_IN15"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN15" }
+
+[[pin]]
+number = "26"
+name = "PB0"
+role = "io"
+alt = ["ADC_IN8"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN8" }
+
+[[pin]]
+number = "27"
+name = "PB1"
+role = "io"
+alt = ["ADC_IN9"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "IN9" }
+
+[[pin]]
+number = "28"
+name = "PB2"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "29"
+name = "PB10"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "30"
+name = "PB11"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "31"
+name = "VSS"
+role = "ground"
+
+[[pin]]
+number = "32"
+name = "VDD"
+role = "power_in"
+
+[[pin]]
+number = "33"
+name = "PB12"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "34"
+name = "PB13"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "35"
+name = "PB14"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "36"
+name = "PB15"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "37"
+name = "PC6"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "38"
+name = "PC7"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "39"
+name = "PC8"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "40"
+name = "PC9"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "41"
+name = "PA8"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "42"
+name = "PA9"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "43"
+name = "PA10"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "44"
+name = "PA11"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "45"
+name = "PA12"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "46"
+name = "PA13"
+role = "io"
+alt = ["SWDIO"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "47"
+name = "VSS"
+role = "ground"
+
+[[pin]]
+number = "48"
+name = "VDDIO2"
+role = "power_in"
+
+[[pin]]
+number = "49"
+name = "PA14"
+role = "io"
+alt = ["SWCLK"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "50"
+name = "PA15"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "51"
+name = "PC10"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "52"
+name = "PC11"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "53"
+name = "PC12"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "54"
+name = "PD2"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "55"
+name = "PB3"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "56"
+name = "PB4"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "57"
+name = "PB5"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "58"
+name = "PB6"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "59"
+name = "PB7"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "60"
+name = "BOOT0"
+role = "input"
+
+[[pin]]
+number = "61"
+name = "PB8"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "62"
+name = "PB9"
+role = "io"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "63"
+name = "VSS"
+role = "ground"
+
+[[pin]]
+number = "64"
+name = "VDD"
+role = "power_in"
+# Parameter sets (ADR-006 D4). `default` carries the pin models Phase 0's
+# board.cir files state for this MCU (ADR-006 D10): estimated, not datasheet
+# values (part.toml [provenance]).
+[defaults.digital_out.default]
+voh = "3.3V"
+vol = "0V"
+rise = "5ns"
+fall = "5ns"
+zout = "25"
+
+[defaults.digital_in.default]
+vih = "2.0V"
+vil = "0.8V"
+cin = "5pF"
+
+[defaults.adc_in.default]
+vref = "3.3V"
+bits = "12"

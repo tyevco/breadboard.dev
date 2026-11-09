@@ -24,9 +24,14 @@ U1 (STM32F103, Renode)        generated glue                    board.cir
 Run these inside WSL Ubuntu 24.04 or Linux, from the repo root:
 
 ```sh
-make setup   # pinned toolchain: Rust, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42
-make test    # cargo tests + 500 ms spike + 10-run determinism + golden diff + feedback and ADC boards
+make setup   # pinned toolchain: Rust, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42; installs bb into ~/.local/bin
+make test    # cargo tests + 500 ms spike + 10-run determinism + golden diff + feedback and ADC boards + packages
 ```
+
+`make setup SETUP=demo` installs only what running boards needs (Rust,
+Renode, ngspice and `bb`, no ARM toolchain); it runs as root without sudo,
+for example in a clean `ubuntu:24.04` container (`make setup-container`
+times exactly that). A clean Ubuntu needs `apt-get install make` first.
 
 From Windows: `wsl -d Ubuntu-24.04 -- bash -lc 'cd /mnt/c/source/tyevco/breadboard.dev && make setup && make test'`.
 
@@ -80,6 +85,17 @@ The run writes these files to `out/spike/`:
    `make adc-stock` (the ADR-003 board on Renode's stock ADC, `--adc-model
    stock`, against its own references) and `make adc-model` (the Renode-only
    tests of Breadboard's ADC model and timer TRGO, ADR-005).
+8. `make packages` (ADR-006): the package files and lockfiles against
+   `spec/schema`, `bb pkg lint`, `bb pkg test` (each view's test vectors
+   through the ngspice engine at two grant partitions) and the examples'
+   `bb.lock` files.
+
+The example boards take their MCU and its pin models from component
+packages (`packages/`, `spec/package.md`): `*bb part U1
+package=st/stm32f103c8` instead of writing every pin parameter out. Each
+board's `bb.lock` pins the package's tree hash and the Renode platform's
+content hash; `bb open <board.cir>` writes it, `bb run` checks it. The
+outputs are byte-identical to the Phase 0 boards' committed hashes.
 
 `make feedback-determinism` (10 runs), `make feedback-open` (the partition
 gate of the open-loop variant), `make lookahead-inert` and

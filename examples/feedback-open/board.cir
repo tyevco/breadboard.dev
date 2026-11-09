@@ -17,8 +17,11 @@
 * reference (--max-quantum = --renode-quantum) byte for byte
 * (make feedback-open, the partition gate).
 *
-*bb part U1 engine=renode platform=stm32f103
-*bb pin U1.PB0 net=SENSE model=digital_in vih=2.0 vil=0.8 cin=5e-12
+* U1 and its pin models come from the package st/stm32f103c8 (ADR-006),
+* pinned in bb.lock; see examples/feedback/board.cir.
+*
+*bb part U1 package=st/stm32f103c8
+*bb pin U1.PB0 net=SENSE model=digital_in
 *bb pin U1.PA6 model=digital_out
 
 * Circuit body. Node 0 is GND. V_DRV toggles every 50 ms from 50 ms on,

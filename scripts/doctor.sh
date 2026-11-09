@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Print toolchain versions; exit non-zero if anything required is missing.
+#   bash scripts/doctor.sh [full|demo]   (default: $SETUP, else full)
+# demo: what `make setup SETUP=demo` installs (no ARM toolchain, no uv).
 set -uo pipefail
+MODE="${1:-${SETUP:-full}}"
 if [ -f "${HOME}/.cargo/env" ]; then . "${HOME}/.cargo/env"; fi
 export PATH="${HOME}/.local/bin:${PATH}"
 
@@ -20,10 +23,15 @@ check cargo            cargo --version
 check rustc            rustc --version
 check rustfmt          rustfmt --version
 check clippy           cargo clippy --version
-check arm-none-eabi-gcc arm-none-eabi-gcc --version
+if [ "${MODE}" != demo ]; then
+  check arm-none-eabi-gcc arm-none-eabi-gcc --version
+fi
 check renode           renode --version
 check ngspice          sh -c 'ngspice --version | grep -m1 -i "ngspice-"'
-check uv               uv --version
+if [ "${MODE}" != demo ]; then
+  check uv               uv --version
+fi
+check bb               sh -c 'command -v bb'
 check pkg-config       pkg-config --version
 
 lib="$(ldconfig -p | awk '/libngspice\.so\.0 /{print $NF; exit}')"

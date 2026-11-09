@@ -1,0 +1,6 @@
+* generic/capacitor, view "ideal": the SPICE primitive C with the instance's
+* value, in base units (F). Elaboration passes value as a plain SPICE
+* number, never with a letter suffix (ADR-006 D5).
+.subckt bb_generic_capacitor 1 2 value=1e-6
+C1 1 2 {value}
+.ends bb_generic_capacitor

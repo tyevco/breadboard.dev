@@ -36,6 +36,12 @@ jobs:
       - name: Clippy
         run: make clippy
 
+      # ADR-006 G1: every part.toml, pins.toml, test vector and bb.lock
+      # against spec/schema, bb pkg lint, bb pkg test, current locks
+      # (also part of make test).
+      - name: Package schemas, lint and tests
+        run: make packages
+
       - name: Test
         run: make test
 

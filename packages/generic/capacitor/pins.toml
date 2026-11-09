@@ -1,0 +1,11 @@
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "1"
+role = "passive"
+
+[[pin]]
+number = "2"
+name = "2"
+role = "passive"

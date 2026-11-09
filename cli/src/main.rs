@@ -41,8 +41,17 @@
 //! engine leases a pre-warmed Renode from that pool when one is idle and
 //! starts one fresh otherwise; `--renode-pool off` ignores the pool. The
 //! outputs are the same either way.
+//!
+//! Phase 1 M3 (ADR-006): a board file's part may come from a package
+//! (`*bb part U1 package=st/stm32f103c8`), its pin models from the
+//! package's `pins.toml`; such a board needs a current `bb.lock` next to it
+//! (`bb open <board.cir>`), which `bb run` checks and never writes. `bb pkg`
+//! lints and tests packages.
 
 mod board;
+mod open;
+mod pkg;
+mod platforms;
 mod pool;
 
 use std::fs::{self, File};
@@ -72,8 +81,12 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
               [--renode-pool env|off]
        bb pool run|start|stop|status ...   (bb pool --help)
+       bb open <board.cir> [--check] [--update-lock]   (bb open --help)
+       bb pkg lint|test|migrate|tree|value ...         (bb pkg --help)
 
-  --netlist    board file: SPICE body plus *bb directives (examples/spike/board.cir)
+  --netlist    board file: SPICE body plus *bb directives (examples/spike/board.cir).
+                 Parts given by package= need a current bb.lock next to it
+                 (bb open <board.cir>, ADR-006 D8)
   --firmware     ELF loaded into the target MCU
   --target       part reference the firmware runs on (e.g. U1)
   --for          simulated duration, e.g. 500ms
@@ -417,9 +430,13 @@ fn create(path: &PathBuf) -> Result<BufWriter<File>, String> {
 }
 
 fn run(a: RunArgs) -> Result<(), String> {
-    let text =
-        fs::read_to_string(&a.netlist).map_err(|e| format!("read {}: {e}", a.netlist.display()))?;
-    let board = board::parse(&text).map_err(|e| format!("{}: {e}", a.netlist.display()))?;
+    // Parts may come from packages (ADR-006): resolved on the search path,
+    // and checked against the board's bb.lock, which bb run never writes.
+    let board = open::parse_board(&a.netlist, true)?;
+    for w in &board.warnings {
+        eprintln!("bb run: warning: {}: {w}", a.netlist.display());
+    }
+    open::check_lock(&a.netlist, &board)?;
     if !a.firmware.is_file() {
         return Err(format!("firmware {} not found", a.firmware.display()));
     }
@@ -765,6 +782,8 @@ fn main() -> ExitCode {
             }
         },
         Some("pool") => pool::main(&args[1..]),
+        Some("open") => open::main(&args[1..]),
+        Some("pkg") => pkg::main(&args[1..]),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             ExitCode::SUCCESS

@@ -5,18 +5,26 @@
 * comments. Grammar: "*bb <keyword> <name> key=value ...", whitespace
 * separated, no quoting.
 *
-*   *bb part <ref> engine=renode platform=stm32f103
-*       A part simulated by a CPU engine. `bb run --target <ref>` loads the
-*       firmware into it.
-*   *bb pin <ref>.<pin> net=<net> model=digital_out voh=<V> vol=<V>
-*       rise=<time> fall=<time> zout=<ohm>
+*   *bb part <ref> package=<id>
+*       A part from a component package (ADR-006, packages/<id>): here
+*       st/stm32f103c8, whose behavioural layer is Renode's STM32F103
+*       platform (stm32f103-offline@1). `bb run --target <ref>` loads the
+*       firmware into it. `bb open board.cir` pins the package's tree hash
+*       and the platform's content hash in bb.lock (next to this file),
+*       which `bb run` checks. (The Phase 0 form, `*bb part <ref>
+*       engine=renode platform=stm32f103` with every pin parameter written
+*       out, still works.)
+*   *bb pin <ref>.<pin> net=<net> model=digital_out [set=<name>] [voh=.. ...]
 *       Binds an MCU pin to a circuit net through its pin model
-*       (spec/pin-model.md). The kernel generates the SPICE glue from the
-*       model: an EXTERNAL voltage source driven by the pin's edges, plus a
-*       series resistor of `zout` into <net>. Do not write that glue here.
+*       (spec/pin-model.md), with the parameters of the package's pins.toml
+*       set `set` (default `default`: 3.3 V, 5 ns, 25 ohm for this MCU).
+*       Explicit keys override it. The kernel generates the SPICE glue from
+*       the model: an EXTERNAL voltage source driven by the pin's edges,
+*       plus a series resistor of `zout` into <net>. Do not write that glue
+*       here.
 *
-*bb part U1 engine=renode platform=stm32f103
-*bb pin U1.PA5 net=PA5 model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb part U1 package=st/stm32f103c8
+*bb pin U1.PA5 net=PA5 model=digital_out
 
 * Circuit body. Node 0 is GND.
 R1 PA5 LED_A 330

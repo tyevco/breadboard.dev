@@ -1,0 +1,36 @@
+# st/stm32f103c8: the Phase 0 spike and feedback boards' MCU (ADR-006 D10).
+schema = "bb-part/0"
+
+[part]
+id = "st/stm32f103c8"
+version = "0.1.0"
+kind = "soc"
+manufacturer = "STMicroelectronics"
+mpn = ["STM32F103C8T6", "STM32F103C8T7"]
+mpn_patterns = ["STM32F103C8T[67](TR)?"]
+datasheet = { url = "https://www.st.com/resource/en/datasheet/stm32f103c8.pdf" }
+license = "Apache-2.0"
+description = "STM32F103C8 (Cortex-M3, 64 KiB flash, LQFP48) on Renode's STM32F103 platform"
+
+[footprints]
+kicad = ["Package_QFP:LQFP-48_7x7mm_P0.5mm"]
+
+[pins]
+file = "pins.toml"
+
+# Renode 1.17.0's platforms/cpus/stm32f103.repl without the SVD download
+# (engines/cpu-renode/platforms/stm32f103-offline.repl); the identity and
+# content hash are in bb.lock (ADR-006 D8).
+[behavioral]
+engine = "renode"
+platform = "stm32f103-offline@1"
+
+# The pin models are the ones Phase 0's board.cir files state for this MCU
+# (digital_out 3.3 V, 5 ns, 25 ohm; digital_in 2.0/0.8 V, 5 pF). They are
+# not fitted to the datasheet (ADR-006 D10).
+[provenance]
+source = "estimated"
+base = "the pin models of Phase 0's examples/spike and examples/feedback board.cir"
+refs = ["DS5319 Table 5 (pinout)"]
+not_modelled = ["drive strength per pin and speed setting", "temperature", "supply dependence of the thresholds", "ADC (no model on this platform)"]
+confidence = "unchecked"

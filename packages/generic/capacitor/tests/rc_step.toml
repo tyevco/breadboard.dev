@@ -1,0 +1,33 @@
+# The ideal capacitor as the C of an RC (R = 1 k in the circuit, tau = 1 ms).
+schema = "bb-pkgtest/0"
+view = "ideal"
+circuit = "rc_step.cir"
+stop = "6ms"
+params = { value = "1u" }
+
+[ports]
+1 = "out"
+2 = "0"
+
+[[edge]]
+net = "in"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+at = [["1ms", "high"]]
+
+[[expect]]
+meas = { node = "out", at = "2ms" }
+value = "0.632120V"
+tol = "0.1mV"
+source = "analytic: 1 V step at 1 ms (1 ns ramp: an ideal step at 1 ms + 0.5 ns), tau = 1 ms: 1 - exp(-0.9999995)"
+
+[[expect]]
+meas = { node = "out", at = "5ms" }
+value = "0.981684V"
+tol = "0.1mV"
+source = "analytic: 1 - exp(-3.9999995)"
+
+[[expect]]
+meas = { node = "out", when = "0.5V", rise = "1" }
+value = "1.693148ms"
+tol = "2us"
+source = "analytic: 1 ms + 0.5 ns + ln(2) x 1 ms"

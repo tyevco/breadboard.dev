@@ -1,0 +1,37 @@
+# st/stm32f072rb: the Phase 0 ADC board's MCU (ADR-006 D10, ADR-005).
+schema = "bb-part/0"
+
+[part]
+id = "st/stm32f072rb"
+version = "0.1.0"
+kind = "soc"
+manufacturer = "STMicroelectronics"
+mpn = ["STM32F072RBT6", "STM32F072RBT7"]
+mpn_patterns = ["STM32F072RBT[67](TR)?"]
+datasheet = { url = "https://www.st.com/resource/en/datasheet/stm32f072rb.pdf" }
+license = "Apache-2.0"
+description = "STM32F072RB (Cortex-M0, 128 KiB flash, LQFP64) on Breadboard's STM32F072 platform (ADC model, TIM TRGO)"
+
+[footprints]
+kicad = ["Package_QFP:LQFP-64_10x10mm_P0.5mm"]
+
+[pins]
+file = "pins.toml"
+
+# Renode 1.17.0's stm32f072.repl with Breadboard's timers and ADC model
+# (engines/cpu-renode/platforms/stm32f072-bb.repl and the plugin sources,
+# ADR-005 D6); the identity and content hash are in bb.lock (ADR-006 D8).
+# `bb run --adc-model stock` runs the stock platform instead.
+[behavioral]
+engine = "renode"
+platform = "stm32f072-bb@1"
+
+# The pin models are the ones Phase 0's examples/adc board.cir states
+# (digital_out 3.3 V, 5 ns, 25 ohm; adc_in 3.3 V, 12 bits) plus the Phase 0
+# digital_in. They are not fitted to the datasheet (ADR-006 D10).
+[provenance]
+source = "estimated"
+base = "the pin models of Phase 0's examples/adc board.cir"
+refs = ["DS9826 pinout (LQFP64)", "RM0091 ADC channel map"]
+not_modelled = ["drive strength per pin and speed setting", "temperature", "supply dependence of the thresholds", "ADC input loading"]
+confidence = "unchecked"

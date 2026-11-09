@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://breadboard.dev/spec/schema/pins.schema.json",
+  "title": "bb-pins/0: a component package's pins.toml (spec/package.md, ADR-006 D4)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "pin"],
+  "properties": {
+    "schema": { "const": "bb-pins/0" },
+    "pin": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["number", "name", "role"],
+        "properties": {
+          "number": { "type": "string", "minLength": 1, "description": "The footprint or chip pin number as KiCad reports it." },
+          "name": { "type": "string", "minLength": 1 },
+          "role": { "enum": ["power_in", "power_out", "ground", "io", "input", "output", "analog", "nc", "passive"] },
+          "supply": { "type": "string" },
+          "alt": { "type": "array", "items": { "type": "string" } },
+          "models": { "type": "array", "uniqueItems": true, "items": { "enum": ["digital_out", "digital_in", "adc_in"] } },
+          "adc": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["channel"],
+            "properties": { "channel": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "digital_out": { "type": "object", "additionalProperties": { "$ref": "#/$defs/digital_out" } },
+        "digital_in": { "type": "object", "additionalProperties": { "$ref": "#/$defs/digital_in" } },
+        "adc_in": { "type": "object", "additionalProperties": { "$ref": "#/$defs/adc_in" } }
+      }
+    }
+  },
+  "$defs": {
+    "value": {
+      "description": "A number with an optional SI prefix and unit (spec/package.md, Values), or for a voltage a supply pin name optionally scaled (VDD, 0.7*VDD).",
+      "type": "string",
+      "minLength": 1
+    },
+    "digital_out": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["voh", "vol", "rise", "fall", "zout"],
+      "properties": {
+        "voh": { "$ref": "#/$defs/value" },
+        "vol": { "$ref": "#/$defs/value" },
+        "rise": { "$ref": "#/$defs/value" },
+        "fall": { "$ref": "#/$defs/value" },
+        "zout": { "$ref": "#/$defs/value" }
+      }
+    },
+    "digital_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vih", "vil", "cin"],
+      "properties": {
+        "vih": { "$ref": "#/$defs/value" },
+        "vil": { "$ref": "#/$defs/value" },
+        "cin": { "$ref": "#/$defs/value" }
+      }
+    },
+    "adc_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vref", "bits"],
+      "properties": {
+        "vref": { "$ref": "#/$defs/value" },
+        "bits": { "$ref": "#/$defs/value" },
+        "model": { "type": "string", "pattern": "^[A-Za-z0-9_]+$" },
+        "load": { "type": "string", "pattern": "^[A-Za-z0-9_]+$" }
+      }
+    }
+  }
+}

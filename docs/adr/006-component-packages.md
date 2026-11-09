@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (2026-11-09), with the approver decisions below
   (revised 2026-11-09 after two design reviews, see Review notes).
+  Implemented for plan M3 (2026-11-09), with Amendment 1.
   Written before implementation because it defines the package schema
   (AGENTS.md: ADRs come before anything that touches the package schema).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestones S1, M3,
@@ -897,6 +898,95 @@ Not adopted as proposed:
 - **"Edges in qualification as the package's rise/fall."** Adopted in
   form (`digital_out` glue), but each vector states its own edge model,
   because one package's view is driven by another package's pin.
+
+## Amendment 1 (2026-11-09): M3 as implemented
+
+Plan M3 implemented D1-D6, D8, D10 and D11 (`spec/package.md`,
+`spec/schema/*.schema.json`, the `bbpkg` crate, `bb pkg`, `bb open` for
+board files, `packages/`). Where the implementation had to settle something
+this ADR left open, or differs from its text, the decision is recorded here.
+None of it changes the kernel, the time-grant protocol or the event stream.
+
+1. **KiCad value qualifiers (D5).** D5 lists `/<voltage>V` and `<x>%` as the
+   only additions to a KiCad value. Five of the main board's 29 distinct
+   (kind, value) pairs carry other text: `12p C0G`, `33p C0G`, `180p C0G`
+   (a dielectric), `51R 1/4W` (a power rating), `4.7u/25V Ta` (tantalum).
+   The suite's `spicelib.parse_value` reads them by ignoring everything
+   after the first token. Under D5 as written they are parse errors, so G3
+   ("equals the suite's parse on all 29") could not pass. The grammar now
+   accepts exactly these qualifiers, each at most once, and keeps them as
+   metadata: a tolerance `<x>%`, a voltage rating (`/<v>V` or `<v>V`), a
+   power rating `<p>W` (`1/4W`, `0.1W`, `100mW`), and for capacitors a
+   dielectric code (`C0G NP0 NPO X5R X6S X7R X7S X7T X8R Y5V Z5U`) or a
+   technology (`Ta`, `Al`). Anything else is still an error, never a guess.
+   G3 then passes on all 29 (`make dms-values`, and `bbpkg/tests/values.rs`
+   on the committed fixture).
+2. **Test vectors (D6).** The D6 example names the view's ports nowhere
+   ("instantiates the view as X1 (ports by name)"). A vector now maps every
+   view port to a circuit node in a `[ports]` table, and the runner writes
+   `X1` itself, in the subckt's port order, with the view's `params`
+   overridden by the vector's `params` as SPICE numbers. Further keys:
+   `lattice` (default 10 µs), `options` (default `phase0`), `sample` (the
+   crossing-measurement sampling period, default the lattice) and an edge's
+   `initial` level. A crossing is `{ node, when, rise|fall = "<n>", after }`
+   (the crossing number as a string, like every other value). Each vector
+   runs under the kernel's real `Scheduler` with a scripted edge engine
+   (every edge in its trace at its exact time) at one lattice cell and at
+   1 ms, and every sample (as `f64` bits) and measurement must be identical.
+3. **`bb.lock` for a hand-written board (D8, ADR-007 D9).** M3 implements
+   `bb open <board.cir>` only, and it writes only `bb.lock`, next to the
+   board file (`board.bbm`, `bb.toml` and KiCad are M4). A board file with
+   a `package=` part needs a current lock: `bb run` refuses a missing lock
+   or any mismatch, and never writes it. A board file without packages (the
+   Phase 0 form) needs none. The lock's `path` is informative: identity is
+   the version and the tree hash, so moving the checkout does not change a
+   lock.
+4. **Platform content hash (D8).** The content hash of a Renode platform is
+   the tree-hash list form over the platform's `.repl` and **every** file in
+   `PLUGIN_SOURCES`, by file name (`cli/src/platforms.rs`). Since all plugin
+   sources are compiled into one assembly (ADR-005 D6), a change to any of
+   them changes every Renode platform's hash, including the STM32 ones when
+   an nRF model is added. That is accepted: the assembly is shared code
+   that decides results. `make locks` rewrites the examples' locks after
+   such a change; AGENTS.md says to commit them with it.
+5. **Generic passive views (D5).** The `ideal` view of `generic/resistor`,
+   `generic/capacitor` and `generic/inductor` is a subckt
+   `bb_generic_<kind>` with ports `1`, `2` and a parameter `value` in base
+   units (`R1 1 2 {value}`). Its provenance is honest about its origin:
+   `source = "agent_generated"`, `confidence = "self_checked"`. Each is
+   qualified at (10 µs, `phase0`) by analytic RC or RL step vectors
+   (`value` within 0.1 mV at 1 ms and 4 ms after the step, and the 0.5 V
+   crossing within 2 µs; the resistor also by a divider within 1 µV).
+6. **The STM32 packages (D10).** `st/stm32f103c8` (48 pins) and
+   `st/stm32f072rb` (64 pins) list every pin, checked against KiCad
+   10.0.8's `MCU_ST_STM32F1:STM32F103C8Tx` and `MCU_ST_STM32F0:STM32F072RBTx`
+   (`scripts/check_pins_kicad.py`: 0 mismatches). Their only parameter set,
+   `default`, holds the Phase 0 numbers (`source = "estimated"`,
+   `confidence = "unchecked"`). The F103 offers no `adc_in` (no ADC model on
+   that platform); the F072's ADC pins carry `adc = { channel = "IN<n>" }`,
+   which `bb run` now uses instead of its built-in pin-to-channel table.
+7. **The `adc_in` parameter set (D4).** `vref` and `bits` are required (the
+   Phase 0 model); `model` and `load` are accepted (ADR-008 D7) but `bb run`
+   refuses a set that uses them until M8 implements the loading model.
+8. **No new crates.** The workspace builds from its vendored registry
+   without downloads (setup-time downloads are toolchains only). `bbpkg`
+   therefore carries its own TOML 1.0 reader (no dates, which no schema
+   uses) and SHA-256 (checked against the FIPS vectors). Schema validation
+   in CI uses Python's `tomllib` and Ubuntu's `python3-jsonschema` (4.10.3),
+   which `make setup` installs.
+9. **G9 (schema bump).** Every schema is at major 0, so there is no real
+   previous major. The gate is a synthetic `bb-part/1` registry in the unit
+   tests (`bbpkg/src/schema.rs`, `bbpkg/tests/lint.rs`): a `bb-part/0`
+   package is read with the migration hint, `migrate` rewrites its schema
+   line (format-preserving), and `bb-part/2` is refused with "upgrade bb".
+   `bb pkg migrate` runs the same registry code; with today's registry it
+   rewrites nothing.
+10. **What lint cannot check yet.** "Every pin of the footprint is listed
+    once" is checked as "every pin number once": `bb` reads no footprint
+    or symbol library in M3 (`scripts/check_pins_kicad.py` does, outside
+    `make test`). `mpn_patterns` are compiled by `validate_packages.py`
+    (Python's `re`); the Rust resolver that matches them is M4. The
+    conflicts report of D9 rule 2 needs migrated views (M5).
 
 ## Amendment 2 (2026-11-09): S1, the TPS22917 view's numerics fix
 

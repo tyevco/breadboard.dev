@@ -34,12 +34,16 @@
 * `bb run --adc-model stock` with build/adc_board_isr.elf runs the ADR-003
 * board on Renode's stock ADC instead.
 *
-* Directive grammar: see examples/spike/board.cir and cli/src/board.rs.
+* Directive grammar: see examples/spike/board.cir and cli/src/board.rs. U1
+* and its pin models come from the package st/stm32f072rb (ADR-006; its
+* pins.toml set `default`: digital_out 3.3 V, 5 ns, 25 ohm; adc_in vref
+* 3.3 V, 12 bits, the channel from the pin's adc = { channel = "IN1" }),
+* pinned in bb.lock with the platform stm32f072-bb@1.
 *
-*bb part U1 engine=renode platform=stm32f072
-*bb pin U1.PA4 net=DRIVE model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
-*bb pin U1.PA1 net=ADC_IN model=adc_in vref=3.3 bits=12
-*bb pin U1.PA5 net=ALARM model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb part U1 package=st/stm32f072rb
+*bb pin U1.PA4 net=DRIVE model=digital_out
+*bb pin U1.PA1 net=ADC_IN model=adc_in
+*bb pin U1.PA5 net=ALARM model=digital_out
 *bb pin U1.PA6 model=digital_out
 *bb pin U1.PA7 model=digital_out
 

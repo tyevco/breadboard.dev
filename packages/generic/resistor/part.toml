@@ -1,0 +1,41 @@
+# generic/resistor: any two-terminal resistor, selected by footprint plus value
+# (ADR-006 D5; ADR-007 D4 stage 5). A package for a specific MPN overrides
+# it whenever one exists.
+schema = "bb-part/0"
+
+[part]
+id = "generic/resistor"
+version = "0.1.0"
+kind = "passive"
+license = "Apache-2.0"
+description = "Generic resistor: the ideal element with the instance's value"
+
+[footprints]
+kicad = ["Resistor_SMD:*", "Resistor_THT:*"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "ideal"
+purpose = "an ideal resistor of the instance's value (the parsed KiCad value field)"
+fidelity = ["fast"]
+default_for = ["fast"]
+file = "analog/resistor.lib"
+subckt = "bb_generic_resistor"
+ports = ["1", "2"]
+params = { value = "1000" }
+
+[analog.provenance]
+source = "agent_generated"
+base = "the SPICE primitive R"
+not_modelled = ["tolerance and rating (kept as metadata for pi views)", "parasitics", "temperature and voltage coefficients"]
+generated_by = "Claude (Phase 1 M3)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

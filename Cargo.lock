@@ -17,6 +17,8 @@ dependencies = [
  "bb-analog-ngspice",
  "bb-cpu-renode",
  "bbcore",
+ "bbpkg",
+ "serde_json",
 ]
 
 [[package]]
@@ -33,6 +35,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "bbpkg"
+version = "0.0.1"
+dependencies = [
+ "bb-analog-ngspice",
+ "bbcore",
+ "serde_json",
 ]
 
 [[package]]

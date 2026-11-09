@@ -11,8 +11,11 @@
 * Same firmware: examples/adc/firmware/build/adc_board.elf (with
 * --adc-model stock: build/adc_board_isr.elf).
 *
-*bb part U1 engine=renode platform=stm32f072
-*bb pin U1.PA1 net=ADC_IN model=adc_in vref=3.3 bits=12
+* U1 and its pin models come from the package st/stm32f072rb (ADR-006),
+* pinned in bb.lock; see board.cir.
+*
+*bb part U1 package=st/stm32f072rb
+*bb pin U1.PA1 net=ADC_IN model=adc_in
 *bb pin U1.PA4 model=digital_out
 *bb pin U1.PA5 model=digital_out
 *bb pin U1.PA6 model=digital_out

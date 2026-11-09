@@ -1,0 +1,2 @@
+* generic/capacitor test circuit: 1 k from in to out, X1 (the view, 1 uF) from out to ground.
+R1 in out 1k

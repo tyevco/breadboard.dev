@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://breadboard.dev/spec/schema/pkgtest.schema.json",
+  "title": "bb-pkgtest/0: a package test vector (spec/package.md, ADR-006 D6)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "view", "circuit", "stop", "ports", "expect"],
+  "properties": {
+    "schema": { "const": "bb-pkgtest/0" },
+    "view": { "type": "string" },
+    "circuit": { "type": "string", "description": "A SPICE body (no .tran, .options or .control) next to the vector; the runner adds X1 for the view." },
+    "stop": { "$ref": "#/$defs/value" },
+    "lattice": { "$ref": "#/$defs/value", "description": "Default 10us." },
+    "options": { "type": "string", "description": "A named option set; default phase0." },
+    "sample": { "$ref": "#/$defs/value", "description": "The sampling period for crossing measurements; default the lattice." },
+    "ports": { "type": "object", "description": "View port (pin name) -> circuit node.", "additionalProperties": { "type": "string", "minLength": 1 } },
+    "params": { "type": "object", "additionalProperties": { "$ref": "#/$defs/value" } },
+    "edge": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["net", "model", "at"],
+        "properties": {
+          "net": { "type": "string" },
+          "initial": { "enum": ["low", "high"] },
+          "model": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["voh", "vol", "rise", "fall", "zout"],
+            "properties": {
+              "voh": { "$ref": "#/$defs/value" },
+              "vol": { "$ref": "#/$defs/value" },
+              "rise": { "$ref": "#/$defs/value" },
+              "fall": { "$ref": "#/$defs/value" },
+              "zout": { "$ref": "#/$defs/value" }
+            }
+          },
+          "at": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "prefixItems": [{ "$ref": "#/$defs/value" }, { "enum": ["low", "high"] }],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        }
+      }
+    },
+    "expect": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meas", "value", "tol", "source"],
+        "properties": {
+          "meas": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["node", "at"],
+                "properties": { "node": { "type": "string" }, "at": { "$ref": "#/$defs/value" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["node", "when"],
+                "properties": {
+                  "node": { "type": "string" },
+                  "when": { "$ref": "#/$defs/value" },
+                  "rise": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+                  "fall": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+                  "after": { "$ref": "#/$defs/value" }
+                },
+                "oneOf": [{ "required": ["rise"] }, { "required": ["fall"] }]
+              }
+            ]
+          },
+          "value": { "$ref": "#/$defs/value" },
+          "tol": { "$ref": "#/$defs/value" },
+          "source": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "value": { "type": "string", "minLength": 1 }
+  }
+}

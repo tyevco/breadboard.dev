@@ -1,0 +1,2 @@
+* generic/resistor divider: X1 (4.7 k) from in to out, 10 k to ground.
+R2 out 0 10k

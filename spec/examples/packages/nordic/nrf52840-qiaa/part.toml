@@ -1,0 +1,37 @@
+# FORMAT EXAMPLE (spec/package.md section 13), an excerpt, not the Phase 1
+# package: plan M5 writes nordic/nrf52840-qiaa from the product
+# specification (every aQFN73 ball, checked against the PS pin table) and
+# ADR-008. Shows a CPU part with a behavioural layer, named parameter sets
+# with supply references, and a pin_load view for the SAADC input.
+schema = "bb-part/0"
+
+[part]
+id = "nordic/nrf52840-qiaa"
+version = "0.1.0"
+kind = "soc"
+manufacturer = "Nordic Semiconductor"
+mpn = ["NRF52840-QIAA-R", "NRF52840-QIAA-R7"]
+license = "Apache-2.0"
+description = "nRF52840 (Cortex-M4F, aQFN73) on Breadboard's nRF52840 platform"
+
+[pins]
+file = "pins.toml"
+
+[behavioral]
+engine = "renode"
+platform = "nrf52840-bb@1"
+
+[[analog]]
+name = "saadc_se"
+kind = "pin_load"
+purpose = "SAADC single-ended input: sample capacitor and pad capacitance, one charge transfer per acquisition"
+fidelity = ["fast"]
+default_for = ["fast"]
+file = "analog/saadc_se.lib"
+subckt = "NRF_SAADC_SE"
+ports = [{ role = "pad" }, { role = "ctrl", signal = "smp" }, { role = "observe", signal = "hold" }, { role = "pin", pin = "VDD" }]
+
+[analog.provenance]
+source = "datasheet"
+refs = ["nRF52840 PS v1.x, SAADC electrical specification"]
+confidence = "unchecked"

@@ -1,0 +1,208 @@
+{
+ "source": "dial-me-spinner 6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a: hardware/sim/spicelib.py parse_value/parse_tol on examples/dial-me-spinner/kicad/main/dial-me-spinner-main.net",
+ "values": [
+  {
+   "kind": "C",
+   "text": "100n",
+   "spicelib_value": "1.0000000000000001e-07",
+   "subunits": 100000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "100n/50V",
+   "spicelib_value": "1.0000000000000001e-07",
+   "subunits": 100000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "10u",
+   "spicelib_value": "9.999999999999999e-06",
+   "subunits": 10000000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "10u/25V",
+   "spicelib_value": "9.999999999999999e-06",
+   "subunits": 10000000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "12p C0G",
+   "spicelib_value": "1.2e-11",
+   "subunits": 12000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "180p C0G",
+   "spicelib_value": "1.8e-10",
+   "subunits": 180000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "1n/50V",
+   "spicelib_value": "1e-09",
+   "subunits": 1000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "1u",
+   "spicelib_value": "1e-06",
+   "subunits": 1000000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "22u",
+   "spicelib_value": "2.2e-05",
+   "subunits": 22000000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "33p C0G",
+   "spicelib_value": "3.3e-11",
+   "subunits": 33000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "4.7u/16V",
+   "spicelib_value": "4.7e-06",
+   "subunits": 4700000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "4.7u/25V",
+   "spicelib_value": "4.7e-06",
+   "subunits": 4700000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "C",
+   "text": "4.7u/25V Ta",
+   "spicelib_value": "4.7e-06",
+   "subunits": 4700000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "L",
+   "text": "10u",
+   "spicelib_value": "9.999999999999999e-06",
+   "subunits": 10000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "0",
+   "spicelib_value": "0.0",
+   "subunits": 0,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "100k",
+   "spicelib_value": "100000.0",
+   "subunits": 100000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "10k",
+   "spicelib_value": "10000.0",
+   "subunits": 10000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "1M",
+   "spicelib_value": "1000000.0",
+   "subunits": 1000000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "2.2M",
+   "spicelib_value": "2200000.0",
+   "subunits": 2200000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "220",
+   "spicelib_value": "220.0",
+   "subunits": 220000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "4.7",
+   "spicelib_value": "4.7",
+   "subunits": 4700000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "4.7k",
+   "spicelib_value": "4700.0",
+   "subunits": 4700000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "470",
+   "spicelib_value": "470.0",
+   "subunits": 470000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "47k",
+   "spicelib_value": "47000.0",
+   "subunits": 47000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "499k 0.5%",
+   "spicelib_value": "499000.0",
+   "subunits": 499000000000,
+   "tolerance_ppm": 5000
+  },
+  {
+   "kind": "R",
+   "text": "51R 1/4W",
+   "spicelib_value": "51.0",
+   "subunits": 51000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "52.3k 0.1%",
+   "spicelib_value": "52300.0",
+   "subunits": 52300000000,
+   "tolerance_ppm": 1000
+  },
+  {
+   "kind": "R",
+   "text": "560k",
+   "spicelib_value": "560000.0",
+   "subunits": 560000000000,
+   "tolerance_ppm": null
+  },
+  {
+   "kind": "R",
+   "text": "68",
+   "spicelib_value": "68.0",
+   "subunits": 68000000,
+   "tolerance_ppm": null
+  }
+ ]
+}

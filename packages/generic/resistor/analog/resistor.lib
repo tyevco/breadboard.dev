@@ -1,0 +1,6 @@
+* generic/resistor, view "ideal": the SPICE primitive R with the instance's
+* value, in base units (ohm). Elaboration passes value as a plain SPICE
+* number, never with a letter suffix (ADR-006 D5).
+.subckt bb_generic_resistor 1 2 value=1000
+R1 1 2 {value}
+.ends bb_generic_resistor

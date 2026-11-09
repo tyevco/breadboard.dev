@@ -1,0 +1,14 @@
+# bb.lock: written by `bb open` (ADR-006 D8). Do not edit; `bb open --update-lock`
+# rewrites the entries whose package tree or platform content changed.
+schema = "bb-lock/0"
+
+[[package]]
+id = "st/stm32f072rb"
+version = "0.1.0"
+path = "../../packages/st/stm32f072rb"
+tree = "sha256:ee7e6b80546fe08b7f83301be3946831b79a08b3234c87c5afd88dd0405d3108"
+
+[[platform]]
+id = "renode:stm32f072-bb@1"
+content = "sha256:16644c94da6041a6f5089e8cff7106347ae963c757a6c58e83097083b8857bb0"
+renode = "1.17.0"

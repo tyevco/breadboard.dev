@@ -1,0 +1,2 @@
+* generic/inductor test circuit: X1 (the view, 10 mH) from in to out, 10 ohm to ground.
+R1 out 0 10

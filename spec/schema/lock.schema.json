@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://breadboard.dev/spec/schema/lock.schema.json",
+  "title": "bb-lock/0: bb.lock, the package and platform lockfile (spec/package.md, ADR-006 D8)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema"],
+  "properties": {
+    "schema": { "const": "bb-lock/0" },
+    "package": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "path", "tree"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9._-]+/[a-z0-9._-]+$" },
+          "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+          "path": { "type": "string" },
+          "tree": { "$ref": "#/$defs/hash" }
+        }
+      }
+    },
+    "platform": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "content"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z]+:[a-z0-9_./-]+@[0-9]+$" },
+          "content": { "$ref": "#/$defs/hash" },
+          "renode": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

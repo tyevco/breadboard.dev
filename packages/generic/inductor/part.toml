@@ -1,0 +1,41 @@
+# generic/inductor: any two-terminal inductor, selected by footprint plus value
+# (ADR-006 D5; ADR-007 D4 stage 5). A package for a specific MPN overrides
+# it whenever one exists.
+schema = "bb-part/0"
+
+[part]
+id = "generic/inductor"
+version = "0.1.0"
+kind = "passive"
+license = "Apache-2.0"
+description = "Generic inductor: the ideal element with the instance's value"
+
+[footprints]
+kicad = ["Inductor_SMD:*", "Inductor_THT:*"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "ideal"
+purpose = "an ideal inductor of the instance's value (the parsed KiCad value field)"
+fidelity = ["fast"]
+default_for = ["fast"]
+file = "analog/inductor.lib"
+subckt = "bb_generic_inductor"
+ports = ["1", "2"]
+params = { value = "1e-3" }
+
+[analog.provenance]
+source = "agent_generated"
+base = "the SPICE primitive L"
+not_modelled = ["tolerance and rating (kept as metadata for pi views)", "parasitics", "temperature and voltage coefficients"]
+generated_by = "Claude (Phase 1 M3)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

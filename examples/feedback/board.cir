@@ -16,14 +16,17 @@
 * vil tau*ln(3.3/0.8) = 1.452500 ms after each fall; U1 sees PB0 at the
 * next lattice point ceil_L(t_x) and PA6 follows in the slice after it.
 *
-* Directive grammar: see examples/spike/board.cir. digital_in: the analog
-* engine thresholds the node with hysteresis at every solver point and adds
-* cin (farads) as a capacitor to ground.
+* Directive grammar: see examples/spike/board.cir. U1 and its pin models
+* come from the package st/stm32f103c8 (ADR-006; its pins.toml set
+* `default`: digital_out 3.3 V, 5 ns, 25 ohm; digital_in vih 2.0 V, vil
+* 0.8 V, cin 5 pF), pinned in bb.lock. digital_in: the analog engine
+* thresholds the node with hysteresis at every solver point and adds cin
+* as a capacitor to ground.
 *
-*bb part U1 engine=renode platform=stm32f103
-*bb pin U1.PA5 net=PA5 model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
-*bb pin U1.PB0 net=SENSE model=digital_in vih=2.0 vil=0.8 cin=5e-12
-*bb pin U1.PA6 net=PA6 model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb part U1 package=st/stm32f103c8
+*bb pin U1.PA5 net=PA5 model=digital_out
+*bb pin U1.PB0 net=SENSE model=digital_in
+*bb pin U1.PA6 net=PA6 model=digital_out
 
 * Circuit body. Node 0 is GND.
 R2 PA5 SENSE 1k

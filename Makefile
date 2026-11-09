@@ -14,6 +14,7 @@ CARGO ?= cargo
         adc-equiv adc-renode adc-model adc-startup adc-stock adc-order adc-determinism pooled-adc-determinism adc-stock-ref adc-open-stock-ref adc-speed \
         cost-table cost-table-runs startup-perf ec-reconnect ec-long \
         pool-equiv pool-perf dms-source dms-suite dms-suite-check dms-suite-update \
+        packages locks dms-values setup-container \
         pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
 
 # --- Phase 0 spike ---------------------------------------------------------
@@ -93,11 +94,15 @@ POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert loo
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
+# `make setup` installs the developer toolchain and bb (into ~/.local/bin);
+# `make setup SETUP=demo` skips the ARM toolchain and uv (Phase 1 plan M3,
+# R7). Root (a container) runs apt without sudo.
+SETUP ?= full
 setup:
-	bash scripts/setup.sh
+	bash scripts/setup.sh $(SETUP)
 
 doctor:
-	@bash scripts/doctor.sh
+	@bash scripts/doctor.sh $(SETUP)
 
 # Bare-metal STM32F103 blinky used by the Phase 0 spike and the Renode engine
 # tests: examples/spike/firmware/build/blinky.elf
@@ -129,6 +134,7 @@ pooled-test:
 	$(MAKE) adc-stock
 	$(MAKE) adc-model
 	$(MAKE) ec-reconnect
+	$(MAKE) packages
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -601,6 +607,42 @@ dms-s1:
 DMS_S1_N ?= 5
 dms-s1-cost:
 	DMS_REPO=$(DMS_REPO) bash scripts/dms_s1.sh cost $(DMS_S1_N)
+
+# --- Phase 1 M3: component packages (ADR-006) ------------------------------
+# The example boards whose parts come from packages; each has a bb.lock.
+PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
+              examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir
+
+# ADR-006 G1 and the package gates of `make test`: every part.toml, pins.toml,
+# test vector and bb.lock validates against spec/schema (python3-jsonschema);
+# `bb pkg lint` is clean; every vector passes through NgspiceEngine at both
+# grant partitions and at every recorded qualification (`bb pkg test`); and
+# every example's bb.lock is current (`bb open --check`).
+packages: bb
+	$(PYTHON) scripts/validate_packages.py
+	$(BB) pkg lint
+	$(BB) pkg test
+	set -e; for b in $(PKG_BOARDS); do $(BB) open --check $$b; done
+	@echo "packages: PASS"
+
+# After an intended change to a package, a platform's .repl or a Renode
+# plugin source: rewrite the changed bb.lock entries (review, then commit).
+locks: bb
+	set -e; for b in $(PKG_BOARDS); do $(BB) open --update-lock $$b; done
+
+# ADR-006 G3: bb's KiCad value parser against the suite's spicelib on the 29
+# distinct passive values of the dial-me-spinner main board (with DMS_REPO
+# present the fixture tests/fixtures/values/dms-main.json is re-derived from
+# spicelib at 6854d25 and must be unchanged).
+dms-values: bb
+	$(PYTHON) scripts/dms_values.py --bb $(BB) $(if $(wildcard $(DMS_REPO)),--repo $(DMS_REPO))
+
+# Phase 1 plan M3 / R7: `make setup SETUP=demo` timed in a clean
+# ubuntu:24.04 container (podman or docker), from `git archive HEAD`
+# (SETUP_REV=<commit>, or SETUP_WORKTREE=1 for the working tree).
+SETUP_REV ?= HEAD
+setup-container:
+	bash scripts/setup_container_test.sh $(if $(SETUP_WORKTREE),--worktree,--rev $(SETUP_REV)) --out out/setup-container
 
 fmt:
 	$(CARGO) fmt --all

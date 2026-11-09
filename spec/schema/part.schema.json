@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://breadboard.dev/spec/schema/part.schema.json",
+  "title": "bb-part/0: a component package's part.toml (spec/package.md, ADR-006 D2-D4)",
+  "description": "The JSON form of part.toml (TOML converted to JSON as is). Unknown keys are an error; the keys reserved for bb-part/1 (layers, thermal, rtl, power; pins.ibis; behavioral.cpu, behavioral.svd; a view's rails) are not accepted in bb-part/0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "part", "pins"],
+  "properties": {
+    "schema": { "const": "bb-part/0" },
+    "part": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "kind", "license"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9._-]+/[a-z0-9._-]+$" },
+        "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+        "kind": {
+          "enum": ["soc", "module", "power", "analog_ic", "logic", "discrete", "passive", "connector", "mechanical", "testpoint"]
+        },
+        "manufacturer": { "type": "string" },
+        "mpn": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "mpn_patterns": {
+          "description": "Regular expressions matched against the whole normalised MPN (anchored implicitly; no ^ or $).",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "not": { "pattern": "^\\^|\\$$" } }
+        },
+        "lcsc": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "datasheet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url"],
+          "properties": { "url": { "type": "string" }, "rev": { "type": "string" } }
+        },
+        "license": { "type": "string", "minLength": 1, "description": "An SPDX expression; LicenseRef-local-only forbids committing the package to a shared repository (ADR-006 D9)." },
+        "description": { "type": "string" }
+      }
+    },
+    "footprints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kicad": { "type": "array", "items": { "type": "string" } },
+        "pinmap": { "type": "string" }
+      }
+    },
+    "pins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file"],
+      "properties": { "file": { "type": "string" } }
+    },
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chip", "pinmap"],
+      "properties": {
+        "chip": { "type": "string", "pattern": "^[a-z0-9._-]+/[a-z0-9._-]+$" },
+        "pinmap": { "type": "string" }
+      }
+    },
+    "behavioral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine"],
+      "properties": {
+        "engine": { "enum": ["renode", "device"] },
+        "platform": { "$ref": "#/$defs/engine_id" },
+        "device": { "$ref": "#/$defs/engine_id" }
+      },
+      "oneOf": [
+        { "properties": { "engine": { "const": "renode" } }, "required": ["platform"], "not": { "required": ["device"] } },
+        { "properties": { "engine": { "const": "device" } }, "required": ["device"], "not": { "required": ["platform"] } }
+      ]
+    },
+    "analog": { "type": "array", "items": { "$ref": "#/$defs/view" } },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dir"],
+      "properties": { "dir": { "type": "string" } }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "part": { "properties": { "kind": { "const": "module" } } } } },
+      "then": { "required": ["module"] },
+      "else": { "not": { "required": ["module"] } }
+    }
+  ],
+  "$defs": {
+    "engine_id": { "type": "string", "pattern": "^[a-z0-9_./-]+@[0-9]+$" },
+    "rung": { "enum": ["fast", "pi", "si", "em"] },
+    "value": {
+      "description": "A string in the value grammar of spec/package.md (a number with an optional SI prefix and unit; a bare M is a lint error).",
+      "type": "string",
+      "minLength": 1
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "confidence"],
+      "properties": {
+        "source": { "enum": ["datasheet", "vendor_model", "vendor_derived", "measured", "estimated", "agent_generated"] },
+        "base": { "type": "string" },
+        "refs": { "type": "array", "items": { "type": "string" } },
+        "deviations": { "type": "array", "items": { "type": "string" } },
+        "not_modelled": { "type": "array", "items": { "type": "string" } },
+        "origin": { "type": "string" },
+        "generated_by": { "type": "string" },
+        "reviewed_by": { "type": "array", "items": { "type": "string" } },
+        "confidence": { "enum": ["unchecked", "self_checked", "datasheet_checked", "measured"] }
+      }
+    },
+    "typed_port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role"],
+      "properties": {
+        "role": { "enum": ["pad", "ctrl", "observe", "pin"] },
+        "signal": { "type": "string" },
+        "pin": { "type": "string" }
+      },
+      "allOf": [
+        { "if": { "properties": { "role": { "enum": ["ctrl", "observe"] } } }, "then": { "required": ["signal"], "not": { "required": ["pin"] } } },
+        { "if": { "properties": { "role": { "const": "pin" } } }, "then": { "required": ["pin"], "not": { "required": ["signal"] } } },
+        { "if": { "properties": { "role": { "const": "pad" } } }, "then": { "not": { "anyOf": [{ "required": ["pin"] }, { "required": ["signal"] }] } } }
+      ]
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "fidelity", "file", "subckt", "ports"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+        "kind": { "enum": ["circuit", "pin_load"] },
+        "purpose": { "type": "string" },
+        "fidelity": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rung" } },
+        "default_for": { "type": "array", "items": { "$ref": "#/$defs/rung" } },
+        "file": { "type": "string" },
+        "subckt": { "type": "string" },
+        "ports": { "type": "array" },
+        "params": { "type": "object", "additionalProperties": { "$ref": "#/$defs/value" } },
+        "qualified": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["lattice", "options"],
+            "properties": { "lattice": { "$ref": "#/$defs/value" }, "options": { "type": "string" } }
+          }
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      },
+      "if": { "properties": { "kind": { "const": "pin_load" } }, "required": ["kind"] },
+      "then": { "properties": { "ports": { "items": { "$ref": "#/$defs/typed_port" } } } },
+      "else": { "properties": { "ports": { "items": { "type": "string" } } } }
+    }
+  }
+}

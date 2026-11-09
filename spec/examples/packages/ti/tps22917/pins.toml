@@ -1,0 +1,35 @@
+# FORMAT EXAMPLE. Pin numbers and names as KiCad's Power_Management:TPS22917DBV
+# libpart gives them; the ground pin is named GNDP here because a view's port
+# may not be gnd (spec/package.md section 5), so a real package maps the
+# symbol's GND through a pinmap or renames the subckt port instead.
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "VIN"
+role = "power_in"
+
+[[pin]]
+number = "2"
+name = "GNDP"
+role = "ground"
+
+[[pin]]
+number = "3"
+name = "ON"
+role = "input"
+
+[[pin]]
+number = "4"
+name = "CT"
+role = "analog"
+
+[[pin]]
+number = "5"
+name = "QOD"
+role = "analog"
+
+[[pin]]
+number = "6"
+name = "VOUT"
+role = "power_out"

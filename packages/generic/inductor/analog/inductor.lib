@@ -1,0 +1,6 @@
+* generic/inductor, view "ideal": the SPICE primitive L with the instance's
+* value, in base units (H). Elaboration passes value as a plain SPICE
+* number, never with a letter suffix (ADR-006 D5).
+.subckt bb_generic_inductor 1 2 value=1e-3
+L1 1 2 {value}
+.ends bb_generic_inductor

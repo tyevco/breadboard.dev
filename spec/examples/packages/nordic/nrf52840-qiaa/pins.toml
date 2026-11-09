@@ -1,0 +1,47 @@
+# FORMAT EXAMPLE, an excerpt: three pins of 73, placeholder ball numbers.
+schema = "bb-pins/0"
+
+[[pin]]
+number = "A12"
+name = "P0.02"
+role = "io"
+supply = "VDD"
+alt = ["AIN0"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN0" }
+
+[[pin]]
+number = "B1"
+name = "VDD"
+role = "power_in"
+
+[[pin]]
+number = "B7"
+name = "VSS"
+role = "ground"
+
+# Drive strengths as named sets, chosen per binding by `set` (ADR-007 D5).
+[defaults.digital_out.S0S1]
+voh = "VDD"
+vol = "0V"
+rise = "25ns"
+fall = "25ns"
+zout = "800"
+
+[defaults.digital_out.H0H1]
+voh = "VDD"
+vol = "0V"
+rise = "8ns"
+fall = "8ns"
+zout = "200"
+
+[defaults.digital_in.default]
+vih = "0.7*VDD"
+vil = "0.3*VDD"
+cin = "3p"
+
+[defaults.adc_in.default]
+vref = "0.6V"
+bits = "12"
+model = "nrf_saadc"
+load = "saadc_se"

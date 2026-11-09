@@ -1,0 +1,44 @@
+# FORMAT EXAMPLE (spec/package.md section 13), not the Phase 1 package: plan
+# M5/M5b write ti/tps22917 from the datasheet and the dial-me-spinner suite.
+# The view file is not included. Shows a load switch with two views: a
+# committed datasheet-fitted default and a vendor-derived view that would be
+# local-only (ADR-006 D9, approver decision A).
+schema = "bb-part/0"
+
+[part]
+id = "ti/tps22917"
+version = "0.1.0"
+kind = "analog_ic"
+manufacturer = "Texas Instruments"
+mpn = ["TPS22917DBVR", "TPS22917DBVT"]
+mpn_patterns = ["TPS22917DBV[RT]"]
+lcsc = ["C2681320"]
+datasheet = { url = "https://www.ti.com/lit/ds/symlink/tps22917.pdf", rev = "SLVSDW8B" }
+license = "Apache-2.0"
+description = "1-5.5 V, 2 A load switch, adjustable rise time, quick output discharge"
+
+[footprints]
+kicad = ["Package_TO_SOT_SMD:SOT-23-6"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "lsw"
+purpose = "rail switching, turn-on ramp, quick discharge, reverse blocking"
+fidelity = ["fast", "pi"]
+default_for = ["fast", "pi"]
+file = "analog/tps22917_fit.lib"
+subckt = "LSW_TPS22917_FIT"
+ports = ["VIN", "GNDP", "ON", "CT", "QOD", "VOUT"]
+params = { ron_add = "0" }
+
+[[analog.qualified]]
+lattice = "10us"
+options = "phase0"
+
+[analog.provenance]
+source = "datasheet"
+refs = ["SLVSDW8B Table 7.5", "SLVSDW8B Table 7.6"]
+not_modelled = ["temperature", "RON variation over VIN"]
+confidence = "datasheet_checked"

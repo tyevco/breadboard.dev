@@ -14,7 +14,8 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 
 | Command | What it does |
 | --- | --- |
-| `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev |
+| `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev, python3-jsonschema; then build `bb` and install it into `~/.local/bin`. `make setup SETUP=demo` skips the ARM toolchain, uv and jsonschema (what the demo needs: Rust, Renode, ngspice, `bb`). As root (a container) it runs apt without sudo (Phase 1 M3) |
+| `make setup-container` | Phase 1 M3 gate (R7): `make setup SETUP=demo` timed in a clean `ubuntu:24.04` container (podman, or docker), as root, from `git archive HEAD` (`SETUP_REV=`, or `SETUP_WORKTREE=1`); timing in `out/setup-container/timing.txt` (`scripts/setup_container_test.sh`) |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
 | `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect`, run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
@@ -54,6 +55,9 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make dms-source` | Phase 1 M0: the vendored dial-me-spinner KiCad inputs (`examples/dial-me-spinner/kicad/`) against the sha256s in `examples/dial-me-spinner/SOURCE`, and against `git show <commit>:<path>` when `DMS_REPO` (default `../dial-me-spinner`) exists (`scripts/dms_source_check.sh`) |
 | `make dms-suite-check` | Phase 1 M0 gate: re-run the dial-me-spinner SPICE suite (`-m "not slow"`) at the reference commit `6854d25` from a `git archive` export in `~/.cache/bb-dms-suite` (`scripts/dms_suite.sh`, about 4-5 min) and require `out/dms-suite/results.json` to equal the committed `examples/dial-me-spinner/suite/results.json` byte for byte (checks, test outcomes, every deck's numeric fallback level, ngspice version). `make dms-suite-update` regenerates it. Never check out, stash or write in the dial-me-spinner repository |
 | `make dms-s1` | Phase 1 plan S1 (ADR-006 Amendment 2): the E1 deck (two LED rail on/off cycles, 120 ms, both benches) through `NgspiceEngine` at `phase0`, with the S1 fix of the TPS22917 view. The view and every deck are built in `~/.cache/bb-dms-s1` from a `git archive` export of `6854d25`; they are TI-derived, so they stay local-only and never enter the repository (`scripts/dms_s1.sh`, `scripts/dms_s1.py`, `engines/analog-ngspice/examples/deck_run.rs`). Its 18 gates: 120 ms at both benches; grants of 10 µs, 1 ms and 10 ms byte-identical; VLED at the check instants and the LSW-2 time against the suite's `suite_fallback` run; VLED at every 10 µs against the converged run; the fix's result neutrality. About 1.5 min on 8 jobs (`DMS_S1_JOBS`). `make dms-s1-cost` is the S1 cost table (plan §8; `DMS_S1_N` interleaved rounds, medians; run it on an idle host) |
+| `make packages` | ADR-006 (Phase 1 M3; in `make test`): every `part.toml`, `pins.toml`, test vector and `bb.lock` against `spec/schema/*.schema.json` (`scripts/validate_packages.py`, python3-jsonschema), `bb pkg lint` clean, `bb pkg test` (every vector through `NgspiceEngine` at one cell and 1 ms, identical, and at every recorded qualification), and every example's `bb.lock` current (`bb open --check`) |
+| `make locks` | `bb open --update-lock` on every example board: after an intended change to a package, a platform `.repl` or **any Renode plugin source** (they are in every Renode platform's content hash, ADR-006 D8); review and commit the `bb.lock` diffs |
+| `make dms-values` | ADR-006 G3: `bb pkg value --kicad` on the 29 distinct passive values of the dial-me-spinner main board equals the suite's `spicelib.parse_value` (re-derived from `git show 6854d25:hardware/sim/spicelib.py` when `DMS_REPO` exists, else the committed fixture `tests/fixtures/values/dms-main.json`) |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
@@ -65,6 +69,11 @@ lookahead gate firmware in `engines/cpu-renode/tests/firmware`) on their own.
 
 ```
 bbcore/                 kernel: Time, PinSignal, Engine trait, Scheduler, EventSink, CsvWriter, VcdWriter
+bbpkg/                  component packages (ADR-006, spec/package.md): value grammar and integer units,
+                        TOML reader, part.toml/pins.toml, lint, view files and deck assembly, test
+                        vectors through NgspiceEngine, tree hashes and bb.lock, schema versions, SHA-256
+packages/               first-party packages: generic/{resistor,capacitor,inductor}, st/stm32f103c8,
+                        st/stm32f072rb
 engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
                         examples/deck_run.rs: a SPICE body through NgspiceEngine with digital-glue edges (S1)
 engines/cpu-renode/     Renode engine over the External Control API; platforms/: the plugin
@@ -73,8 +82,10 @@ engines/cpu-renode/     Renode engine over the External Control API; platforms/:
                         ADC model and its host port, ADR-005) and stm32f072-bb.repl (the F072
                         overlay); tests/firmware (gate firmware); console.rs, pool.rs,
                         manager.rs (the warm Renode pool, ADR-004)
-cli/                    `bb` binary (`bb run`, `bb pool`, board-file parser)
-examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings)
+cli/                    `bb` binary (`bb run`, `bb pool`, `bb open`, `bb pkg`, board-file parser,
+                        platforms.rs: the Renode platform identities of ADR-006 D8)
+examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings; U1 from the package
+                        st/stm32f103c8 since M3, pinned in examples/*/bb.lock like every example)
 examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware and a polling variant
 examples/feedback-open/ the same with the loop opened (acyclic, long grants)
 examples/adc/           STM32F072 ADC board (adc_in PA1 reads the divider PA4 drives; board.cir,
@@ -89,7 +100,8 @@ tests/golden/feedback/  SENSE / LED_B snapshots, exact pin_edge list, one-cell r
 tests/golden/feedback-open/ partition hashes of the one-cell reference
 tests/golden/adc/, adc-open/ hashes of the every-lattice-point one-cell ADC references (ADR-005)
 tests/golden/adc-stock/, adc-open-stock/ the same on the stock ADC model (ADR-003)
-spec/                   normative protocol and schema docs; changing them needs an ADR
+spec/                   normative protocol and schema docs (package.md and schema/*.schema.json: ADR-006);
+                        changing them needs an ADR
 docs/adr/               architecture decision records
 scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh,
                         partition.sh, perf.sh, perf_ab.sh (also make cost-table),
@@ -97,7 +109,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         lookahead_equiv.sh, check_adc.py, adc_equiv.sh, startup_perf.sh,
                         with_pool.sh, pool_equiv.sh, pool_perf.sh, dms_vendor.sh,
                         dms_source_check.sh, dms_suite.sh (+ dms_suite_plugin.py,
-                        dms_suite_collect.py)
+                        dms_suite_collect.py), validate_packages.py, dms_values.py,
+                        check_pins_kicad.py, setup_container_test.sh
 ```
 
 ## The three invariants
@@ -167,6 +180,15 @@ feedback board).
   `bb_cpu_renode::renode_command` (kill on the death of the spawning
   thread). Spawn it from a thread that lives as long as the process is
   used.
+- **Packages and platforms are pinned** (ADR-006 D8). A board file whose
+  parts come from packages (`*bb part U1 package=...`) needs a current
+  `bb.lock` next to it; `bb run` refuses a mismatch and never writes the
+  lock. A change to a package's files, to a platform's `.repl` or to any
+  Renode plugin source in `PLUGIN_SOURCES` changes those hashes: run
+  `make locks`, review, and commit the `bb.lock` files with the change. A
+  new platform adds a row to `cli/src/platforms.rs`. A package value is a
+  string in the value grammar (`spec/package.md` section 6), never a SPICE
+  suffix: write `Meg`, never a bare `M`.
 - Git is local only: never push and never add remotes. Commit messages end with
   the co-author trailer given by the orchestrator.
 
