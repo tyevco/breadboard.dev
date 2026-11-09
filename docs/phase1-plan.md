@@ -6,7 +6,9 @@
   see Review notes). M1 done (2026-11-09: the promise clamp, ADR-008
   Amendment 1). S1 done (2026-11-09) without the fallback: a view-local
   fix of the TPS22917 view runs E1 at `phase0` through the engine
-  (ADR-006 Amendment 2; Review notes: S1).
+  (ADR-006 Amendment 2; Review notes: S1). M3 done (2026-11-09: package format v0
+  (ADR-006 Amendment 1), the Phase 0 examples through packages with their
+  committed hashes, setup timed in a clean container; Review notes: M3).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -650,3 +652,58 @@ ADR-006/007/008. Items not adopted as proposed:
   loaded (load 7–9) during the measurement, so the medians are upper
   bounds. A re-measurement on an idle host (`make dms-s1-cost`) can only
   lower them.
+
+## Review notes: M3 (2026-11-09)
+
+- **What exists.** `spec/package.md` (normative) and four JSON Schemas in
+  `spec/schema/` (`part`, `pins`, `lock`, `pkgtest`); the `bbpkg` crate (the
+  value grammar and integer units, a TOML reader, `part.toml`/`pins.toml`,
+  lint, view files and deck assembly, test vectors through `NgspiceEngine`,
+  tree hashes and `bb.lock`, schema versions); `bb pkg lint|test|migrate|
+  tree|value`; `bb open <board.cir>` (writes `bb.lock`); five first-party
+  packages (`generic/resistor`, `generic/capacitor`, `generic/inductor`,
+  `st/stm32f103c8`, `st/stm32f072rb`); the platform identities
+  `stm32f103-offline@1` and `stm32f072-bb@1` (`cli/src/platforms.rs`).
+  ADR-006 Amendment 1 records what the implementation settled.
+- **Gate: the Phase 0 examples through packages.** `examples/spike`,
+  `feedback`, `feedback-open` and `adc` (both boards) now name their MCU as
+  `*bb part U1 package=st/...` and take every pin parameter from the
+  package's `pins.toml`, with a `bb.lock` beside them. With no golden
+  update, `make test` (on the pool and with `POOL=0`), `make partition`,
+  `feedback-open`, `lookahead-inert`, `lookahead-equiv`, `adc-equiv` (pool
+  and `POOL=0`) and `make pool-equiv` give the committed hashes in
+  `tests/golden/*/` byte for byte. A unit test also requires the parsed
+  pins and pin models of every example to equal its Phase 0 directives, bit
+  for bit.
+- **Gate: schema validation in CI.** `make packages` (in `make test`, and a
+  CI step of its own) validates every `part.toml`, `pins.toml`, test vector
+  and `bb.lock` (22 files: the five packages, the two spec format examples,
+  the four example locks) against the schemas with `python3-jsonschema`
+  4.10.3, after a self-test that the schemas reject known-bad documents;
+  then `bb pkg lint` (clean), `bb pkg test` (every vector at one cell and
+  1 ms, identical) and `bb open --check` on every example.
+- **ADR-006's M3 gates.** G1 as above. G2 as above. G3: `make dms-values`
+  and `bbpkg/tests/values.rs`, 29 of 29 equal to `spicelib.parse_value` at
+  `6854d25` (after Amendment 1's qualifiers). G5: `cli/tests/lock.rs`
+  (refused by `bb open`, `--check` and `bb run`; `--update-lock` rewrites
+  one line). G7: `bbpkg/src/spice.rs` and `bbpkg/tests/lint.rs`. G9: the
+  synthetic `bb-part/1` registry tests (Amendment 1 item 9).
+- **Gate: setup.** `make setup` now builds `bb` and installs it into
+  `~/.local/bin`; `SETUP=demo` skips the ARM toolchain, uv and
+  `python3-jsonschema`; as root it runs apt without sudo.
+  **Timed in a clean `ubuntu:24.04` container** (podman 4.9.3, installed
+  in WSL for this; image `d9b8c34d61a9`; as root, nothing preinstalled; the
+  source a `git archive` of commit `590c455`; `make setup-container`): `apt
+  install make` 5.5 s, `make setup SETUP=demo` 57.6 s (apt packages,
+  rustup and Rust 1.99.1, Renode 1.17.0 portable, the release build of
+  `bb` in 22 s, `bb` into `~/.local/bin`), then `make doctor SETUP=demo`
+  and the installed `bb pkg lint` passing: **63.6 s in total**. A second
+  run, which also ran `bb pkg test` with the container's ngspice, took
+  66.0 s. Installed: 617 MB Rust toolchain, 184 MB Renode. R7's 15-minute
+  budget is therefore not at risk from setup on this host's network; M7
+  repeats the measurement from a local clone, with the demo's own steps.
+- **No new board or run mode,** so no new equivalence gate or cost-table
+  row: the examples are the same boards with byte-identical outputs. `bb
+  run` now resolves packages and checks the lock before it starts any
+  engine; measured at 22-174 ms (5 runs, load 23) up to the firmware check
+  for the spike, from `/mnt/c`.

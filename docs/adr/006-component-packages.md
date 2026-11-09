@@ -1116,3 +1116,9 @@ outside the repository, D9 rule 4) and runs the gates there.
      and CCCS sense sources, and V-type B or E sources. Use a B conductance
      instead, and compute a sensed current from node voltages.
 6. **Cost.** Plan §8 has the measured table (`make dms-s1-cost`).
+11. **Setup (plan M3, R7).** `make setup` builds `bb` and installs it into
+    `~/.local/bin`; `make setup SETUP=demo` skips the ARM toolchain, uv and
+    `python3-jsonschema`; as root it runs apt without sudo. In a clean
+    `ubuntu:24.04` container (podman) from `git archive 590c455`, `apt
+    install make` plus `make setup SETUP=demo` took 63.6 s, and 66.0 s in a
+    second run (plan, Review notes: M3).
