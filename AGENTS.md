@@ -53,6 +53,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make cost-table` | The README cost table with the measurement protocol (`scripts/perf_ab.sh`, interleaved, N = `PERF_N`, medians): the spike at 10 µs vs 10 ms grants, `examples/feedback` and `examples/adc` with lookahead off vs on, `examples/feedback-open` at 10 µs vs 10 ms. Reports only; no gate. Run it on an otherwise idle host |
 | `make dms-source` | Phase 1 M0: the vendored dial-me-spinner KiCad inputs (`examples/dial-me-spinner/kicad/`) against the sha256s in `examples/dial-me-spinner/SOURCE`, and against `git show <commit>:<path>` when `DMS_REPO` (default `../dial-me-spinner`) exists (`scripts/dms_source_check.sh`) |
 | `make dms-suite-check` | Phase 1 M0 gate: re-run the dial-me-spinner SPICE suite (`-m "not slow"`) at the reference commit `6854d25` from a `git archive` export in `~/.cache/bb-dms-suite` (`scripts/dms_suite.sh`, about 4-5 min) and require `out/dms-suite/results.json` to equal the committed `examples/dial-me-spinner/suite/results.json` byte for byte (checks, test outcomes, every deck's numeric fallback level, ngspice version). `make dms-suite-update` regenerates it. Never check out, stash or write in the dial-me-spinner repository |
+| `make dms-s1` | Phase 1 plan S1 (ADR-006 Amendment 2): the E1 deck (two LED rail on/off cycles, 120 ms, both benches) through `NgspiceEngine` at `phase0`, with the S1 fix of the TPS22917 view. The view and every deck are built in `~/.cache/bb-dms-s1` from a `git archive` export of `6854d25`; they are TI-derived, so they stay local-only and never enter the repository (`scripts/dms_s1.sh`, `scripts/dms_s1.py`, `engines/analog-ngspice/examples/deck_run.rs`). Its 18 gates: 120 ms at both benches; grants of 10 µs, 1 ms and 10 ms byte-identical; VLED at the check instants and the LSW-2 time against the suite's `suite_fallback` run; VLED at every 10 µs against the converged run; the fix's result neutrality. About 1.5 min on 8 jobs (`DMS_S1_JOBS`). `make dms-s1-cost` is the S1 cost table (plan §8; `DMS_S1_N` interleaved rounds, medians; run it on an idle host) |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
@@ -65,6 +66,7 @@ lookahead gate firmware in `engines/cpu-renode/tests/firmware`) on their own.
 ```
 bbcore/                 kernel: Time, PinSignal, Engine trait, Scheduler, EventSink, CsvWriter, VcdWriter
 engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
+                        examples/deck_run.rs: a SPICE body through NgspiceEngine with digital-glue edges (S1)
 engines/cpu-renode/     Renode engine over the External Control API; platforms/: the plugin
                         assembly's sources (bb_lookahead.cs, the lookahead block, ADR-003 D5;
                         bb_stm32_timer.cs, STM32_Timer + TRGO; bb_stm32f0_adc.cs, the STM32F0
@@ -220,6 +222,15 @@ feedback board).
   that races the restart leaks the listener or crashes Renode (ADR-004
   Amendment 2). The pool waits for the re-listen first; keep it that way.
 - **Parsing KiCad files with regex.** Use a real S-expression parser.
+- **A branch-current unknown in series with a milliohm path in an analog
+  view.** Under `phase0` (`ABSTOL=1e-13`) ngspice converges every branch
+  current to 1e-13 A + 1e-5·|i|. That includes 0 V ammeters, CCVS and CCCS
+  sense sources, and V-type B and E sources. Through a few milliohms
+  between nodes at about 3 V, that asks for the node voltages to about
+  1e-14 V, below double resolution, and the step collapses (ADR-006
+  Amendment 2: the TPS22917 view's `RVAR` and `H1` blocks). Write such an
+  element as a B conductance, and compute a sensed current from node
+  voltages.
 - Using float seconds for scheduling. Convert at the engine's FFI boundary only.
 - Assuming engines advance in registration order. They advance in the plan
   order the kernel builds from the bindings (producers first, ADR-003 D3);

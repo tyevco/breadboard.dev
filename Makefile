@@ -587,6 +587,21 @@ dms-suite-check: dms-suite
 dms-suite-update: dms-suite
 	cp $(DMS_SUITE_OUT)/results.json $(DMS_SUITE_RESULTS)
 
+# Phase 1 plan S1 (ADR-006 Amendment 2): the E1 deck through NgspiceEngine
+# at phase0 with the S1 fix of the TPS22917 view. The fixed view and every
+# deck are TI-derived: they stay in ~/.cache/bb-dms-s1 (local-only, never
+# in the repository), and the reference is read with git archive. About
+# 1.5 min on 8 jobs.
+.PHONY: dms-s1 dms-s1-cost
+dms-s1:
+	DMS_REPO=$(DMS_REPO) bash scripts/dms_s1.sh gate
+
+# The S1 cost table (plan §8): DMS_S1_N interleaved rounds (default 5),
+# medians, load reported. Run it on an otherwise idle host.
+DMS_S1_N ?= 5
+dms-s1-cost:
+	DMS_REPO=$(DMS_REPO) bash scripts/dms_s1.sh cost $(DMS_S1_N)
+
 fmt:
 	$(CARGO) fmt --all
 

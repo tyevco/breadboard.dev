@@ -4,7 +4,9 @@
   (revised 2026-11-09 after two design reviews). M0 done (2026-11-09:
   inputs vendored with `SOURCE`, suite re-run committed and reproduced;
   see Review notes). M1 done (2026-11-09: the promise clamp, ADR-008
-  Amendment 1).
+  Amendment 1). S1 done (2026-11-09) without the fallback: a view-local
+  fix of the TPS22917 view runs E1 at `phase0` through the engine
+  (ADR-006 Amendment 2; Review notes: S1).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -333,7 +335,7 @@ These are AGENTS.md rules and they hold here unchanged.
 | --- | --- | --- | --- |
 | M0 | Approvals and inputs: ADR-006/007/008 accepted. Licence and publication decisions (§7, approver decisions A and B). Reference commit `6854d25` recorded (decision C; `dc96515` as the secondary import check). The reference KiCad inputs vendored. **The suite re-run at `6854d25`** from a `git archive` export, with pinned ngspice 42, its `results.json` committed under `examples/dial-me-spinner/suite/` with the ngspice version and the numeric fallback level each deck used | Approver sign-off. `examples/dial-me-spinner/SOURCE` names the commit and the sha256 of each imported file (`scripts/dms_source_check.sh`). The committed `results.json` reproduces on a second run (`make dms-suite-check`) | all |
 | M1 | Engine fix: clamp the lookahead promise before `Time::from_ns` (`engines/cpu-renode/src/lib.rs:1509` panics past about 18 446 s) | A new unit test with a promise of `u64::MAX` ns returns a clamped grant. `make test`, `make lookahead-equiv` unchanged | 008 D6 |
-| S1 | **Numerics spike (blocks M5, timeboxed to 1 week):** make the E1 deck pass the LED_PWR_EN fall and the QOD discharge through `NgspiceEngine` (lattice 10 µs, edges as digital glue) at Phase 0's option set, by a view-local fix of the TPS22917 turn-off and QOD path (§6 R1). The harness in `~/bbscratch-p1-rev/eng` is the starting point. If no view-local fix works in the timebox, take the R1 fallback | The E1 deck, through the engine, runs 120 ms at both benches at Phase 0's options with VLED within 1 mV of the suite's fallback-option result. A measured cost table (wall time per bench and option set) replaces §8's estimate | 006 D6 |
+| S1 | **Numerics spike (blocks M5, timeboxed to 1 week):** make the E1 deck pass the LED_PWR_EN fall and the QOD discharge through `NgspiceEngine` (lattice 10 µs, edges as digital glue) at Phase 0's option set, by a view-local fix of the TPS22917 turn-off and QOD path (§6 R1). The harness in `~/bbscratch-p1-rev/eng` is the starting point. If no view-local fix works in the timebox, take the R1 fallback | The E1 deck, through the engine, runs 120 ms at both benches at Phase 0's options with VLED within 1 mV of the suite's fallback-option result. A measured cost table (wall time per bench and option set) replaces §8's estimate. **Done (2026-11-09):** `make dms-s1` (18 gates), cost in §8; the gate as applied is in ADR-006 Amendment 2 item 4 | 006 D6 |
 | M2 | nRF52840 platform `Nrf52840Bb` (offline overlay, `PerformanceInMips: 64`, host-port block). `PinSpec::nrf`. Bare-metal gate firmware (blinky, feedback, ppi, busy-wait) in `engines/cpu-renode/tests/firmware/nrf52840/` | `make nrf-gates`: blinky edge list identical at one-cell, 10 ms, plugin armed and lookahead on. The feedback board identical to its `--lookahead off` reference with no broken promise. Lookahead self-test status 0x3. `nrf-busywait` records the virtual time of a 10 ms nrfx busy-wait (expected about 6.67 ms, ADR-008 D1). `make pool-equiv` with the nRF configurations added | 008 D1–D4 |
 | M3 | Package format v0. `spec/package.md` plus schemas, the value grammar and the schema versioning policy. Generic R/C/L. `st/stm32f103c8` and `st/stm32f072rb` packages. Platform identities. `bb pkg lint/test`. `bb.lock`. **Setup:** `make setup` installs `bb` into `~/.local/bin`, `SETUP=demo` skips the ARM toolchain, root runs without sudo | `examples/spike`, `feedback` and `adc` expressed through packages give the committed hashes (`tests/golden/*/outputs.sha256`) byte for byte. Schema validation of every `part.toml`/`pins.toml` in CI. `make setup SETUP=demo` timed in a clean `ubuntu:24.04` container (R7) | 006 |
 | M4 | Importer (`importers/kicad`), `board.bbm`, `bb.toml`, name resolution, `bb open`/`flash`/`run`/`probe`. Existing `board.cir` files become a second front end of the same elaborated board | (a) `examples/adc` drawn in KiCad (new, in the repo), imported, gives `nets.csv`, `nets.vcd` and the non-grant records byte-identical to `board.cir`. (b) dial-me-spinner main at `6854d25` (the vendored netlist): 201 parts, 142 nets, 657 pin nodes (re-derived at M0); plus a small synthetic two-board fixture in which a shared bare ref (`U1`) is an error that lists `a:U1`, `b:U1`. (c) The committed KiCad 10.0.8 netlist at `6854d25`, fresh KiCad 10.0.8 exports (Linux and Windows `kicad-cli`) and the `.kicad_sch` route give a byte-identical `board.bbm`. Secondary (not a gate for E1): `dc96515`'s KiCad 9.0.9 netlist must give the same `board.bbm`; M0 measured the content the importer reads (ADR-007 D3) identical on the main board, so any difference is a bug to fix or, if it is a real connectivity difference, recorded. (d) Two imports give a byte-identical `board.bbm`. (e) A schematic newer than the supported versions, and a `.net` from an unsupported Eeschema major, are refused | 007 |
@@ -402,7 +404,7 @@ M3 measures `make setup` first, so a miss is known early (R7).
 
 | # | Risk | Evidence | Mitigation |
 | --- | --- | --- | --- |
-| R1 | **The E1 deck does not get past the LED_PWR_EN fall through the engine, at any option set measured.** Breadboard's ngspice engine needs TMAX to divide the 10 µs lattice and clamps every step to the lattice (`engines/analog-ngspice/src/lib.rs`, `NgspiceConfig::lattice`). The options come from the deck (Phase 0: `.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13` in every `examples/*/board.cir`) | **Standalone** (ngspice 42 batch, the suite's `led_rail_sequence` cold deck, TMAX 10 µs, 7 runs in parallel at load 11, 120 s cap; `~/bbscratch-p1-rev`): Phase 0 options killed; Phase 0 + `rshunt`, + Gear and `rshunt`, and reltol 1e-4 + Gear + `rshunt` killed; Phase 0 + Gear 112.8 s; reltol 1e-4 85.4 s; the suite's fallback (reltol 1e-3, Gear, `rshunt` 1e12) 4.4 s. Every run that finished gives the same VLED (2.971511 V at 10.5 ms, 0.104326 V at 50.6 ms). **Through `NgspiceEngine`** (lattice 10 µs, edges as 100 ns digital glue, grants 10 µs–1 ms, 120–240 s caps): Phase 0 reaches the LED_PWR_EN fall (15.6 ms) in 1.5–3.3 s with the same VLED (2.971511 V at 10.5 ms) and stalls there; reltol 1e-4 and the suite fallback pass the fall and stall at 27.92 ms during QOD (VLED 0.914 V); Phase 0 + Gear stops at the LED_PWR_EN rise. The stall points do not depend on the grant size. The QOD deck at reltol 1e-5 also fails, at 0.1 ms (critique) | **S1**, timeboxed and before M5: a view-local fix of the TPS22917 turn-off path (the suite already replaced two numerically fragile vendor blocks), qualified through the engine. Option sets are part of qualification (ADR-006 D6), so a looser set is allowed only where it is shown not to change results. **Fallback** if no view-local fix works: a datasheet-fitted behavioural TPS22917 view (M5b), which also answers R2. The exit date moves by M5b's 1.5 weeks |
+| R1 | **The E1 deck does not get past the LED_PWR_EN fall through the engine, at any option set measured.** Breadboard's ngspice engine needs TMAX to divide the 10 µs lattice and clamps every step to the lattice (`engines/analog-ngspice/src/lib.rs`, `NgspiceConfig::lattice`). The options come from the deck (Phase 0: `.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13` in every `examples/*/board.cir`) | **Standalone** (ngspice 42 batch, the suite's `led_rail_sequence` cold deck, TMAX 10 µs, 7 runs in parallel at load 11, 120 s cap; `~/bbscratch-p1-rev`): Phase 0 options killed; Phase 0 + `rshunt`, + Gear and `rshunt`, and reltol 1e-4 + Gear + `rshunt` killed; Phase 0 + Gear 112.8 s; reltol 1e-4 85.4 s; the suite's fallback (reltol 1e-3, Gear, `rshunt` 1e12) 4.4 s. Every run that finished gives the same VLED (2.971511 V at 10.5 ms, 0.104326 V at 50.6 ms). **Through `NgspiceEngine`** (lattice 10 µs, edges as 100 ns digital glue, grants 10 µs–1 ms, 120–240 s caps): Phase 0 reaches the LED_PWR_EN fall (15.6 ms) in 1.5–3.3 s with the same VLED (2.971511 V at 10.5 ms) and stalls there; reltol 1e-4 and the suite fallback pass the fall and stall at 27.92 ms during QOD (VLED 0.914 V); Phase 0 + Gear stops at the LED_PWR_EN rise. The stall points do not depend on the grant size. The QOD deck at reltol 1e-5 also fails, at 0.1 ms (critique) | **S1**, timeboxed and before M5: a view-local fix of the TPS22917 turn-off path (the suite already replaced two numerically fragile vendor blocks), qualified through the engine. Option sets are part of qualification (ADR-006 D6), so a looser set is allowed only where it is shown not to change results. **Fallback** if no view-local fix works: a datasheet-fitted behavioural TPS22917 view (M5b), which also answers R2. The exit date moves by M5b's 1.5 weeks. **Resolved by S1 (2026-11-09):** the stalls are Newton failures on branch-current unknowns in the view's pass path under `ABSTOL=1e-13`. Restating TI's `RVAR` and `H1` without them runs E1 at `phase0` in about 4 s and changes no result by more than 0.07 mV (ADR-006 Amendment 2) |
 | R2 | **Licences.** Neither repo has a LICENSE file. The TPS22917 and TPS61040 views derive from TI models (SLVMCE8, SLVMDA8) whose redistribution terms were not checked | `git ls-tree dc96515` and `6854d25` (root): no LICENSE; same for breadboard.dev | Decided (approver decision A): Apache-2.0; the TI-derived view stays local-only and M5b's datasheet-fitted view is the committed default. The cross-check then compares different models of U2, so its 5 mV gate applies to the local vendor-derived run only |
 | R3 | **Reference board churn.** Uncommitted edits in the dial-me-spinner working tree, a `kicad10-port` branch, rev B | `git status` in dial-me-spinner; `6854d25` ("Move the toolchain and boards to KiCad 10.0.8, with no change to the design") on `kicad10-port` descends from `dc96515` and commits a `.net` from Eeschema 10.0.8 | Pin `6854d25` (decision C). Import from `git archive` of that commit, never from the working tree. The netlists and schematics are vendored (decision A). M4c also imports `dc96515`'s KiCad 9.0.9 netlist, which must give the same `board.bbm` (a free check of "no change to the design"; M0 found the importer's content identical on the main board) |
 | R4 | **Renode nRF gaps grow every scenario.** SAADC, PWM, TWIM, SPIM3, QSPI, NVMC, TEMP, POWER are absent. TIMER SHORTS and BITMODE are missing. PPI tasks are deferred to the lattice | Renode research, `nrf52840.repl` | E1 needs none of them. E2 adds exactly one model (SAADC). Each further model is its own ADR-005-style step |
@@ -481,36 +483,60 @@ agent work. ADR-003 took about 2 days for 10 gated steps.
 | M2 | 1 week | Overlay, pins, 4 gate firmwares, pool-equiv |
 | M3 | 2 weeks | Schema, grammar, versioning policy, lint/test through the engine, 5 packages, the three Phase 0 examples through packages, setup changes and the clean-container timing |
 | M4 | 1.5 weeks | S-expression parser, resolver, name resolution, `board.bbm`, four CLI verbs, KiCad drawing of `examples/adc`. The base board moved to M11 |
-| M5 | 1.5 weeks | Assumes S1 found the fix |
+| M5 | 1.5 weeks | S1 found the fix (ADR-006 Amendment 2) |
 | M5b | +1.5 weeks, required | Decision A (Q3: the TI-derived view stays local) |
 | M6 | 2 weeks | Zephyr board definition, two firmware builds, two benches, checks, goldens, suite-derived cross-check deck, convergence gate |
 | M7 | 0.5 week | Clean-container timing from a local clone, README; no publication (decision B) |
-| **Exit (M0–M7)** | **about 11.5 weeks (with M5b)** | The design doc allows months 2–4 (about 12 weeks). The exit date is contingent on S1 |
+| **Exit (M0–M7)** | **about 11.5 weeks (with M5b)** | The design doc allows months 2–4 (about 12 weeks). S1 needed no fallback, so M5b stays at its 1.5 weeks |
 | M8 | 3 weeks | SAADC model with BURST (ADR-005 scale), pin-model change, reference runs, UART log |
 | M9 | 1 week | Prototype-dependent |
 | M10 | 3–4 weeks | Four models |
 | M11 | 1 week | Base board, connections, harness view |
 
-**Run cost of the demo.** Not yet known, which is why S1 must measure it.
+**Run cost of the demo (measured by S1).** `make dms-s1-cost` measured the
+E1 deck: the suite's sequence deck with each bench's power path, two LED
+rail on/off cycles, 120 ms. It ran through `NgspiceEngine` with
+`deck_run`, lattice 10 µs, and the control edges as digital glue. The
+protocol is ADR-003's: 5 interleaved rounds, medians. The host was **not
+idle**: load median 7–9 from other agents' work, so the numbers are upper
+bounds. Each row's minimum to maximum range is in
+`out/dms-s1/cost.tsv`.
+
+| Bench | View, option set | Grants | Solver points | Wall time (median) |
+| --- | --- | --- | --- | --- |
+| nominal | S1-fixed, `phase0` | 10 ms (12 grants) | 19 689 | 4.06 s |
+| nominal | S1-fixed, `phase0` | 1 ms | 19 689 | 4.17 s |
+| nominal | S1-fixed, `phase0` | 10 µs (one cell, 12 000 grants) | 19 689 | 4.50 s |
+| nominal | S1-fixed, `suite_fallback` | 10 ms | 15 386 | 2.91 s |
+| nominal | suite's view, `phase0` or `suite_fallback` | 10 ms | — | does not finish 120 ms in 120 s (R1) |
+| cold | S1-fixed, `phase0` | 10 ms | 19 967 | 4.07 s |
+| cold | S1-fixed, `phase0` | 1 ms | 19 967 | 4.21 s |
+| cold | S1-fixed, `phase0` | 10 µs (one cell) | 19 967 | 6.20 s |
+| cold | S1-fixed, `suite_fallback` | 10 ms | 15 438 | 2.95 s |
+| cold | suite's view, `phase0` or `suite_fallback` | 10 ms | — | does not finish 120 ms in 120 s (R1) |
+
+For scale, standalone `ngspice -b` on the same deck took 2.64 s / 2.76 s
+(fixed view, `phase0`, `tran 20u`) and 1.90 s / 1.75 s (the suite's view
+and options as the suite runs it), nominal / cold. All partitions give the
+same samples (`make dms-s1`).
 
 - Engine startup: about 1.5–1.75 s fresh for the nRF52840 (measured, at
   100 MIPS; M2 re-measures at 64), or about 0.1–0.4 s on a warm pool.
-- ngspice: through the engine, the E1 deck's on-phase (0–15.5 ms) took
-  0.7–3.3 s depending on the option set and grant size (R1). The turn-off
-  edge and the 35 ms of QOD after it have no measured cost until S1's fix
-  exists.
+- ngspice: about 4.1 s for E1's 120 ms at `phase0` and 10 ms grants
+  (above). The solver work dominates: the 12 000 one-cell handoffs add
+  0.4–2 s.
 - Grants: E1 is acyclic (no MCU input is bound), so 12 grants of 10 ms at
-  about 7 ms each.
+  about 7 ms each on the Renode side.
 
-The target stays under 10 s of wall time per demo run; S1's gate replaces
-this estimate with a measurement. Either way, the 15-minute budget goes
-almost entirely to `make setup`.
+So a demo run is about 4–6 s of wall time, under the 10 s target. The
+15-minute budget still goes almost entirely to `make setup`.
 
 **CI:** `make test` grows by about 1–2 min:
 
 - M2 gates: about 20 s;
 - M3 equivalence reruns: about 40 s on the pool;
-- E1 runs at two benches and determinism: about 60 s, if S1's cost holds.
+- E1 runs at two benches and determinism: about 60 s (S1 measured about
+  4 s of ngspice per 120 ms run).
 
 There is no new paid infrastructure. CI stays local-only, as now.
 
@@ -578,3 +604,49 @@ ADR-006/007/008. Items not adopted as proposed:
   already takes the minimum with `t_end` and `--max-quantum`. D6's nRF
   gate firmware (a TIMER compare followed by a long sleep) moves to M2's
   `make nrf-gates`, because it needs M2's platform.
+
+## Review notes: S1 (2026-11-09)
+
+- **Result.** S1 is done inside its timebox, and the R1 fallback was not
+  needed. The suite's TPS22917 view stalls through the engine because of a
+  Newton convergence problem, not because of the step size. Under
+  `ABSTOL=1e-13`, TI's `RVAR` and `H1` blocks put branch-current unknowns
+  in series with milliohm paths. Restating those two blocks without
+  branch unknowns, with the same I-V, is the whole fix (ADR-006
+  Amendment 2). `make dms-s1` passes its 18 gates:
+  - 120 ms at `phase0` on both benches and on the suite's two E1 corners;
+  - grants of 10 µs, 1 ms and 10 ms give byte-identical samples;
+  - VLED at the E1 check instants within 0.0004 mV of the suite's
+    `suite_fallback` run, and the LSW-2 time within 0.03 µs of it;
+  - VLED at every 10 µs within 0.59 mV of the converged run;
+  - the fix changes the converged result by at most 0.07 mV;
+  - the suite corners match M0's `results.json`.
+- **Gate as applied (an amendment, not a silent change).** "VLED within
+  1 mV of the suite's fallback-option result" is gated at the instants the
+  suite measures, against the suite's run, and over the whole waveform,
+  against the converged run of the suite's view at its fallback options.
+  The reason: the suite's `suite_fallback` run moves by up to 2.4 mV on the
+  turn-on ramp's knee under a 1-ulp change of its edge times, and lies
+  1.3–5.5 mV from the converged solution there (ADR-006 Amendment 2
+  item 4).
+- **The E1 deck used** is the suite's own `led_rail_sequence` deck, built
+  by its functions at `6854d25`, with each bench's power path. It runs two
+  on/off cycles to 120 ms, so the second turn-on and its P0.06 rise are
+  covered (the unfixed view also stalled there).
+- **Local-only.** The fixed view and every deck are TI-derived. They are
+  generated in `~/.cache/bb-dms-s1` from a `git archive` export, and the
+  repository holds only the generator (`scripts/dms_s1.py`, which carries
+  the two replacement lines), the runner (`scripts/dms_s1.sh`) and the
+  engine example `engines/analog-ngspice/examples/deck_run.rs`. Fixed view
+  sha256 `061285e8bb854529fc2c77ec122bcea58e49eaecaf9e9c30f5881b5d2fa4a4ef`;
+  M5's local `ti/tps22917` package takes it from there.
+- **For M5 and M5b.** The view's own suite vectors (U2 QOD at three
+  corners, Table 7.6 at 3.6 V and 5 V) also run at `phase0` with the fix
+  and reproduce `results.json` within 4 ns, so M5's qualification at
+  (10 µs, `phase0`) should hold. M5b stays required (decision A3) with its
+  gate unchanged. Its comparison with the vendor-derived view can now run
+  both views at `phase0` through the engine, locally.
+- **Cost.** §8's estimate is replaced by the measured table. The host was
+  loaded (load 7–9) during the measurement, so the medians are upper
+  bounds. A re-measurement on an idle host (`make dms-s1-cost`) can only
+  lower them.

@@ -897,3 +897,132 @@ Not adopted as proposed:
 - **"Edges in qualification as the package's rise/fall."** Adopted in
   form (`digital_out` glue), but each vector states its own edge model,
   because one package's view is driven by another package's pin.
+
+## Amendment 2 (2026-11-09): S1, the TPS22917 view's numerics fix
+
+Plan S1 is done **without the fallback**. A view-local fix of the suite's
+TPS22917 view (`load_switches__tps22917.lib` at `6854d25`) lets the E1 deck
+run 120 ms through `NgspiceEngine` at `phase0` on both benches. The fixed
+view is TI-derived, so it stays **local-only** (approver decision A3). Nothing
+TI-derived is in the repository: `make dms-s1` (`scripts/dms_s1.sh`) exports
+the reference with `git archive`, writes the fixed view to
+`~/.cache/bb-dms-s1/local-packages/ti/tps22917/` (a local package path
+outside the repository, D9 rule 4) and runs the gates there.
+
+1. **Cause (measured).** Context 3's stalls are not step-size (LTE)
+   limits. A step trace inside the engine (a scratch copy with a
+   `GetSyncData` log) shows ngspice accepting a step, doubling it twice,
+   failing Newton on the next one and cutting it by 8, over and over. It
+   cycles at 5e-14 to 2e-13 s during the LED_PWR_EN fall (t = 15.60005 ms,
+   inside the 100 ns glue ramp) and at 2e-16 to 1.7e-15 s at the second
+   P0.06 rise of a 120 ms run. Phase 0's `ABSTOL = 1e-13` is the Newton
+   tolerance of every **branch-current unknown**. In this view, TI's
+   `RVAR U4` (a B voltage source R·I, a 0 V ammeter and a current-copy CCCS)
+   and TI's current sense `H1` (a 0 V ammeter and a CCVS) put branch
+   unknowns in series with the pass path. There, 0.1 mΩ (`S10`) to about
+   50 mΩ (`RVAR`) separate nodes at about 3 V. Converging such a branch
+   current to 1e-13 A + 1e-5·|i| (with the ring's ~50 µA quiescent current)
+   needs those node voltages to about 1e-14 V, which is the resolution of a
+   double at 3 V. At the stall the pass-path nodes alternate by 2.4 µV
+   between accepted points.
+
+   Supporting measurements (`~/bbscratch-s1`):
+   - With ABSTOL 1e-12 instead of 1e-13, the fall passes.
+   - Replacing every XSPICE `aswitch` of the view by an equivalent B-source
+     does not help.
+   - Rewriting the logic blocks' Thevenin outputs as Norton sources does
+     not help on its own.
+   - The suite's view did not stop for good at the fall. With a 150 s cap
+     it crawled through the fall, reached 51 ms (just past the second
+     turn-on) after 112 s, and then made no further progress before the
+     cap. Context 3's 120 s cap ended inside the crawl.
+2. **The fix** is the only change to the view, and M5 lists it under the
+   view's `deviations` (D9 rule 1):
+   - `RVAR U4` becomes one B conductance from VIN to the next pass-path
+     node: I = V/R, where R = V(`E4`) (TI's resistance table plus `ron_add`),
+     floored at 1 µΩ. The floor only matters below VIN ≈ 5 mV, where the
+     table gives less than 1 µΩ.
+   - `H1` loses its 0 V ammeter. Its two nodes are merged (a 0 V source is
+     a short), and its 1 Ω transresistance output `I_REVERSE` is computed
+     from the same branch current (VOUT side to VIN through `RVAR`).
+
+   The I-V is the same and nothing else changes. Input sha256 `b487750f…`
+   (the file at `6854d25`, identical at `dc96515`). Output sha256
+   `061285e8…` (the input plus a local-only header and the two
+   replacements). The replacement lines are breadboard.dev's own text, in
+   `scripts/dms_s1.py`.
+3. **What `make dms-s1` measures** (18 gates, all pass; `out/dms-s1/summary.json`).
+
+   **The deck.** The suite's own `led_rail_sequence` deck, built by its
+   functions at `6854d25`, with the power path replaced by each plan §2
+   bench: supply, series R, 50 mA, tracking +3V3. It runs two on/off
+   cycles of firmware.md §6.4 to 120 ms:
+   - LED_PWR_EN high at 0.5 ms;
+   - P0.06 high from 10.5 to 15.5 ms;
+   - LED_PWR_EN low at 15.6 ms;
+   - the same again from 50.6 ms.
+
+   **How it runs.** The control edges are 100 ns digital glue through
+   `engines/analog-ngspice/examples/deck_run.rs`: lattice 10 µs, TMAX
+   10 µs, grants of 1 ms, and every edge delivered through
+   `Engine::apply_input_trace`.
+
+   | Gate (each bench) | nominal | cold |
+   | --- | --- | --- |
+   | 120 ms at `phase0` (solver points) | 19 689 | 19 967 |
+   | Grants of 10 µs, 1 ms and 10 ms: samples byte-identical | yes | yes |
+   | VLED at the check instants (each P0.06 rise, each QOD end) vs the suite's `suite_fallback` run (its view, `tran 20u`), ≤ 1 mV | 0.0003 mV | 0.0004 mV |
+   | LSW-2 time (VLED < 10 % after LED_PWR_EN falls) vs the same run, ≤ 10 µs | 0.026 µs (23.8659 ms) | 0.025 µs (24.0641 ms) |
+   | VLED at every 10 µs vs the converged `suite_fallback` run (its view, TMAX 1 µs), ≤ 1 mV | 0.52 mV | 0.59 mV |
+   | The fix changes no result: converged runs (TMAX 1 µs) of the fixed view at `phase0` and of the suite's view at `suite_fallback`, ≤ 0.1 mV | 0.068 mV | 0.038 mV |
+
+   The suite's two E1 corners (bat3.0 −10 °C, bat4.2 25 °C, its own
+   battery network) also run 120 ms. VLED at 10.5 ms and 50.6 ms is
+   2.971511 / 0.1043265 V and 4.184020 / 0.1428753 V. M0's `results.json`
+   has 2.971511 / 0.1043262 V and 4.18402 / 0.1428747 V.
+
+   **The view's own suite vectors (reported here; M5 qualifies them).**
+   U2 QOD at bat3.0, bat4.2 and usb5.0, and Table 7.6 at 3.6 V and 5 V. The
+   QOD deck at reltol 1e-5 also failed before (Context 3). They now run at
+   `phase0` through the engine and reproduce `results.json`'s t_off10, tR
+   and tON within 4 ns.
+4. **How the plan's S1 gate is applied** ("VLED within 1 mV of the suite's
+   fallback-option result"), stated so it is not a silent change. The
+   suite's `suite_fallback` run is not a 1 mV reference over the whole
+   waveform:
+   - On the turn-on ramp's knee it moves by up to 2.4 mV when the PWL edge
+     times change by about one ulp (the same deck with times written in
+     seconds or in `e-15` units).
+   - Its TMAX-20 µs and TMAX-10 µs runs are 1.3–5.5 mV and 0.5–1.8 mV from
+     the converged solution there (both benches; summary.json
+     `max_dVLED_mV`). The engine's distance to the TMAX-10 µs run is
+     reported: 0.52 mV nominal, 1.19 mV cold.
+
+   So the 1 mV is gated two ways:
+   - **At the instants the suite measures**, against the suite's run as the
+     suite runs it.
+   - **Over the whole waveform**, against the converged run of the suite's
+     own view at the suite's fallback option set.
+
+   Both are at least as strict as the plan's wording intends. Neither one
+   loosens a tolerance.
+5. **Consequences.**
+   - D6 "Gate (S1/M5)": the S1 half holds for E1. M5 migrates the fixed
+     view as `ti/tps22917`'s `lsw` view (local-only), with the deviation in
+     item 2. Its D9 rule 1 comparison ("results within tolerance" for a
+     numerics fix) is item 3's view-neutrality row. `bb pkg test` (D6,
+     Amendment 1 item 2) runs the qualification itself.
+   - The R1 fallback (a datasheet-fitted view *because* no fix works) is
+     not needed. M5b stays required by approver decision A3 (licensing),
+     with its gate unchanged. Its comparison with the vendor-derived view
+     (10 mV / 1 ms on the E1 checks) can now run both views through the
+     engine at `phase0`, locally.
+   - The suite's other TPS22917 files (`oled_boost__`, `power_integrity__`,
+     `sleep_current__`) carry the same `RVAR`/`H1` blocks, so they need the
+     same fix when a scenario migrates them (M8 and later).
+   - **A rule for view authors** (AGENTS.md, Known bad ideas): no
+     branch-current unknown in series with a path of a few milliohms or
+     less in a view qualified at `phase0`. That covers 0 V ammeters, CCVS
+     and CCCS sense sources, and V-type B or E sources. Use a B conductance
+     instead, and compute a sensed current from node voltages.
+6. **Cost.** Plan §8 has the measured table (`make dms-s1-cost`).
