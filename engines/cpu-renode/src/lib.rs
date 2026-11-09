@@ -524,6 +524,74 @@ except Exception as e:
     )
 }
 
+/// Environment switch for the ADR-004 G1 baseline: with
+/// `BB_RENODE_STOCK_RUNTIME=1` the engine starts Renode with the stock .NET
+/// runtime settings and the 100 ms connect poll it used before ADR-004
+/// Part A. A measurement knob; it never changes results.
+#[doc(hidden)]
+pub const STOCK_RUNTIME_ENV: &str = "BB_RENODE_STOCK_RUNTIME";
+
+fn stock_runtime() -> bool {
+    std::env::var(STOCK_RUNTIME_ENV).is_ok_and(|v| v == "1")
+}
+
+/// How long the engine sleeps between External Control connect attempts
+/// (ADR-004 A2: 5 ms; the stock baseline: 100 ms). Wall clock only.
+fn connect_poll() -> Duration {
+    Duration::from_millis(if stock_runtime() { 100 } else { 5 })
+}
+
+/// A [`Command`] for the `renode` launcher with ADR-004 Part A applied and
+/// kill-on-parent-death set.
+///
+/// - `DOTNET_TieredPGO=0` (A1), for this child only: .NET 8's tier-0
+///   instrumentation is pure startup cost for Renode, whose hot loop is
+///   native tlib code. Codegen tiers never reach results (ADR-004,
+///   "Determinism argument" 4). Not set with [`STOCK_RUNTIME_ENV`].
+/// - The child gets `SIGKILL` when the thread that spawned it exits
+///   (`PR_SET_PDEATHSIG`), so a killed `bb` or pool never leaves a Renode
+///   behind (ADR-004 approver decision 7). The spawning thread must
+///   therefore live as long as the process is used: `bb`'s main thread, a
+///   test's thread, a pool slot's thread.
+pub fn renode_command(renode: &Path) -> Command {
+    let mut c = Command::new(renode);
+    if !stock_runtime() {
+        c.env("DOTNET_TieredPGO", "0");
+    }
+    die_with_parent(&mut c);
+    c
+}
+
+#[cfg(target_os = "linux")]
+fn die_with_parent(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    extern "C" {
+        fn prctl(option: std::os::raw::c_int, ...) -> std::os::raw::c_int;
+        fn getppid() -> std::os::raw::c_int;
+    }
+    const PR_SET_PDEATHSIG: std::os::raw::c_int = 1;
+    const SIGKILL: std::os::raw::c_ulong = 9;
+    const ESRCH: i32 = 3;
+    let parent = std::process::id() as std::os::raw::c_int;
+    // SAFETY: the closure runs in the forked child before exec and only
+    // makes two async-signal-safe system calls; it does not allocate.
+    unsafe {
+        cmd.pre_exec(move || {
+            if prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // The parent may have died between fork and prctl.
+            if getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(ESRCH));
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn die_with_parent(_cmd: &mut Command) {}
+
 /// Locate the `renode` launcher: `$BB_RENODE`, then `renode` on `PATH`, then
 /// `~/.local/bin/renode` (where `make setup` installs it).
 pub fn find_renode() -> Option<PathBuf> {
@@ -777,7 +845,7 @@ impl RenodeEngine {
         let log_path = workdir.join("renode.log");
         let log = std::fs::File::create(&log_path)?;
 
-        let child = Command::new(&cfg.renode)
+        let child = renode_command(&cfg.renode)
             .args(["--disable-xwt", "--plain", "--port", "-1"])
             .arg(&script_path)
             .current_dir(&workdir)
@@ -820,12 +888,10 @@ impl RenodeEngine {
                 // with many engines starting at once (ADR-003 Amendment 3).
                 Ok(s) if s.local_addr().ok() == s.peer_addr().ok() && Instant::now() < deadline => {
                     drop(s);
-                    std::thread::sleep(Duration::from_millis(100));
+                    std::thread::sleep(connect_poll());
                 }
                 Ok(s) => break s,
-                Err(_) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(100))
-                }
+                Err(_) if Instant::now() < deadline => std::thread::sleep(connect_poll()),
                 Err(e) => {
                     return Err(fail(
                         &mut engine_child,

@@ -394,3 +394,63 @@ is weakened. A gate that turns out infeasible gets an amendment here.
    External Control port stayed in `LISTEN` after `Clear`; later leases'
    ports were released. Outputs are not affected (each lease uses a new
    port), and `--max-runs` bounds the leak. Step 3 should find the cause.
+
+## Amendments
+
+### Amendment 1: step 1 (Part A) as implemented (2026-11-08)
+
+**Status:** Accepted with step 1.
+
+- **Code.** `bb_cpu_renode::renode_command` builds every Renode `Command`:
+  `DOTNET_TieredPGO=0` (A1) on the child only, and kill on parent death
+  (`PR_SET_PDEATHSIG` = `SIGKILL` from a `pre_exec` hook, with a `getppid`
+  check for a parent that died before the call; approver decision 7). The
+  launcher is a native apphost (`file`: ELF executable), so Renode is that
+  one process and the signal reaches it. The signal fires when the
+  *thread* that spawned the child exits, so a Renode must be spawned by a
+  thread that lives as long as it is used (`bb`'s main thread, a test's
+  thread; no test moves an engine to another thread). The connect poll
+  (A2) and the self-connect retry sleep 5 ms.
+  `BB_RENODE_STOCK_RUNTIME=1` restores the stock runtime and the 100 ms
+  poll for the G1 baseline; it keeps the parent-death signal.
+- **Orphan test.** `cli/tests/orphans.rs` (`killed_bb_leaves_no_renode`,
+  in `make cargo-test`) SIGKILLs a `bb run` of the spike 1.5 s after its
+  Renode child appears and requires that child to be gone within 10 s.
+  The same procedure with the binary of `dcc9d66` leaves the Renode alive
+  (`ORPHAN alive: ... (renode) S 1650299`, then killed by hand), so the
+  test fails without the change.
+- **G1** (`make startup-perf`, `scripts/startup_perf.sh`, N = 7,
+  interleaved, medians, against `BB_RENODE_STOCK_RUNTIME=1`; outputs
+  identical in every run). Every attempt is listed:
+
+  | Attempt | Board | Stock | Part A | Cut | Load | Gate |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | 1 | spike | 2.54 s | 2.19 s | −0.350 s (13.8 %) | 2.7 | pass |
+  | 1 | feedback | 2.55 s | 2.41 s | −0.140 s (5.5 %) | 2.4–3.9 | **fail** |
+  | 2 | feedback | 2.64 s | 2.24 s | −0.400 s (15.2 %) | 1.9–2.1 | pass |
+  | 3 | spike | 2.54 s | 2.17 s | −0.370 s (14.6 %) | 3.6–9.1 | pass |
+  | 3 | feedback | 2.56 s | 2.28 s | −0.280 s (10.9 %) | 3.6–4.4 | **fail** |
+
+  Against `bb` built from `dcc9d66` (the commit before ADR-004, N = 5,
+  spike only, because make stops at the first failing board): 2.44 →
+  2.32 s, −0.120 s (4.9 %), **fail**.
+
+  The failures come from host noise, not from Part A. A run sometimes
+  takes about 1.5 s longer (3.6–4.4 s) with no memory or I/O pressure in
+  WSL (`/proc/pressure/*` at 0, 10 GB free); another agent's CPU-bound
+  job was running throughout. With N = 7 two such runs on one side
+  move the median. In the failing attempts these outliers landed on the
+  Part A side (feedback attempt 1: 4.04 s; the `dcc9d66` comparison: 4.06
+  and 3.65 s). A separate interleaved check (N = 8, spike: stock, stock
+  with an inherited `DOTNET_TieredPGO=0`, Part A) had outliers on the
+  stock side (4.36 s) and the Part A side (3.75 s) alike. Its medians
+  were 2.585 / 2.24 / 2.20 s: A1 alone gives −0.35 s, and Part A gives
+  −0.385 s (14.9 %). G1 is re-measured at step 5 (Amendment 5). It is
+  not marked as met until a full `make startup-perf` passes for both
+  boards.
+- **G3 (fresh)** passed: `make check` (150 s, load 12 during its own
+  parallel tests), `make partition`, `lattice-check`, `feedback-open`,
+  `lookahead-inert`, `lookahead-equiv`, `adc-equiv` and
+  `spike-verify-every`. Nothing under `tests/golden/` changed.
+- **G6** passed: `make lookahead-startup`, without the plugin 2.204 s,
+  with it 2.194 s (difference −0.010 s ≤ 0.3 s, N = 7, load 4.2).
