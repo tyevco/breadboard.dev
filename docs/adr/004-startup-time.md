@@ -973,3 +973,116 @@ output formats or the hashes changes.
   1.17.0's External Control server binds 0.0.0.0 (Amendment 2). A3
   (Amendment 6) still awaits the approver's review. F1–F3 are
   engine-internal and recorded here for the same review.
+
+### Amendment 8: External Control message limit, and the startup claims re-measured (2026-11-09)
+
+**Status:** Implemented. Engine-internal (`engines/cpu-renode`) plus
+gates and documentation. Nothing in `spec/`, the time-grant protocol, the
+output formats or the committed hashes changes.
+
+**Renode 1.17.0 crashes after about 524 000 messages on one External
+Control connection.** A review found that the one-cell reference of a
+longer or pin-heavy run killed Renode with `Stack overflow.` (exit -6):
+the ADC board's every-lattice-point reference (`--lookahead off
+--adc-push every`) over 1 500 ms died after 81 746 grants (700 ms, 70 000
+grants, still passed), and a flood of `SYSTEM_BUS` reads on one connection
+died after 523 874 requests. The cause, checked in the upstream v1.17.0
+source (`src/Renode/Network/ExternalControl/ExternalControlSocket.cs`,
+`RxThreadBody`): the receive loop is `while(true) { Span<byte>
+headerBuffer = stackalloc byte[Message.HeaderSize]; ... }`. A `stackalloc`
+is freed only when the method returns, so every message received leaks
+`HeaderSize` (6) bytes, 16 after alignment, of the receive thread's stack:
+8 MiB / 16 B = 524 288 messages. The count is per connection, because a
+disconnect ends the thread (`ReceiveAll` throws on a closed socket,
+`Disconnect(Unconnected)`) and `RestartConnection` starts a new one on the
+same port. ADR-005's per-channel host-port cross-check reads raised the
+ADC board's rate to about 6 messages per one-cell grant.
+
+- **Reconnect while paused** (`RenodeEngine::reconnect`, called from
+  `run_to` right before a `RUN_FOR` once the connection has carried
+  `RenodeConfig::ec_messages_per_connection` messages; default
+  `EC_MESSAGES_DEFAULT` = 100 000, environment `BB_RENODE_EC_MESSAGES`, 0
+  = never). The engine closes its socket, connects again to the same port
+  until Renode listens again (1 ms retry, the TCP self-connect guard of
+  `start`, a dead child is reported), handshakes, and fetches the machine,
+  GPIO, ADC and bus descriptors again: they belong to the connection's
+  command handlers, which Renode disposes and recreates. It does **not**
+  register the GPIO events again: `GPIOPort` adds a state-changed hook to
+  the pin that calls `parent.SendRequest`, the socket object that
+  survives the reconnect, and nothing removes it, so the first
+  connection's hooks keep reporting on the new connection (registering
+  again would report every edge twice). GPIO events received but not yet
+  taken move to the new client in order (`Client::restore_events`).
+  Nothing in the reconnect touches emulation state: Renode is paused, no
+  peripheral is accessed and no time passes, so outputs cannot depend on
+  when or whether the engine reconnects. The pool is unaffected: a lease
+  ends with `END ok` on the pool socket, not with the disconnect, and
+  `end_session` waits for the re-listen after the final disconnect as
+  before (Amendment 2).
+- **A clear error before the crash.** `Client` counts every message it
+  sends (requests and answers to Renode's event requests) and refuses a
+  request once a connection has carried `EC_MESSAGE_LIMIT` = 400 000:
+  "400000 messages sent on one connection: Renode 1.17.0's External
+  Control server leaks receive-thread stack per message and crashes after
+  about 524 000, so no more are sent". With reconnects disabled
+  (`BB_RENODE_EC_MESSAGES=0`) the 1 500 ms ADC reference now stops with
+  that error after 62 887 grants instead of crashing Renode.
+- **One request less per cross-check.** `verify_pins` fetched the bus
+  descriptor (`GET SYSTEM_BUS`) on every cross-check of a timed ADC pin when
+  the lookahead block was not loaded; it now uses the cached
+  `sysbus_id()`.
+- **Deferred:** reading the GPIO ODRs and the host port's per-channel
+  words in one multi-word `SYSTEM_BUS` read instead of one `GPIO GET_STATE`
+  per pin. With the reconnect the count of requests no longer limits a
+  run's length, and the per-pin `GET_STATE` is what cross-checks the
+  External Control GPIO path itself; it is a possible speed-up of the
+  `--verify every` and one-cell runs, not a correctness fix.
+- **Gates.**
+  - `engines/cpu-renode/src/protocol.rs`
+    `message_limit_fails_before_renode_would_crash` (the error, nothing
+    sent past the limit, event order across `restore_events`) and the
+    message count in `event_with_bit15_id_is_classified_by_type`.
+  - `engines/cpu-renode/tests/blinky.rs`
+    `reconnecting_external_control_changes_nothing`: 120 ms of one-cell
+    grants with `--verify every` and a reconnect every 500 messages (72
+    reconnects) give the golden edges, once each, and the bus works on the
+    last connection.
+  - `make ec-reconnect` (in `make test`): the ADC board's one-cell
+    reference (86 reconnects) and the feedback board's `--lookahead off`
+    run (GPIO input `SET_STATE`, 25 reconnects), each reconnecting every
+    2 000 messages, give their committed hashes (`nets.csv`, `nets.vcd`,
+    non-grant records).
+  - `make ec-long` (`scripts/ec_long.sh`; CI job `adc`): the ADC board's
+    every-lattice-point reference over 1 500 ms, which crashed after
+    81 746 grants before, finishes: 150 000 grants, 9 reconnects (every
+    100 000 messages), 122 s wall while a second long run shared the
+    host; `check_adc.py` passes (1 501 conversions, 616 edges); the
+    defaults over the same span (6 013 grants, 11 s, no `stop:ngspice`)
+    give its `nets.csv`, `nets.vcd` and non-grant records byte for byte.
+
+**The README's startup claims, re-measured.** The same review could not
+reproduce the README's "0.77–1.17 s against the stock runtime" on a
+lightly loaded host: its `make startup-perf` (load 1.2–1.4) gave cuts of
+0.580 s (spike, 1.93 → 1.35 s) and 0.660 s (feedback, 2.12 → 1.46 s), both
+passing G1. Re-run here on an idle host (load 1.1–1.2, N = 7,
+interleaved, medians, outputs identical): spike 2.06 → 1.32 s, −0.740 s
+(35.9 %), pass; feedback 2.08 → 1.39 s, −0.690 s (33.2 %), pass. The
+0.77–1.17 s of Amendment 7 came from load 2.9–3.6, where every open on
+`/mnt/c` costs more and F1 saves more. `make adc-startup` (N = 5, load
+1.1–1.3): stock F072 with the lookahead plugin 1.39 s, Breadboard's F072
+with a warm plugin cache 1.46 s (+0.070 s, pass), cold 2.68 s (+1.220 s,
+pass). So on an idle host fresh startup is about a third below the cost
+table's spike and feedback figures (2.04 s and 2.22 s, measured at load
+2.3–6.6), and the ADC board starts about 0.1–0.3 s slower than the spike,
+not faster as the table's rows (measured at different loads) suggest.
+The README now states the cut as 0.58–1.17 s with the load of each figure
+and adds the idle-host startup figures under the table. The table itself
+was not re-measured (`make cost-table` is a reporting target, about 25
+minutes; its rows stay labelled with the load they were measured at).
+
+**Gates of this amendment** (all rc = 0, with the committed hashes; load
+0.8–5.5): `make check` (fmt, clippy, `make test` on the pool with the new
+`ec-reconnect`: 46 leases, 46 kept, 0 leaked listeners; 3 min 54 s),
+`make partition`, `make lookahead-equiv`, `make adc-equiv`, `make
+adc-model`, `make ec-long`; `make startup-perf` and `make adc-startup` as
+above. Nothing under `tests/golden` changed.

@@ -216,6 +216,15 @@ differ from the fresh ones (for example feedback-open defaults 0.36 s,
 adc defaults 6.60 s) because the host's speed drifted, so compare within
 a row and between the two startup columns.
 
+The fresh-startup column follows the host's load. On an idle host (load
+1.1–1.2, ADR-004 Amendment 8; `make startup-perf`, `make adc-startup`,
+N = 7 and 5, medians) fresh startup was 1.32 s for the spike, 1.39 s for
+the feedback board and 1.46 s for the ADC board, about a third below the
+spike and feedback figures in the table. The ADC board starts about
+0.1–0.3 s slower than the spike (it loads Breadboard's plugin assembly and
+the STM32F072 overlay); its lower figure in the table is an artifact of
+the busier host the spike and feedback rows were measured on.
+
 **Engine startup** is the time `bb run` waits before the first grant.
 Almost all of it is Renode's own start: .NET, Renode init and the platform
 load (ADR-004). A fresh run sets `DOTNET_TieredPGO=0` on Renode, plays
@@ -224,8 +233,11 @@ the first run for a Renode install, platform and plugin setting gathers
 it), polls its External Control server every 5 ms, and hands Renode a copy
 of the firmware in its temp workdir, read once (Renode's `LoadELF` opens
 the file about a dozen times, each costly on `/mnt/c`). Together these cut
-fresh startup by 0.77–1.17 s against the stock runtime, and by 0.95–1.09 s
-against the commit before ADR-004 (ADR-004 Part A, Amendments 6 and 7). On
+fresh startup by 0.58–1.17 s against the stock runtime (`make
+startup-perf`: 0.69–0.74 s on an idle host, 0.58–0.66 s at load 1.2–1.4,
+0.77–1.17 s at load 2.9–3.6, where `/mnt/c` is slower and the firmware
+copy saves more), and by 0.95–1.09 s against the commit before ADR-004
+(ADR-004 Part A, Amendments 6, 7 and 8). On
 a warm pool (`bb pool run -- <command>`), each run leases a pre-warmed
 Renode process instead of starting one, and startup falls to 0.08–0.39 s.
 `make test` and the gate targets run on a pool by default (`POOL=0` runs

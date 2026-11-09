@@ -118,11 +118,27 @@ impl From<io::Error> for ProtocolError {
 
 type Result<T> = std::result::Result<T, ProtocolError>;
 
+/// Messages one External Control connection may carry before a request
+/// fails with a clear error instead of crashing Renode.
+///
+/// Renode 1.17.0's server leaks stack on its receive thread for every
+/// message it receives (`ExternalControlSocket.RxThreadBody` does
+/// `stackalloc byte[Message.HeaderSize]` inside its `while(true)` loop, 16
+/// bytes each after alignment), so with the default 8 MiB thread stack it
+/// dies with `Stack overflow.` after about 524 000 messages on one
+/// connection (523 874 measured). A new connection gets a new receive
+/// thread. The engine reconnects long before this limit
+/// (`RenodeConfig::ec_messages_per_connection`, ADR-004 Amendment 8).
+pub const EC_MESSAGE_LIMIT: u64 = 400_000;
+
 /// Synchronous External Control API connection.
 pub struct Client {
     stream: TcpStream,
     next_id: u16,
     events: Vec<GpioEvent>,
+    /// Messages sent on this connection (requests and event answers): what
+    /// Renode's receive thread has received.
+    sent: u64,
 }
 
 impl Client {
@@ -135,6 +151,7 @@ impl Client {
             stream,
             next_id: 0,
             events: Vec::new(),
+            sent: 0,
         };
         c.request(CMD_CHECK_VERSION, &PROTOCOL_VERSION.to_le_bytes())?;
         Ok(c)
@@ -319,7 +336,28 @@ impl Client {
         std::mem::take(&mut self.events)
     }
 
+    /// Put `events` (taken from an earlier connection) before any received
+    /// on this one, so a reconnect loses and reorders nothing.
+    pub fn restore_events(&mut self, mut events: Vec<GpioEvent>) {
+        events.append(&mut self.events);
+        self.events = events;
+    }
+
+    /// Messages sent on this connection so far (see [`EC_MESSAGE_LIMIT`]).
+    pub fn messages_sent(&self) -> u64 {
+        self.sent
+    }
+
     fn request(&mut self, cmd: u16, data: &[u8]) -> Result<Vec<u8>> {
+        if self.sent >= EC_MESSAGE_LIMIT {
+            return Err(ProtocolError::Server(format!(
+                "{} messages sent on one connection: Renode 1.17.0's External Control \
+                 server leaks receive-thread stack per message and crashes after about \
+                 524 000, so no more are sent (the engine reconnects before this, \
+                 ADR-004 Amendment 8)",
+                self.sent
+            )));
+        }
         let id = CLIENT_INITIATED | self.next_id;
         self.next_id = (self.next_id + 1) & !CLIENT_INITIATED;
         let mut payload = Vec::with_capacity(3 + data.len());
@@ -402,6 +440,7 @@ impl Client {
         buf.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         buf.extend_from_slice(payload);
         self.stream.write_all(&buf)?;
+        self.sent += 1;
         Ok(())
     }
 
@@ -570,6 +609,46 @@ mod tests {
             vec![0xDEAD_BEEF, 42]
         );
         c.sysbus_write_u32(3, 0x2000_1000, 5).unwrap();
+        server.join().unwrap();
+        // Every message Renode's receive thread received is counted:
+        // CHECK_VERSION, RUN_FOR, the event's answer, the read, the write.
+        assert_eq!(c.messages_sent(), 5);
+    }
+
+    /// ADR-004 Amendment 8: at [`EC_MESSAGE_LIMIT`] a request fails with a
+    /// clear error and sends nothing (Renode 1.17.0 would crash a little
+    /// later); events carried over a reconnect keep their order.
+    #[test]
+    fn message_limit_fails_before_renode_would_crash() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            read_frame(&mut s);
+            s.write_all(&frame(0x8000, CMD_CHECK_VERSION, TYPE_SUCCESS, &[]))
+                .unwrap();
+            // Nothing more may arrive: the next read sees the close.
+            let mut b = [0u8; 1];
+            assert_eq!(
+                s.read(&mut b).unwrap(),
+                0,
+                "a request was sent past the limit"
+            );
+        });
+        let stream = TcpStream::connect(addr).unwrap();
+        let mut c = Client::handshake(stream, Duration::from_secs(10)).unwrap();
+        c.sent = EC_MESSAGE_LIMIT;
+        let err = c.get_time().unwrap_err().to_string();
+        assert!(err.contains("524 000"), "{err}");
+        let ev = |d| GpioEvent {
+            descriptor: d,
+            time_ns: 1,
+            state: true,
+        };
+        c.events = vec![ev(3)];
+        c.restore_events(vec![ev(1), ev(2)]);
+        assert_eq!(c.take_events(), vec![ev(1), ev(2), ev(3)]);
+        c.close();
         server.join().unwrap();
     }
 }

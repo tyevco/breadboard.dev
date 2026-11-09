@@ -181,5 +181,8 @@ jobs:
       - name: ADC equivalence (Part A, Part B, open board)
         run: make adc-equiv
 
+      - name: Long one-cell reference across External Control reconnects
+        run: make ec-long
+
       - name: Renode ADC platform test
         run: make adc-renode

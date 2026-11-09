@@ -1078,3 +1078,66 @@ ran on the warm pool was run again with `POOL=0` and no `BB_RENODE_POOL`
 clippy, `make test` with `adc`, `adc-order`, `adc-stock`, `adc-model`),
 `make partition`, `make lookahead-equiv`, `make adc-equiv` and
 `make adc-determinism` (10 runs): all green, with the committed hashes.
+
+### Amendment 5: `WAIT` corrections, and the one-cell reference's message limit (2026-11-09)
+
+**Status:** Implemented. Engine-internal (`bb_stm32f0_adc.cs`, the Renode
+engine); nothing in `spec/`, the time-grant protocol or the committed
+hashes changes (`adc_board.elf` does not set `WAIT`).
+
+A review found two places where the model's `WAIT = 1` behaviour differs
+from RM0091 (Rev 9, DocID018940; the text checked in the local
+`rm0091.txt` extraction of the ST PDF). Both were reproduced on `6d80a3c`
+with host probes before the fix:
+
+- **A hardware trigger during the wait time was held.** Amendment 1
+  recorded as a choice that "a trigger that arrives while `EOC` is still
+  set is accepted and held; the chain starts (with its trigger latency)
+  when the data is read". RM0091 13.7.1, Note: "Any hardware triggers
+  which occur while a conversion is ongoing or during the wait time
+  preceding the read access are ignored." D2's `Start` bullet already
+  said so; its `WAIT` bullet ("or an accepted trigger") did not. Probe
+  (CKMODE 01, `WAIT`, `EXTSEL = TRG3`, rising, TIM3 TRGO every 99 µs, `DR`
+  read at t0 + 250 µs): before, 2 triggers accepted, 0 ignored and a
+  conversion at the `DR` read (T = t0 + 250 µs). Now `OnTrigger` counts a
+  trigger that finds `WAIT = 1` and `EOC` set as ignored, like one during
+  a conversion; the next conversion is the one of the trigger at t0 +
+  297 µs. Only a chain's own continuation (the next channel, the `CONT`
+  restart) is still held until the data is read. D2's `WAIT` bullet is
+  superseded accordingly.
+- **A software `ADSTART` during the wait time started at once and
+  overran.** RM0091 13.7.1: with `WAIT = 1` "a new conversion can start
+  only if the previous data has been treated, once the ADC_DR register
+  has been read or if the EOC bit has been cleared"; 13.1: "Wait mode:
+  prevents ADC overrun". Probe (single mode, `EXTEN = 00`, `OVRMOD = 0`,
+  second `ADSTART` with `DR` unread): before, a conversion at the write and
+  `ISR = 0x1F` (`OVR`). Now `ADSTART` with `EXTEN = 00`, `WAIT = 1` and
+  `EOC` set sets `ADSTART` and holds the start (`heldStart`, the same
+  mechanism as a chain continuation); the `DR` read or `EOC` clear that
+  releases it starts the conversion at that instant (`cpu.SyncTime()`, as
+  before), with the software-start latency of D4. `ADSTP` cancels it.
+- **Tests** (`bb_adc_test.py` registers, in `make adc-model`): "WAIT
+  single" (no conversion and no `OVR` after the second `ADSTART`,
+  `ADSTART` reads 1, the conversion at the D4 instants of the `DR` read,
+  `ADSTART` cleared at its end) and "WAIT trigger" (conversions at t0 +
+  99 and t0 + 297 µs at the D4 instants, 2 accepted, 1 ignored). Both are
+  part of the registers transcript checked for determinism. `make
+  adc-model` passes (36 s).
+
+**The one-cell reference and Renode's message limit.** The same review
+found that the every-lattice-point reference (`--lookahead off --adc-push
+every`) of a longer ADC run crashed Renode: 1.17.0's External Control
+server leaks 16 bytes of its receive thread's stack per message and dies
+after about 524 000 messages on one connection, and the reference sends
+about 6 per grant (`RUN_FOR`, the push batch, `GET_TIME`, the host-port
+reads of the cross-check). The fix is in the Renode engine and is
+recorded in ADR-004 Amendment 8: the engine reconnects every 100 000
+messages, a request past 400 000 on one connection fails with a clear
+error, and the cross-check's bus descriptor is fetched once instead of
+once per check (one request less per grant on a board without the
+lookahead plugin). `make ec-reconnect` (in `make test`) and `make
+ec-long` gate it on this board.
+
+Gates (all green with the committed hashes): `make check` (with `make
+adc-model` and `make ec-reconnect`), `make partition`, `make
+lookahead-equiv`, `make adc-equiv`, `make ec-long`.

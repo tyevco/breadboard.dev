@@ -12,7 +12,7 @@ CARGO ?= cargo
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
         adc-equiv adc-renode adc-model adc-startup adc-stock adc-order adc-determinism pooled-adc-determinism adc-stock-ref adc-open-stock-ref adc-speed \
-        cost-table cost-table-runs startup-perf \
+        cost-table cost-table-runs startup-perf ec-reconnect ec-long \
         pool-equiv pool-perf \
         pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
 
@@ -128,6 +128,7 @@ pooled-test:
 	$(MAKE) adc-order
 	$(MAKE) adc-stock
 	$(MAKE) adc-model
+	$(MAKE) ec-reconnect
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -515,6 +516,34 @@ ADC_EQUIV_OUT ?= out/adc-equiv
 pooled-adc-equiv: firmware bb
 	bash scripts/adc_equiv.sh $(BB) $(ADC_EQUIV_OUT) $(ADC_HASHES) $(ADC_OPEN_HASHES) \
 	    "$(ADC_ARGS)" -- "$(ADC_OPEN_ARGS)"
+
+# ADR-004 Amendment 8: Renode 1.17.0's External Control server crashes after
+# about 524 000 messages on one connection, so the engine reconnects every
+# BB_RENODE_EC_MESSAGES (default 100 000) while Renode is paused.
+# ec-reconnect (in `make test`): the one-cell references of examples/adc
+# (sampled ADC input, host port, GPIO outputs) and examples/feedback (GPIO
+# input SET_STATE) reconnecting every $(EC_MESSAGES) messages must give their
+# committed hashes. ec-long: the ADC board's one-cell reference over
+# $(EC_LONG_FOR) (it used to crash after 81 746 grants) must finish and equal
+# the lookahead run except grant records (scripts/ec_long.sh, about 2.5 min).
+EC_OUT      ?= out/ec-reconnect
+EC_MESSAGES ?= 2000
+EC_LONG_FOR ?= 1500ms
+EC_LONG_OUT ?= out/ec-long
+ec-reconnect: firmware bb
+	rm -rf $(EC_OUT) && mkdir -p $(EC_OUT)
+	BB_RENODE_EC_MESSAGES=$(EC_MESSAGES) $(BB) run $(ADC_ARGS) --lookahead off --adc-push every \
+	    --out $(EC_OUT)/adc > $(EC_OUT)/adc.log 2>&1 || { tail -8 $(EC_OUT)/adc.log; exit 1; }
+	BB_RENODE_EC_MESSAGES=$(EC_MESSAGES) $(BB) run $(FEEDBACK_ARGS) --lookahead off \
+	    --out $(EC_OUT)/feedback > $(EC_OUT)/feedback.log 2>&1 || { tail -8 $(EC_OUT)/feedback.log; exit 1; }
+	grep 'External Control reconnected' $(EC_OUT)/adc.log $(EC_OUT)/feedback.log
+	cd $(EC_OUT)/adc && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && grep -v ' events.jsonl$$' $(CURDIR)/$(ADC_HASHES) | sha256sum -c
+	cd $(EC_OUT)/feedback && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && grep -v ' events.jsonl$$' $(CURDIR)/$(FEEDBACK_HASHES) | sha256sum -c
+	@echo "ec-reconnect: PASS (one-cell references identical with a reconnect every $(EC_MESSAGES) messages)"
+ec-long: firmware bb
+	bash scripts/ec_long.sh $(BB) $(EC_LONG_OUT) -- $(subst --for $(ADC_FOR),--for $(EC_LONG_FOR),$(ADC_ARGS))
 
 # ADR-005 test plan 1-3: Renode-only tests of Breadboard's STM32F072 ADC
 # model and BbStm32Timer TRGO (examples/adc/bb_adc_test.py: pwm, trgo,

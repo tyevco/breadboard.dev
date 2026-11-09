@@ -273,20 +273,16 @@ namespace Antmicro.Renode.Peripherals.Analog
             {
                 return;
             }
-            if(busy || holding)
+            if(busy || holding || (Wait && (isr & IsrEoc) != 0))
             {
-                // RM0091 13.5: triggers during a conversion are ignored.
+                // RM0091 13.5: triggers during a conversion are ignored;
+                // 13.7.1 (Note): with WAIT = 1, so are triggers during the
+                // wait time before the data is read (EOC still set). A
+                // trigger is never held for later (ADR-005 Amendment 5).
                 Stats.TriggersIgnored++;
                 return;
             }
             Stats.TriggersAccepted++;
-            if(Wait && (isr & IsrEoc) != 0)
-            {
-                // RM0091 13.7.1: the conversion waits until the data is read.
-                holding = true;
-                heldStart = () => StartChain(Now());
-                return;
-            }
             StartChain(now);
         }
 
@@ -404,7 +400,18 @@ namespace Antmicro.Renode.Peripherals.Analog
                     {
                         // Software trigger: at the instruction's time.
                         SyncCpu();
-                        StartChain(Now());
+                        if(Wait && (isr & IsrEoc) != 0)
+                        {
+                            // RM0091 13.7.1: with WAIT = 1 a new conversion
+                            // starts only once the previous data is treated
+                            // (DR read or EOC cleared), so no overrun.
+                            holding = true;
+                            heldStart = () => StartChain(Now());
+                        }
+                        else
+                        {
+                            StartChain(Now());
+                        }
                     }
                 }
             }

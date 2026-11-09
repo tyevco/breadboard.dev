@@ -17,7 +17,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect`, run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -42,6 +42,8 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make adc-speed` | ADR-005 step 6 speed gates (`scripts/perf_ab.sh`, interleaved, N = `PERF_N`, medians): `examples/adc` on the model takes at most 2 000 grants per 300 ms and at least 3× less simulation than the ADR-003 default (`--adc-model stock`) in the same run. Run it on an idle host |
 | `make adc-startup` | ADR-005 D6 startup gate (`scripts/plugin_startup.sh`, fresh Renode, interleaved, N = `ADC_STARTUP_N`, medians): the ADC board's engine startup on Breadboard's STM32F072 with a warm plugin cache within 0.3 s of the stock STM32F072 with the lookahead plugin, and a cold start (the plugin assembly compiled) within 3 s of a warm one. Run it on an idle host |
 | `make adc-renode` | The Renode-only test of the stock ADC model of ADR-003 Amendment 5 (`make -C examples/adc test`, about 15 s; CI job `adc`) |
+| `make ec-reconnect` | ADR-004 Amendment 8: the one-cell references of `examples/adc` (`--lookahead off --adc-push every`) and `examples/feedback` (`--lookahead off`), with the Renode engine replacing its External Control connection every 2 000 messages (`EC_MESSAGES`, passed as `BB_RENODE_EC_MESSAGES`), must give their committed hashes (about 40 s; in `make test`) |
+| `make ec-long` | ADR-004 Amendment 8 long one-cell gate (`scripts/ec_long.sh`, about 2.5 min): the ADC board's every-lattice-point reference over 1 500 ms (`EC_LONG_FOR`; Renode used to crash after 81 746 grants) must finish, reconnect at least once, pass `check_adc.py` and equal the lookahead run except grant records (CI job `adc`) |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
 | `make startup-perf` | ADR-004 G1: fresh `bb run` engine startup of the spike and the feedback board at least 12 % and 0.3 s below `BB_RENODE_STOCK_RUNTIME=1` (the stock .NET settings, no JIT profile and the 100 ms connect poll), interleaved, N = 7 (`STARTUP_N`), medians, outputs identical; `STARTUP_BASE=<bb>` compares against another binary. Run it on an idle host |
 | `make pool-equiv` | ADR-004 G4: one pool process serves the spike (default, 1 ms, 500 ms), feedback (on, off, plugin never, polling firmware), adc (on, off) and adc-open twice, in alternating order; every pooled run must be leased and byte-identical to its fresh run and to the committed hashes (`scripts/pool_equiv.sh`) |
@@ -195,6 +197,17 @@ feedback board).
   `nets.csv` alone.** Compare `nets.csv`, `nets.vcd` and the non-grant
   records (`grep -v '"type":"grant"'`); grant records differ by design
   between partitions and lookahead settings.
+- **Sending more than about 500 000 messages on one External Control
+  connection.** Renode 1.17.0's server leaks 16 bytes of its receive
+  thread's stack per message received (`stackalloc` inside the
+  `RxThreadBody` loop) and dies with `Stack overflow.` after about 524 000
+  (8 MiB stack). The Renode engine replaces its connection every 100 000
+  messages while Renode is paused (`RenodeConfig::ec_messages_per_connection`,
+  `BB_RENODE_EC_MESSAGES`), and `Client` refuses a request past 400 000
+  (`protocol::EC_MESSAGE_LIMIT`). A new client of the API (a test, a
+  script) that sends many requests must reconnect too. A reconnect must not
+  register the GPIO events again: the hooks of the first connection stay
+  on the pins and would report every edge twice (ADR-004 Amendment 8).
 - **Sending `Clear` to a Renode right after its External Control client
   disconnected.** Renode 1.17.0 restarts the server then, and a `Clear`
   that races the restart leaks the listener or crashes Renode (ADR-004

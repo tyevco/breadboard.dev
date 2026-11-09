@@ -542,6 +542,49 @@ fn verify_modes_do_not_change_results() {
     assert_eq!(got, GOLDEN_10US[..2]);
 }
 
+/// ADR-004 Amendment 8: Renode 1.17.0's External Control server crashes
+/// after about 524 000 messages on one connection, so the engine replaces
+/// the connection while Renode is paused. Reconnecting every 500 messages
+/// (about 70 times in 120 ms of one-cell grants with a cross-check after
+/// each) must change nothing: the same edges, at the golden times, the GPIO
+/// hooks of the first connection still reporting (once each), the bus and
+/// GPIO descriptors fetched again.
+#[test]
+fn reconnecting_external_control_changes_nothing() {
+    let Some(mut cfg) = setup() else { return };
+    cfg.verify = Verify::Every;
+    cfg.ec_messages_per_connection = 500;
+    let mut e = RenodeEngine::start(&cfg).expect("start renode");
+    let mut now = Time::ZERO;
+    let mut edges = Vec::new();
+    while now < Time::from_ms(120) {
+        e.next_safe_time(now);
+        now = now + L;
+        e.advance_to(now).unwrap();
+        for tr in e.read_output_trace().unwrap().unwrap() {
+            edges.push((tr.t.as_fs(), tr.signal.level()));
+        }
+        assert!(
+            e.ec_messages_sent() <= 600,
+            "{} messages",
+            e.ec_messages_sent()
+        );
+    }
+    // A SYSTEM_BUS read on the latest connection (SYST_RVR).
+    assert_eq!(e.sysbus_read_u32s(0xE000_E014, 1).unwrap(), vec![3_599_999]);
+    e.end_of_run().unwrap();
+    let n = e.ec_reconnects();
+    eprintln!("{n} reconnects, {} verifications", e.verifications());
+    assert!(n >= 50, "only {n} reconnects");
+    assert_eq!(
+        edges,
+        vec![
+            (GOLDEN_10US[0], Some(Level::High)),
+            (GOLDEN_10US[1], Some(Level::Low)),
+        ]
+    );
+}
+
 /// The SYSTEM_BUS helpers (ADR-003 D1.3, for Part B) against real Renode:
 /// read the SysTick reload value the firmware programmed, and write then
 /// read back a word of SRAM.

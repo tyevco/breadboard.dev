@@ -508,6 +508,31 @@ pub struct RenodeConfig {
     /// process from it when one matches and is idle, else start Renode
     /// fresh. Never changes results. Default: [`pool::POOL_ENV`].
     pub pool: Option<PathBuf>,
+    /// Messages after which the engine replaces its External Control
+    /// connection, between two `RUN_FOR`s while Renode is paused (Renode
+    /// 1.17.0 crashes after about 524 000 on one connection, see
+    /// [`protocol::EC_MESSAGE_LIMIT`]; ADR-004 Amendment 8). 0: never (a
+    /// request then fails at the limit). Never changes results. Default:
+    /// [`EC_MESSAGES_ENV`], else [`EC_MESSAGES_DEFAULT`].
+    #[doc(hidden)]
+    pub ec_messages_per_connection: u64,
+}
+
+/// The default of [`RenodeConfig::ec_messages_per_connection`]: a quarter
+/// of Renode 1.17.0's limit, so one grant's messages never reach it.
+pub const EC_MESSAGES_DEFAULT: u64 = 100_000;
+
+/// Environment override of [`RenodeConfig::ec_messages_per_connection`]
+/// (gates force frequent reconnects with it). A test knob; never changes
+/// results.
+#[doc(hidden)]
+pub const EC_MESSAGES_ENV: &str = "BB_RENODE_EC_MESSAGES";
+
+fn ec_messages_from_env() -> u64 {
+    std::env::var(EC_MESSAGES_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(EC_MESSAGES_DEFAULT)
 }
 
 impl RenodeConfig {
@@ -529,6 +554,7 @@ impl RenodeConfig {
             lookahead: LookaheadCfg::default(),
             extra_monitor: Vec::new(),
             pool: pool::from_env(),
+            ec_messages_per_connection: ec_messages_from_env(),
         }
     }
 }
@@ -1002,6 +1028,19 @@ pub struct RenodeEngine {
     la: Lookahead,
     /// The fresh child's startup JIT profile (ADR-004 Amendment 6).
     jit: Option<JitProfile>,
+    /// What [`RenodeEngine::reconnect`] needs (ADR-004 Amendment 8).
+    ec: EcConnection,
+}
+
+/// The External Control connection's parameters, for reconnecting.
+struct EcConnection {
+    port: u16,
+    machine: String,
+    io_timeout: Duration,
+    /// [`RenodeConfig::ec_messages_per_connection`].
+    messages_per_connection: u64,
+    /// Connections replaced so far.
+    reconnects: u64,
 }
 
 /// Lookahead state of a [`RenodeEngine`].
@@ -1400,6 +1439,13 @@ impl RenodeEngine {
             carried_edges: 0,
             failed: false,
             jit,
+            ec: EcConnection {
+                port,
+                machine: cfg.machine.clone(),
+                io_timeout: cfg.io_timeout,
+                messages_per_connection: cfg.ec_messages_per_connection,
+                reconnects: 0,
+            },
             la: Lookahead {
                 cfg: cfg.lookahead.clone(),
                 startup,
@@ -1504,6 +1550,16 @@ impl RenodeEngine {
     /// Query Renode's virtual time (ns) over the API.
     pub fn query_renode_time_ns(&mut self) -> Result<u64, EngineError> {
         self.client.get_time().map_err(proto)
+    }
+
+    /// External Control connections replaced so far (ADR-004 Amendment 8).
+    pub fn ec_reconnects(&self) -> u64 {
+        self.ec.reconnects
+    }
+
+    /// Messages sent on the current External Control connection.
+    pub fn ec_messages_sent(&self) -> u64 {
+        self.client.messages_sent()
     }
 
     /// Number of `RUN_FOR` requests sent so far.
@@ -1735,6 +1791,14 @@ impl Engine for RenodeEngine {
     /// The end-of-run cross-check of [`Verify::Edges`] and [`Verify::Final`]
     /// (with [`Verify::Every`] the last advance has just been checked).
     fn end_of_run(&mut self) -> Result<(), EngineError> {
+        if self.ec.reconnects > 0 {
+            // stderr only: never part of the outputs.
+            eprintln!(
+                "{}: External Control reconnected {} times (every {} messages, ADR-004 \
+                 Amendment 8)",
+                self.name, self.ec.reconnects, self.ec.messages_per_connection
+            );
+        }
         if self.verify == Verify::Every {
             return Ok(());
         }
@@ -1761,18 +1825,18 @@ impl RenodeEngine {
     /// or, for a pin with an event carried over to the next grant (lattice
     /// rule 3), the level of its last carried event: Renode already shows it.
     fn verify_pins(&mut self) -> Result<(), EngineError> {
+        // The bus descriptor, fetched once (not once per cross-check).
+        let bus = if self.pins.iter().any(|p| p.timed) {
+            Some(self.sysbus_id()?)
+        } else {
+            None
+        };
         for (i, p) in self.pins.iter().enumerate() {
             if p.spec.direction == PinDirection::Adc && p.timed {
                 // The host port: the channel's latest timed input, and no
                 // timed input that came too late for a sample (ADR-005 D5.3).
                 let ch = u64::try_from(p.spec.index).unwrap_or(0);
-                let id = match self.sysbus {
-                    Some(id) => id,
-                    None => self
-                        .client
-                        .get_sysbus(self.machine, "sysbus")
-                        .map_err(proto)?,
-                };
+                let id = bus.expect("fetched above for a timed pin");
                 let got = self
                     .client
                     .sysbus_read_u32s(id, BB_ADC_PORT_ADDRESS + 0x100 + 4 * ch, 1)
@@ -1857,10 +1921,88 @@ impl RenodeEngine {
                 self.fault = None;
             }
         }
+        self.reconnect_if_due()?;
         self.client.run_for(ns).map_err(proto)?;
         self.run_for_calls += 1;
         self.renode_ns = to_ns;
         events.extend(self.client.take_events());
+        Ok(())
+    }
+
+    /// Replace the External Control connection once it has carried
+    /// [`RenodeConfig::ec_messages_per_connection`] messages. Called right
+    /// before a `RUN_FOR`, so Renode is paused.
+    fn reconnect_if_due(&mut self) -> Result<(), EngineError> {
+        let n = self.ec.messages_per_connection;
+        if n == 0 || self.client.messages_sent() < n {
+            return Ok(());
+        }
+        self.reconnect()
+    }
+
+    /// Close the External Control connection and open a new one while
+    /// Renode is paused (ADR-004 Amendment 8). Renode 1.17.0's server
+    /// leaks receive-thread stack per message ([`protocol::EC_MESSAGE_LIMIT`]);
+    /// a new connection gets a new receive thread.
+    ///
+    /// After the client disconnects, Renode disposes the connection's
+    /// command handlers and listens on the same port again
+    /// (`ExternalControlSocket.Disconnect(Unconnected)` →
+    /// `RestartConnection`), so the connect is retried until the server is
+    /// back. Descriptors (machine, GPIO, ADC, bus) belong to the handlers and
+    /// are fetched again. The GPIO event hooks registered on the first
+    /// connection stay on the pins and send through the socket object, so
+    /// they are not registered again (that would report every edge twice).
+    /// Nothing here touches emulation state: no time passes and no
+    /// peripheral is accessed, so results never depend on when (or whether)
+    /// the engine reconnects.
+    fn reconnect(&mut self) -> Result<(), EngineError> {
+        let pending_events = self.client.take_events();
+        self.client.close();
+        let addr = SocketAddr::from(([127, 0, 0, 1], self.ec.port));
+        let deadline = Instant::now() + self.ec.io_timeout.min(Duration::from_secs(30));
+        let stream = loop {
+            if let Host::Child(c) = &mut self.host {
+                if let Ok(Some(status)) = c.try_wait() {
+                    return Err(EngineError::Protocol(format!(
+                        "renode exited while reconnecting External Control ({status})"
+                    )));
+                }
+            }
+            match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+                // TCP self-connect while nothing listens (see `start`).
+                Ok(s) if s.local_addr().ok() == s.peer_addr().ok() && Instant::now() < deadline => {
+                    drop(s);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(s) => break s,
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(e) => {
+                    return Err(EngineError::Protocol(format!(
+                        "External Control reconnect: no server on port {} again: {e}",
+                        self.ec.port
+                    )))
+                }
+            }
+        };
+        let mut client = Client::handshake(stream, self.ec.io_timeout).map_err(proto)?;
+        let md = client.get_machine(&self.ec.machine).map_err(proto)?;
+        for p in &mut self.pins {
+            p.gpio = if p.spec.direction == PinDirection::Adc {
+                client.get_adc(md, &p.spec.gpio).map_err(proto)?
+            } else {
+                client.get_gpio(md, &p.spec.gpio).map_err(proto)?
+            };
+        }
+        if self.sysbus.is_some() {
+            self.sysbus = Some(client.get_sysbus(md, "sysbus").map_err(proto)?);
+        }
+        client.restore_events(pending_events);
+        self.machine = md;
+        self.client = client;
+        self.ec.reconnects += 1;
         Ok(())
     }
 

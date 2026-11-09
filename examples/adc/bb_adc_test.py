@@ -536,6 +536,56 @@ def group_registers(env, f):
                 f"WAIT: after the read at {t_read}: {e}")
         s.w(CR, ADSTP)
         print("  WAIT: the next conversion starts at the DR read, then waits again")
+        # WAIT, single mode, software trigger: an ADSTART while EOC is still
+        # set starts nothing (no overrun) until the data is read (RM0091
+        # 13.7.1, 13.1 "Wait mode: prevents ADC overrun"; ADR-005 Amendment 5).
+        enable(s, ckmode=1, cfgr1=1 << 14, ch=1 << 1)
+        s.run_to((s.now // L_NS + 1) * L_NS)
+        k0 = s.conversions()
+        s.w(CR, ADSTART)
+        s.run(20 * US)
+        f.check(s.conversions() - k0 == 1 and s.r(ISR) & EOC and not s.r(CR) & ADSTART,
+                f"WAIT single: first conversion: {s.conversions() - k0}, ISR {s.r(ISR):#x}")
+        s.w(CR, ADSTART)
+        s.run(20 * US)
+        f.check(s.conversions() - k0 == 1 and not s.r(ISR) & OVR and s.r(CR) & ADSTART,
+                f"WAIT single: ADSTART with EOC set gave {s.conversions() - k0 - 1} conversions, "
+                f"ISR {s.r(ISR):#x}, CR {s.r(CR):#x}")
+        t_read = s.now
+        s.r(DR)
+        s.run(20 * US)
+        e = [s.ring(k) for k in range(k0, s.conversions())]
+        f.check(len(e) == 2 and (e[1]["s"], e[1]["c"]) == instants(t_read, 1, 0, 0)
+                and not e[1]["ovr"] and not s.r(ISR) & OVR and not s.r(CR) & ADSTART,
+                f"WAIT single: after the read at {t_read}: {e}, ISR {s.r(ISR):#x}")
+        note(f"wait-single {[(x['T'], x['s'], x['c']) for x in e]}")
+        s.r(DR)
+        print("  WAIT single: an ADSTART with EOC set waits for the DR read; no overrun")
+        # WAIT with a hardware trigger: triggers during the wait time before
+        # the DR read are ignored, not held (RM0091 13.7.1 Note).
+        enable(s, ckmode=1, cfgr1=1 << 14 | 1 << 10 | 3 << 6, ch=1 << 1)
+        s.run_to((s.now // L_NS + 1) * L_NS)
+        k0 = s.conversions()
+        acc0, ign0 = s.r(PORT + 0x20), s.r(PORT + 0x24)
+        s.w(CR, ADSTART)
+        t0 = s.now
+        timer_start(s, 3, 2)            # TRGO at t0 + k * 99 us
+        s.run(250 * US)                 # triggers at 99 (converts) and 198 (EOC set) us
+        f.check(s.conversions() - k0 == 1, f"WAIT trigger: {s.conversions() - k0} conversions before the read")
+        s.r(DR)                         # at t0 + 250 us: starts nothing
+        s.run(100 * US)                 # to t0 + 350 us: the trigger at 297 us converts
+        s.w(TIM[3], 0)
+        e = [s.ring(k) for k in range(k0, s.conversions())]
+        acc = s.r(PORT + 0x20) - acc0
+        ign = s.r(PORT + 0x24) - ign0
+        want_T = [t0 + 99 * US, t0 + 297 * US]
+        f.check([x["T"] for x in e] == want_T and all(
+            (x["s"], x["c"]) == instants(x["T"], 1, 0, 0) for x in e) and (acc, ign) == (2, 1),
+            f"WAIT trigger: conversions at {[x['T'] - t0 for x in e]}, accepted {acc}, ignored {ign}")
+        s.w(CR, ADSTP)
+        s.r(DR)
+        note(f"wait-trigger {[x['T'] for x in e]} {acc} {ign}")
+        print("  WAIT trigger: a trigger before the DR read is ignored; the next one converts")
         # DISCEN with SCANDIR: one channel per ADSTART, descending.
         s.push([(s.now, 0, 100_000), (s.now, 2, 200_000), (s.now, 5, 300_000)])
         enable(s, ckmode=1, cfgr1=1 << 16 | 1 << 2, ch=0b100101)
