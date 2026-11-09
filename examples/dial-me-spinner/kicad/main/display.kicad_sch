@@ -1,0 +1,9997 @@
+(kicad_sch
+	(version 20250114)
+	(generator "eeschema")
+	(generator_version "9.0")
+	(uuid "1ed31de8-daef-5c47-978c-557b82800f0b")
+	(paper "A2")
+	(title_block
+		(title "OLED display & 13 V boost")
+		(date "2026-10-19")
+		(rev "A")
+		(company "dial-me-spinner")
+	)
+	(lib_symbols
+		(symbol "Connector_Generic_MountingPin:Conn_01x30_MountingPin"
+			(pin_names
+				(offset 1.016)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "J"
+				(at 0 38.1 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "Conn_01x30_MountingPin"
+				(at 1.27 -40.64 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Generic connectable mounting pin connector, single row, 01x30, script generated (kicad-library-utils/schlib/autogen/connector/)"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "connector"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "Connector*:*_1x??-1MP*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "Conn_01x30_MountingPin_1_1"
+				(rectangle
+					(start -1.27 36.83)
+					(end 1.27 -39.37)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(rectangle
+					(start -1.27 35.687)
+					(end 0 35.433)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 33.147)
+					(end 0 32.893)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 30.607)
+					(end 0 30.353)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 28.067)
+					(end 0 27.813)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 25.527)
+					(end 0 25.273)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 22.987)
+					(end 0 22.733)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 20.447)
+					(end 0 20.193)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 17.907)
+					(end 0 17.653)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 15.367)
+					(end 0 15.113)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 12.827)
+					(end 0 12.573)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 10.287)
+					(end 0 10.033)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 7.747)
+					(end 0 7.493)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 5.207)
+					(end 0 4.953)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 2.667)
+					(end 0 2.413)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 0.127)
+					(end 0 -0.127)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -2.413)
+					(end 0 -2.667)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -4.953)
+					(end 0 -5.207)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -7.493)
+					(end 0 -7.747)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -10.033)
+					(end 0 -10.287)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -12.573)
+					(end 0 -12.827)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -15.113)
+					(end 0 -15.367)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -17.653)
+					(end 0 -17.907)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -20.193)
+					(end 0 -20.447)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -22.733)
+					(end 0 -22.987)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -25.273)
+					(end 0 -25.527)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -27.813)
+					(end 0 -28.067)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -30.353)
+					(end 0 -30.607)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -32.893)
+					(end 0 -33.147)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -35.433)
+					(end 0 -35.687)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start -1.27 -37.973)
+					(end 0 -38.227)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy -1.016 -40.132) (xy 1.016 -40.132))
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(text "Mounting"
+					(at 0 -39.751 0)
+					(effects
+						(font
+							(size 0.381 0.381)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 35.56 0)
+					(length 3.81)
+					(name "Pin_1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 33.02 0)
+					(length 3.81)
+					(name "Pin_2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 30.48 0)
+					(length 3.81)
+					(name "Pin_3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 27.94 0)
+					(length 3.81)
+					(name "Pin_4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 25.4 0)
+					(length 3.81)
+					(name "Pin_5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 22.86 0)
+					(length 3.81)
+					(name "Pin_6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 20.32 0)
+					(length 3.81)
+					(name "Pin_7"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 17.78 0)
+					(length 3.81)
+					(name "Pin_8"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 15.24 0)
+					(length 3.81)
+					(name "Pin_9"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "9"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 12.7 0)
+					(length 3.81)
+					(name "Pin_10"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "10"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 10.16 0)
+					(length 3.81)
+					(name "Pin_11"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "11"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 7.62 0)
+					(length 3.81)
+					(name "Pin_12"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "12"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 5.08 0)
+					(length 3.81)
+					(name "Pin_13"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "13"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 2.54 0)
+					(length 3.81)
+					(name "Pin_14"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "14"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 0 0)
+					(length 3.81)
+					(name "Pin_15"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "15"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -2.54 0)
+					(length 3.81)
+					(name "Pin_16"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "16"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -5.08 0)
+					(length 3.81)
+					(name "Pin_17"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "17"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -7.62 0)
+					(length 3.81)
+					(name "Pin_18"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "18"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -10.16 0)
+					(length 3.81)
+					(name "Pin_19"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "19"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -12.7 0)
+					(length 3.81)
+					(name "Pin_20"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "20"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -15.24 0)
+					(length 3.81)
+					(name "Pin_21"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "21"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -17.78 0)
+					(length 3.81)
+					(name "Pin_22"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "22"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -20.32 0)
+					(length 3.81)
+					(name "Pin_23"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "23"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -22.86 0)
+					(length 3.81)
+					(name "Pin_24"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "24"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -25.4 0)
+					(length 3.81)
+					(name "Pin_25"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "25"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -27.94 0)
+					(length 3.81)
+					(name "Pin_26"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "26"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -30.48 0)
+					(length 3.81)
+					(name "Pin_27"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "27"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -33.02 0)
+					(length 3.81)
+					(name "Pin_28"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "28"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -35.56 0)
+					(length 3.81)
+					(name "Pin_29"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "29"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -5.08 -38.1 0)
+					(length 3.81)
+					(name "Pin_30"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "30"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -43.18 90)
+					(length 3.048)
+					(name "MountPin"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "MP"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Device:C"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0.254)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "C"
+				(at 0.635 2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Value" "C"
+				(at 0.635 -2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Footprint" ""
+				(at 0.9652 -3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Unpolarized capacitor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "cap capacitor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "C_*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "C_0_1"
+				(polyline
+					(pts (xy -2.032 0.762) (xy 2.032 0.762))
+					(stroke
+						(width 0.508)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy -2.032 -0.762) (xy 2.032 -0.762))
+					(stroke
+						(width 0.508)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "C_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 2.794)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 2.794)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Device:C_Polarized"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0.254)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "C"
+				(at 0.635 2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Value" "C_Polarized"
+				(at 0.635 -2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Footprint" ""
+				(at 0.9652 -3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Polarized capacitor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "cap capacitor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "CP_*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "C_Polarized_0_1"
+				(rectangle
+					(start -2.286 0.508)
+					(end 2.286 1.016)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy -1.778 2.286) (xy -0.762 2.286))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy -1.27 2.794) (xy -1.27 1.778))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(rectangle
+					(start 2.286 -0.508)
+					(end -2.286 -1.016)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type outline)
+					)
+				)
+			)
+			(symbol "C_Polarized_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 2.794)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 2.794)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Device:L"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 1.016)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "L"
+				(at -1.27 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "L"
+				(at 1.905 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Inductor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "inductor choke coil reactor magnetic"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "Choke_* *Coil* Inductor_* L_*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "L_0_1"
+				(arc
+					(start 0 2.54)
+					(mid 0.6323 1.905)
+					(end 0 1.27)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 0 1.27)
+					(mid 0.6323 0.635)
+					(end 0 0)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 0 0)
+					(mid 0.6323 -0.635)
+					(end 0 -1.27)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 0 -1.27)
+					(mid 0.6323 -1.905)
+					(end 0 -2.54)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "L_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Device:R"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "R"
+				(at 2.032 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "R"
+				(at 0 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at -1.778 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Resistor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "R res resistor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "R_*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "R_0_1"
+				(rectangle
+					(start -1.016 -2.54)
+					(end 1.016 2.54)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Diode:BAV99"
+			(pin_names
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "D"
+				(at 0 5.08 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "BAV99"
+				(at 0 2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" "Package_TO_SOT_SMD:SOT-23"
+				(at 0 -12.7 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" "https://assets.nexperia.com/documents/data-sheet/BAV99_SER.pdf"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "BAV99 High-speed switching diodes, SOT-23"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "diode"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "SOT?23*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "BAV99_0_1"
+				(polyline
+					(pts (xy -5.08 0) (xy 5.08 0))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "BAV99_1_1"
+				(polyline
+					(pts (xy -3.81 1.27) (xy -1.27 0) (xy -3.81 -1.27) (xy -3.81 1.27) (xy -3.81 1.27) (xy -3.81 1.27))
+					(stroke
+						(width 0.2032)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy -1.27 -1.27) (xy -1.27 1.27) (xy -1.27 1.27))
+					(stroke
+						(width 0.2032)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy 0 0) (xy 0 -2.54))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(circle
+					(center 0 0)
+					(radius 0.254)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type outline)
+					)
+				)
+				(polyline
+					(pts (xy 1.27 1.27) (xy 3.81 0) (xy 1.27 -1.27) (xy 1.27 1.27) (xy 1.27 1.27) (xy 1.27 1.27))
+					(stroke
+						(width 0.2032)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy 3.81 1.27) (xy 3.81 -1.27) (xy 3.81 -1.27))
+					(stroke
+						(width 0.2032)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(pin passive line
+					(at -7.62 0 0)
+					(length 2.54)
+					(name "K"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 7.62 0 180)
+					(length 2.54)
+					(name "A"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -5.08 90)
+					(length 2.54)
+					(name "K"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Power_Management:TPS22917DBV"
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at -6.35 6.35 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "TPS22917DBV"
+				(at 2.54 6.35 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" "Package_TO_SOT_SMD:SOT-23-6"
+				(at 0 12.7 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" "http://www.ti.com/lit/ds/symlink/tps22917.pdf"
+				(at 1.27 -17.78 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "1V to 5.5V, 2A, 80mΩ Ultra-Low Leakage Load Switch, SOT23-6"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "high-side power distribution switch"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "SOT?23*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "TPS22917DBV_0_1"
+				(rectangle
+					(start -7.62 5.08)
+					(end 7.62 -5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+			)
+			(symbol "TPS22917DBV_1_1"
+				(pin power_in line
+					(at -10.16 2.54 0)
+					(length 2.54)
+					(name "VIN"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 0 -7.62 90)
+					(length 2.54)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -10.16 -2.54 0)
+					(length 2.54)
+					(name "ON"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin output line
+					(at -10.16 0 0)
+					(length 2.54)
+					(name "CT"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin open_collector line
+					(at 10.16 -2.54 180)
+					(length 2.54)
+					(name "QOD"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 10.16 2.54 180)
+					(length 2.54)
+					(name "VOUT"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Regulator_Switching:TPS61040DBV"
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at -5.08 6.35 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Value" "TPS61040DBV"
+				(at 0 6.35 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Footprint" "Package_TO_SOT_SMD:SOT-23-5"
+				(at 2.54 -6.35 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+						(italic yes)
+					)
+					(justify left)
+				)
+			)
+			(property "Datasheet" "http://www.ti.com/lit/ds/symlink/tps61040.pdf"
+				(at -5.08 7.62 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Synchronous Boost Regulator, Adjustable Output up to 28V, 400 mA Switch Current Limit, SOT-23-5"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "Step-Up Boost DC-DC Regulator Adjustable"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "SOT?23*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "TPS61040DBV_0_1"
+				(rectangle
+					(start -5.08 5.08)
+					(end 5.08 -5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+			)
+			(symbol "TPS61040DBV_1_1"
+				(pin power_out line
+					(at 7.62 2.54 180)
+					(length 2.54)
+					(name "SW"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 0 -7.62 90)
+					(length 2.54)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at 7.62 0 180)
+					(length 2.54)
+					(name "FB"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -7.62 0 0)
+					(length 2.54)
+					(name "EN"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at -7.62 2.54 0)
+					(length 2.54)
+					(name "VIN"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "dial_spinner:B5819W_SOD123"
+			(pin_names
+				(offset 1.016)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "D"
+				(at -7.62 3.81 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Value" "B5819W_SOD123"
+				(at -7.62 -3.81 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+				)
+			)
+			(property "Footprint" "Diode_SMD:D_SOD-123"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "https://www.lcsc.com/datasheet/C8598.pdf"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "40 V 1 A Schottky rectifier, SOD-123; pin 1 = K (cathode band), pin 2 = A"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "schottky diode rectifier"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "B5819W_SOD123_0_1"
+				(rectangle
+					(start -7.62 2.54)
+					(end 7.62 -2.54)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+			)
+			(symbol "B5819W_SOD123_1_1"
+				(pin passive line
+					(at 0 5.08 270)
+					(length 2.54)
+					(name "A"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -5.08 90)
+					(length 2.54)
+					(name "K"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "power:+3V3"
+			(power global)
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "#PWR"
+				(at 0 -3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "+3V3"
+				(at 0 3.556 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Power symbol creates a global label with name \"+3V3\""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "global power"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "+3V3_0_1"
+				(polyline
+					(pts (xy -0.762 1.27) (xy 0 2.54))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy 0 2.54) (xy 0.762 1.27))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy 0 0) (xy 0 2.54))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "+3V3_1_1"
+				(pin power_in line
+					(at 0 0 90)
+					(length 0)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "power:GND"
+			(power global)
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "#PWR"
+				(at 0 -6.35 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "GND"
+				(at 0 -3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "global power"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "GND_0_1"
+				(polyline
+					(pts (xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "GND_1_1"
+				(pin power_in line
+					(at 0 0 270)
+					(length 0)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "power:PWR_FLAG"
+			(power global)
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "#FLG"
+				(at 0 1.905 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "PWR_FLAG"
+				(at 0 3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Special symbol for telling ERC where power comes from"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "flag power"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "PWR_FLAG_0_0"
+				(pin power_out line
+					(at 0 0 90)
+					(length 0)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "PWR_FLAG_0_1"
+				(polyline
+					(pts (xy 0 0) (xy 0 1.27) (xy -1.016 1.905) (xy 0 2.54) (xy 1.016 1.905) (xy 0 1.27))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "power:VCC"
+			(power global)
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "#PWR"
+				(at 0 -3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "VCC"
+				(at 0 3.556 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Power symbol creates a global label with name \"VCC\""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "global power"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "VCC_0_1"
+				(polyline
+					(pts (xy -0.762 1.27) (xy 0 2.54))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy 0 2.54) (xy 0.762 1.27))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts (xy 0 0) (xy 0 2.54))
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "VCC_1_1"
+				(pin power_in line
+					(at 0 0 90)
+					(length 0)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+	)
+	(text "OLED ZIF J20: NHD-1.5-128128G panel, 30-pin 0.5 mm FPC"
+		(exclude_from_sim no)
+		(at 15.24 20.32 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "dc5d0a75-d570-586f-8dea-8874cfd6b99c")
+	)
+	(text "Pin map from Newhaven NHD-1.5-128128G datasheet, Pin Description + Interface Selection (p.4), Wiring Diagram (p.5):                 \n  https://newhavendisplay.com/content/specs/NHD-1.5-128128G.pdf   (Orient AOC128128A0-1.50W is pin-identical)\n1 NC(GND)=GND | 2 VCC=+13V_OLED | 3 VCOMH | 4 VDDIO=+3V3 | 5 VSL | 6 NC | 7-11 D7..D3=GND\n12 D2 open (SPI) | 13 D1=SDIN | 14 D0=SCLK | 15 E/RD#=GND | 16 R/W#=GND | 17 BS0=GND | 18 BS1=GND\n19 CS# | 20 D/C# | 21 RES# | 22 IREF | 23 GPIO1, 24 GPIO0, 25 NC: open | 26 VDD (int. reg.)\n27 VCI=+3V3 | 28 VSS | 29 NC | 30 NC(GND)=GND.   BS1:BS0 = 00 -> 4-wire SPI, write-only, mode 0, <= 20 MHz.\nBottom-contact ZIF: FPC folds 180 deg behind the glass (NHD's top-contact advice is for unfolded entry).\nRES# 1M pull-down keeps the panel in reset while the MCU is in reset. Mates with the panel (not assembled).\nFPC fit: NHD W 15.5+/-0.2 / t 0.3+/-0.03 / stiffener 4+/-0.5 vs JUSHUO slot 15.60+/-0.05, recommended FPC\n  15.50+/-0.05 / t 0.30+/-0.01 / stiffener 6.0: check insertion, latch and retention with real panel samples\n  (with the 1:1 contact-side mock-up) before PCBA."
+		(exclude_from_sim no)
+		(at 15.24 24.13 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+				(italic yes)
+			)
+			(justify left top)
+		)
+		(uuid "6b847aae-90e8-5c43-acd1-a1de1967b8e8")
+	)
+	(rectangle
+		(start 12.7 17.78)
+		(end 149.86 154.94)
+		(stroke
+			(width 0.1)
+			(type dash)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "91c4d99b-c5d2-5847-8c51-382db7f9c4f4")
+	)
+	(text "Panel supply capacitors (at the ZIF pins)"
+		(exclude_from_sim no)
+		(at 157.48 20.32 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "a7135f76-405d-5483-97a9-e366b4a5fa66")
+	)
+	(text "NHD wiring diagram: VCC C5 0.1u + C6 10u (C31, C30), VCOMH C7 4.7u/25V tantalum (C32),                                                                                                \nVDDIO C3 1u (C33), VDD C4 1u (C34), VCI C1 0.1u + C2 4.7u (C36, C35).\nC39 = boost output cap on +13V_OLED: place it at D21 / U20 GND, not at the ZIF.\nNo bleeders or QOD switches on +3V3 / +13V_OLED (VCC must float when off)."
+		(exclude_from_sim no)
+		(at 157.48 24.13 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+				(italic yes)
+			)
+			(justify left top)
+		)
+		(uuid "faa174ce-e1d1-510d-ae5d-dbe320582080")
+	)
+	(rectangle
+		(start 154.94 17.78)
+		(end 341.63 71.12)
+		(stroke
+			(width 0.1)
+			(type dash)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "c4d19901-b40a-5292-a6e1-e0b1241ee01d")
+	)
+	(text "IREF and VSL networks"
+		(exclude_from_sim no)
+		(at 349.25 20.32 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "fb1f4205-d7fe-5f75-84c4-a0df7b08c045")
+	)
+	(text "IREF: R = (VCC - 6 V) / 12.5 uA = 560k at 13 V (recompute if VCC changes).\nVSL: 50 ohm 1/4 W + ~1.4 V: BAV99 as 2 series diodes (pin 1 A1, pin 3 mid NC, pin 2 K2)."
+		(exclude_from_sim no)
+		(at 349.25 24.13 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+				(italic yes)
+			)
+			(justify left top)
+		)
+		(uuid "63d65ee8-ace8-54e4-9869-d9f37a76119d")
+	)
+	(rectangle
+		(start 346.71 17.78)
+		(end 471.17 54.61)
+		(stroke
+			(width 0.1)
+			(type dash)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "aada34d8-9e9e-520d-80c5-ea79428023ea")
+	)
+	(text "Boost input: load switch VSYS -> OLED_VIN, CIN, inductor"
+		(exclude_from_sim no)
+		(at 15.24 162.56 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "73b580d2-0d3a-5119-97fd-d5de44a71392")
+	)
+	(text "OLED_VCC_EN low (also through MCU reset, R25) -> U21 off: VCC floats, boost draws 0 uA.                                                                                             \nWithout it a disabled boost still passes VSYS - Vf to VCC through L20 and D21.\nU21 TPS22917: CT 1 nF from CT to VIN (C37) -> ~4 ms ramp. Inrush is set by the TPS61040 soft start\n(it starts at its 1.5 V UVLO while U21 ramps): ~0.3 A for ~2 ms, 0.4 A peak.\nQOD tied to OLED_VIN: when off, OLED_VIN is held at ~0 V (150 R) so the boost (EN = VIN) stays off;\notherwise D21 leakage from the panel's VCI->VCC ESD path floats it up and the boost hiccups in sleep.\n(Replaces the AO3401A/2N7002 disconnect, which had no real dV/dt control - review SCH-1.)\nLAYOUT: L20 and the SW node >= 10 mm from the TMAG5273 and the magnet track."
+		(exclude_from_sim no)
+		(at 15.24 166.37 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+				(italic yes)
+			)
+			(justify left top)
+		)
+		(uuid "cf311cfa-8337-539b-9c7f-962c07ed139c")
+	)
+	(rectangle
+		(start 12.7 160.02)
+		(end 198.12 267.97)
+		(stroke
+			(width 0.1)
+			(type dash)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "fd3a5eb3-3ed3-5c85-af75-4e18bc092ac2")
+	)
+	(text "13 V boost: TPS61040, rectifier, FB divider"
+		(exclude_from_sim no)
+		(at 205.74 162.56 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "c3ca058e-2042-5157-9144-23e7fa6aa1e6")
+	)
+	(text "VOUT = 1.233 V x (1 + 499k / 52.3k) = 13.00 V (0.5 % / 0.1 % divider); CFF C40 33 pF across R26 (tune 22-100 pF).                                     \nEN tied to OLED_VIN: the input disconnect does the switching.  L 10 uH, Isat 0.72 A rated (0.92 A typ; peak need 0.49 A).\nLAYOUT: tight CIN-L-SW-GND and SW-D-COUT-GND loops; R26/R27/C40 at the FB pin, away from SW."
+		(exclude_from_sim no)
+		(at 205.74 166.37 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+				(italic yes)
+			)
+			(justify left top)
+		)
+		(uuid "8a2c0bab-3047-5d64-aefb-53c338fd9558")
+	)
+	(rectangle
+		(start 203.2 160.02)
+		(end 358.14 219.71)
+		(stroke
+			(width 0.1)
+			(type dash)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "90bd64bb-cd96-531d-a700-dde09dee93ef")
+	)
+	(symbol
+		(lib_id "Connector_Generic_MountingPin:Conn_01x30_MountingPin")
+		(at 35.56 96.52 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "703af09f-b653-59fa-aa7e-2dcd2b980d49")
+		(property "Reference" "J20"
+			(at 30.48 56.39 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right bottom)
+			)
+		)
+		(property "Value" "OLED_ZIF30"
+			(at 30.48 58.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right bottom)
+			)
+		)
+		(property "Footprint" "dial_spinner:JUSHUO_AFC01-S30FCA-00_1x30-1MP_P0.50mm_Horizontal"
+			(at 35.56 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "https://www.lcsc.com/datasheet/C262671.pdf"
+			(at 35.56 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "30-pin 0.5 mm bottom-contact flip-lock FPC connector for the NHD-1.5-128128G OLED"
+			(at 35.56 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "AFC01-S30FCA-00"
+			(at 35.56 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "JUSHUO"
+			(at 35.56 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C262671"
+			(at 35.56 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Mates_With" "NHD-1.5-128128G (Newhaven) / AOC128128A0-1.50W (Orient)"
+			(at 35.56 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Panel_Datasheet" "https://newhavendisplay.com/content/specs/NHD-1.5-128128G.pdf"
+			(at 35.56 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "8a3dfb43-57c4-5da3-894f-875d68f5353d")
+		)
+		(pin "2"
+			(uuid "ec66317a-1908-50c4-be21-c60e6977c309")
+		)
+		(pin "3"
+			(uuid "8cc0b55e-b516-57bf-b98b-586efb1ece19")
+		)
+		(pin "4"
+			(uuid "924a9efa-ea37-57c9-8719-13f0b32dba5f")
+		)
+		(pin "5"
+			(uuid "8e7d8fed-eb16-544f-89e4-78f0f792deb9")
+		)
+		(pin "6"
+			(uuid "2cecb64f-2747-57ba-9f7c-a9dbf50440ad")
+		)
+		(pin "7"
+			(uuid "9396f27d-b475-5aab-b1d0-25866b52d5ea")
+		)
+		(pin "8"
+			(uuid "118b8333-2082-581c-8a3c-e439b77b1bee")
+		)
+		(pin "9"
+			(uuid "3e7618d6-424b-5db9-a398-192e316cbd9c")
+		)
+		(pin "10"
+			(uuid "456396f5-0e5d-5dae-9df5-9340131018f7")
+		)
+		(pin "11"
+			(uuid "6a50a980-84c0-5a92-befc-957a1ed519c7")
+		)
+		(pin "12"
+			(uuid "c6dbdb97-d4e1-5244-8fff-bacdf79ce6a8")
+		)
+		(pin "13"
+			(uuid "bc5adda4-e343-5da7-ad7b-fb458f8d2f44")
+		)
+		(pin "14"
+			(uuid "9e8d734f-24cb-5fa7-adf4-1db9526d9dc7")
+		)
+		(pin "15"
+			(uuid "fcb049bc-cf85-504b-bd23-c0ea53f7386f")
+		)
+		(pin "16"
+			(uuid "fa5a8253-9c12-5215-bf7c-ca6527a34348")
+		)
+		(pin "17"
+			(uuid "bcfea434-39e1-5de2-aa68-02a091504367")
+		)
+		(pin "18"
+			(uuid "98515ec2-f394-57c9-b2a8-29ade86e19cb")
+		)
+		(pin "19"
+			(uuid "10e085a0-5877-5b16-8c23-00b1ffc631eb")
+		)
+		(pin "20"
+			(uuid "9b942c21-914b-5106-b973-86298ddc2e4b")
+		)
+		(pin "21"
+			(uuid "0daef099-537a-59e8-9937-477645be9eb3")
+		)
+		(pin "22"
+			(uuid "e471860b-015b-521a-b153-fb2a91744296")
+		)
+		(pin "23"
+			(uuid "8972eb44-9e51-5fe6-86dd-f74ae07ca066")
+		)
+		(pin "24"
+			(uuid "cfcd0466-35b5-5489-86f2-ae3e31bf8f6e")
+		)
+		(pin "25"
+			(uuid "20ea30cc-add3-56ae-bef8-3de60b1b129f")
+		)
+		(pin "26"
+			(uuid "1114278f-25d4-596b-9e05-aaf6f8d2c5a8")
+		)
+		(pin "27"
+			(uuid "1215c549-573b-50ee-b544-12e07193ac54")
+		)
+		(pin "28"
+			(uuid "79a3f6d4-fdb1-586a-9a15-d5204e23ee35")
+		)
+		(pin "29"
+			(uuid "43c66efc-2c70-5cc3-af2b-b8c3d7cb9901")
+		)
+		(pin "30"
+			(uuid "cdc74e75-bbf0-562b-9d31-0f061fce928b")
+		)
+		(pin "MP"
+			(uuid "3dd0a55f-d752-5a6d-a769-7fb2a53b6cbf")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "J20")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 60.96) (xy 27.94 60.96))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6a70fb83-f151-5e6d-a14b-a1948efc5d09")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 60.96 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "5cc7f06c-2f1d-5320-bf79-158779e4f28a")
+		(property "Reference" "#PWR04001"
+			(at 27.94 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 60.96 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "779a8c68-e1ed-57dc-adcc-ef4547c11f51")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04001")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 63.5) (xy 27.94 63.5))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "32fe60e5-c5c0-561d-8453-a149d181438d")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 27.94 63.5 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "9fb3ed55-a5f0-59ce-b2dd-ad5da8ca3624")
+		(property "Reference" "#PWR04002"
+			(at 27.94 63.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+13V_OLED"
+			(at 24.64 63.5 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 63.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 63.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 63.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "6bbcf37c-45ec-5474-ad2b-dc79d10a000f")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04002")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 66.04) (xy 27.94 66.04))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b1c05062-2545-5d3a-a88c-bb5723103428")
+	)
+	(label "OLED_VCOMH"
+		(at 27.94 66.04 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "02c192bc-beba-51c3-a884-7dd66fb64deb")
+	)
+	(wire
+		(pts (xy 30.48 68.58) (xy 27.94 68.58))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c718d083-bc13-5fe5-b9d7-b9af7b95fe8e")
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 27.94 68.58 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "23517623-594c-50e6-9ba8-220e0d13aef0")
+		(property "Reference" "#PWR04003"
+			(at 27.94 68.58 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 24.64 68.58 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 68.58 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 68.58 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 68.58 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "e2603460-e6a9-5d8a-a149-a4ecd256791f")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04003")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 71.12) (xy 27.94 71.12))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "89101a58-de1b-5d58-a199-d637bff47764")
+	)
+	(label "OLED_VSL"
+		(at 27.94 71.12 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "cf9375c0-3fea-5a55-93c1-936e2103e308")
+	)
+	(no_connect
+		(at 30.48 73.66)
+		(uuid "961666fb-f05e-5578-b863-b16e13eff088")
+	)
+	(wire
+		(pts (xy 30.48 76.2) (xy 27.94 76.2))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ea3469eb-2711-5764-ac76-031ca2eefa36")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 76.2 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "ffe298e1-b654-54bd-8018-a69ac54d6ad8")
+		(property "Reference" "#PWR04004"
+			(at 27.94 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 76.2 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "aab555c6-446a-53ed-8ae3-20ee6e3c814e")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04004")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 78.74) (xy 27.94 78.74))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9e7b0ae9-dbb8-5dec-ab9b-b5c138053620")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 78.74 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "b425b51e-1e23-5eac-b37b-f35df03bd6a5")
+		(property "Reference" "#PWR04005"
+			(at 27.94 78.74 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 78.74 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 78.74 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 78.74 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 78.74 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "026ae5eb-418d-57cd-8bda-e98c773012ee")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04005")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 81.28) (xy 27.94 81.28))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3fa53706-48b2-56a8-96f1-f3fafbe8b3a2")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 81.28 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "c6318eba-f5f2-5d41-997f-aa89995feebf")
+		(property "Reference" "#PWR04006"
+			(at 27.94 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 81.28 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "93a9ad09-acc0-51be-8947-8e8403403081")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04006")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 83.82) (xy 27.94 83.82))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "58a17537-08ed-57e3-8933-0943d6bee0c5")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 83.82 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "cf9e37f9-0f41-50ca-b623-eaffcc62f112")
+		(property "Reference" "#PWR04007"
+			(at 27.94 83.82 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 83.82 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 83.82 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 83.82 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 83.82 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "4b1601d7-ed65-568c-96e2-5b52da1412c5")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04007")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 86.36) (xy 27.94 86.36))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9eed7891-55f4-52b4-a0b0-166b1ced59f9")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 86.36 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "8bf4f800-35ba-552e-9b35-523f51da2896")
+		(property "Reference" "#PWR04008"
+			(at 27.94 86.36 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 86.36 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 86.36 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 86.36 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 86.36 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "b6880da4-b5c5-5a64-a510-2ee4e93af4ed")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04008")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(no_connect
+		(at 30.48 88.9)
+		(uuid "9c34792a-09c1-5ac3-b2f2-cbc021212b7c")
+	)
+	(wire
+		(pts (xy 30.48 91.44) (xy 27.94 91.44))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8c50f55d-a786-5bdf-b1a0-c533943a6903")
+	)
+	(global_label "OLED_MOSI"
+		(shape passive)
+		(at 27.94 91.44 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "15f7a11c-09e9-5ec2-bc48-4a6b79ccea62")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 27.94 91.44 180)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 93.98) (xy 27.94 93.98))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8ae98c4e-9c95-5697-af0b-930b0a6e9bda")
+	)
+	(global_label "OLED_SCK"
+		(shape passive)
+		(at 27.94 93.98 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "17a381c3-a0cb-5fb3-8f41-513d7401a8fd")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 27.94 93.98 180)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 96.52) (xy 27.94 96.52))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "418ccb52-8e5a-551a-957f-c105d169edaf")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 96.52 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "435e3411-4bd0-50f3-92bd-59ecaceae0a5")
+		(property "Reference" "#PWR04009"
+			(at 27.94 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 96.52 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "19300111-96b4-51db-ae4c-2a7af4d36663")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04009")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 99.06) (xy 27.94 99.06))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4bd8fe1d-2010-5d32-bc13-9ec37018311a")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 99.06 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "f92cf65b-9320-5997-80ef-9b7615f122f8")
+		(property "Reference" "#PWR04010"
+			(at 27.94 99.06 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 99.06 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 99.06 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 99.06 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 99.06 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "d362eed8-1cc8-5fb5-adac-c82e5697fa24")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04010")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 101.6) (xy 27.94 101.6))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6215e139-58ed-55cd-99f7-085efa1c3b5a")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 101.6 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "8809f567-21aa-5df8-a03c-ec25c1dfd63e")
+		(property "Reference" "#PWR04011"
+			(at 27.94 101.6 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 101.6 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 101.6 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 101.6 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 101.6 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "897565ee-517f-5108-8632-e8835eaeee6e")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04011")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 104.14) (xy 27.94 104.14))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0fe31244-0e94-5424-9d39-1df2a401fdc1")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 104.14 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "1b2545a0-1fb3-57f4-9f58-eb0e33e01414")
+		(property "Reference" "#PWR04012"
+			(at 27.94 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 104.14 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "937c9566-330d-5603-b436-d595f585694c")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04012")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 106.68) (xy 27.94 106.68))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "85631737-1dae-5c45-9a79-da770c534291")
+	)
+	(global_label "OLED_CS_N"
+		(shape passive)
+		(at 27.94 106.68 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "23f52a30-47ab-5c36-be17-2113318dfd5b")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 27.94 106.68 180)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 109.22) (xy 27.94 109.22))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "97dfb755-b924-5a0e-b74f-156dd932db7a")
+	)
+	(global_label "OLED_DC"
+		(shape passive)
+		(at 27.94 109.22 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "da2a68f7-a535-56f3-8877-d0a219abcdc3")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 27.94 109.22 180)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 111.76) (xy 27.94 111.76))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0a8a1a00-8e07-5249-b5e5-09d301590148")
+	)
+	(global_label "OLED_RES_N"
+		(shape passive)
+		(at 27.94 111.76 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "e2a1a3d3-f6c8-524c-9be2-827de965e08e")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 27.94 111.76 180)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 114.3) (xy 27.94 114.3))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b13ae873-27c5-5246-b0ed-030b100a886c")
+	)
+	(label "OLED_IREF"
+		(at 27.94 114.3 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "fdfd01b9-ddde-5ba8-b025-ed19184c945d")
+	)
+	(no_connect
+		(at 30.48 116.84)
+		(uuid "94f685c3-61ec-533a-8117-53379bc04cb1")
+	)
+	(no_connect
+		(at 30.48 119.38)
+		(uuid "417f4194-da3e-5a42-abd9-a7537ee539b4")
+	)
+	(no_connect
+		(at 30.48 121.92)
+		(uuid "f9c41436-c823-5f91-ad70-36a2e291585c")
+	)
+	(wire
+		(pts (xy 30.48 124.46) (xy 27.94 124.46))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0a61d080-3e14-56a3-ba24-dacafe7b630f")
+	)
+	(label "OLED_VDD"
+		(at 27.94 124.46 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "3679aa1b-53a9-523a-b03e-5f44b3a0f159")
+	)
+	(wire
+		(pts (xy 30.48 127) (xy 27.94 127))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5efb4d7f-0a00-5a5a-89f3-79d3f8a5c59a")
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 27.94 127 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "f7d599ac-ef58-5e30-ad0a-10f8d1fd7bc5")
+		(property "Reference" "#PWR04013"
+			(at 27.94 127 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 24.64 127 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 127 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 127 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 127 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "de06aaa5-30b4-55e4-bda2-44488084a280")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04013")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 30.48 129.54) (xy 27.94 129.54))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9cbb87c7-16dc-5e82-a925-ea7acd7b6b1b")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 129.54 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "af0a8872-6bd5-517f-bcc4-cda5edb713e2")
+		(property "Reference" "#PWR04014"
+			(at 27.94 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 129.54 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "8c0dd31f-2a4e-54b7-af76-e2e027de67a7")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04014")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(no_connect
+		(at 30.48 132.08)
+		(uuid "adb958b3-12dd-551e-acc7-560d0e1687a7")
+	)
+	(wire
+		(pts (xy 30.48 134.62) (xy 27.94 134.62))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b3725cf2-ad6c-513f-bf69-67ea6390a40d")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 27.94 134.62 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "64f278b9-be78-5a43-8551-83bd2c50afd1")
+		(property "Reference" "#PWR04015"
+			(at 27.94 134.62 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 24.64 134.62 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 27.94 134.62 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 134.62 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 134.62 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "9bb48c30-c0b4-509c-abe3-fed14e3d3d6a")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04015")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 35.56 139.7) (xy 35.56 142.24))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a697d15f-20e6-5571-9ee8-209d650c4d24")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 35.56 142.24 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "f504956a-04a6-58c6-8df4-4b971c2d5c6a")
+		(property "Reference" "#PWR04016"
+			(at 35.56 142.24 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 35.56 145.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify top)
+			)
+		)
+		(property "Footprint" ""
+			(at 35.56 142.24 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 35.56 142.24 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 35.56 142.24 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "bab7fd60-d1b9-5a6b-8ad8-a51a82b5cf59")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04016")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 63.5 55.88 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "bd30efee-ba27-5f40-9d57-1e5b47f5041e")
+		(property "Reference" "R20"
+			(at 63.5 53.264 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1M"
+			(at 63.5 58.496 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 63.5 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 63.5 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 63.5 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "0402WGF1004TCE"
+			(at 63.5 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "UNI-ROYAL"
+			(at 63.5 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C26083"
+			(at 63.5 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "07b86877-b1a9-58bc-83fd-8490555bbf29")
+		)
+		(pin "2"
+			(uuid "26a5dce6-f6c5-57e5-ab0b-4e1d1dcc1a2a")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "R20")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 59.69 55.88) (xy 57.15 55.88))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fb82d391-a4da-5712-8596-6c74018fc47b")
+	)
+	(global_label "OLED_RES_N"
+		(shape passive)
+		(at 57.15 55.88 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "a260233b-2530-522c-b307-98eade40e96d")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 57.15 55.88 180)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
+	(wire
+		(pts (xy 67.31 55.88) (xy 69.85 55.88))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "26e079b7-7e7b-5a68-b4a0-4393be4d442c")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 69.85 55.88 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "ed6d1405-929b-587a-bc67-92991bd6ca19")
+		(property "Reference" "#PWR04017"
+			(at 69.85 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 73.15 55.88 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 69.85 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 69.85 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 69.85 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "c26387af-1d17-53f0-b2da-a04f8d289f73")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04017")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:PWR_FLAG")
+		(at 81.28 58.42 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board no)
+		(dnp no)
+		(uuid "f7875d31-3dec-52e0-83f6-693ae0a8c0ab")
+		(property "Reference" "#FLG21"
+			(at 83.566 57.15 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "PWR_FLAG"
+			(at 83.566 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 81.28 58.42 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 81.28 58.42 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Special symbol for telling ERC where power comes from"
+			(at 81.28 58.42 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "aac705b3-23a6-5309-ad3e-dd92187ddc4b")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#FLG21")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 81.28 58.42) (xy 81.28 60.96))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "92cf44f4-20ed-5dba-ace4-c35cde65cc56")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 81.28 60.96 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "b2449929-801b-5220-80bb-d9261e2e3646")
+		(property "Reference" "#PWR04018"
+			(at 81.28 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+13V_OLED"
+			(at 81.28 64.26 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Footprint" ""
+			(at 81.28 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 81.28 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 81.28 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "1c09e13e-e70e-5381-a26b-dee77ab2acfd")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04018")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C_Polarized")
+		(at 177.8 43.18 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "505f9121-093b-55ab-98a3-83fe2e08a0e8")
+		(property "Reference" "C32"
+			(at 177.8 39.294 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "4.7u/25V Ta"
+			(at 177.8 47.066 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Capacitor_Tantalum_SMD:CP_EIA-3216-18_Kemet-A"
+			(at 177.8 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 177.8 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "VCOMH (FPC pin 3) tantalum, + to VCOMH"
+			(at 177.8 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "TAJA475K025RNJ"
+			(at 177.8 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "KYOCERA AVX"
+			(at 177.8 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C7189"
+			(at 177.8 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "dca05a84-2d9f-5f8c-8938-aa10d4d1a975")
+		)
+		(pin "2"
+			(uuid "b49c0385-e0e7-5260-a0fe-d96f513c2ea0")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C32")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 173.99 43.18) (xy 171.45 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "16a43af0-38c7-524a-9913-0037a42ebd91")
+	)
+	(label "OLED_VCOMH"
+		(at 171.45 43.18 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "57cad57c-2578-5ffb-933a-e6c3cd4e9d53")
+	)
+	(wire
+		(pts (xy 181.61 43.18) (xy 184.15 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e8981c4e-2374-57b7-a65d-7e2127a9e06d")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 184.15 43.18 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "caeb0817-e200-5c94-a7e8-ceff2de6feec")
+		(property "Reference" "#PWR04019"
+			(at 184.15 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 187.45 43.18 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 184.15 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 184.15 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 184.15 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "d3b6fc7f-cc9f-5275-b9ec-44bd090f7933")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04019")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 198.12 53.34 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "12114a37-3443-59a9-8dcd-71fc2fdd3270")
+		(property "Reference" "C30"
+			(at 201.422 52.07 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10u/25V"
+			(at 201.422 54.61 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 198.12 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 198.12 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "VCC (FPC pin 2) bulk"
+			(at 198.12 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "CL21A106KAYNNNE"
+			(at 198.12 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Samsung Electro-Mechanics"
+			(at 198.12 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C15850"
+			(at 198.12 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "6dc15ab0-aac5-5847-9b94-b599ba199094")
+		)
+		(pin "2"
+			(uuid "986dc752-465b-590f-859a-78f73704c7d5")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C30")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 198.12 49.53) (xy 198.12 46.99))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4686959e-e1fd-5bdb-8fb8-d32341d9af53")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 198.12 46.99 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "ed140ebe-8601-5fb0-9fea-3ddd0153fd4f")
+		(property "Reference" "#PWR04020"
+			(at 198.12 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 198.12 43.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify top)
+			)
+		)
+		(property "Footprint" ""
+			(at 198.12 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 198.12 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 198.12 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "ad57bdb0-8c74-5ab5-a75e-88fa59679cd1")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04020")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 198.12 57.15) (xy 198.12 59.69))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8cd4f6ea-8a01-50b2-9b99-39e188aaf7f7")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 198.12 59.69 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "18c7a462-7ca1-5898-a2d8-4444fda4c80e")
+		(property "Reference" "#PWR04021"
+			(at 198.12 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+13V_OLED"
+			(at 198.12 62.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Footprint" ""
+			(at 198.12 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 198.12 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 198.12 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "a791f9c1-0836-5bbb-8faa-614f136f1b03")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04021")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 215.9 43.18 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "e6d149d4-f890-5d03-9868-55d99209d859")
+		(property "Reference" "C33"
+			(at 215.9 39.548 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1u"
+			(at 215.9 46.812 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 215.9 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 215.9 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "VDDIO (FPC pin 4) decoupling"
+			(at 215.9 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "CL05A105KA5NQNC"
+			(at 215.9 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Samsung Electro-Mechanics"
+			(at 215.9 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C52923"
+			(at 215.9 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "5beb4bef-aded-5db1-802b-d6547f35d876")
+		)
+		(pin "2"
+			(uuid "2a0f095a-4dd5-5972-bd4b-5628839c7b32")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C33")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 212.09 43.18) (xy 209.55 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8c670785-bef4-5d47-95e8-41531501c4bf")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 209.55 43.18 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "476017e7-d771-5ab8-a0c5-798139b31c1f")
+		(property "Reference" "#PWR04022"
+			(at 209.55 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 206.25 43.18 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 209.55 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 209.55 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 209.55 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "ae9e5264-b7d6-5aec-aa8f-e55a4c549f89")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04022")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 219.71 43.18) (xy 222.25 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fdb59713-01db-561c-9d6d-c09dfde5c903")
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 222.25 43.18 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "34fe56bb-1d5b-5610-8919-58e6f5172d6a")
+		(property "Reference" "#PWR04023"
+			(at 222.25 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 225.55 43.18 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 222.25 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 222.25 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 222.25 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "6f13ba03-18a3-5a8c-851c-546d37340bb0")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04023")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 238.76 53.34 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "7214c664-d756-5e34-bef7-e2b75c94fa2b")
+		(property "Reference" "C31"
+			(at 242.062 52.07 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "100n/50V"
+			(at 242.062 54.61 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 238.76 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 238.76 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "VCC (FPC pin 2) HF decoupling"
+			(at 238.76 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "CL05B104KB54PNC"
+			(at 238.76 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Samsung Electro-Mechanics"
+			(at 238.76 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C307331"
+			(at 238.76 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "4836df5c-7ae6-5c7d-b82e-e40eabefa24d")
+		)
+		(pin "2"
+			(uuid "6a711479-51ba-5b09-960a-e85c9bed0907")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C31")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 238.76 49.53) (xy 238.76 46.99))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0ac8ba01-5037-54f7-8ded-694733ecfa0e")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 238.76 46.99 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "ceaab09d-6047-5c58-82dd-79069f439ba2")
+		(property "Reference" "#PWR04024"
+			(at 238.76 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 238.76 43.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify top)
+			)
+		)
+		(property "Footprint" ""
+			(at 238.76 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 238.76 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 238.76 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "38a740cf-6a1b-59ff-b98c-9aeb7db93bd1")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04024")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 238.76 57.15) (xy 238.76 59.69))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f0d549ed-4849-53ed-b834-86931c295c50")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 238.76 59.69 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "85527f10-bc73-51a5-b83a-6aa32bd4adbc")
+		(property "Reference" "#PWR04025"
+			(at 238.76 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+13V_OLED"
+			(at 238.76 62.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Footprint" ""
+			(at 238.76 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 238.76 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 238.76 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "7972b937-fd9e-5eb2-bd85-859896b46a73")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04025")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 264.16 43.18 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "df36a412-2468-5f8c-8e52-215f6fa81e62")
+		(property "Reference" "C34"
+			(at 264.16 39.548 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1u"
+			(at 264.16 46.812 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 264.16 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 264.16 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "VDD (FPC pin 26, internal regulator output)"
+			(at 264.16 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "CL05A105KA5NQNC"
+			(at 264.16 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Samsung Electro-Mechanics"
+			(at 264.16 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C52923"
+			(at 264.16 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "e5abdb3a-8b8a-5e0e-bd4b-a5adb5debc07")
+		)
+		(pin "2"
+			(uuid "b9ef6ca8-68e3-5ab7-a5c7-cc6e183bc6c5")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C34")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 260.35 43.18) (xy 257.81 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c2faf19e-31d0-5bde-851c-f2a31ffe4738")
+	)
+	(label "OLED_VDD"
+		(at 257.81 43.18 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "3b34a499-a8db-5543-9c5e-9e505e3ca248")
+	)
+	(wire
+		(pts (xy 267.97 43.18) (xy 270.51 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ffc44240-2acc-5860-8229-a06985275805")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 270.51 43.18 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "d594c22d-c9e6-5891-ba7a-6122be68c207")
+		(property "Reference" "#PWR04026"
+			(at 270.51 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 273.81 43.18 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 270.51 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 270.51 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 270.51 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "f470d6ed-0727-5aae-82f8-982e935ee052")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04026")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 281.94 53.34 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "d56a78bf-b6a6-5e22-a969-5e43f99d07e2")
+		(property "Reference" "C39"
+			(at 285.242 52.07 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "4.7u/25V"
+			(at 285.242 54.61 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 281.94 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 281.94 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Boost output capacitor (place at D21 cathode / U20 GND)"
+			(at 281.94 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "CL21A475KAQNNNE"
+			(at 281.94 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Samsung Electro-Mechanics"
+			(at 281.94 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C1779"
+			(at 281.94 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "24002af2-aea5-5da6-ab6d-f646526a700a")
+		)
+		(pin "2"
+			(uuid "4e1ccb23-9648-5252-bf88-79e93cdc7dba")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C39")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 281.94 49.53) (xy 281.94 46.99))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d6caf641-efa7-50d8-a3d0-711cf50a1847")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 281.94 46.99 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "3331e012-bcf0-5c6b-8cf6-8efb484052d0")
+		(property "Reference" "#PWR04027"
+			(at 281.94 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 281.94 43.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify top)
+			)
+		)
+		(property "Footprint" ""
+			(at 281.94 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 281.94 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 281.94 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "3a476bf6-0997-5984-9387-92a770deef45")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04027")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 281.94 57.15) (xy 281.94 59.69))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7500f853-b60f-5fef-9798-f00799b760cf")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 281.94 59.69 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "5ccf6e5e-0726-5fda-b3f8-fc1082078a6d")
+		(property "Reference" "#PWR04028"
+			(at 281.94 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+13V_OLED"
+			(at 281.94 62.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Footprint" ""
+			(at 281.94 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 281.94 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 281.94 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "91301f25-dc08-5cd4-b678-19fe642f1585")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04028")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 302.26 43.18 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "d14919de-a0f9-5f8d-9baa-7ccd1aa22ca9")
+		(property "Reference" "C35"
+			(at 302.26 39.548 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "4.7u/25V"
+			(at 302.26 46.812 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 302.26 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 302.26 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "VCI (FPC pin 27) bulk"
+			(at 302.26 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "CL21A475KAQNNNE"
+			(at 302.26 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Samsung Electro-Mechanics"
+			(at 302.26 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C1779"
+			(at 302.26 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "cbea3146-75ed-5bef-afa4-aaf5d3cbcabc")
+		)
+		(pin "2"
+			(uuid "fa271343-a22e-5b4f-993a-de758a69c85e")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C35")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 298.45 43.18) (xy 295.91 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ba8f5809-c3ec-58b8-a94f-07fe4488259b")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 295.91 43.18 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "ba101c8a-c1c4-5044-bc69-8e3f414d5bed")
+		(property "Reference" "#PWR04029"
+			(at 295.91 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 292.61 43.18 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 295.91 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 295.91 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 295.91 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "8ca6c65c-0257-5ca0-8451-5cab46ab1786")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04029")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 306.07 43.18) (xy 308.61 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1e5a2235-db0e-5e3b-abc7-7beb4320df95")
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 308.61 43.18 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "69d41cd2-578c-5c64-8414-f1729e9926f0")
+		(property "Reference" "#PWR04030"
+			(at 308.61 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 311.91 43.18 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 308.61 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 308.61 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 308.61 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "df7a4b61-1bb5-54a1-874a-81e4e7675879")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04030")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 322.58 53.34 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "627911e6-a69d-58cc-b716-baa87659e3a6")
+		(property "Reference" "C36"
+			(at 325.882 52.07 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "100n"
+			(at 325.882 54.61 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 322.58 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 322.58 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "VCI (FPC pin 27) HF decoupling"
+			(at 322.58 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 322.58 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Samsung Electro-Mechanics"
+			(at 322.58 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C1525"
+			(at 322.58 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "16fc8446-380e-5dd7-bd5c-19c7042a0dd2")
+		)
+		(pin "2"
+			(uuid "1c5270e3-f04b-5f30-9530-5993a810b769")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C36")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 322.58 49.53) (xy 322.58 46.99))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9f81c1d1-91d4-5134-aad7-acc0b9144301")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 322.58 46.99 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "18b3e304-4028-5d90-a2fe-8cb0769c566c")
+		(property "Reference" "#PWR04031"
+			(at 322.58 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 322.58 43.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify top)
+			)
+		)
+		(property "Footprint" ""
+			(at 322.58 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 322.58 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 322.58 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "fca50a13-d45a-52ee-aba5-6cd25884a35a")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04031")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 322.58 57.15) (xy 322.58 59.69))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1a735151-321e-51dd-b433-2b1844edee6b")
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 322.58 59.69 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "0879983f-b9d3-58c4-8858-d31565336b1a")
+		(property "Reference" "#PWR04032"
+			(at 322.58 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 322.58 62.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Footprint" ""
+			(at 322.58 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 322.58 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 322.58 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "98c1a7b4-809d-5f27-bd63-a86e8f075ff2")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04032")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 368.3 35.56 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "edd11a84-731b-51ff-8124-78b49ae7c726")
+		(property "Reference" "R21"
+			(at 368.3 32.944 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "560k"
+			(at 368.3 38.176 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 368.3 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 368.3 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 368.3 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "0402WGF5603TCE"
+			(at 368.3 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "UNI-ROYAL"
+			(at 368.3 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C132339"
+			(at 368.3 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "0e083fe0-d887-5f5f-a161-80551d22c2d3")
+		)
+		(pin "2"
+			(uuid "fb8fa79b-005e-51d5-a68f-72286cd20209")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "R21")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 364.49 35.56) (xy 361.95 35.56))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7f32261d-a280-5b8d-be70-ada3b70af9e8")
+	)
+	(label "OLED_IREF"
+		(at 361.95 35.56 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "f14e0598-5f11-54f4-8737-e1e31aa90a6d")
+	)
+	(wire
+		(pts (xy 372.11 35.56) (xy 374.65 35.56))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "881a929f-235d-5c2d-a9d7-4f43cd7bac3b")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 374.65 35.56 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "88569c11-c8af-5896-8bc9-93f8aeb4d353")
+		(property "Reference" "#PWR04033"
+			(at 374.65 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 377.95 35.56 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 374.65 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 374.65 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 374.65 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "9ed16c6f-3e3d-55da-96d5-303543a5601b")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04033")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 403.86 35.56 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "57f1f969-9136-55e3-aa37-a18f31b2ca73")
+		(property "Reference" "R22"
+			(at 403.86 32.944 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "51R 1/4W"
+			(at 403.86 38.176 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric"
+			(at 403.86 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 403.86 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 403.86 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "1206W4F510JT5E"
+			(at 403.86 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "UNI-ROYAL"
+			(at 403.86 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C18019"
+			(at 403.86 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "e1256098-6b6a-52bb-8575-24ff8f357637")
+		)
+		(pin "2"
+			(uuid "dab1eb62-a6ef-54ac-8dd0-b157efd61d1b")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "R22")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 400.05 35.56) (xy 397.51 35.56))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6c3b80db-e869-5105-9a3b-830d3993fb8a")
+	)
+	(label "OLED_VSL"
+		(at 397.51 35.56 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "c5f94988-d5fd-5140-b8fc-cc2fefc9e270")
+	)
+	(wire
+		(pts (xy 407.67 35.56) (xy 410.21 35.56))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f85f69c7-45aa-501b-be12-9bfeea0f3003")
+	)
+	(label "OLED_VSL_D"
+		(at 410.21 35.56 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "b0eae5e6-c9e9-5c68-ac3d-70b7ddaae368")
+	)
+	(symbol
+		(lib_id "Diode:BAV99")
+		(at 452.12 43.18 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "58e74a54-e053-5edf-8b1e-36749f03a105")
+		(property "Reference" "D20"
+			(at 444.5 38.61 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right bottom)
+			)
+		)
+		(property "Value" "BAV99"
+			(at 444.5 40.91 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right bottom)
+			)
+		)
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-23"
+			(at 452.12 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "https://assets.nexperia.com/documents/data-sheet/BAV99_SER.pdf"
+			(at 452.12 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "BAV99 High-speed switching diodes, SOT-23"
+			(at 452.12 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "BAV99,215"
+			(at 452.12 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Nexperia"
+			(at 452.12 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C2500"
+			(at 452.12 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "3796a49f-ee7f-5f91-a9f5-2d5579b1d405")
+		)
+		(pin "2"
+			(uuid "e3a48183-6208-567e-8b88-7e54b8175751")
+		)
+		(pin "3"
+			(uuid "cee4a2ff-0667-5559-98ca-518e54031bf3")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "D20")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 444.5 43.18) (xy 441.96 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7d3e2e8a-b57b-5de7-8f74-d9c146a65c90")
+	)
+	(label "OLED_VSL_D"
+		(at 441.96 43.18 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "552b697f-e4b6-55af-84d7-f73a83b69b7a")
+	)
+	(wire
+		(pts (xy 459.74 43.18) (xy 462.28 43.18))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "abc065c8-ea07-5026-9cbb-d53bd65ae30e")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 462.28 43.18 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "d8109e03-7501-5385-b5b9-f5b003fff6b1")
+		(property "Reference" "#PWR04034"
+			(at 462.28 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 465.58 43.18 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 462.28 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 462.28 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 462.28 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "e91ef870-8070-55de-bf61-252b32205ad1")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04034")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(no_connect
+		(at 452.12 48.26)
+		(uuid "0bb1620b-0c9f-553c-bd90-cbaaa0bfa47a")
+	)
+	(symbol
+		(lib_id "Power_Management:TPS22917DBV")
+		(at 43.18 200.66 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "d298b958-746e-5c17-af83-364da18633eb")
+		(property "Reference" "U21"
+			(at 33.02 192.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right bottom)
+			)
+		)
+		(property "Value" "TPS22917DBVR"
+			(at 33.02 194.58 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right bottom)
+			)
+		)
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-23-6"
+			(at 43.18 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "http://www.ti.com/lit/ds/symlink/tps22917.pdf"
+			(at 43.18 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "1V to 5.5V, 2A, 80mΩ Ultra-Low Leakage Load Switch, SOT23-6"
+			(at 43.18 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "TPS22917DBVR"
+			(at 43.18 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Texas Instruments"
+			(at 43.18 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C2681320"
+			(at 43.18 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "1d784233-0bca-51bb-a4f4-386a0f29ca44")
+		)
+		(pin "2"
+			(uuid "3caccd07-af17-5d7f-a0ac-37adcd4e7cac")
+		)
+		(pin "3"
+			(uuid "04725be7-ec3f-5fb4-85be-88ad439f44b1")
+		)
+		(pin "4"
+			(uuid "8606e0f2-9a50-5a34-828b-040b1451a8e0")
+		)
+		(pin "5"
+			(uuid "5f9ba597-c716-5e1a-8d0f-88409270bfbf")
+		)
+		(pin "6"
+			(uuid "f1e01b55-e7af-5c29-9191-d292b5130f02")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "U21")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 33.02 198.12) (xy 30.48 198.12))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2b67c094-b3e8-5d3f-857e-ee5c308b62fe")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 30.48 198.12 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "ac1def11-deca-5a7a-ad4f-a6a1a0b5ac69")
+		(property "Reference" "#PWR04035"
+			(at 30.48 198.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "VSYS"
+			(at 27.18 198.12 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 30.48 198.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 30.48 198.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 30.48 198.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "eac6dc8e-2094-525b-a222-426f675df5b7")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04035")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 43.18 208.28) (xy 43.18 210.82))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "66e02207-7c80-55e6-a8e8-12de80b16ef2")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 43.18 210.82 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "409bfe92-ce96-534e-8218-c3092881185a")
+		(property "Reference" "#PWR04036"
+			(at 43.18 210.82 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 43.18 214.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify top)
+			)
+		)
+		(property "Footprint" ""
+			(at 43.18 210.82 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 43.18 210.82 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 43.18 210.82 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "2c2fbbd4-2f53-551f-8b4b-2471b852da0c")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04036")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 33.02 203.2) (xy 30.48 203.2))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "908f13b2-d94f-5ef6-8d4b-53e390099e19")
+	)
+	(global_label "OLED_VCC_EN"
+		(shape input)
+		(at 30.48 203.2 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "f624cb91-8778-588a-be67-0d19c3587d4a")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 30.48 203.2 180)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
+	(wire
+		(pts (xy 33.02 200.66) (xy 30.48 200.66))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "847c9271-9068-59db-9008-ccab134626ab")
+	)
+	(label "OLED_LSW_CT"
+		(at 30.48 200.66 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "0099c57e-3569-5cfa-95e9-b47691a5320c")
+	)
+	(wire
+		(pts (xy 53.34 203.2) (xy 55.88 203.2))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a669fc0e-22c7-5f2d-b702-385ac5e3d38f")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 55.88 203.2 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "f346aec7-028d-556a-afb7-2f12fbb68602")
+		(property "Reference" "#PWR04037"
+			(at 55.88 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "OLED_VIN"
+			(at 59.18 203.2 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 55.88 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 55.88 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 55.88 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "1e639d74-3806-52e2-af96-165d434da70e")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04037")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 53.34 198.12) (xy 55.88 198.12))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "618ef6bf-5eff-5816-8cc7-0508e0b808d8")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 55.88 198.12 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "1a082a31-ecbe-5cbf-a510-79d815dcc50a")
+		(property "Reference" "#PWR04038"
+			(at 55.88 198.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "OLED_VIN"
+			(at 59.18 198.12 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 55.88 198.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 55.88 198.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 55.88 198.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "5633221f-68a2-5d08-aa78-28b61b743078")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04038")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 93.98 193.04 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "821325fd-5e13-52f2-ad4a-8458845d8690")
+		(property "Reference" "C37"
+			(at 93.98 189.408 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1n/50V"
+			(at 93.98 196.672 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 93.98 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 93.98 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 93.98 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "0402B102K500NT"
+			(at 93.98 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "FH"
+			(at 93.98 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C1523"
+			(at 93.98 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "3da2ae60-5e57-5cd9-81d7-38379b551cad")
+		)
+		(pin "2"
+			(uuid "c77bda6a-f61c-58f9-af72-332ef9fe91f0")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C37")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 90.17 193.04) (xy 87.63 193.04))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6074556c-4393-53bf-bb59-063c5b30949a")
+	)
+	(label "OLED_LSW_CT"
+		(at 87.63 193.04 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "7bbdfd8d-a8b2-5916-9e69-81e0e18b62ed")
+	)
+	(wire
+		(pts (xy 97.79 193.04) (xy 100.33 193.04))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "eaa0c858-b396-520c-873a-fdf3154b48fb")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 100.33 193.04 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "27cf6177-cebf-58b9-a9f0-a5d59e7639d6")
+		(property "Reference" "#PWR04039"
+			(at 100.33 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "VSYS"
+			(at 103.63 193.04 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 100.33 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 100.33 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 100.33 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "4dd5d124-01c5-574b-ba81-fae48a38efd5")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04039")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 124.46 193.04 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "3c496fe0-33a8-5d2a-bc4e-f5a09a2a9bd3")
+		(property "Reference" "C41"
+			(at 124.46 189.408 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "10u/25V"
+			(at 124.46 196.672 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+			(at 124.46 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 124.46 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "U21 VIN bypass"
+			(at 124.46 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "CL10A106MA8NRNC"
+			(at 124.46 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Samsung Electro-Mechanics"
+			(at 124.46 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C96446"
+			(at 124.46 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "25e7a029-3730-5606-bf39-bcc90b2bbb71")
+		)
+		(pin "2"
+			(uuid "9ae54a83-ce11-5ee1-aeb4-68f4241891b6")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C41")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 120.65 193.04) (xy 118.11 193.04))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "737f121d-d549-51eb-a440-f74e6b676af8")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 118.11 193.04 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "245de1e4-75ad-5b43-9253-4762fde0dabe")
+		(property "Reference" "#PWR04040"
+			(at 118.11 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "VSYS"
+			(at 114.81 193.04 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 118.11 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 118.11 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 118.11 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "5179a2a9-d66c-596d-bf51-4a04d82abf2f")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04040")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 128.27 193.04) (xy 130.81 193.04))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7ed9b26b-45c0-5771-b70a-e217a59d67e8")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 130.81 193.04 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "13abdc31-591f-517a-97a2-b4255205a329")
+		(property "Reference" "#PWR04041"
+			(at 130.81 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 134.11 193.04 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 130.81 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 130.81 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 130.81 193.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "e3ef4c86-0cdb-5e97-bc72-cb5fc28a4d40")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04041")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 144.78 203.2 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "1e200a3a-9af7-5458-b77c-5d5e900995ee")
+		(property "Reference" "C38"
+			(at 148.082 201.93 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "4.7u/25V"
+			(at 148.082 204.47 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 144.78 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 144.78 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Boost input capacitor (place at U20 VIN/GND)"
+			(at 144.78 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "CL21A475KAQNNNE"
+			(at 144.78 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Samsung Electro-Mechanics"
+			(at 144.78 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C1779"
+			(at 144.78 203.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "fa5006bc-5ac0-5689-98b6-a631c2c83906")
+		)
+		(pin "2"
+			(uuid "92654f10-5255-55d9-a339-df18f46f109d")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C38")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 144.78 199.39) (xy 144.78 196.85))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9aa0ed75-83a1-5d84-8a90-585790747de2")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 144.78 196.85 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "7d8e9409-3381-5e6f-a5a8-d5361ff2e763")
+		(property "Reference" "#PWR04042"
+			(at 144.78 196.85 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 144.78 193.55 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify top)
+			)
+		)
+		(property "Footprint" ""
+			(at 144.78 196.85 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 144.78 196.85 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 144.78 196.85 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "1d19f884-fdf4-532b-948c-ecb8f699dfaa")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04042")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 144.78 207.01) (xy 144.78 209.55))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8a48ee06-eb8b-50dc-a3be-c3745fc2799e")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 144.78 209.55 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "8be7bca6-101f-59ac-ac5b-68a4f81bf8c6")
+		(property "Reference" "#PWR04043"
+			(at 144.78 209.55 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "OLED_VIN"
+			(at 144.78 212.85 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Footprint" ""
+			(at 144.78 209.55 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 144.78 209.55 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 144.78 209.55 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "822358be-7f97-54d4-ad5e-a2576a40e506")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04043")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 35.56 231.14 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "18d71197-b303-5d64-a5b3-711339e559c8")
+		(property "Reference" "R25"
+			(at 35.56 228.524 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "100k"
+			(at 35.56 233.756 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 35.56 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 35.56 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 35.56 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "0402WGF1003TCE"
+			(at 35.56 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "UNI-ROYAL"
+			(at 35.56 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C25741"
+			(at 35.56 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "6a513fcc-f984-5251-8c67-c230818b02dc")
+		)
+		(pin "2"
+			(uuid "5472cad5-2afc-50ab-ba6c-1f3fb0b3e1f0")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "R25")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 31.75 231.14) (xy 29.21 231.14))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6cbb19e7-48d8-563a-ad1b-85f16855f6cc")
+	)
+	(global_label "OLED_VCC_EN"
+		(shape passive)
+		(at 29.21 231.14 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "0fb587a9-1be2-5900-ad5e-1a83e8afda16")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 29.21 231.14 180)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
+	(wire
+		(pts (xy 39.37 231.14) (xy 41.91 231.14))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c1631216-284f-5200-8b2f-7c184486ef2f")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 41.91 231.14 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "b976ec54-c1fe-5265-bb79-ba804a2c8e2e")
+		(property "Reference" "#PWR04044"
+			(at 41.91 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 45.21 231.14 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 41.91 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 41.91 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 41.91 231.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "daeeab87-aab3-5b4c-910a-b8be88f59f51")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04044")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:L")
+		(at 55.88 248.92 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "412b902c-d61a-52f3-bdac-154cf46ef33c")
+		(property "Reference" "L20"
+			(at 57.15 247.65 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10u"
+			(at 57.15 250.19 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Inductor_SMD:L_Sunlord_SWPA3015S"
+			(at 55.88 248.92 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 55.88 248.92 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Inductor"
+			(at 55.88 248.92 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "SWPA3015S100MT"
+			(at 55.88 248.92 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Sunlord"
+			(at 55.88 248.92 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C45403"
+			(at 55.88 248.92 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "526cc200-ecfe-5fb0-80fa-2a5365227e8b")
+		)
+		(pin "2"
+			(uuid "c3518c00-c2e5-523e-a2bd-0efce16eb9f8")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "L20")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 55.88 245.11) (xy 55.88 242.57))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "bf0e4f55-95fd-5c06-be2b-3a9c4ac75bca")
+	)
+	(label "OLED_BST_SW"
+		(at 55.88 242.57 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "8cce8428-87ed-5544-8555-76370f3012ef")
+	)
+	(wire
+		(pts (xy 55.88 252.73) (xy 55.88 255.27))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9f04d1dd-a650-524c-a662-07cb2a78a090")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 55.88 255.27 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "f2d82657-f6ce-5046-8870-18be32aac9f8")
+		(property "Reference" "#PWR04045"
+			(at 55.88 255.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "OLED_VIN"
+			(at 55.88 258.57 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Footprint" ""
+			(at 55.88 255.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 55.88 255.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 55.88 255.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "a40431e8-020c-50a8-9a16-89f97ff0de3e")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04045")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 218.44 180.34 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "8bc1fc4d-237e-5b8e-999f-cbade4ce4f9d")
+		(property "Reference" "R27"
+			(at 218.44 177.724 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "52.3k 0.1%"
+			(at 218.44 182.956 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 218.44 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 218.44 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 218.44 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "RT0402BRD0752K3L"
+			(at 218.44 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "YAGEO"
+			(at 218.44 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C852832"
+			(at 218.44 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "be154b86-ae19-5e97-89a0-7ebdec4bbe7e")
+		)
+		(pin "2"
+			(uuid "0f5545b2-a08a-5f63-96a9-3ee1d7fc3036")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "R27")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 214.63 180.34) (xy 212.09 180.34))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "687fadf0-1027-5b06-b6b0-973538519fc7")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 212.09 180.34 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "418fff09-1adf-5acd-8b60-a470f690fb36")
+		(property "Reference" "#PWR04046"
+			(at 212.09 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 208.79 180.34 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 212.09 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 212.09 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 212.09 180.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "cb3f4413-fff5-5ada-b1fe-09173f068b41")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04046")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 222.25 180.34) (xy 224.79 180.34))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1ddba005-9d50-5d74-911f-ab523f166019")
+	)
+	(label "OLED_BST_FB"
+		(at 224.79 180.34 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "c3f83a76-be56-56c8-952d-06f110646a3b")
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 246.38 200.66 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "45832dbf-b7d1-5611-997b-1e5eeee2538d")
+		(property "Reference" "R26"
+			(at 248.666 199.39 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "499k 0.5%"
+			(at 248.666 201.93 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 246.38 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 246.38 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 246.38 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "RC0402DR-07499KL"
+			(at 246.38 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "YAGEO"
+			(at 246.38 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C4167968"
+			(at 246.38 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "253f634b-78a1-5ae4-94a2-21f0b76ba0a6")
+		)
+		(pin "2"
+			(uuid "65edcfc2-ba99-533a-ba50-62dfe290e519")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "R26")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 246.38 196.85) (xy 246.38 194.31))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c1f6e783-2e5b-5a80-aa3b-5b213b3121a9")
+	)
+	(label "OLED_BST_FB"
+		(at 246.38 194.31 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "e96cd2b3-860a-5485-a66e-84778123c417")
+	)
+	(wire
+		(pts (xy 246.38 204.47) (xy 246.38 207.01))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8c05c4c3-5b2e-5ca5-8a74-5f3b10d300c6")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 246.38 207.01 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "a9aabc3e-5bbf-56b3-b2da-0400beea596c")
+		(property "Reference" "#PWR04047"
+			(at 246.38 207.01 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+13V_OLED"
+			(at 246.38 210.31 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Footprint" ""
+			(at 246.38 207.01 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 246.38 207.01 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 246.38 207.01 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "63cd2474-8e3e-5d98-850b-6c664883bf4f")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04047")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Regulator_Switching:TPS61040DBV")
+		(at 274.32 190.5 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "aca892a7-1c99-53a8-8773-06e5b640105d")
+		(property "Reference" "U20"
+			(at 266.7 182.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right bottom)
+			)
+		)
+		(property "Value" "TPS61040DBVR"
+			(at 266.7 184.42 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right bottom)
+			)
+		)
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-23-5"
+			(at 274.32 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps61040.pdf"
+			(at 274.32 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Synchronous Boost Regulator, Adjustable Output up to 28V, 400 mA Switch Current Limit, SOT-23-5"
+			(at 274.32 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "TPS61040DBVR"
+			(at 274.32 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Texas Instruments"
+			(at 274.32 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C7722"
+			(at 274.32 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "a08e348f-1acc-53d8-a646-9f8fa3c1ea71")
+		)
+		(pin "2"
+			(uuid "1a5d8bc1-8c6c-56f1-b313-86d1d682fa95")
+		)
+		(pin "3"
+			(uuid "1ba2a0b5-04dc-58d7-adb2-986e992edc2a")
+		)
+		(pin "4"
+			(uuid "fb52866d-67fd-5aa0-8576-a276cf10cf1f")
+		)
+		(pin "5"
+			(uuid "746c157c-9e48-53f6-adbd-c45d6bb0c2ca")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "U20")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 281.94 187.96) (xy 284.48 187.96))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "437999c4-14e2-52b7-8e36-671e4ef7c210")
+	)
+	(label "OLED_BST_SW"
+		(at 284.48 187.96 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "7d10fb51-b1aa-5f71-a05f-c7784fb58ae6")
+	)
+	(wire
+		(pts (xy 274.32 198.12) (xy 274.32 200.66))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c45ece5c-6656-57c4-a788-83e45f29903e")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 274.32 200.66 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "f795f51e-7242-5dc6-a8a1-5db3a9457bd0")
+		(property "Reference" "#PWR04048"
+			(at 274.32 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 274.32 203.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify top)
+			)
+		)
+		(property "Footprint" ""
+			(at 274.32 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 274.32 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 274.32 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "0f909d7f-f80a-5ce8-97c3-bb12cb0b914b")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04048")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 281.94 190.5) (xy 284.48 190.5))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6026f5bb-110d-5060-84de-ef1ed3ad7e48")
+	)
+	(label "OLED_BST_FB"
+		(at 284.48 190.5 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "67a12ed3-7e30-54dd-9925-1734edbbc115")
+	)
+	(wire
+		(pts (xy 266.7 190.5) (xy 264.16 190.5))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "70ff8768-cb75-57f3-bfe3-355e2ca7c827")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 264.16 190.5 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "d1178da2-8447-5369-9c26-9c629eadcabf")
+		(property "Reference" "#PWR04049"
+			(at 264.16 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "OLED_VIN"
+			(at 260.86 190.5 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 264.16 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 264.16 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 264.16 190.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "b215abf8-496e-50c4-ab78-9f9295ab3748")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04049")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 266.7 187.96) (xy 264.16 187.96))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e5682a7d-2806-5648-80fd-68926e815292")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 264.16 187.96 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "47efd901-5790-5e5d-bfa0-2315c2e1e583")
+		(property "Reference" "#PWR04050"
+			(at 264.16 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "OLED_VIN"
+			(at 260.86 187.96 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 264.16 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 264.16 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 264.16 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "93ed6f6d-b16d-5f4a-9cf0-e0e8ab29f0ee")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04050")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 304.8 200.66 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "746713db-125f-5ca8-a35e-0434b1db62a2")
+		(property "Reference" "C40"
+			(at 308.102 199.39 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "33p C0G"
+			(at 308.102 201.93 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 304.8 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 304.8 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 304.8 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "0402CG330J500NT"
+			(at 304.8 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "FH (Fenghua)"
+			(at 304.8 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C1562"
+			(at 304.8 200.66 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "32979c3a-c392-5eba-b6f1-a47c3eee4a83")
+		)
+		(pin "2"
+			(uuid "9b693c95-0222-5142-a429-070ef19e3902")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "C40")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 304.8 196.85) (xy 304.8 194.31))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c36504bd-96e4-59ef-a4b9-e56f5f62db76")
+	)
+	(label "OLED_BST_FB"
+		(at 304.8 194.31 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "7822e998-3bff-5ecf-8ac9-b8beef5ac6b4")
+	)
+	(wire
+		(pts (xy 304.8 204.47) (xy 304.8 207.01))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "748d175c-b612-5974-b0a7-91b2edcf00a4")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 304.8 207.01 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "87c47dd1-e0ff-5168-87ef-16b662e8ba8b")
+		(property "Reference" "#PWR04051"
+			(at 304.8 207.01 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+13V_OLED"
+			(at 304.8 210.31 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Footprint" ""
+			(at 304.8 207.01 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 304.8 207.01 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 304.8 207.01 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "a78e9a27-a76c-5fbf-8b2b-a5d0329ab0e9")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04051")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "dial_spinner:B5819W_SOD123")
+		(at 335.28 187.96 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "de20ae1d-5047-558c-831a-bfedf5a235e5")
+		(property "Reference" "D21"
+			(at 335.28 178.74 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "B5819W"
+			(at 335.28 197.18 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Diode_SMD:D_SOD-123"
+			(at 335.28 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "https://www.lcsc.com/datasheet/C8598.pdf"
+			(at 335.28 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "40 V 1 A Schottky rectifier, SOD-123; pin 1 = K (cathode band), pin 2 = A"
+			(at 335.28 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "B5819W SL"
+			(at 335.28 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer" "Jiangsu Changjing (CJ)"
+			(at 335.28 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C8598"
+			(at 335.28 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "12c536b2-bd24-57ff-937d-54f244587b6f")
+		)
+		(pin "1"
+			(uuid "657d056a-0b4a-5f84-bb2b-a9461e8e0bde")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "D21")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 330.2 187.96) (xy 327.66 187.96))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d31ece0e-52ca-59e8-9279-d1a582d1b756")
+	)
+	(label "OLED_BST_SW"
+		(at 327.66 187.96 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "2538db7b-8c62-53af-8902-35c5ed5245c9")
+	)
+	(wire
+		(pts (xy 340.36 187.96) (xy 342.9 187.96))
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3246d319-51d6-558c-9946-a10cb491c4be")
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 342.9 187.96 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "9872e8bc-8050-5cc3-8a59-bc6c4434e06e")
+		(property "Reference" "#PWR04052"
+			(at 342.9 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+13V_OLED"
+			(at 346.2 187.96 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 342.9 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 342.9 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 342.9 187.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "85f855a3-46b3-5b51-9d79-80858f463272")
+		)
+		(instances
+			(project "dial-me-spinner-main"
+				(path "/fc48ae6b-820c-5234-a46b-1ec97c7946cc/1ed31de8-daef-5c47-978c-557b82800f0b"
+					(reference "#PWR04052")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(embedded_fonts no)
+)

@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "dial_spinner")(type "KiCad")(uri "${KIPRJMOD}/lib/dial_spinner.kicad_sym")(options "")(descr ""))
+)

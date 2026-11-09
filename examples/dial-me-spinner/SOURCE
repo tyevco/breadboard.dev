@@ -1,0 +1,39 @@
+# examples/dial-me-spinner/SOURCE: where every vendored dial-me-spinner file
+# comes from (Phase 1 plan M0; approver decisions A and C, 2026-11-09).
+# Written by scripts/dms_vendor.sh; checked by scripts/dms_source_check.sh.
+#
+# repository  dial-me-spinner (the board's author's repository; local, not fetched)
+# reference   6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a
+#             branch kicad10-port, KiCad 10.0.8 ("Move the toolchain and
+#             boards to KiCad 10.0.8, with no change to the design")
+# secondary   dc96515affe3c114a7091248ae403ff3d61dc59d
+#             main, KiCad 9.0.9: only its two netlists, for the secondary
+#             import check of gate M4c (not a gate for E1)
+# method      git archive <commit> <paths> | tar -x; bytes unchanged
+# licence     vendored by approver decision A (plan Q2): distributed with
+#             breadboard.dev under its licence (Apache-2.0). dial-me-spinner
+#             itself carries no LICENSE file at either commit.
+# suite       hardware/sim at the reference commit is not vendored; it is
+#             re-run from a git archive export by scripts/dms_suite.sh, and
+#             its results are in suite/results.json
+#
+# sha256  vendored path (relative to this directory)  commit:path in dial-me-spinner
+c3791275870e72c71cbf3dd5fb92e3b491414695ac2a37427006e2863dab1b54  kicad/main/dial-me-spinner-main.net  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/dial-me-spinner-main.net
+cb2fd54809387a78a08328103c39d271a05826b059cc89699891445543574589  kicad/main/dial-me-spinner-main.kicad_pro  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/dial-me-spinner-main.kicad_pro
+6bc69d1e1bab35cbd79c8f937021b496ee5c0fbd583356365a550525cf316351  kicad/main/dial-me-spinner-main.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/dial-me-spinner-main.kicad_sch
+e3fa85122c1aa8351a5c1399eba52b31f2112138b2b3cf049b3d1ea3db4f0106  kicad/main/detent.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/detent.kicad_sch
+1d30806bcd6aba0a4549817ee0f8875161b7403ab269aefd189ab3d4062bb2d6  kicad/main/display.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/display.kicad_sch
+478107fccb8bcba80410abcbfc7aafe5c4e089dd69253f995cadb3b1b57b1f68  kicad/main/leds.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/leds.kicad_sch
+63dbefe2965ddd452131a83fb8047946818a89a06988cc23480f5058de964736  kicad/main/main_power.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/main_power.kicad_sch
+32eb044aa1d5633e553337a2083fb3a2941af7306c36a219ced3ec899c91e50d  kicad/main/mcu.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/mcu.kicad_sch
+ef66da2a194c2a9f0a8a951e79953555a6f73110c8a57a2cf3bcf18481e5f4dd  kicad/main/sensors.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/sensors.kicad_sch
+be5c9f041c3aa67c3c596344f2cd0b9f8d2eb68f8d5b231c112bf2af8f817905  kicad/main/sym-lib-table  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/sym-lib-table
+5a8b18011e08896f8183713c1c192c486512695b3c358599c4ee5e0e6e271457  kicad/main/lib/dial_spinner.kicad_sym  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/lib/dial_spinner.kicad_sym
+b41575fc22b42587b25e6bfe4f6f5757827b82a482bee519529eff35a8cb3edf  kicad/base/dial-me-spinner-base.net  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/base/dial-me-spinner-base.net
+a3705155a86a4973c96a9f6e33774186fce2817d8234d2eca283c46e6fe61066  kicad/base/dial-me-spinner-base.kicad_pro  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/base/dial-me-spinner-base.kicad_pro
+359ee7aa8ecffb770778209b71b1ebea571684eaa070a98d28f23d9c944741ba  kicad/base/dial-me-spinner-base.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/base/dial-me-spinner-base.kicad_sch
+c3362a53229e1afa24f9f4fb2c404510b6efa5a448bf06a488bf44bd10be2c6f  kicad/base/base.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/base/base.kicad_sch
+be5c9f041c3aa67c3c596344f2cd0b9f8d2eb68f8d5b231c112bf2af8f817905  kicad/base/sym-lib-table  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/base/sym-lib-table
+2e0072faa0a6ce348a76e3c519bfdac47be0bd10053d4592fb764fa2e9902d50  kicad/base/lib/dial_spinner.kicad_sym  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/base/lib/dial_spinner.kicad_sym
+aa3b76cd734133302eee854e351381dacea0a108e64c84acd28f4011e45d48bd  kicad/kicad9-dc96515/main/dial-me-spinner-main.net  dc96515affe3c114a7091248ae403ff3d61dc59d:hardware/kicad/main/dial-me-spinner-main.net
+c4aae7ba7ca96b39e4f77f2b434bc98035535569b32ff4d8596a80a1b3fca32a  kicad/kicad9-dc96515/base/dial-me-spinner-base.net  dc96515affe3c114a7091248ae403ff3d61dc59d:hardware/kicad/base/dial-me-spinner-base.net
