@@ -36,7 +36,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make adc-equiv` | ADR-003 step 9 gates (`scripts/adc_equiv.sh`): Part A (one cell) and Part B (lookahead, 1 ms and 10 ms) on `examples/adc`, and `board-open.cir` (acyclic) at 1, 10 and 50 ms, all identical except `grant` records to the every-lattice-point references (`tests/golden/adc*/outputs.sha256`); no promise broken; the watchdog's window crossings stop quiet grants (`stop:ngspice`) (CI job `adc`) |
 | `make adc-renode` | The Renode-only ADC model test of ADR-003 Amendment 5 (`make -C examples/adc test`, about 15 s; CI job `adc`) |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
-| `make startup-perf` | ADR-004 G1: fresh `bb run` engine startup of the spike and the feedback board at least 12 % and 0.3 s below `BB_RENODE_STOCK_RUNTIME=1` (the stock .NET settings and 100 ms connect poll), interleaved, N = 7 (`STARTUP_N`), medians, outputs identical; `STARTUP_BASE=<bb>` compares against another binary. Run it on an idle host |
+| `make startup-perf` | ADR-004 G1: fresh `bb run` engine startup of the spike and the feedback board at least 12 % and 0.3 s below `BB_RENODE_STOCK_RUNTIME=1` (the stock .NET settings, no JIT profile and the 100 ms connect poll), interleaved, N = 7 (`STARTUP_N`), medians, outputs identical; `STARTUP_BASE=<bb>` compares against another binary. Run it on an idle host |
 | `make pool-equiv` | ADR-004 G4: one pool process serves the spike (default, 1 ms, 500 ms), feedback (on, off, plugin never, polling firmware), adc (on, off) and adc-open twice, in alternating order; every pooled run must be leased and byte-identical to its fresh run and to the committed hashes (`scripts/pool_equiv.sh`) |
 | `make pool-perf` | ADR-004 G2: on a 1-slot pool, the first lease starts in at most 0.5 s, median engine startup is at most 0.30 s for spike, feedback and adc (N = 7), and spike total wall at most 1.2 s (`scripts/pool_perf.sh`). Run it on an idle host |
 | `bb pool run -- <cmd>` | Run `<cmd>` with a warm Renode pool in `BB_RENODE_POOL` (`--slots N`, `--max-runs K`); `bb pool start` / `stop` / `status` for an interactive shell (`bb pool --help`). `bb run --renode-pool off` ignores a pool |
@@ -206,6 +206,13 @@ feedback board).
 - The Renode lookahead plugin is compiled once and cached in
   `~/.cache/bb/renode-plugins` (`$BB_CACHE_DIR` or `$XDG_CACHE_HOME/bb`
   override it); deleting the directory only costs one compile (about 1.6 s).
+- A fresh Renode plays back a .NET multi-core JIT startup profile cached in
+  `~/.cache/bb/renode-jit` (same overrides), one per Renode install,
+  platform and plugin setting (ADR-004 Amendment 6). The first run for a key
+  gathers it and stops Renode with `SIGTERM` instead of `SIGKILL` so the
+  runtime writes it. Deleting the directory only costs that one gather.
+  `BB_RENODE_JIT_PROFILE=off` disables it. It changes JIT timing only; a
+  new board must still give its committed hashes with and without it.
 - Renode is installed at `~/.local/opt/renode-1.17.0` (symlink
   `~/.local/bin/renode`). `libngspice.so.0` is in `/usr/lib/x86_64-linux-gnu`.
 

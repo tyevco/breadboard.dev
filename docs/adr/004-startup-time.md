@@ -165,6 +165,11 @@ that every run of the option gave the committed hashes.
 Expected: fresh engine startup −0.45 to −0.55 s (−14 to −16 %), with no
 other change in behaviour.
 
+Measured, A1 + A2 save only 0.2–0.4 s, too close to G1's thresholds on
+this host. Amendment 6 adds A3, a cached .NET multi-core JIT startup
+profile, which is an engine-internal addition that still needs the
+approver's review. With A3, G1 passes by a wide margin.
+
 ### Part B: a warm Renode pool (opt-in per process tree)
 
 - **`bb pool run [--slots N] [--max-runs K] -- <command>`** starts a pool
@@ -734,3 +739,112 @@ rule, the `Clear` race as a known bad idea) are updated.
   not approved, not run); the trimmed install view; a client-mode
   External Control connection that would avoid the listener
   (Amendment 2).
+
+### Amendment 6: A3, the startup JIT profile, and G1 re-measured (2026-11-08)
+
+**Status:** Implemented. A3 is an engine-internal addition to Part A. It
+is not in approver decision 1's list, so it is recorded here for the
+approver's review. It uses only the installed .NET runtime: nothing is
+downloaded or run besides Renode (compare decision 3, crossgen2).
+`BB_RENODE_JIT_PROFILE=off` turns it off.
+
+- **Why.** Amendment 5 left G1 open. Re-run first on a quieter host (load
+  2.2–3.8; Windows CPU 3 %), A1 + A2 alone still sat on the threshold:
+
+  | Comparison (A1 + A2 only) | spike | feedback |
+  | --- | --- | --- |
+  | G1, stock baseline, N = 7 | −0.200 s (7.0 %), fail | −0.380 s (12.4 %), pass |
+  | `dcc9d66`, N = 5 | −0.210 s (7.6 %), fail | −0.290 s (9.5 %), fail |
+
+  So the true A1 + A2 effect on this host is about 0.2–0.4 s (7–13 %),
+  below the prototype's −0.46 to −0.54 s. G1 needs a larger real cut, not
+  more attempts. `DOTNET_TC_CallCountingDelayMs=0` was tried as well and
+  gave nothing outside the noise (2.65 → 2.49 s, N = 7, not adopted).
+- **A3. The .NET multi-core JIT startup profile.** Checked against the
+  .NET 8.0.12 sources (`src/coreclr/inc/clrconfigvalues.h`,
+  `src/coreclr/vm/multicorejit.cpp`):
+  - `DOTNET_MultiCoreJitProfile=<name>` (retail config) makes
+    `MulticoreJitManager::AutoStartProfile` start profiling without any app
+    code.
+  - With a file `<name>_<domain>_<domain>_<n>.prof` present
+    (`_clrhost_clrhost_1.prof` for Renode's apphost), a background thread
+    JIT-compiles the listed methods while the main thread runs.
+    `DOTNET_MultiCoreJitNoProfileGather=1` keeps the playback read-only.
+  - On Unix the write-delay timer (`MultiCoreJitProfileWriteDelay`) is
+    compiled out, so the profile is written only by `StopProfileAll` at a
+    graceful shutdown. `MultiCoreJitMinNumCpus` defaults to 2.
+  - Observed with Renode 1.17.0: `SIGTERM` exits Renode gracefully in
+    about 80 ms and writes a 180–195 KB profile. `SIGKILL` writes nothing.
+  - Renode only (spawn to External Control listening, feedback, N = 9
+    interleaved, A1 on both sides): 2.775 s → 2.245 s median with the
+    profile played back (−0.53 s).
+- **Implementation** (`engines/cpu-renode/src/lib.rs`, `JitProfile`):
+  - Only a fresh child uses the profile. A pool lease starts no process,
+    and pool processes start without A3.
+  - The key hashes a version tag, the canonical Renode launcher, the
+    platform description (its content, or its install-relative name such as
+    `platforms/cpus/stm32f072.repl`) and whether the lookahead plugin is
+    loaded. Profiles live in `~/.cache/bb/renode-jit` (`BB_CACHE_DIR` and
+    `XDG_CACHE_HOME` apply as for the plugin cache).
+  - **Playback:** when a profile for the key exists, the child gets
+    `DOTNET_MultiCoreJitProfile=<dir>/<key>` and
+    `DOTNET_MultiCoreJitNoProfileGather=1`.
+  - **Gather:** when none exists, the child gets a name unique to the
+    engine (`<key>.tmp-<pid>-<instance>`). At a clean teardown, and only
+    then (no engine failure, no panic), the engine closes External Control
+    and sends `SIGTERM`. It waits up to 5 s, then sends `SIGKILL`, and
+    renames the profile into place. This happens once per key and costs
+    about 0.1 s of teardown. Parallel first runs each write their own file,
+    and the last rename wins. A failed or killed run writes nothing and
+    the next run gathers again. The parent-death `SIGKILL` (decision 7) is
+    unchanged, so a killed `bb` still leaves no Renode.
+  - `BB_RENODE_STOCK_RUNTIME=1` (G1's baseline) also turns A3 off.
+- **Determinism.** "Determinism argument" 4 applies unchanged. A3 only
+  changes which methods are compiled earlier, and on which thread. JIT
+  compilation runs no static constructor and no managed code of the
+  application. Renode's results depend on virtual time, never on how fast
+  a method was compiled. An unreadable or stale profile only costs JIT
+  work: the runtime skips what it cannot match. Evidence, all with
+  profiles active:
+  - `cli/tests/jit_profile.rs` (new): starting from an empty cache, the
+    first run leaves exactly one `.prof` file and no temporary files. A
+    playback run leaves it untouched, and so does a run with
+    `BB_RENODE_JIT_PROFILE=off`. All three give byte-identical
+    `nets.csv`, `nets.vcd` and `events.jsonl`.
+  - Every `startup_perf.sh` B run matched its A run (stock, or `dcc9d66`,
+    neither with a profile).
+  - G3 below.
+- **G1 with A3** (`scripts/startup_perf.sh`, stock baseline, N = 7,
+  interleaved, medians, outputs identical; profiles already cached; load
+  2.2–5.3). Both boards pass:
+  - spike: 3.05 s → 2.12 s, −0.930 s (30.5 %), pass.
+  - feedback: 2.94 s → 2.18 s, −0.760 s (25.9 %), pass.
+- **Against the commit before ADR-004** (`dcc9d66`, N = 5, interleaved,
+  same session, load 2.8–5.7, outputs identical). Both boards pass G1's
+  thresholds:
+  - spike: 3.96 s → 2.66 s, −1.30 s (32.8 %).
+  - feedback: 4.01 s → 2.74 s, −1.27 s (31.7 %).
+- **G3**, both modes, on the A3 tree:
+  - All targets pass in both modes: `make check`, `partition`,
+    `lattice-check`, `feedback-open`, `lookahead-inert`, `lookahead-equiv`,
+    `adc-equiv`, `spike-verify-every`, `determinism` and
+    `feedback-determinism`.
+  - Timings, fresh (`POOL=0`): `make check` 326 s at load 7.6. Pool:
+    `make check` 220 s at load 13.
+  - Nothing under `tests/golden` changed.
+- **G4.** `make pool-equiv` passes: 20 leases, 20 kept, 0 discarded,
+  0 leaked listeners.
+- **G6.** `make lookahead-startup` passes, with a difference of 0.161 s.
+- **G2** (`make pool-perf`) did not pass on this host in this session. A3
+  does not touch the pool's code path. Numbers:
+
+  | Run | First lease | Median startup (spike / feedback / adc) | Spike wall |
+  | --- | --- | --- | --- |
+  | In the gate suite | 0.88 s, fail | 0.27 / 0.28 / 0.22 s, pass | 1.28 s, fail |
+  | Standalone, right after | 0.35 s, pass | 0.24 / 0.28 / 0.28 s, pass | 1.29 s, fail |
+
+  The spike's wall fails because of its simulation, 0.92 s here against
+  0.52 s when G2 passed in step 3 (spike wall 0.85 s then). The host was
+  slower: load 5–7, and another agent's layout job was using half a core.
+  Pool startup itself stays within its 0.30 s gate. G2 stays as written,
+  and the result is recorded, not waived.

@@ -348,7 +348,7 @@ lookahead-startup: firmware
 # ADR-004 G1 (Part A): fresh `bb run` engine startup of the spike and the
 # feedback board at least STARTUP_MIN_FRAC (12 %) and STARTUP_MIN_S (0.3 s)
 # below the same-session baseline, BB_RENODE_STOCK_RUNTIME=1 (the stock .NET
-# settings and the 100 ms connect poll); interleaved, N = STARTUP_N (7),
+# settings, no JIT profile, the 100 ms connect poll); interleaved, N = STARTUP_N (7),
 # medians, outputs identical. STARTUP_BASE=<path to another bb> compares
 # against that binary instead (e.g. one built from the commit before
 # ADR-004). Wall-clock: run it on an otherwise idle host.

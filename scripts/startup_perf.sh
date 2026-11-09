@@ -6,7 +6,7 @@
 # Usage: scripts/startup_perf.sh <bb> <out_root> <n> <min_frac> <min_s> <baseline> \
 #            -- <bb run args...>
 #   <baseline>  "stock": the same <bb> with BB_RENODE_STOCK_RUNTIME=1 (the
-#               runtime settings and 100 ms connect poll before Part A);
+#               runtime settings, no JIT profile and the 100 ms poll before Part A);
 #               otherwise the path of another bb binary (e.g. one built from
 #               the commit before ADR-004)
 #   <min_frac>  median(A) - median(B) >= min_frac * median(A)  (- = no check)

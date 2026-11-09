@@ -128,7 +128,9 @@
 //! # Startup (ADR-004)
 //!
 //! A fresh Renode is started with [`renode_command`]: `DOTNET_TieredPGO=0`
-//! (Part A) and kill-on-parent-death. With [`RenodeConfig::pool`] the
+//! (Part A) and kill-on-parent-death, plus the cached .NET multi-core JIT
+//! startup profile for its Renode and platform (Amendment 6; the first run
+//! for a key gathers it). With [`RenodeConfig::pool`] the
 //! engine first asks a warm Renode pool for a process ([`pool`], Part B);
 //! the rest of the engine does not depend on where its Renode came from.
 
@@ -621,8 +623,9 @@ except Exception as e:
 
 /// Environment switch for the ADR-004 G1 baseline: with
 /// `BB_RENODE_STOCK_RUNTIME=1` the engine starts Renode with the stock .NET
-/// runtime settings and the 100 ms connect poll it used before ADR-004
-/// Part A. A measurement knob; it never changes results.
+/// runtime settings, no startup JIT profile (Amendment 6) and the 100 ms
+/// connect poll it used before ADR-004 Part A. A measurement knob; it never
+/// changes results.
 #[doc(hidden)]
 pub const STOCK_RUNTIME_ENV: &str = "BB_RENODE_STOCK_RUNTIME";
 
@@ -686,6 +689,151 @@ fn die_with_parent(cmd: &mut Command) {
 
 #[cfg(not(target_os = "linux"))]
 fn die_with_parent(_cmd: &mut Command) {}
+
+/// Environment switch for the startup JIT profile (ADR-004 Amendment 6):
+/// `BB_RENODE_JIT_PROFILE=off` starts fresh Renode processes without it.
+/// A measurement knob and escape hatch; it never changes results.
+#[doc(hidden)]
+pub const JIT_PROFILE_ENV: &str = "BB_RENODE_JIT_PROFILE";
+
+/// The .NET multi-core JIT startup profile of a fresh Renode (ADR-004
+/// Amendment 6, A3). .NET 8 reads `DOTNET_MultiCoreJitProfile=<name>` at
+/// startup: with a profile file `<name><suffix>` present, a background
+/// thread JIT-compiles the methods the profile lists while the main thread
+/// runs; the runtime appends `<suffix>` (`_clrhost_clrhost_1.prof` for the
+/// apphost) and writes a new profile at a graceful shutdown. Only codegen
+/// timing changes, never results (ADR-004 "Determinism argument" 4).
+///
+/// - **Playback** (a profile for this key exists): `MultiCoreJitProfile` =
+///   `<dir>/<key>` and `MultiCoreJitNoProfileGather=1`, so the run never
+///   writes the cache.
+/// - **Gather** (none yet): `MultiCoreJitProfile` = a name unique to this
+///   engine; at a clean teardown the engine stops Renode with `SIGTERM`
+///   (graceful: the runtime writes the profile, about 0.1 s) instead of
+///   `SIGKILL`, then renames the file into place. Parallel first runs each
+///   write their own file and the last rename wins; every one is valid.
+///
+/// The key hashes the canonical Renode launcher, the platform description
+/// and whether the lookahead plugin is loaded. A stale or unreadable profile
+/// only costs JIT work: the runtime skips what it cannot match.
+struct JitProfile {
+    dir: PathBuf,
+    key: String,
+    /// `Some(name)`: gather into `<dir>/<name><suffix>`.
+    gather: Option<String>,
+}
+
+const JIT_PROFILE_VERSION: &[u8] = b"bb-mcj-1";
+
+fn jit_profile_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("BB_CACHE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(|d| PathBuf::from(d).join("bb")))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/bb")))?;
+    Some(base.join("renode-jit"))
+}
+
+/// The profile file for `key` in `dir`, if one is there (any runtime suffix).
+fn jit_profile_file(dir: &Path, key: &str) -> Option<PathBuf> {
+    let prefix = format!("{key}_");
+    std::fs::read_dir(dir).ok()?.flatten().find_map(|e| {
+        let n = e.file_name().into_string().ok()?;
+        (n.starts_with(&prefix) && n.ends_with(".prof")).then(|| e.path())
+    })
+}
+
+impl JitProfile {
+    /// `None` with the stock baseline, `BB_RENODE_JIT_PROFILE=off`, no cache
+    /// directory, or an unreadable platform file.
+    fn for_run(cfg: &RenodeConfig, instance: u64) -> Option<JitProfile> {
+        if stock_runtime() || std::env::var(JIT_PROFILE_ENV).is_ok_and(|v| v == "off") {
+            return None;
+        }
+        let platform = match &cfg.platform {
+            Platform::Stm32f103Offline => STM32F103_OFFLINE_REPL.as_bytes().to_vec(),
+            // A path inside the Renode install (e.g. `platforms/cpus/...`)
+            // is keyed by its name; the install is in the key already.
+            Platform::Repl(p) => std::fs::read(p).unwrap_or_else(|_| p.as_bytes().to_vec()),
+        };
+        let renode_id = pool::canonical_renode(&cfg.renode);
+        let key = format!(
+            "renode-{:016x}",
+            fnv1a64(&[
+                JIT_PROFILE_VERSION,
+                renode_id.to_string_lossy().as_bytes(),
+                &platform,
+                &[u8::from(cfg.lookahead.plugin)],
+            ])
+        );
+        let dir = jit_profile_dir()?;
+        std::fs::create_dir_all(&dir).ok()?;
+        let gather = jit_profile_file(&dir, &key)
+            .is_none()
+            .then(|| format!("{key}.tmp-{}-{instance}", std::process::id()));
+        Some(JitProfile { dir, key, gather })
+    }
+
+    fn apply(&self, cmd: &mut Command) {
+        match &self.gather {
+            None => {
+                cmd.env("DOTNET_MultiCoreJitProfile", self.dir.join(&self.key));
+                cmd.env("DOTNET_MultiCoreJitNoProfileGather", "1");
+            }
+            Some(name) => {
+                cmd.env("DOTNET_MultiCoreJitProfile", self.dir.join(name));
+                cmd.env_remove("DOTNET_MultiCoreJitNoProfileGather");
+            }
+        }
+    }
+
+    /// After a gathering Renode has exited: move its profile into place.
+    /// Best effort; a missing file costs the next run its gather.
+    fn publish(&self) {
+        let Some(name) = &self.gather else { return };
+        let Ok(rd) = std::fs::read_dir(&self.dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let Ok(n) = e.file_name().into_string() else {
+                continue;
+            };
+            if let Some(suffix) = n.strip_prefix(name.as_str()) {
+                let dst = self.dir.join(format!("{}{suffix}", self.key));
+                if !suffix.ends_with(".prof") || std::fs::rename(e.path(), &dst).is_err() {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+}
+
+/// Stop a gathering child gracefully (`SIGTERM`, the runtime writes its JIT
+/// profile), falling back to `SIGKILL` after `grace`.
+fn terminate_gracefully(c: &mut Child, grace: Duration) {
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn kill(pid: std::os::raw::c_int, sig: std::os::raw::c_int) -> std::os::raw::c_int;
+        }
+        const SIGTERM: std::os::raw::c_int = 15;
+        if let Ok(Some(_)) = c.try_wait() {
+            return;
+        }
+        // SAFETY: plain kill(2) on our own, not yet reaped, child.
+        if unsafe { kill(c.id() as std::os::raw::c_int, SIGTERM) } == 0 {
+            let deadline = Instant::now() + grace;
+            while Instant::now() < deadline {
+                if let Ok(Some(_)) = c.try_wait() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+    let _ = grace;
+    let _ = c.kill();
+    let _ = c.wait();
+}
 
 /// Locate the `renode` launcher: `$BB_RENODE`, then `renode` on `PATH`, then
 /// `~/.local/bin/renode` (where `make setup` installs it).
@@ -771,6 +919,8 @@ pub struct RenodeEngine {
     failed: bool,
     /// Lookahead (ADR-003 D5).
     la: Lookahead,
+    /// The fresh child's startup JIT profile (ADR-004 Amendment 6).
+    jit: Option<JitProfile>,
 }
 
 /// Lookahead state of a [`RenodeEngine`].
@@ -852,11 +1002,9 @@ impl RenodeEngine {
         let firmware = std::fs::canonicalize(&cfg.firmware)
             .map_err(|e| EngineError::Other(format!("firmware {}: {e}", cfg.firmware.display())))?;
 
-        let workdir = std::env::temp_dir().join(format!(
-            "bb-renode-{}-{}",
-            std::process::id(),
-            INSTANCE.fetch_add(1, Ordering::Relaxed)
-        ));
+        let instance = INSTANCE.fetch_add(1, Ordering::Relaxed);
+        let workdir =
+            std::env::temp_dir().join(format!("bb-renode-{}-{instance}", std::process::id()));
         let _ = std::fs::remove_dir_all(&workdir);
         std::fs::create_dir_all(&workdir)?;
         let platform = match &cfg.platform {
@@ -955,11 +1103,17 @@ impl RenodeEngine {
             let _ = std::fs::remove_dir_all(&workdir);
             EngineError::Other(format!("{msg}{plugin}\n--- renode log (tail) ---\n{tail}"))
         };
+        let mut jit = None;
         let mut host = Some(match lease {
             Some(l) => Host::Lease(l),
             None => {
                 let log = std::fs::File::create(&log_path)?;
-                let child = renode_command(&cfg.renode)
+                let mut cmd = renode_command(&cfg.renode);
+                jit = JitProfile::for_run(cfg, instance);
+                if let Some(j) = &jit {
+                    j.apply(&mut cmd);
+                }
+                let child = cmd
                     .args(["--disable-xwt", "--plain", "--port", "-1"])
                     .arg(&script_path)
                     .current_dir(&workdir)
@@ -1136,6 +1290,7 @@ impl RenodeEngine {
             boundary_edges: 0,
             carried_edges: 0,
             failed: false,
+            jit,
             la: Lookahead {
                 cfg: cfg.lookahead.clone(),
                 startup,
@@ -1795,8 +1950,20 @@ impl Drop for RenodeEngine {
     fn drop(&mut self) {
         match &mut self.host {
             Host::Child(c) => {
-                let _ = c.kill();
-                let _ = c.wait();
+                // A clean run that gathers the startup JIT profile stops
+                // Renode gracefully so the runtime writes it (ADR-004
+                // Amendment 6); every other child is killed.
+                let gather = self.jit.as_ref().is_some_and(|j| j.gather.is_some());
+                if gather && !self.failed && !std::thread::panicking() {
+                    self.client.close();
+                    terminate_gracefully(c, Duration::from_secs(5));
+                    if let Some(j) = &self.jit {
+                        j.publish();
+                    }
+                } else {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
             }
             Host::Lease(l) => {
                 // Close External Control first: the manager clears the
