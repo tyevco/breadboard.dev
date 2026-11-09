@@ -15,7 +15,9 @@
 #   <bb run args>         without --out
 #
 # Every B run must also match the first A run in nets.csv, nets.vcd and every
-# non-grant event record (B may change only the grant partition). Wall-clock
+# non-grant event record (B may change only the grant partition), unless
+# PERF_AB_EQUIV=0 (A and B are different models, e.g. the ADC board on
+# Breadboard's ADC model against the stock one; ADR-005 step 6). Wall-clock
 # numbers never reach the simulation outputs.
 set -euo pipefail
 
@@ -65,11 +67,13 @@ for c in A B; do
        "cpu $(median $c 7) s, grants $(median $c 3), load $(median $c 8)"
 done
 for k in $(seq 1 "$n"); do
+  [[ ${PERF_AB_EQUIV:-1} == 0 ]] && break
   for f in nets.csv nets.vcd non-grant-records; do
     cmp -s "$root/A-1/$f" "$root/B-$k/$f" \
       || { echo "perf-ab: FAIL: B-$k $f differs from A-1"; status=1; }
   done
 done
+[[ ${PERF_AB_EQUIV:-1} == 0 ]] && echo "perf-ab: A and B are different models (PERF_AB_EQUIV=0): outputs not compared"
 sim_a=$(median A 6) sim_b=$(median B 6)
 speedup=$(awk -v a="$sim_a" -v b="$sim_b" 'BEGIN { printf "%.2f", a / b }')
 slowdown=$(awk -v a="$sim_a" -v b="$sim_b" 'BEGIN { printf "%.3f", b / a }')

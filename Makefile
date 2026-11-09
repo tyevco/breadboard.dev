@@ -11,7 +11,8 @@ CARGO ?= cargo
         golden-update feedback-run feedback feedback-order feedback-determinism \
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
-        adc-equiv adc-renode adc-model cost-table cost-table-runs startup-perf \
+        adc-equiv adc-renode adc-model adc-stock adc-order adc-determinism pooled-adc-determinism adc-stock-ref adc-open-stock-ref adc-speed \
+        cost-table cost-table-runs startup-perf \
         pool-equiv pool-perf \
         pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
 
@@ -53,7 +54,9 @@ FEEDBACK_OPEN_HASHES := tests/golden/feedback-open/partition.sha256
 FEEDBACK_OPEN_QUANTA ?= 10us,100us,1ms,10ms,50ms,500ms
 
 # --- ADR-003 step 9: adc_in and the ADC boards (STM32F072) -----------------
-ADC_ELF     := examples/adc/firmware/build/adc_board_isr.elf
+ADC_ELF     := examples/adc/firmware/build/adc_board.elf
+# ADR-003's board on Renode's stock ADC model (bb run --adc-model stock).
+ADC_STOCK_ELF := examples/adc/firmware/build/adc_board_isr.elf
 ADC_FOR     ?= 300ms
 ADC_OUT     ?= out/adc-board
 ADC_PROBES   = --probe net:ADC_IN --probe net:U1.PA4 --probe net:U1.PA5 \
@@ -65,6 +68,12 @@ ADC_OPEN_ARGS = --netlist examples/adc/board-open.cir --firmware $(ADC_ELF) --ta
 ADC_GOLDEN  := tests/golden/adc
 ADC_HASHES  := $(ADC_GOLDEN)/outputs.sha256
 ADC_OPEN_HASHES := tests/golden/adc-open/outputs.sha256
+# The stock-model board (ADR-003 step 9): its own one-cell references.
+ADC_STOCK_FLAGS = --adc-model stock --firmware $(ADC_STOCK_ELF)
+ADC_STOCK_ARGS  = $(ADC_ARGS) $(ADC_STOCK_FLAGS)
+ADC_OPEN_STOCK_ARGS = $(ADC_OPEN_ARGS) $(ADC_STOCK_FLAGS)
+ADC_STOCK_HASHES := tests/golden/adc-stock/outputs.sha256
+ADC_OPEN_STOCK_HASHES := tests/golden/adc-open-stock/outputs.sha256
 
 # --- ADR-004 Part B: make test and the gates on a warm Renode pool ---------
 # Each target below runs its recipe (pooled-<target>) under `bb pool run`
@@ -80,7 +89,7 @@ WITH_POOL = env -u BB_RENODE_POOL
 else
 WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
-POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism
+POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -116,6 +125,8 @@ pooled-test:
 	$(MAKE) feedback
 	$(MAKE) feedback-order
 	$(MAKE) adc
+	$(MAKE) adc-order
+	$(MAKE) adc-stock
 	$(MAKE) adc-model
 
 bb:
@@ -193,7 +204,8 @@ golden:
 # (`--lookahead off`, which the polling firmware shares); the feedback-open
 # partition hashes (from its one-cell reference); and the hashes of the ADC
 # boards' every-lattice-point references.
-golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-open-ref
+golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-open-ref \
+               adc-stock-ref adc-open-stock-ref
 	mkdir -p $(dir $(GOLDEN))
 	$(PYTHON) scripts/golden.py write $(SPIKE_OUT)/nets.csv $(GOLDEN)
 	cd $(SPIKE_OUT) && sha256sum nets.csv events.jsonl nets.vcd > $(CURDIR)/$(SPIKE_HASHES)
@@ -214,6 +226,11 @@ golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-ope
 	cd $(ADC_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_HASHES) \
 	    && rm non-grant-records
+	mkdir -p $(dir $(ADC_STOCK_HASHES)) $(dir $(ADC_OPEN_STOCK_HASHES))
+	cd $(ADC_OUT)-stock-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_STOCK_HASHES)
+	cd $(ADC_OUT)-open-stock-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_OPEN_STOCK_HASHES)
 	cd $(ADC_OUT)-open-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_OPEN_HASHES) \
 	    && rm non-grant-records
@@ -337,6 +354,20 @@ cost-table-runs:
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/feedback-open $(PERF_N) "--max-quantum 10us" "" - - - \
 	    -- $(FEEDBACK_OPEN_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
+	PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc-stock $(PERF_N) "$(ADC_STOCK_FLAGS)" "" \
+	    - - - -- $(ADC_ARGS)
+
+# ADR-005 step 6 speed gates (scripts/perf_ab.sh, interleaved, N = PERF_N,
+# medians): examples/adc on Breadboard's ADC model (bb defaults) against the
+# ADR-003 default (--adc-model stock, its firmware), in the same protocol
+# run: at most 2000 grants per 300 ms and at least 3x less simulation time.
+# The two models give different (each self-consistent) outputs, so the A/B
+# equivalence is not checked here (it is make adc / make adc-stock). Run it
+# on an otherwise idle host.
+ADC_SPEED_OUT ?= out/adc-speed
+adc-speed: firmware bb
+	env -u BB_RENODE_POOL PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) $(ADC_SPEED_OUT) $(PERF_N) \
+	    "$(ADC_STOCK_FLAGS)" "" 2000 3 - -- $(ADC_ARGS)
 
 # ADR-003 step 5 startup-cost gate: with the cached plugin, Renode engine
 # startup is within 0.3 s of a start without it (interleaved, N =
@@ -384,7 +415,9 @@ pool-equiv: firmware bb
 	    "feedback-poll;$(FEEDBACK_HASHES);nongrant;$(FEEDBACK_POLL_ARGS)" \
 	    "adc;$(ADC_HASHES);nongrant;$(ADC_ARGS)" \
 	    "adc-off;$(ADC_HASHES);nongrant;$(ADC_ARGS) --lookahead off" \
-	    "adc-open;$(ADC_OPEN_HASHES);nongrant;$(ADC_OPEN_ARGS)"
+	    "adc-open;$(ADC_OPEN_HASHES);nongrant;$(ADC_OPEN_ARGS)" \
+	    "adc-stock;$(ADC_STOCK_HASHES);nongrant;$(ADC_STOCK_ARGS)" \
+	    "adc-open-stock;$(ADC_OPEN_STOCK_HASHES);nongrant;$(ADC_OPEN_STOCK_ARGS)"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -403,17 +436,20 @@ feedback-open-ref: firmware bb
 	$(BB) run $(FEEDBACK_OPEN_ARGS) --max-quantum 10us --out $(FEEDBACK_OPEN_OUT)-ref
 	$(PYTHON) scripts/check_feedback.py $(FEEDBACK_OPEN_OUT)-ref --open
 
-# ADR-003 step 9 (D6): examples/adc, an STM32F072 that reads back through
-# its ADC (PA1, adc_in) the RC-filtered divider it drives (PA4); TIM3 starts
-# a conversion every 999 us, the analog watchdog drives ALARM (PA5) and the
-# code bits 4 and 8 go to PA6/PA7. A feedback loop, so lookahead is on by
-# default: ngspice pushes ADC_IN at the lattice points where its whole
-# millivolts change and stops early there (the code-change watch).
-# check_adc.py: every conversion's edges as the firmware model predicts from
-# ADC_IN.
+# ADR-005 (D7; ADR-003 step 9): examples/adc, an STM32F072 that reads back
+# through its ADC (PA1, adc_in) the RC-filtered divider it drives (PA4), on
+# Breadboard's ADC model: TIM3 TRGO triggers a conversion every 999 us (no
+# TIM3 interrupt), the ADC interrupt drives ALARM (PA5) from the analog
+# watchdog, the code bits 4 and 8 on PA6/PA7 and PA4 every 50 conversions.
+# A feedback loop, so lookahead is on by default: ngspice pushes ADC_IN at
+# the lattice points where its 12-bit code changes, as timed inputs of the
+# model; the ADC pin is a sampled input, so quiet grants do not stop at a
+# push (ADR-005 D3). check_adc.py: every conversion's edges as the firmware
+# and the model's timing (s_k = T_k + 1063 ns, c_k = T_k + 4750 ns) predict
+# from ADC_IN.
 adc-run: firmware bb
 	$(BB) run $(ADC_ARGS) --out $(ADC_OUT)
-	$(PYTHON) scripts/check_adc.py $(ADC_OUT)
+	$(PYTHON) scripts/check_adc.py $(ADC_OUT) --require-no-stops
 
 # ... and nets.csv, nets.vcd and the non-grant records byte-identical to the
 # committed one-cell reference that pushes at every lattice point
@@ -432,23 +468,51 @@ adc-open-ref: firmware bb
 	$(BB) run $(ADC_OPEN_ARGS) --max-quantum 10us --adc-push every --out $(ADC_OUT)-open-ref
 	$(PYTHON) scripts/check_adc.py $(ADC_OUT)-open-ref
 
-# ADR-003 step 9 gates (scripts/adc_equiv.sh): Part A (one cell) and Part B
+# Swapping the registration order (analog engine first) must give
+# byte-identical outputs (ADR-003 D3). Reuses the `adc` run. In `make test`.
+adc-order: adc
+	$(BB) run $(ADC_ARGS) --engine-order analog-first --out $(ADC_OUT)-swapped
+	set -e; for f in nets.csv events.jsonl nets.vcd; do cmp $(ADC_OUT)/$$f $(ADC_OUT)-swapped/$$f; done
+	@echo "adc-order: outputs identical with the engines registered in the other order"
+
+# 10 runs of the ADC board (DET_RUNS, DET_JOBS): byte-identical outputs.
+pooled-adc-determinism: firmware bb
+	bash scripts/determinism.sh $(BB) out/adc-determinism $(DET_RUNS) $(DET_JOBS) -- $(ADC_ARGS)
+
+# ADR-003's board on Renode's stock ADC (`--adc-model stock`, approver
+# decision 4 of ADR-005: kept for comparisons): the defaults must give its
+# committed one-cell references ($(ADC_STOCK_HASHES), the ADR-003 hashes).
+adc-stock: firmware bb
+	$(BB) run $(ADC_STOCK_ARGS) --out $(ADC_OUT)-stock
+	$(PYTHON) scripts/check_adc.py $(ADC_OUT)-stock --model stock
+	cd $(ADC_OUT)-stock && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && grep -v ' events.jsonl$$' $(CURDIR)/$(ADC_STOCK_HASHES) | sha256sum -c
+	@echo "adc-stock: PASS (identical to the stock model's one-cell reference except grant records)"
+adc-stock-ref: firmware bb
+	$(BB) run $(ADC_STOCK_ARGS) --lookahead off --adc-push every --out $(ADC_OUT)-stock-ref
+	$(PYTHON) scripts/check_adc.py $(ADC_OUT)-stock-ref --model stock
+adc-open-stock-ref: firmware bb
+	$(BB) run $(ADC_OPEN_STOCK_ARGS) --max-quantum 10us --adc-push every --out $(ADC_OUT)-open-stock-ref
+	$(PYTHON) scripts/check_adc.py $(ADC_OUT)-open-stock-ref --model stock
+
+# ADR-005 step 5 gates (scripts/adc_equiv.sh): Part A (one cell) and Part B
 # (lookahead, 1 ms and 10 ms) on the cyclic board, and the open board in
-# long grants, all byte-identical to the every-lattice-point references
-# (committed hashes) except grant records; no promise broken; early stops at
-# pushes. CI job `adc`.
+# long grants (1, 10, 50 ms), all byte-identical to the every-lattice-point
+# references (committed hashes) except grant records; no promise broken; no
+# early stop at a push (the ADC pin is a sampled input). CI job `adc`.
 ADC_EQUIV_OUT ?= out/adc-equiv
 pooled-adc-equiv: firmware bb
 	bash scripts/adc_equiv.sh $(BB) $(ADC_EQUIV_OUT) $(ADC_HASHES) $(ADC_OPEN_HASHES) \
 	    "$(ADC_ARGS)" -- "$(ADC_OPEN_ARGS)"
 
-# The Renode-only ADC platform test of ADR-003 Amendment 5 (about 15 s).
 # ADR-005 test plan 1-3: Renode-only tests of Breadboard's STM32F072 ADC
 # model and BbStm32Timer TRGO (examples/adc/bb_adc_test.py: pwm, trgo,
 # registers, firmware; about 80 s). In `make test`.
 adc-model: firmware
 	$(MAKE) -C examples/adc model-test
 
+# The Renode-only ADC platform test of ADR-003 Amendment 5 (the stock
+# model; about 15 s).
 adc-renode:
 	$(MAKE) -C examples/adc test
 

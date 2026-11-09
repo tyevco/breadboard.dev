@@ -4,7 +4,8 @@ Breadboard is an open hardware simulator ("QEMU for whole circuit boards"). The
 repo is in **Phase 0**: a Renode (STM32F103, and STM32F072 for the ADC
 board) ↔ ngspice co-simulation spike under a kernel-owned time-grant
 protocol, with the speed-ups of ADR-003 (the grant lattice, traces, CPU
-lookahead, ADC pushes). Read this file first. Then read
+lookahead, ADC pushes), ADR-004 (startup) and ADR-005 (Breadboard's own
+STM32F072 ADC model and sampled inputs). Read this file first. Then read
 `spec/time-grant.md` before you touch anything that advances time.
 
 ## Build and test
@@ -32,9 +33,14 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make lookahead-inert` | ADR-003 step 5: Renode's lookahead plugin is inert. `examples/feedback` without the plugin (`--lookahead-plugin never`, so lookahead off) must give the committed hashes (`tests/golden/feedback/outputs.sha256`), with the plugin armed and `--lookahead off` byte-identical, with lookahead on (the default) identical except `grant` records; the spike with the plugin forced on must give its partition hashes (CI job `feedback`) |
 | `make lookahead-equiv` | ADR-003 step 8 equivalence gate: `examples/feedback` and its polling-firmware variant (`feedback_poll.elf`) with lookahead on at `--max-quantum` 1 ms and 10 ms must give the one-cell `--lookahead off` reference (the committed `tests/golden/feedback/outputs.sha256`) byte for byte in `nets.csv`, `nets.vcd` and every non-grant record, with no broken promise and at most 200 grants per 500 ms at 10 ms (`scripts/lookahead_equiv.sh`; CI job `feedback`) |
 | `make lookahead-perf` | ADR-003 step 8 performance gates with the measurement protocol (`scripts/perf_ab.sh`, interleaved, N = `PERF_N`, medians): `examples/feedback` with lookahead on vs step 4 (one-cell, no plugin) at most 200 grants and >= 10x less simulation time; the polling firmware with lookahead on vs off at most 10 % slower. Run it on an otherwise idle host |
-| `make adc` | ADR-003 step 9: `examples/adc` (STM32F072; U1.PA4 → RC-filtered divider → ADC_IN → U1.PA1 `adc_in`; TIM3 converts every 999 µs, the analog watchdog drives ALARM on PA5, code bits 4 and 8 on PA6/PA7), 300 ms with lookahead on. `scripts/check_adc.py`: every conversion's edges as the firmware model predicts from ADC_IN; then `nets.csv`, `nets.vcd` and the non-grant records byte-identical to the one-cell reference that pushes at every lattice point (`tests/golden/adc/outputs.sha256`; `make adc-ref`) |
-| `make adc-equiv` | ADR-003 step 9 gates (`scripts/adc_equiv.sh`): Part A (one cell) and Part B (lookahead, 1 ms and 10 ms) on `examples/adc`, and `board-open.cir` (acyclic) at 1, 10 and 50 ms, all identical except `grant` records to the every-lattice-point references (`tests/golden/adc*/outputs.sha256`); no promise broken; the watchdog's window crossings stop quiet grants (`stop:ngspice`) (CI job `adc`) |
-| `make adc-renode` | The Renode-only ADC model test of ADR-003 Amendment 5 (`make -C examples/adc test`, about 15 s; CI job `adc`) |
+| `make adc` | ADR-005 (ADR-003 step 9): `examples/adc` on Breadboard's STM32F072 (`BbStm32F0Adc`, `BbStm32Timer`; U1.PA4 → RC-filtered divider → ADC_IN → U1.PA1 `adc_in`; TIM3 TRGO triggers a conversion every 999 µs, sampled at T + 1063 ns, ended at T + 4750 ns; the ADC interrupt drives ALARM on PA5 from the analog watchdog, code bits 4 and 8 on PA6/PA7, PA4 every 50 conversions), 300 ms with lookahead on (about 1 200 grants). `scripts/check_adc.py`: every conversion's edges as the firmware and the model's timing predict from ADC_IN, and no `stop:ngspice` (the ADC pin is a sampled input); then `nets.csv`, `nets.vcd` and the non-grant records byte-identical to the one-cell reference that pushes at every lattice point (`tests/golden/adc/outputs.sha256`; `make adc-ref`) |
+| `make adc-order` | The `adc` run with `--engine-order analog-first` must be byte-identical |
+| `make adc-stock` | The ADR-003 board on Renode's stock ADC (`bb run --adc-model stock`, `adc_board_isr.elf`): its committed one-cell references (`tests/golden/adc-stock`, the ADR-003 hashes; `make adc-stock-ref`, `make adc-open-stock-ref`) |
+| `make adc-model` | ADR-005 test plan 1-3 (`examples/adc/bb_adc_test.py`, about 80 s): TIM3 PWM through the overlay's AF wiring, TRGO, the ADC's registers and exact conversion instants for every SMP × RES × CKMODE, AWD, the host port, and the board firmware (TRGO conversions, the AWD interrupt, no wake on a push, timed inputs = `SetValue`) |
+| `make adc-equiv` | ADR-005 step 5 gates (`scripts/adc_equiv.sh`): Part A (one cell) and Part B (lookahead, 1 ms and 10 ms) on `examples/adc`, and `board-open.cir` (acyclic) at 1, 10 and 50 ms, all identical except `grant` records to the every-lattice-point references (`tests/golden/adc*/outputs.sha256`); no promise broken; no `stop:ngspice` (CI job `adc`) |
+| `make adc-determinism` | 10 runs of `examples/adc`, byte-identical |
+| `make adc-speed` | ADR-005 step 6 speed gates (`scripts/perf_ab.sh`, interleaved, N = `PERF_N`, medians): `examples/adc` on the model takes at most 2 000 grants per 300 ms and at least 3× less simulation than the ADR-003 default (`--adc-model stock`) in the same run. Run it on an idle host |
+| `make adc-renode` | The Renode-only test of the stock ADC model of ADR-003 Amendment 5 (`make -C examples/adc test`, about 15 s; CI job `adc`) |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
 | `make startup-perf` | ADR-004 G1: fresh `bb run` engine startup of the spike and the feedback board at least 12 % and 0.3 s below `BB_RENODE_STOCK_RUNTIME=1` (the stock .NET settings, no JIT profile and the 100 ms connect poll), interleaved, N = 7 (`STARTUP_N`), medians, outputs identical; `STARTUP_BASE=<bb>` compares against another binary. Run it on an idle host |
 | `make pool-equiv` | ADR-004 G4: one pool process serves the spike (default, 1 ms, 500 ms), feedback (on, off, plugin never, polling firmware), adc (on, off) and adc-open twice, in alternating order; every pooled run must be leased and byte-identical to its fresh run and to the committed hashes (`scripts/pool_equiv.sh`) |
@@ -54,19 +60,25 @@ lookahead gate firmware in `engines/cpu-renode/tests/firmware`) on their own.
 ```
 bbcore/                 kernel: Time, PinSignal, Engine trait, Scheduler, EventSink, CsvWriter, VcdWriter
 engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
-engines/cpu-renode/     Renode engine over the External Control API; platforms/bb_lookahead.cs
-                        (the lookahead plugin, ADR-003 D5); tests/firmware (its gate firmware);
-                        console.rs, pool.rs, manager.rs (the warm Renode pool, ADR-004)
+engines/cpu-renode/     Renode engine over the External Control API; platforms/: the plugin
+                        assembly's sources (bb_lookahead.cs, the lookahead block, ADR-003 D5;
+                        bb_stm32_timer.cs, STM32_Timer + TRGO; bb_stm32f0_adc.cs, the STM32F0
+                        ADC model and its host port, ADR-005) and stm32f072-bb.repl (the F072
+                        overlay); tests/firmware (gate firmware); console.rs, pool.rs,
+                        manager.rs (the warm Renode pool, ADR-004)
 cli/                    `bb` binary (`bb run`, `bb pool`, board-file parser)
 examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings)
 examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware and a polling variant
 examples/feedback-open/ the same with the loop opened (acyclic, long grants)
 examples/adc/           STM32F072 ADC board (adc_in PA1 reads the divider PA4 drives; board.cir,
-                        board-open.cir), its firmware, and the Renode-only ADC model test
+                        board-open.cir), its firmware (adc_board.elf on Breadboard's ADC model,
+                        adc_board_isr.elf on the stock one, test firmware), bb_adc_test.py (the
+                        ADR-005 model tests) and renode_adc_test.py (the stock model's test)
 tests/golden/spike/     led_a.csv waveform snapshot, default-run output hashes, partition hashes
 tests/golden/feedback/  SENSE / LED_B snapshots, exact pin_edge list, one-cell reference hashes
 tests/golden/feedback-open/ partition hashes of the one-cell reference
-tests/golden/adc/, adc-open/ hashes of the every-lattice-point one-cell ADC references
+tests/golden/adc/, adc-open/ hashes of the every-lattice-point one-cell ADC references (ADR-005)
+tests/golden/adc-stock/, adc-open-stock/ the same on the stock ADC model (ADR-003)
 spec/                   normative protocol and schema docs; changing them needs an ADR
 docs/adr/               architecture decision records
 scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh,
@@ -159,10 +171,20 @@ feedback board).
   tuning knob to couple to `--max-quantum`.
 - **Applying an MCU input before `ceil_L(edge_time)`.** Renode sees an input
   only at a sync point; earlier is acausal, later than that is a skew. The
-  same holds for an ADC push: ngspice sends it at a lattice point (when the
-  whole millivolts change, ADR-003 Amendment 5) and Renode applies it with
-  `ADC SetValue` while paused there, never at the engine's `now` before it
-  (`RenodeEngine::apply_input_trace`).
+  same holds for an ADC push: ngspice sends it at a lattice point `t` (where
+  the 12-bit code changes, ADR-005 D5). On Breadboard's ADC model the engine
+  writes it to the model as a timed input before Renode runs past `t`, and a
+  conversion reads the latest push strictly before its sample instant; on
+  the stock model (`--adc-model stock`, whole millivolts) Renode applies it
+  with `ADC SetValue` while paused at `t`. Never at the engine's `now`
+  before `t` (`RenodeEngine::apply_input_trace`).
+- **Declaring an input sampled (`Engine::input_is_sampled`) that is not.**
+  A sampled input may change only the engine's behaviour at sample instants
+  its `quiet_until` never passes (ADR-005 D3). A model that raises an
+  interrupt, sets a flag or arms a timer when an input changes is not
+  sampled; the promise audit then fails the run with `PromiseBroken`. A new
+  peripheral that wants the exemption needs the D3 argument and a gate like
+  `la_adc` (`engines/cpu-renode/tests/lookahead.rs`).
 - **A `quiet_until` promise the engine cannot guarantee, or one with side
   effects.** It is a pure read, it may be skipped by the back-off, and a
   sleeping CPU's promise ends at its next clock limit. Never weaken the
@@ -203,9 +225,12 @@ feedback board).
   Cargo names workspace-member artifacts by their workspace-relative path,
   so two checkouts sharing `~/.cache/bb-target` overwrite each other's
   crates and a build can silently link the other checkout's code.
-- The Renode lookahead plugin is compiled once and cached in
-  `~/.cache/bb/renode-plugins` (`$BB_CACHE_DIR` or `$XDG_CACHE_HOME/bb`
-  override it); deleting the directory only costs one compile (about 1.6 s).
+- Breadboard's Renode plugins (the lookahead block, `BbStm32Timer`,
+  `BbStm32F0Adc` and its host port) are compiled once, together, into one
+  assembly cached in `~/.cache/bb/renode-plugins` (`$BB_CACHE_DIR` or
+  `$XDG_CACHE_HOME/bb` override it); deleting the directory only costs one
+  compile (about 2 s). The loader runs before `LoadPlatformDescription`,
+  because the STM32F072 overlay names the plugin's types.
 - A fresh Renode plays back a .NET multi-core JIT startup profile cached in
   `~/.cache/bb/renode-jit` (same overrides), one per Renode install,
   platform and plugin setting (ADR-004 Amendment 6). The first run for a key

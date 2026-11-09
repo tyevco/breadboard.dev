@@ -1,5 +1,6 @@
-* Breadboard ADC example (ADR-003 Part C, plan step 9): an STM32F072 that
-* reads back, through its ADC, an RC-filtered divider it drives itself.
+* Breadboard ADC example (ADR-003 Part C, plan step 9; on Breadboard's ADC
+* model since ADR-005): an STM32F072 that reads back, through its ADC, an
+* RC-filtered divider it drives itself.
 *
 *   U1.PA4 (DRIVE) -> 25 ohm (zout glue) -> R1 10k -> ADC_IN
 *   ADC_IN -> R2 33k -> GND, C1 470 nF -> GND
@@ -7,12 +8,15 @@
 *   U1.PA5 (ALARM) -> R3 330 ohm -> LED -> D1 (red LED) -> GND
 *   U1.PA6, U1.PA7: code bits 4 and 8 (not connected, probed)
 *
-* Firmware (examples/adc/firmware/adc.c, build/adc_board.elf): TIM3 updates
-* every 999 us on Renode (ARR ticks, ADR-003 Amendment 5 fact 5); its ISR
-* toggles PA4 every 50 updates and starts one conversion. Analog watchdog 1
-* watches [1241, 2482] = [1.0 V, 2.0 V]: an out-of-window conversion drives
-* ALARM high, the next in-window one drives it low. The ADC ISR copies code
-* bits 4 and 8 to PA6 and PA7.
+* Firmware (examples/adc/firmware/adc.c, build/adc_board.elf, ADR-005 D7):
+* TIM3 updates every 999 us on Renode (ARR ticks, ADR-003 Amendment 5 fact
+* 5) and its TRGO triggers one conversion (EXTSEL = TRG3, EXTEN = rising;
+* no TIM3 interrupt). The ADC (CKMODE = PCLK/2, SMP = 000, 12 bits) samples
+* at T_k + 1063 ns and ends the conversion at T_k + 4750 ns (ADR-005 D4);
+* the ADC interrupt then runs: analog watchdog 1 watches [1241, 2482] =
+* [1.0 V, 2.0 V], an out-of-window conversion drives ALARM high and the next
+* in-window one drives it low; code bits 4 and 8 go to PA6 and PA7; PA4
+* toggles every 50 conversions. The CPU sleeps in wfi between interrupts.
 *
 * ADC_IN settles to 3.3 V * 33k / (25 + 10k + 33k) = 2.531087 V (code 3141,
 * above the window) with tau = (10025 || 33000) ohm * 470 nF = 3.614 ms, and
@@ -20,12 +24,15 @@
 * window and rises again after.
 *
 * The binding graph is U1 -> ngspice (PA4, PA5) and ngspice -> U1 (PA1): a
-* feedback loop. ngspice pushes ADC_IN to the ADC at the lattice points
-* where its whole millivolts change (ADR-003 D6, Amendment 10); Renode sets
-* each value (External Control ADC SetValue) while paused on that lattice
-* point. With lookahead (the default) the grants grow while the MCU sleeps
-* and ADC_IN is flat; a millivolt change stops ngspice at its lattice point
-* (the code-change watch).
+* feedback loop. ngspice pushes ADC_IN at the lattice points where its
+* 12-bit code changes (ADR-005 D5); the Renode engine writes the pushes of
+* each grant to the ADC model as timed inputs, and a conversion reads the
+* latest push strictly before its sample instant. The ADC pin is a sampled
+* input (ADR-005 D3): with lookahead (the default) a quiet grant runs to the
+* next TIM3 update whatever ADC_IN does, and an out-of-window value is
+* reported at the end of the next conversion, as on silicon.
+* `bb run --adc-model stock` with build/adc_board_isr.elf runs the ADR-003
+* board on Renode's stock ADC instead.
 *
 * Directive grammar: see examples/spike/board.cir and cli/src/board.rs.
 *

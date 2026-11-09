@@ -939,3 +939,72 @@ existing equivalence gates apply unchanged.
     `stop:ngspice`**), **1.50 s** of simulation, `nets.csv`, `nets.vcd` and
     every non-grant record byte-identical to the one-cell
     every-lattice-point reference (30 000 grants, 17.88 s).
+
+### Amendment 3: step 5 (`examples/adc` on the model, new goldens) as implemented (2026-11-09)
+
+- **Default.** `bb run --adc-model` defaults to `bb` now: `platform=stm32f072`
+  loads the overlay with `bbAdc`, and the board runs `adc_board.elf`, the
+  hardware-trigger firmware of D7 (`CKMODE = 01`, `SMP = 000`, 12 bits,
+  `EXTSEL = TRG3`, `EXTEN = rising`, `ADSTART` once, TIM3 `MMS = update`
+  without its interrupt; the ADC ISR handles the watchdog, the code bits and
+  PA4 every 50 conversions). `ADC_ELF` in the Makefile points at it;
+  `ADC_STOCK_ELF` (`adc_board_isr.elf`, the former `adc_board.elf`) with
+  `--adc-model stock` is the ADR-003 board.
+- **Why the goldens changed (the reason `make golden-update` records).**
+  `tests/golden/adc/outputs.sha256` and `tests/golden/adc-open/outputs.sha256`
+  are the hashes of the **new one-cell references** (`--lookahead off
+  --adc-push every`, and the open board at `--max-quantum 10us --adc-push
+  every`) on Breadboard's model. The model's semantics differ from the stock
+  model's by design (D2, D4, D5): a conversion is triggered by TIM3 TRGO and
+  takes the RM0091 time (sample at `T + 1 063 ns`, end at `T + 4 750 ns`)
+  instead of happening inside the TIM3 ISR's `ADSTART` write; it reads the
+  value of the latest lattice point strictly before its sample instant, in
+  microvolts, instead of whole millivolts at the latest lattice point at or
+  before it; codes saturate at 4 095; the watchdog compares the raw 12-bit
+  data at the end of conversion; and the firmware's edges now come from the
+  ADC ISR at `c_k` (PA4 included), 4.75 µs after the TIM3 update, so the
+  analog waveform shifts by that much too. No other golden file changed:
+  `make golden-update` rewrote every snapshot and hash, and `git diff`
+  showed only these two files. The ADR-003 references moved to
+  `tests/golden/adc-stock` and `tests/golden/adc-open-stock`; the fresh
+  stock-model references written by `make golden-update`
+  (`adc-stock-ref`, `adc-open-stock-ref`) are byte-identical to the
+  ADR-003 hashes, so the stock path is unchanged (`make adc-stock`, in
+  `make test`).
+- **`board-open.cir` keeps its drive** (`PULSE … 49.95m …`). D7 asked for
+  the PULSE to follow the new PA4 instants (4.75 µs later); the loop is
+  open, so the drive only has to resemble the firmware's, and keeping it
+  lets the stock open board keep its ADR-003 references (deviation,
+  recorded). The comments of both board files describe the model.
+- **`scripts/check_adc.py --model bb`** (the default; `--model stock` keeps
+  the ADR-003 check): `T_1` from the first ALARM edge (conversion 1
+  converts 0 V), `T_k = T_1 + (k − 1) · 999 µs`, the value at the latest
+  lattice point strictly before `s_k = T_k + 1 063 ns`, `code12`, and every
+  ISR edge at `c_k` or at the next lattice point + 1 fs (the write after a
+  sync point, Amendment 1's correction of D7), conversion by conversion;
+  `--require-no-stops` for lookahead runs. On the board all 109 edges are
+  at `c_k` (no ISR write crosses a lattice point) and no sample instant is
+  on a lattice point.
+- **`scripts/adc_equiv.sh`** on the model: Part B requires **no**
+  `stop:ngspice` (it used to require one: the code-change watch is gone).
+  `scripts/perf_ab.sh` takes `PERF_AB_EQUIV=0` for an A/B of two models
+  (step 6). New targets: `make adc-order` (in `make test`),
+  `make adc-stock` (in `make test`), `make adc-stock-ref`,
+  `make adc-open-stock-ref`, `make adc-determinism`; `make pool-equiv`
+  gained the stock board and the stock open board.
+- **Gates** (all green): `make check` (`make test` on the pool: `make adc`,
+  `make adc-order`, `make adc-stock`, `make adc-model`); `make adc-equiv`:
+  `ref` and `a` 30 000 grants, **`b-1ms` and `b-10ms` 1 209 grants** (300
+  `engine:U1`, 908 `loop_quantum`, 1 `engine:ngspice`, no `stop:ngspice`, 0
+  promises broken; the quiet grants end at the TIM3 updates, 999 µs apart,
+  so 1 ms and 10 ms caps give the same partition), the open board at 1, 10
+  and 50 ms, every run identical to its reference in `nets.csv`,
+  `nets.vcd` and the non-grant records; `make adc-determinism` (10 runs
+  byte-identical); `make adc-order` (`--engine-order analog-first`
+  identical); `make partition`, `make lookahead-equiv` and
+  `make pool-equiv` (12 configurations, 2 rounds) green.
+- **Flake seen once:** the first `make check` of this step failed in
+  `cli/tests/jit_profile.rs` (the gather run left no `.prof`); the test
+  passed when rerun alone and in the next full `make check`. It is the
+  ADR-004 Amendment 6 profile test (a graceful `SIGTERM` under load) and
+  does not touch the ADC; recorded, not changed.

@@ -123,10 +123,10 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  every lattice point, with the value in whole microvolts
                  (the reference of the equivalence gate). The MCU sees the
                  same conversions either way (a test knob)
-  --adc-model    the STM32F072's ADC (ADR-005): bb, Breadboard's
+  --adc-model    the STM32F072's ADC (ADR-005): bb (default), Breadboard's
                  model (hardware triggers, conversion timing, the analog
                  watchdog; pushes are timed inputs, a sampled input), or
-                 stock (default until ADR-005 step 5), Renode's STM32F0_ADC on the stock platform (ADR-003
+                 stock, Renode's STM32F0_ADC on the stock platform (ADR-003
                  D6: SetValue at each push, the code-change watch; keep it
                  for comparisons). Changes results: each has its own
                  references
@@ -402,7 +402,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
 }
 
 /// The default of `--adc-model`.
-const ADC_MODEL_DEFAULT_BB: bool = false;
+const ADC_MODEL_DEFAULT_BB: bool = true;
 
 /// Output writers buffer 1 MiB: every write(2) to a slow file system
 /// (WSL's /mnt/c: up to ~10 ms each under host load) is paid during the

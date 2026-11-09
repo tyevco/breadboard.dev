@@ -1,11 +1,29 @@
 #!/usr/bin/env python3
-"""Check an `examples/adc` run (ADR-003 plan step 9) against the firmware's
-conversions, computed from the circuit's own waveform.
+"""Check an `examples/adc` run against the firmware's conversions, computed
+from the circuit's own waveform.
 
-    check_adc.py <out-dir> [--period-us 999] [--drive-updates 50]
+    check_adc.py <out-dir> [--model bb|stock] [--period-us 999] [--drive-updates 50]
 
-The firmware (examples/adc/firmware/adc.c, adc_board.elf) converts ADC
-channel 1 once per TIM3 update. On Renode 1.17.0 TIM3 updates every
+--model bb (the default; ADR-005 D7, Breadboard's ADC model,
+examples/adc/firmware/build/adc_board.elf): TIM3 TRGO triggers conversion k
+at T_k = T_1 + (k - 1) * 999 us (Renode's ARR-tick period; T_1 follows from
+the start-up). With CKMODE = PCLK/2 (4 MHz), SMP = 000 and 12 bits the model
+samples at s_k = T_k + 1063 ns and ends the conversion at c_k = T_k + 4750 ns
+(ADR-005 D4). The value converted is ADC_IN at the latest lattice point
+strictly before s_k (ADR-005 D5.2), as code12 = min(4095, round_half_up(uV *
+4095 / 3.3 V)). The CPU sleeps until the EOC interrupt at c_k; its ISR sets
+ALARM (PA5) on the analog watchdog (code outside [1241, 2482]) and releases
+it on the next in-window code, copies bits 4 and 8 to PA6/PA7 and toggles
+PA4 every 50th conversion. Renode stamps each write with the sync point
+that opens its slice: c_k (the EOC limit), or the next lattice point (+1 fs)
+when the write comes after it. T_1 follows from the first ALARM edge
+(conversion 1 converts 0 V). With --require-no-stops (lookahead runs) no
+grant may end with `stop:ngspice`: the ADC pin is a sampled input and is not
+watched (ADR-005 D3).
+
+--model stock (ADR-003 plan step 9, `bb run --adc-model stock`,
+adc_board_isr.elf): the firmware converts ADC channel 1 once per TIM3
+update. On Renode 1.17.0 TIM3 updates every
 999 us (ARR ticks, ADR-003 Amendment 5 fact 5), so conversion k happens at
 the TIM3 limit T_k = k * 999 us. Its ISRs then write, in the same slice:
 
@@ -72,6 +90,12 @@ def main():
         action="store_true",
         help="fail unless some window crossing ended a quiet grant (stop:ngspice)",
     )
+    ap.add_argument("--model", choices=["bb", "stock"], default="bb")
+    ap.add_argument(
+        "--require-no-stops",
+        action="store_true",
+        help="fail if a grant ended with stop:ngspice (bb model: nothing is watched)",
+    )
     a = ap.parse_args()
     period = a.period_us * FS_PER_US
     lat = a.lattice_us * FS_PER_US
@@ -96,6 +120,9 @@ def main():
                 grant_end[e["until_fs"]] = e["limited_by"]
     if not edges:
         sys.exit("check-adc: FAIL: no edges")
+    if a.model == "bb":
+        check_bb(a, adc, t_end, lat, period, edges, grant_end)
+        return
 
     # The ISR offset: conversion 1 (code 0, ADC_IN at 0 V) raises ALARM.
     first = next(e for e in edges if e[1] == "U1.PA5")
@@ -193,6 +220,99 @@ def main():
     )
     if a.require_stops and not ends.get("stop:ngspice"):
         sys.exit("check-adc: FAIL: no window crossing ended a quiet grant (stop:ngspice)")
+
+
+def code12(uv):
+    uv = min(max(uv, 0), VREF_UV)
+    return min(4095, (2 * uv * 4095 + VREF_UV) // (2 * VREF_UV))
+
+
+FS_PER_NS = 1_000_000
+SAMPLE_NS = 1063  # ADR-005 D4: T + ceil(2.75 + 1.5 cycles at 4 MHz)
+EOC_NS = 4750  # T + ceil(2.75 + 1.5 + 12.5 cycles + 4.5 PCLK at 8 MHz)
+ISR_US = 3  # an ISR write lands within this of c_k
+
+
+def check_bb(a, adc, t_end, lat, period, edges, grant_end):
+    first = next(e for e in edges if e[1] == "U1.PA5")
+    if first[2] != 1 or first[0] % FS_PER_NS:
+        sys.exit(f"check-adc: FAIL: first ALARM edge {first} is not conversion 1's EOC")
+    t1 = first[0] - EOC_NS * FS_PER_NS
+    level = {p: 0 for p in PINS}
+    alarm = 0
+    expect = []  # (c_k, pin, level)
+    k = 1
+    on_lattice = 0
+    crossings = 0
+    while True:
+        t = t1 + (k - 1) * period
+        s = t + SAMPLE_NS * FS_PER_NS
+        c = t + EOC_NS * FS_PER_NS
+        if c + ISR_US * FS_PER_US + lat > t_end:
+            break
+        q = (s - 1) // lat * lat  # the latest lattice point strictly before s
+        if s % lat == 0:
+            on_lattice += 1
+        code = code12(adc[q])
+        out = []
+        if code < AWD_LT or code > AWD_HT:
+            if not alarm:
+                out.append(("U1.PA5", 1))
+                crossings += 1
+            alarm = 1
+        for pin, bit in (("U1.PA6", 4), ("U1.PA7", 8)):
+            v = (code >> bit) & 1
+            if v != level[pin]:
+                level[pin] = v
+                out.append((pin, v))
+        if k % a.drive_updates == 0:
+            level["U1.PA4"] ^= 1
+            out.append(("U1.PA4", level["U1.PA4"]))
+        if alarm and AWD_LT <= code <= AWD_HT:
+            out.append(("U1.PA5", 0))
+            alarm = 0
+            crossings += 1
+        expect += [(c, pin, v) for pin, v in out]
+        k += 1
+    conversions = k - 1
+    # Compare conversion by conversion: every edge of an ISR belongs to the
+    # conversion whose EOC c_k is at most ISR_US before it.
+    c1 = t1 + EOC_NS * FS_PER_NS
+    horizon = c1 + (conversions - 1) * period + ISR_US * FS_PER_US
+    got = [e for e in edges if e[0] <= horizon]
+    by_conv = {}
+    for t, pin, v in got:
+        k = (t - c1) // period
+        if t < c1 or t - (c1 + k * period) > ISR_US * FS_PER_US:
+            sys.exit(f"check-adc: FAIL: edge {(t, pin, v)} is not within {ISR_US} us after an EOC")
+        by_conv.setdefault(k, []).append((t, pin, v))
+    want = {}
+    for c, pin, v in expect:
+        want.setdefault((c - c1) // period, []).append((pin, v))
+    late = 0
+    for k in sorted(set(by_conv) | set(want)):
+        c = c1 + k * period
+        nxt = -(-c // lat) * lat + 1
+        g = by_conv.get(k, [])
+        bad = [e for e in g if e[0] != c and e[0] != nxt]
+        if sorted((p, v) for _, p, v in g) != sorted(want.get(k, [])) or bad:
+            sys.exit(f"check-adc: FAIL: conversion {k + 1} (c_k = {c} fs): edges {g}, expected "
+                     f"{want.get(k, [])} at c_k (or {nxt} fs)")
+        late += sum(1 for e in g if e[0] != c)
+    stops = sum(1 for v in grant_end.values() if v == "stop:ngspice")
+    counts = {p: sum(1 for e in got if e[1] == p) for p in PINS}
+    print(
+        f"check-adc: PASS: {conversions} conversions (model bb: T_1 = {t1} fs, s_k = T_k + "
+        f"{SAMPLE_NS} ns, c_k = T_k + {EOC_NS} ns), {len(got)} edges as the firmware model "
+        f"predicts from ADC_IN (PA4 {counts['U1.PA4']}, ALARM {counts['U1.PA5']}, bit 4 "
+        f"{counts['U1.PA6']}, bit 8 {counts['U1.PA7']}; {late} at the next lattice point); "
+        f"{on_lattice} sample instants on a lattice point; {crossings} watchdog window "
+        f"crossings, each reported at the EOC of the first conversion after it"
+    )
+    print(f"check-adc: {stops} grants ended with stop:ngspice")
+    if a.require_no_stops and stops:
+        sys.exit("check-adc: FAIL: a quiet grant stopped at an ADC push (stop:ngspice), but the "
+                 "pin is a sampled input")
 
 
 if __name__ == "__main__":

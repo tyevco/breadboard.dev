@@ -75,13 +75,18 @@ The run writes these files to `out/spike/`:
 7. `make adc`: 300 ms of `examples/adc`, an STM32F072 that reads back
    through its ADC the divider it drives (below), then `scripts/check_adc.py`
    and the hashes of the one-cell reference that pushes the ADC value at
-   every lattice point (lookahead changes only `grant` records).
+   every lattice point (lookahead changes only `grant` records);
+   `make adc-order` (the engines registered in the other order),
+   `make adc-stock` (the ADR-003 board on Renode's stock ADC, `--adc-model
+   stock`, against its own references) and `make adc-model` (the Renode-only
+   tests of Breadboard's ADC model and timer TRGO, ADR-005).
 
 `make feedback-determinism` (10 runs), `make feedback-open` (the partition
 gate of the open-loop variant), `make lookahead-inert` and
 `make lookahead-equiv` (the lookahead equivalence gate) run in their own CI
-job, and `make adc-equiv` (the ADC gates) and `make adc-renode` (the
-Renode-only ADC model test) in another.
+job, and `make adc-equiv` (the ADC gates), `make adc-determinism` (10 runs)
+and `make adc-renode` (the Renode-only test of the stock ADC model) in
+another.
 
 ## Feedback example
 
@@ -114,8 +119,11 @@ a circuit source) gives long grants with byte-identical outputs too.
 
 ## ADC example
 
-`examples/adc` (ADR-003 Part C) runs on Renode's stock STM32F072, whose ADC
-model (`STM32F0_ADC`) External Control can drive:
+`examples/adc` (ADR-003 Part C, ADR-005) runs on Breadboard's STM32F072:
+Renode's stock platform with Breadboard's own ADC model (`BbStm32F0Adc`,
+RM0091: hardware triggers, conversion timing, the analog watchdog) and
+timers with a trigger output (`BbStm32Timer`, TRGO), loaded from one cached
+plugin assembly (`engines/cpu-renode/platforms/stm32f072-bb.repl`):
 
 ```
 U1.PA4 ─ 25 Ω ─ R1 10 kΩ ─ ADC_IN ─ R2 33 kΩ ∥ C1 470 nF ─ GND
@@ -123,15 +131,25 @@ U1.PA4 ─ 25 Ω ─ R1 10 kΩ ─ ADC_IN ─ R2 33 kΩ ∥ C1 470 nF ─ GND
 U1.PA5 (ALARM) ─ 25 Ω ─ R3 330 Ω ─ LED ─ D1 (red) ─ GND
 ```
 
-TIM3 starts a conversion every 999 µs (Renode counts ARR ticks) and toggles
-PA4 every 50th time. The analog watchdog ([1.0 V, 2.0 V]) drives ALARM, and
-code bits 4 and 8 go to PA6/PA7. ngspice pushes ADC_IN to the ADC at the
-10 µs lattice points where its whole millivolts change, which is all
-Renode's ADC converts; Renode sets each value while paused on that lattice
-point. With lookahead the sleeping MCU's promise lets ngspice run ahead
-until the next millivolt change: 6 344 grants for 300 ms instead of 30 000,
-with byte-identical outputs (`make adc-equiv`). `board-open.cir` drives the
-divider from a circuit source instead (no loop): 30 grants of 10 ms.
+TIM3's update event (every 999 µs; Renode counts ARR ticks) triggers each
+conversion through TRGO, with no TIM3 interrupt. The ADC samples ADC_IN
+1 063 ns after the trigger and ends the conversion 4 750 ns after it
+(PCLK/2, 1.5 cycles of sampling, 12 bits, RM0091 and the datasheet's
+latencies); its interrupt then drives ALARM from the analog watchdog
+([1.0 V, 2.0 V]), copies code bits 4 and 8 to PA6/PA7 and toggles PA4 every
+50th conversion. ngspice pushes ADC_IN at the 10 µs lattice points where its
+12-bit code changes; the Renode engine writes the pushes of a grant to the
+ADC model as timed inputs, and a conversion reads the latest push strictly
+before its sample instant. Because the model reads its input only at sample
+instants that the sleeping MCU's lookahead promise never passes, the ADC pin
+is a *sampled input* (ADR-005 D3): quiet grants run to the next TIM3 update
+whatever ADC_IN does, and an out-of-window value is reported at the next end
+of conversion, as on silicon. The run takes about 1 200 grants for 300 ms
+instead of 30 000, with byte-identical outputs (`make adc-equiv`).
+`board-open.cir` drives the divider from a circuit source instead (no loop):
+30 grants of 10 ms. `bb run --adc-model stock` (with
+`firmware/build/adc_board_isr.elf`) runs the ADR-003 board on Renode's stock
+`STM32F0_ADC` (`make adc-stock`).
 
 ## Result
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# ADR-003 plan step 9 (D6) gates for the ADC boards (examples/adc).
+# ADR-003 plan step 9 (D6) gates for the ADC boards (examples/adc), on
+# Breadboard's ADC model since ADR-005 step 5 (D3: the ADC pin is a sampled
+# input, so nothing is watched and quiet grants never stop at a push).
 #
 #   adc_equiv.sh <bb> <out-dir> <hashes> <open-hashes> <cyclic-args> -- <open-args>
 #
@@ -10,22 +12,22 @@
 #   ref      cyclic board, --lookahead off --adc-push every: the one-cell
 #            reference that pushes the ADC value at every lattice point
 #   a        cyclic board, --lookahead off (Part A: one-cell lockstep, the
-#            default push on a whole-millivolt change)
+#            default push on a code12 change)
 #   b-1ms    cyclic board, lookahead on (Part B), --max-quantum 1ms
 #   b-10ms   cyclic board, bb's defaults (Part B, 10 ms)
 #   open-ref open board (acyclic, ngspice -> U1), --max-quantum 10us
 #            --adc-push every: its one-cell every-lattice-point reference
 #   open-1ms, open-10ms, open-50ms
-#            open board, Part A long grants: Renode splits each RUN_FOR at
-#            the pushes in it and sets the value while paused there
+#            open board, Part A long grants: the pushes of each grant reach
+#            the ADC model as timed inputs before Renode runs it
 #
 # Gates: every run exits 0 (a broken quiet promise fails a run with
 # PromiseBroken) and passes check_adc.py (every conversion's edges as the
 # firmware model predicts from ADC_IN); the Part B runs print bb's
-# "0 promises broken" line and stop early at pushes (`stop:ngspice`), among
-# them pushes that move ADC_IN across the watchdog window inside a promised
-# window (the analog-watchdog wakes, caught by the watch: check_adc.py
-# --require-stops); ref
+# "0 promises broken" line and never stop early at a push (no
+# `stop:ngspice`: check_adc.py --require-no-stops), although pushes move
+# ADC_IN across the watchdog window inside promised windows (the model
+# reports them at the next end of conversion, a clock limit); ref
 # and open-ref give the committed hashes <hashes> and <open-hashes>
 # (nets.csv, events.jsonl, nets.vcd, non-grant-records; `make
 # golden-update`); every other run matches its reference byte for byte in
@@ -73,7 +75,7 @@ for r in "${runs[@]}"; do
     echo "adc-equiv: $r: $(grants "$d") grants ($(limits "$d"))"
     grep -h 'bb run:' "$d.log" | sed 's/^/adc-equiv:   /'
     opt=()
-    [[ $r == b-* ]] && opt=(--require-stops)
+    [[ $r == b-* ]] && opt=(--require-no-stops)
     python3 "$here/check_adc.py" "$d" "${opt[@]}" | sed "s/^/adc-equiv:   /" \
         || { echo "adc-equiv: FAIL: $r check_adc"; status=1; }
 done
@@ -99,12 +101,13 @@ for r in b-1ms b-10ms; do
     grep -q '^bb run: lookahead: .* 0 promises broken$' "$out/$r.log" \
         || { echo "adc-equiv: FAIL: $r: no lookahead summary"; status=1; }
     stops=$(grep -c '"limited_by":"stop:ngspice"' "$out/$r/events.jsonl" || true)
-    [[ $stops -gt 0 ]] || { echo "adc-equiv: FAIL: $r: no early stop at an ADC push"; status=1; }
+    [[ $stops -eq 0 ]] || { echo "adc-equiv: FAIL: $r: $stops early stops at an ADC push"; status=1; }
 done
 if [[ $status -eq 0 ]]; then
     echo "adc-equiv: PASS (Part A one-cell, Part B at 1 ms and 10 ms, and the open board at" \
          "1, 10 and 50 ms: nets.csv, nets.vcd and non-grant records identical to the" \
-         "every-lattice-point reference; no promise broken; every conversion as predicted)"
+         "every-lattice-point reference; no promise broken; no early stop at a push;" \
+         "every conversion as predicted)"
 else
     echo "adc-equiv: FAIL"
 fi
