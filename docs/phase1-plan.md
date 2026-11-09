@@ -1,0 +1,528 @@
+# Phase 1 plan: a real board from KiCad (dial-me-spinner rev A)
+
+- **Status:** Accepted (2026-11-09), with the approver decisions below
+  (revised 2026-11-09 after two design reviews). Milestones start with M0.
+- **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
+  import and `board.bbm`), ADR-008 (nRF52840 target). All three are
+  Accepted (2026-11-09) with the same approver decisions.
+- **Replaces:** the design doc's Phase 1 definition ("worked example 1 from a
+  real KiCad project": an invented STM32F103 blinky board) with the user's
+  own board, **dial-me-spinner**, as the reference board (user-approved
+  direction).
+- **Evidence:** three research passes (board and SPICE suite, Renode 1.17.0
+  nRF52840, KiCad import), measurements for this plan, two critiques, and
+  re-measurements for this revision. Scratch work is in WSL under
+  `~/bbscratch-p1-board`, `~/bbscratch-p1-nrf`, `~/bbscratch-p1-kicad`,
+  `~/bbscratch-p1-design`, `~/bbscratch-p1-crit`, `~/bbscratch-crit-p1` and
+  `~/bbscratch-p1-rev` (this revision). Neither repository was modified by
+  any of the measurements.
+
+## Approver decisions (2026-11-09)
+
+Recorded after the human approver reviewed this plan and ADR-006, ADR-007
+and ADR-008. The same three decisions are recorded in each ADR.
+
+**A. Every recommended answer is accepted,** here (§7) and in the three
+ADRs' own question lists:
+
+1. **Numerics (Q1):** S1 as planned (a timeboxed view-local fix of the
+   TPS22917 turn-off, before M5), with the datasheet-fitted view as the
+   fallback.
+2. **Licences (Q2):** Apache-2.0 for breadboard.dev and for first-party
+   packages. `examples/dial-me-spinner/` vendors the reference `.net`,
+   `.kicad_sch` and `.kicad_pro` files, and the migrated suite models.
+3. **TI-derived TPS22917 view (Q3):** it stays **local-only**
+   (`license = "LicenseRef-local-only"`, in a package path outside the
+   repository, never committed). A datasheet-fitted TPS22917 view is the
+   committed default. **M5b is therefore required**, not conditional; the
+   exit estimate is the one with M5b (about 11.5 weeks).
+4. **Solver options (Q5):** option sets are part of lattice
+   qualification, `phase0` is the default for imported boards, and a bench
+   may use another named set only where every in-scope view is qualified
+   under it (ADR-006 D6).
+5. **Exit scope (Q6):** E1 on one simulated board (the main board), at the
+   nominal and cold benches. E2, GDB, E3 and system import follow.
+6. **Design-doc deviations (Q7):** all accepted as recorded deviations.
+7. **Canonical JSON and `confidence` (Q8):** Breadboard's integer-only
+   canonical JSON, and `confidence` as an enum.
+8. **nRF CPU speed (Q9):** `PerformanceInMips: 64`; busy-waits documented
+   at about 2/3 of their requested time; rule timing only with
+   `k_sleep`/RTC.
+9. **Firmware location (Q10):** `examples/dial-me-spinner/firmware` in
+   breadboard.dev.
+10. **SAADC loading (ADR-008 Q4–Q6):** the loading `adc_in` design as
+    recommended (ADR-008 approver decisions).
+
+**B. Publication (replaces the recommended answer to Q4).** No GitHub
+repository is created, nothing is pushed and no remote is added during
+Phase 1's milestones. M7 runs the stranger test (§5) from a **local
+clone** (a file path or `file://` URL) and stops there. The human decides
+publication afterwards. The README gives the clone URL as a placeholder,
+clearly marked to be filled in at publication.
+
+**C. The reference revision changes to `6854d25`.** The reference board is
+dial-me-spinner branch `kicad10-port`, commit `6854d25` ("Move the
+toolchain and boards to KiCad 10.0.8, with no change to the design"; its
+message says the netlists are connectivity-identical to the KiCad 9.0.9
+ones). `dc96515` (KiCad 9, `main`) becomes the **secondary** import check:
+it is not a gate for E1, but gate M4c still requires it to give the same
+`board.bbm` if the connectivity is truly identical, and records the
+differences if it is not. Every reference to `dc96515` as the reference
+in this plan, the three ADRs, the M0/M4b/M4c gates and
+`examples/dial-me-spinner/SOURCE` is updated, and the gate counts are
+re-derived at `6854d25` (M0 below; they are unchanged: 201 parts, 142
+nets, 657 pin nodes on the main board).
+
+## 1. Goal
+
+Phase 0 proved the seam: a hand-written netlist, one MCU pin, an RC or a
+divider, byte-identical results. Phase 1 proves the **funnel** on a board
+nobody wrote for Breadboard:
+
+> Import a real KiCad project, resolve its parts to packages, load real
+> firmware on the real MCU, and reproduce, in a co-simulation, a result
+> that the board's own SPICE test suite established by hand: a firmware
+> rule that protects the hardware.
+
+The reference board is dial-me-spinner **rev A, pinned at commit `6854d25`**
+(branch `kicad10-port`, KiCad 10.0.8; approver decision C). It descends
+from `dc96515` (`main`, KiCad 9.0.9), the first pin, which stays as the
+secondary import check (M4c). A pin is needed because:
+
+- the working tree has uncommitted edits to `hardware/design/sheets/*.py`;
+- branches move (`main`, `kicad10-port`, rev B work);
+- rev B replaces the SSD1351 OLED.
+
+The board has:
+
+- an nRF52840 in a Raytac MDBT50Q-U1MV2 module;
+- 201 parts and 142 nets on the main board, plus 21 parts and 17 nets on the
+  base board (both re-derived at `6854d25`, M0);
+- an ngspice test suite (`hardware/sim`). Its everyday subset gave 718
+  passed and 44 expected failures in 3 min 24 s. Its decks already model
+  each MCU output as a digital output plus glue.
+
+That last point is exactly Breadboard's pin model, so the suite is a ready
+cross-check. The suite commits no results at `6854d25` (`hardware/sim/results/`
+is git-ignored), so M0 regenerates them (§4). Between `dc96515` and
+`6854d25` the suite's models are unchanged; only `spicelib.py` (pin names
+from `libparts`) and one line of `test_led_data.py` changed.
+
+## 2. Worked examples (ranked)
+
+All three come from the board's firmware rules and from suite tests. Each is
+scored on two things: what Renode 1.17.0 can do without new peripheral
+models, and how much new modelling it needs.
+
+### E1 (rank 1, Phase 1's definition of done): LED rail sequencing (LSW-3, LED-DATA-V4, LSW-2)
+
+Firmware drives LED_PWR_EN (P1.04, which turns on U2 TPS22917) and the LED
+data pin P0.06, both as plain GPIO, following `docs/firmware.md` §6.4 of
+dial-me-spinner:
+
+- **On:** LED_PWR_EN high, then at least 10 ms with P0.06 low, then P0.06
+  may go high.
+- **Off:** P0.06 low, then LED_PWR_EN low, then at least 30 ms before the
+  next turn-on.
+
+The firmware times both waits with `k_sleep` (or the regulator's
+`startup-delay-us`, which sleeps), never with `k_busy_wait`: busy-wait
+loops do not run at their real speed in Renode (ADR-008 D1). A second
+firmware build applies the deliberately wrong order: P0.06 is high while
+VLED is off.
+
+- **Analog side:**
+  - U2 and its CT capacitor C7;
+  - the VLED capacitance (C8, C9, C101–C148);
+  - quick discharge through R4;
+  - the data chain R40/R41/R43 into D101's input clamp;
+  - the 48 LED supply loads.
+
+  The suite has all of these models.
+- **CPU side:** GPIO only. Renode's nRF52840 GPIO works through External
+  Control (measured), so E1 needs **no new Renode peripheral model**. That
+  is why it ranks first.
+- **Power path: a bench, not the base board.** The suite drives VSYS
+  through the base board's BQ25180 battery path (a behavioural BAT-FET
+  model, a temperature-dependent pack resistance `RPACK`, the base-board
+  VSYS capacitors and the link harness) and makes +3V3 an ideal LDO,
+  `min(3.3, V(VSYS) − 44.2 mV)`. Phase 1 simulates only the main board, so
+  E1 has two benches that stand in for that path with the suite's own
+  constants (`test_load_switches.py` @6854d25, unchanged since `dc96515`):
+
+  | Bench | VSYS source | Series R | Temp | +3V3 | VSYS load |
+  | --- | --- | --- | --- | --- | --- |
+  | `bench/nominal.toml` | 3.7 V | 0.319 Ω (RPACK 0.25 + BAT-FET 0.055 + harness 0.0142) | 25 °C | tracking supply, 3.3 V max, 44.2 mV drop | 50 mA |
+  | `bench/cold.toml` | 3.0 V | 0.569 Ω (RPACK 0.50 + 0.055 + 0.0142) | −10 °C | same | 50 mA |
+
+  The tracking supply and the DC load are the two bench additions this
+  needs (ADR-007 D5). **Not reproduced:** the BQ25180 power-path dynamics,
+  the base-board VSYS capacitance (omitting it should make VSYS sag more,
+  which is pessimistic for VLED; M6 measures the size), and every
+  tolerance, DC-bias and Monte Carlo corner (those need `pi`-rung views,
+  Phase 2).
+- **Checks.** The limits are the suite's limits, not values the suite
+  measured:
+
+  | Check | Limit (suite constant) | Benches |
+  | --- | --- | --- |
+  | LED-DATA-V4: VLED at the instant P0.06 first goes high | ≥ 2.67 V (`FW_VLED_FRAME_MIN`) | nominal, cold |
+  | LSW-3: max(V(LED_DIN) − V(VLED)) over the run | ≤ 0.7 V (DI abs max) | nominal, cold |
+  | LSW-2: VLED below 10 % of its on value after LED_PWR_EN falls | within 30 ms (`FW_LED_OFF`) | nominal, cold |
+  | Wrong-order firmware | the LSW-3 check **fails**, and the message gives the excursion and the clamp current from the series-resistor drop | cold |
+
+  The suite's measured values (VLED 2.9715 V at the P0.06 rise at the cold
+  corner; 24 ms nominal QOD) are **reported** next to each result, never
+  used as limits. The suite's 26.6 ms worst case is out of E1: it needs
+  tolerance and DC-bias views.
+- **Cross-check (local, M6).** `scripts/dms_suite_deck.py` builds the
+  suite's own `led_rail_sequence` deck with the suite's functions, but with
+  the power path replaced by the **same** bench supply (the suite's own
+  `ideal_vsys` idiom plus the bench's series R and load) and the two PWL
+  sources replaced by the run's `pin_edge` records. VLED from that deck and
+  from the co-simulation must agree within 5 mV. The difference to the
+  suite's original battery-network deck at the same corner is reported, not
+  gated: it measures what the bench leaves out. The script needs the
+  dial-me-spinner repository (it exports `6854d25` with `git archive`, as
+  `scripts/dms_suite.sh` does), so it runs locally, not in the stranger
+  demo.
+
+### E2 (rank 2): battery reading, sample-rate error, low-battery LED shed (VSENSE, §12.4)
+
+Firmware reads VSYS_SENSE (R1/R2 = 2.2 MΩ/1 MΩ with C5 = 100 nF) on AIN0 =
+P0.02, using:
+
+- gain 1/6;
+- TACQ 40 µs;
+- 12 bits with 8× oversampling (Zephyr's simple mode, which turns on BURST:
+  one SAMPLE task runs 8 back-to-back acquisitions in hardware);
+- VBAT_est = 0.979 × code × 2.8125 mV.
+
+The bench ramps a battery source (open-circuit voltage plus 0.2–0.4 Ω) down
+through the 3.53 V threshold. When VBAT_est drops below 3.53 V, the firmware
+runs E1's off sequence ("LEDs off").
+
+- **What is observable where.** One 12-bit LSB at the pin is
+  3.6 V / 4096 = 879 µV. The suite's sample-rate effect (356 µV with 1 s
+  bursts, 761 µV with 50 ms bursts, against a 439 µV half-LSB limit) is
+  below one LSB and is measured on the analog hold node against an
+  unloaded reference, at the suite's worst case (VSYS 3.0 V, CS pre-charged
+  to VDD max). So E2 has two kinds of check:
+  - **Analog-side** (not firmware-visible): the SAADC model records the
+    value it sampled at each sample instant (V(hold), ADR-008 D7). A
+    reference run of the same firmware with `load = "none"` records V(pad)
+    unloaded. The check script compares the averaged per-sample error with
+    356 µV (1 s) and 761 µV (50 ms) at the cold bench with VPRE = VDD
+    (ADR-008 D7 default). The tolerance is set from M8's measurement.
+  - **Firmware-visible:** codes match code = V/2.8125 mV within the model's
+    stated error; the C5 ÷ 10 fault (about 3.47 mV, about 4 LSB) shows in
+    the codes; LED_PWR_EN falls within one burst period after the
+    threshold crossing.
+- **Needs:**
+  - a SAADC model (absent in Renode 1.17.0), with BURST;
+  - an `adc_in` pin that **loads** the net: 2.5 pF sample capacitor plus
+    3 pF pad, with one charge transfer per acquisition (ADR-008 D7).
+    Without that load the sample-rate effect cannot appear.
+  - UART log lines.
+
+  All three are in ADR-008.
+- **Out of E2 for Phase 1:** the SHIP write to the BQ25180 over I2C. That
+  needs TWIM with EasyDMA (Renode has legacy TWI only), a BQ25180 bus model
+  and the two-board system run.
+
+### E3 (rank 3, stretch): detent homing H0–H5 (§5.4, MD-1/2/3, DRV5032)
+
+PWM0 microstepping drives two DRV8837s and the stepper. A mechanism model
+maps the microstep phase to carriage position and field, which drives the
+DRV5032 HOME_N input.
+
+- **Needs:**
+  - a PWM model (absent);
+  - TEMP and NVMC stand-ins (absent);
+  - an averaged DRV8837/PWM analog view: switch level runs at about 1.75 s of
+    wall time per ms of simulated time, so the 2.4 s homing would take about
+    70 min;
+  - a pin-level device for the mechanism and field.
+- **It is the stretch** because it needs four new models before it shows
+  anything.
+
+**Not in Phase 1:**
+
+- S4 (OLED start-up on a dead battery: brown-out reboot loop);
+- S5 (battery sag, POFWARN, SHIP).
+
+Both need a POWER/reset model driven by an analog rail, the BQ25180 I2C
+model and the two-board system. They belong in Phase 2's `pi` fidelity.
+
+## 3. Scope
+
+**In (the exit, M0–M7):**
+
+- **KiCad import (ADR-007):**
+  - `kicad-cli sch export netlist` on a temporary copy, then a native
+    S-expression parse;
+  - KiCad 9 and 10;
+  - part resolution (exact MPN, or a package's declared patterns);
+  - deterministic, content-only `board.bbm`;
+  - one simulated board per project, with qualified names (`main:U2`)
+    specified now so that systems are additive later;
+  - `bb open`, `bb flash`, `bb run`, `bb probe`.
+- **Packages (ADR-006):**
+  - `part.toml` v0 and `pins.toml`, with JSON Schemas and a versioning
+    policy in `spec/`;
+  - local package directories and `bb.lock`, which also pins the engine
+    platform identity;
+  - generic R/C/L packages;
+  - packages for the two existing STM32 platforms;
+  - `nordic/nrf52840-qiaa`, `raytac/mdbt50q-u1mv2`;
+  - the E1 parts (TPS22917, WS2812C), migrated from `hardware/sim/models`
+    under their provenance;
+  - `bb pkg lint` and `bb pkg test` (lattice qualification through the real
+    `NgspiceEngine`, per solver option set).
+- **nRF52840 target (ADR-008):**
+  - an offline platform overlay at 64 MIPS;
+  - nRF pin names;
+  - the engine overflow fix;
+  - bare-metal gate firmware;
+  - a Zephyr app for E1 (prebuilt, pinned, banner-free).
+- **Fidelity:** `--fidelity fast` only, with a per-instance override of the
+  analog view and the ladder fallback rule (ADR-006 D3).
+- **A minimal bench (`bench.toml`):**
+  - supplies on nets (with source resistance), including one tracking
+    (LDO-like) supply;
+  - DC loads;
+  - temperature;
+  - the analog scope;
+  - PWL sources;
+  - solver options (which must be a qualified set).
+- **Setup for strangers:** `make setup SETUP=demo` installs `bb` on PATH,
+  skips the ARM toolchain, and runs as root without sudo (M3).
+
+**After the exit (Phase 1, M8–M11):** E2 (SAADC, loading `adc_in`, UART
+log), GDB passthrough, the E3 stretch, and two-board system import (the base
+board and `[[connection]]`, M11).
+
+**Out (each named, so it is a decision rather than a gap):**
+
+| Item | Why / where |
+| --- | --- |
+| Public registry, signing, `bb pkg publish` | Phase 2 (design doc). Packages are local directories plus a lockfile |
+| PCB geometry, parasitics, gerbers | Nothing at `fast` consumes geometry. Phase 1 may parse `.kicad_pcb` only as an optional cross-check (ADR-007 D8) |
+| `pi`/`si`/`em` rungs, rail-tracking pin outputs, brown-out reset from a rail | Phase 2 (S4, S5). Views may already declare `pi` |
+| Python device API, the design doc's "5 example sensor packages" | Bus devices: Renode's nRF TWI drives no pins and has no External Control route; SPI has one, but its synchronous callbacks need a time-grant analysis (ADR-006 D7). Phase 2, with TWIM/SPIM models |
+| BLE/RADIO, USBD, NFCT, QSPI, TWIM, SPIM3, I2S-to-pin, PWM (unless E3) | Absent or not faithful in Renode 1.17.0. Each is its own model and gate (ADR-008 D9 lists them) |
+| RP2040 package | The design doc lists it. The Renode 1.17.0 RP2040 platform was not evaluated, and nothing on this board needs it. Deferred |
+| `bench.yaml` with CSV playback, `bb test`, JUnit | Phase 2 (design doc). Phase 1 checks are scripts over the outputs, as in Phase 0 |
+| Multi-MCU, multi-board **simulation** | Phase 3 (design doc). M11 imports the main/base system; only one board is ever simulated |
+| Firmware images other than ELF | The schema takes a list of typed images now (ADR-007 D5); Phase 1 implements `elf` only |
+
+## 4. Milestones (ordered; each is gated and committed after its gates)
+
+Every milestone keeps `make test` green. Every new board or run mode gets
+two things before it is on by default:
+
+- an equivalence gate against its one-cell reference;
+- a `make cost-table` row measured with the ADR-003 protocol.
+
+These are AGENTS.md rules and they hold here unchanged.
+
+| # | Milestone | Gate (must pass) | ADR |
+| --- | --- | --- | --- |
+| M0 | Approvals and inputs: ADR-006/007/008 accepted. Licence and publication decisions (§7, approver decisions A and B). Reference commit `6854d25` recorded (decision C; `dc96515` as the secondary import check). The reference KiCad inputs vendored. **The suite re-run at `6854d25`** from a `git archive` export, with pinned ngspice 42, its `results.json` committed under `examples/dial-me-spinner/suite/` with the ngspice version and the numeric fallback level each deck used | Approver sign-off. `examples/dial-me-spinner/SOURCE` names the commit and the sha256 of each imported file (`scripts/dms_source_check.sh`). The committed `results.json` reproduces on a second run (`make dms-suite-check`) | all |
+| M1 | Engine fix: clamp the lookahead promise before `Time::from_ns` (`engines/cpu-renode/src/lib.rs:1509` panics past about 18 446 s) | A new unit test with a promise of `u64::MAX` ns returns a clamped grant. `make test`, `make lookahead-equiv` unchanged | 008 D6 |
+| S1 | **Numerics spike (blocks M5, timeboxed to 1 week):** make the E1 deck pass the LED_PWR_EN fall and the QOD discharge through `NgspiceEngine` (lattice 10 µs, edges as digital glue) at Phase 0's option set, by a view-local fix of the TPS22917 turn-off and QOD path (§6 R1). The harness in `~/bbscratch-p1-rev/eng` is the starting point. If no view-local fix works in the timebox, take the R1 fallback | The E1 deck, through the engine, runs 120 ms at both benches at Phase 0's options with VLED within 1 mV of the suite's fallback-option result. A measured cost table (wall time per bench and option set) replaces §8's estimate | 006 D6 |
+| M2 | nRF52840 platform `Nrf52840Bb` (offline overlay, `PerformanceInMips: 64`, host-port block). `PinSpec::nrf`. Bare-metal gate firmware (blinky, feedback, ppi, busy-wait) in `engines/cpu-renode/tests/firmware/nrf52840/` | `make nrf-gates`: blinky edge list identical at one-cell, 10 ms, plugin armed and lookahead on. The feedback board identical to its `--lookahead off` reference with no broken promise. Lookahead self-test status 0x3. `nrf-busywait` records the virtual time of a 10 ms nrfx busy-wait (expected about 6.67 ms, ADR-008 D1). `make pool-equiv` with the nRF configurations added | 008 D1–D4 |
+| M3 | Package format v0. `spec/package.md` plus schemas, the value grammar and the schema versioning policy. Generic R/C/L. `st/stm32f103c8` and `st/stm32f072rb` packages. Platform identities. `bb pkg lint/test`. `bb.lock`. **Setup:** `make setup` installs `bb` into `~/.local/bin`, `SETUP=demo` skips the ARM toolchain, root runs without sudo | `examples/spike`, `feedback` and `adc` expressed through packages give the committed hashes (`tests/golden/*/outputs.sha256`) byte for byte. Schema validation of every `part.toml`/`pins.toml` in CI. `make setup SETUP=demo` timed in a clean `ubuntu:24.04` container (R7) | 006 |
+| M4 | Importer (`importers/kicad`), `board.bbm`, `bb.toml`, name resolution, `bb open`/`flash`/`run`/`probe`. Existing `board.cir` files become a second front end of the same elaborated board | (a) `examples/adc` drawn in KiCad (new, in the repo), imported, gives `nets.csv`, `nets.vcd` and the non-grant records byte-identical to `board.cir`. (b) dial-me-spinner main at `6854d25` (the vendored netlist): 201 parts, 142 nets, 657 pin nodes (re-derived at M0); plus a small synthetic two-board fixture in which a shared bare ref (`U1`) is an error that lists `a:U1`, `b:U1`. (c) The committed KiCad 10.0.8 netlist at `6854d25`, fresh KiCad 10.0.8 exports (Linux and Windows `kicad-cli`) and the `.kicad_sch` route give a byte-identical `board.bbm`. Secondary (not a gate for E1): `dc96515`'s KiCad 9.0.9 netlist must give the same `board.bbm`; M0 measured the content the importer reads (ADR-007 D3) identical on the main board, so any difference is a bug to fix or, if it is a real connectivity difference, recorded. (d) Two imports give a byte-identical `board.bbm`. (e) A schematic newer than the supported versions, and a `.net` from an unsupported Eeschema major, are refused | 007 |
+| M5 | E1 packages (`ti/tps22917`, `worldsemi/ws2812c-2020`, `nordic/nrf52840-qiaa` GPIO views, `raytac/mdbt50q-u1mv2`), migrated from `hardware/sim/models` with their provenance and S1's fix. Each view is **lattice-qualified** at Phase 0's option set | `bb pkg test` per package through `NgspiceEngine`: its vectors reproduce M0's committed `results.json` values within the stated tolerance | 006 D4–D6 |
+| M5b | **Required** (approver decision A: Q3 keeps the TI-derived view local-only): a datasheet-fitted TPS22917 view, qualified, gated against the vendor-derived view locally, becomes the committed default | As M5, plus agreement with the vendor-derived view on the E1 checks within 10 mV / 1 ms | 006 D9 |
+| M6 | E1 run: `examples/dial-me-spinner/` (`bb.toml`, `bench/nominal.toml`, `bench/cold.toml`, firmware sources and prebuilt ELFs). Check script `scripts/check_dms_rail.py` | The correct-order firmware passes every E1 check at both benches. The wrong-order firmware fails exactly the LSW-3 check (the script expects it to fail). **Board-level convergence:** the whole E1 deck completes 120 ms at each bench's option set, at both engine orders, in under 30 s. One-cell reference equivalence. 10-run determinism. Goldens in `tests/golden/dms-rail/`. Local cross-check: PWL replay into the suite-derived bench deck within 5 mV on VLED | 006, 007, 008 |
+| M7 | Definition of done, packaged: README quickstart (clone URL as a marked placeholder), `make demo`, cost-table row. **Not published** (approver decision B): the stranger test runs from a local clone and stops; the human decides publication | §5, measured in a clean Ubuntu 24.04 container and on a clean WSL distro, cloning from a local path or `file://` URL | — |
+| M8 | E2: `BbNrf52Saadc` model with BURST, loading `adc_in`, per-sample trace, UART-to-`log` records, VDD channel | `make nrf-saadc-model` (register and timing tests, the ADR-005 test-plan shape, including an 8× burst with one charge transfer per acquisition). `make dms-vsense`: the analog-side check against the `load = "none"` reference run (356 µV at 1 s and 761 µV at 50 ms, tolerance set from M8's measurement), the firmware-visible checks (codes, C5 ÷ 10 fault, LED shed timing). Equivalence with the every-lattice-point reference; no `stop:ngspice` | 008 D7–D8 |
+| M9 | GDB passthrough (`bb run --gdb <port>`) | Prototype first (ADR-008 D10). Then a run with GDB attached, one breakpoint hit and continued, gives `nets.csv`, `nets.vcd` and non-grant records identical to the run without GDB. If that cannot hold, the mode is marked debug-only and its outputs carry a `debug` flag | 008 D10 |
+| M10 | Stretch E3: PWM model, TEMP and NVMC stand-ins, the averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device | One full step at 446 PPS against `test_firmware_microstep_pwm`. HOME_N latency within 75 ms. Equivalence and determinism | 006 D7, 008 D9 |
+| M11 | Systems: base board import, `[[connection]]`, the harness view | Base board: 21 parts, 17 nets. The mated system with the shared refs U1, U2, J1 and TP1 all resolved by qualified name; a bare shared ref is an error | 007 D5 |
+
+Dependencies:
+
+- M1 → M2 → M6.
+- S1 → M5 (S1 can run in parallel with M1–M4).
+- M3 → M4 → M5 → M5b → M6 → M7 (M5b required by decision A).
+- M8 needs M6.
+- M9 needs M2.
+- M10 needs M6 and M8's model style.
+- M11 needs M4.
+
+## 5. Definition of done (the Phase 1 exit)
+
+The design doc's exit is "a stranger can clone, install and run the
+reference demo from the README in under 15 minutes". For this board:
+
+1. On a clean Ubuntu 24.04 (container or fresh WSL distro), with no KiCad,
+   no Zephyr SDK and no dial-me-spinner checkout, a person who has not
+   worked on Breadboard follows the README and, **in under 15 minutes of
+   wall time including `make setup`**, runs:
+
+   ```sh
+   git clone <CLONE-URL> breadboard.dev && cd breadboard.dev   # placeholder, filled in at publication (decision B); M7 uses a local path
+   make setup SETUP=demo                     # Renode, Rust, ngspice; installs bb into ~/.local/bin
+   cd examples/dial-me-spinner
+   bb open                                   # imports the pinned netlist, resolves parts, writes board.bbm
+   bb flash --target U10 firmware/prebuilt/led_rail.elf
+   bb run --for 120ms --bench bench/cold.toml --probe net:VLED --probe net:LED_DIN --out out/rail
+   python3 ../../scripts/check_dms_rail.py out/rail      # PASS: LED-DATA-V4, LSW-3, LSW-2
+   ```
+
+   `net:LED_DIN` resolves to `/LED ring/LED_DIN` as the unique leaf name
+   (ADR-007 D7). They then repeat the run with
+   `firmware/prebuilt/led_rail_wrong_order.elf` and see the LSW-3 check
+   **fail**, with the DIN-over-VLED excursion and the clamp current in the
+   message.
+2. The same outputs are byte-identical across 10 runs and against the
+   committed hashes, and `make test` (now including E1) is green.
+3. `bb open` on the KiCad sources (with KiCad 9 or 10 installed) gives the
+   **same** `board.bbm` as the committed netlist (gate M4c). Source paths,
+   hashes and schematic versions live in `.bb/import.json`, not in
+   `board.bbm`, so the identity holds by construction. A user with KiCad can
+   therefore start from the schematic, and the stranger does not need
+   KiCad.
+4. Every analog view used in the run is listed with its provenance,
+   confidence, qualification and the solver option set in
+   `out/rail/run.json` (ADR-007 D6). A view whose provenance is `estimated`
+   or `agent_generated` is flagged in `bb run`'s summary.
+
+M7 measures it: a timed script in a clean container plus one human run,
+both cloning from a local path or `file://` URL (approver decision B).
+M3 measures `make setup` first, so a miss is known early (R7).
+
+## 6. Risks
+
+| # | Risk | Evidence | Mitigation |
+| --- | --- | --- | --- |
+| R1 | **The E1 deck does not get past the LED_PWR_EN fall through the engine, at any option set measured.** Breadboard's ngspice engine needs TMAX to divide the 10 µs lattice and clamps every step to the lattice (`engines/analog-ngspice/src/lib.rs`, `NgspiceConfig::lattice`). The options come from the deck (Phase 0: `.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13` in every `examples/*/board.cir`) | **Standalone** (ngspice 42 batch, the suite's `led_rail_sequence` cold deck, TMAX 10 µs, 7 runs in parallel at load 11, 120 s cap; `~/bbscratch-p1-rev`): Phase 0 options killed; Phase 0 + `rshunt`, + Gear and `rshunt`, and reltol 1e-4 + Gear + `rshunt` killed; Phase 0 + Gear 112.8 s; reltol 1e-4 85.4 s; the suite's fallback (reltol 1e-3, Gear, `rshunt` 1e12) 4.4 s. Every run that finished gives the same VLED (2.971511 V at 10.5 ms, 0.104326 V at 50.6 ms). **Through `NgspiceEngine`** (lattice 10 µs, edges as 100 ns digital glue, grants 10 µs–1 ms, 120–240 s caps): Phase 0 reaches the LED_PWR_EN fall (15.6 ms) in 1.5–3.3 s with the same VLED (2.971511 V at 10.5 ms) and stalls there; reltol 1e-4 and the suite fallback pass the fall and stall at 27.92 ms during QOD (VLED 0.914 V); Phase 0 + Gear stops at the LED_PWR_EN rise. The stall points do not depend on the grant size. The QOD deck at reltol 1e-5 also fails, at 0.1 ms (critique) | **S1**, timeboxed and before M5: a view-local fix of the TPS22917 turn-off path (the suite already replaced two numerically fragile vendor blocks), qualified through the engine. Option sets are part of qualification (ADR-006 D6), so a looser set is allowed only where it is shown not to change results. **Fallback** if no view-local fix works: a datasheet-fitted behavioural TPS22917 view (M5b), which also answers R2. The exit date moves by M5b's 1.5 weeks |
+| R2 | **Licences.** Neither repo has a LICENSE file. The TPS22917 and TPS61040 views derive from TI models (SLVMCE8, SLVMDA8) whose redistribution terms were not checked | `git ls-tree dc96515` and `6854d25` (root): no LICENSE; same for breadboard.dev | Decided (approver decision A): Apache-2.0; the TI-derived view stays local-only and M5b's datasheet-fitted view is the committed default. The cross-check then compares different models of U2, so its 5 mV gate applies to the local vendor-derived run only |
+| R3 | **Reference board churn.** Uncommitted edits in the dial-me-spinner working tree, a `kicad10-port` branch, rev B | `git status` in dial-me-spinner; `6854d25` ("Move the toolchain and boards to KiCad 10.0.8, with no change to the design") on `kicad10-port` descends from `dc96515` and commits a `.net` from Eeschema 10.0.8 | Pin `6854d25` (decision C). Import from `git archive` of that commit, never from the working tree. The netlists and schematics are vendored (decision A). M4c also imports `dc96515`'s KiCad 9.0.9 netlist, which must give the same `board.bbm` (a free check of "no change to the design"; M0 found the importer's content identical on the main board) |
+| R4 | **Renode nRF gaps grow every scenario.** SAADC, PWM, TWIM, SPIM3, QSPI, NVMC, TEMP, POWER are absent. TIMER SHORTS and BITMODE are missing. PPI tasks are deferred to the lattice | Renode research, `nrf52840.repl` | E1 needs none of them. E2 adds exactly one model (SAADC). Each further model is its own ADR-005-style step |
+| R5 | **Static pin direction and no high-Z.** Renode's nRF GPIO keeps driving after a switch to input, and drive strength is ignored | Renode research §1 | Bindings in `bb.toml` fix direction and drive per pin. E1 uses fixed outputs. An end-of-run `PIN_CNF` audit of every pin on an analog-scope net warns when firmware's configuration differs from the bound model, or when an unbound pin is an output (ADR-008 D4) |
+| R6 | **Firmware toolchain weight and image identity.** The Zephyr workspace plus SDK is about 2.0 GB; NCS is not installed; the workspace is v4.5.0-rc3. The boot banner embeds `git describe` of the Zephyr tree | Renode research §3; `strings zephyr.bin` shows `Booting Zephyr OS build 76280bce2a05` | Commit prebuilt ELFs; a rebuild job checks the **loadable image** hash. The example pins `BUILD_VERSION` and turns the boot banner off, and the rebuild gate uses a second, fresh workspace (ADR-008 D5) |
+| R7 | **15 minutes not met.** The bb build is cheap (11.5 s clean release build, 24 cores); downloads dominate: Rust 1.99.1 about 617 MB, Renode portable 184 MB, the ARM toolchain about 930 MB installed. Today `make setup` uses sudo (absent in `ubuntu:24.04`), does not install `bb`, and always installs the ARM toolchain. breadboard.dev has no public remote | `scripts/setup.sh`; `git remote -v` empty; the GitHub URL returns 404 | M3: `SETUP=demo`, `bb` into `~/.local/bin`, a root path without sudo, and a timed clean-container run. M7: the timed run from a local clone; publication is the human's decision afterwards (approver decision B) |
+| R8 | **KiCad format drift.** KiCad 11 (schematic 20261106) is already on the dev branch. Windows `kicad-cli` writes CRLF and orders some pins differently. `kicad-cli` writes `.kicad_prl` into the project | KiCad research | Version gates on the schematic and on the `.net`'s Eeschema major. Canonicalise before hashing. Always run on a temporary copy |
+| R9 | **Whole-board decks are slow or fail to converge.** 201 parts, switching converters, motor drivers | Microstep deck: 1.75 s of wall time per simulated ms; R1 | The analog **scope** (ADR-007 D5) puts only the parts the scenario needs into ngspice. M6 adds a board-level convergence gate, because view-level qualification says nothing about the assembled deck |
+| R10 | **Model disagreement inside one part.** The nRF GPIO output resistance is 200 Ω in one suite file and 800 Ω in another; BSS138 Vth is 1.2 V against 1.5 V | Board research finding 7 | Packages keep several views with their own provenance. `bb pkg lint` reports conflicts and never averages them |
+| R11 | **Virtual CPU speed.** Renode's default is 100 MIPS; nrfx busy-waits count instructions as cycles | ADR-008 Context 3 | 64 MIPS in the overlay; rule timing with `k_sleep`/RTC only; the `nrf-busywait` gate documents the residual error |
+| R12 | **Schema churn.** Five new schemas are public API for agents | — | A versioning policy (ADR-006 D11) and reserved Phase 2 keys, before M3 freezes v0 |
+
+## 7. Questions for the approver (plan level)
+
+The ten most important questions across the plan and the three ADRs, most
+important first. Each ADR's own list has the rest. **All are answered**
+(see Approver decisions at the top): every recommendation is accepted
+except Q4, which decision B replaces, and the reference commit in Q2 is
+now `6854d25` (decision C).
+
+1. **Numerics (R1):** accept S1 (a timeboxed view-local fix of the TPS22917
+   turn-off, before M5) with the datasheet-fitted view (M5b) as the
+   fallback, and the exit date moving by 1.5 weeks if the fallback is
+   taken? **Recommended: yes.**
+2. **Licences:** Apache-2.0 for breadboard.dev and for first-party
+   packages, and may `examples/dial-me-spinner/` vendor the `.net`,
+   `.kicad_sch`/`.kicad_pro` files at the reference commit (`6854d25`
+   since decision C) and the migrated suite models under it? **Recommended: yes to both** (otherwise the demo needs
+   the dial-me-spinner repo to be public too).
+3. **TI-derived TPS22917 view:** commit it, or keep it local and commit a
+   datasheet-fitted default (M5b)? **Recommended: keep it local
+   (`LicenseRef-local-only`) until TI's terms are read, and do M5b.** It
+   also covers R1's fallback.
+4. **Publication:** where and when is breadboard.dev published, so that the
+   exit's `git clone` works? **Recommended: public GitHub
+   `tyevco/breadboard.dev` at M7, after Q2.** (Not adopted: decision B,
+   a local-clone stranger test, publication decided by the human
+   afterwards.)
+5. **Solver options:** options are part of lattice qualification; the
+   default for imported boards is Phase 0's set; a bench may use another set
+   only if every in-scope view is qualified under it, which requires its
+   vectors to agree with the default set's results within tolerance
+   (ADR-006 D6). **Recommended: yes.**
+6. **Exit scope:** E1 alone (one simulated board, nominal and cold benches)
+   is the exit; E2, GDB, E3 and system import (M11) follow. **Recommended:
+   yes.** E2 in the exit would add about 3 weeks.
+7. **Deviations from the design doc:** the `part.toml` restructure
+   (top-level `[behavioral]`, `[[analog]]` views, reserved `idd`/`rails`/
+   `ibis`); `board.bbm` split from `run.json`; no RP2040; a Rust-only device
+   API; PCB parse optional; systems after the exit. **Recommended:
+   accept all.**
+8. **Canonical JSON and `confidence`:** Breadboard's own canonical JSON
+   (sorted keys, arbitrary-precision integer literals, not RFC 8785), and
+   `confidence` as an enum (`unchecked`, `self_checked`,
+   `datasheet_checked`, `measured`). **Recommended: yes** (ADR-006 Q2,
+   ADR-007 Q1).
+9. **nRF CPU speed:** `PerformanceInMips: 64`, busy-waits documented as
+   running at about 2/3 of their requested time, rule timing only with
+   `k_sleep`/RTC. **Recommended: yes** (ADR-008 Q1).
+10. **Firmware location:** E1/E2 firmware in
+    `breadboard.dev/examples/dial-me-spinner/firmware` (dial-me-spinner
+    stays untouched). **Recommended: yes** (ADR-008 Q2).
+
+## 8. Cost and time estimate
+
+Assumptions: one lead (the approver) plus coding agents, as in Phase 0. The
+estimates are in agent-working weeks and are calibrated against Phase 0. For
+example, ADR-005 (one peripheral model with gates) took about 2 days of
+agent work. ADR-003 took about 2 days for 10 gated steps.
+
+| Milestone | Estimate | Note |
+| --- | --- | --- |
+| M0 | 2–3 days of approver time, plus 1 day | Licences, publication, ADR review; the suite re-run |
+| M1 | 0.5 day | One clamp plus a test |
+| S1 | up to 1 week | Timeboxed; parallel with M1–M4 if a second agent is free |
+| M2 | 1 week | Overlay, pins, 4 gate firmwares, pool-equiv |
+| M3 | 2 weeks | Schema, grammar, versioning policy, lint/test through the engine, 5 packages, the three Phase 0 examples through packages, setup changes and the clean-container timing |
+| M4 | 1.5 weeks | S-expression parser, resolver, name resolution, `board.bbm`, four CLI verbs, KiCad drawing of `examples/adc`. The base board moved to M11 |
+| M5 | 1.5 weeks | Assumes S1 found the fix |
+| M5b | +1.5 weeks, required | Decision A (Q3: the TI-derived view stays local) |
+| M6 | 2 weeks | Zephyr board definition, two firmware builds, two benches, checks, goldens, suite-derived cross-check deck, convergence gate |
+| M7 | 0.5 week | Clean-container timing from a local clone, README; no publication (decision B) |
+| **Exit (M0–M7)** | **about 11.5 weeks (with M5b)** | The design doc allows months 2–4 (about 12 weeks). The exit date is contingent on S1 |
+| M8 | 3 weeks | SAADC model with BURST (ADR-005 scale), pin-model change, reference runs, UART log |
+| M9 | 1 week | Prototype-dependent |
+| M10 | 3–4 weeks | Four models |
+| M11 | 1 week | Base board, connections, harness view |
+
+**Run cost of the demo.** Not yet known, which is why S1 must measure it.
+
+- Engine startup: about 1.5–1.75 s fresh for the nRF52840 (measured, at
+  100 MIPS; M2 re-measures at 64), or about 0.1–0.4 s on a warm pool.
+- ngspice: through the engine, the E1 deck's on-phase (0–15.5 ms) took
+  0.7–3.3 s depending on the option set and grant size (R1). The turn-off
+  edge and the 35 ms of QOD after it have no measured cost until S1's fix
+  exists.
+- Grants: E1 is acyclic (no MCU input is bound), so 12 grants of 10 ms at
+  about 7 ms each.
+
+The target stays under 10 s of wall time per demo run; S1's gate replaces
+this estimate with a measurement. Either way, the 15-minute budget goes
+almost entirely to `make setup`.
+
+**CI:** `make test` grows by about 1–2 min:
+
+- M2 gates: about 20 s;
+- M3 equivalence reruns: about 40 s on the pool;
+- E1 runs at two benches and determinism: about 60 s, if S1's cost holds.
+
+There is no new paid infrastructure. CI stays local-only, as now.
+
+## Review notes (2026-11-09)
+
+Two critiques of the first draft were resolved in this revision and in
+ADR-006/007/008. Items not adopted as proposed:
+
+- **"Replay into a suite-derived deck, or widen the 5 mV."** The first
+  option is adopted (the suite-derived deck uses the same bench supply). The
+  5 mV is kept for that comparison; the comparison against the suite's
+  original battery network is reported only, not gated, because the two
+  circuits differ by design.
+- **"Take the base board and `[[connection]]` out of the exit."** Adopted
+  (M11). The qualified-name rules are still specified now (ADR-007 D7), so
+  M11 adds no schema change.
+- **The 26.6 ms QOD worst case** is dropped from E1 rather than
+  re-scoped: it depends on tolerance and DC-bias views that are `pi` work.
