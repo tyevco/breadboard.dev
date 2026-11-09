@@ -4,7 +4,8 @@ Status: normative. Implementation: `bbcore::pin`, `bbcore::signal`. Changing
 this file requires an ADR. `digital_out` ramp start: ADR-003 D3 (plan step 3,
 Amendment 3). `digital_in` thresholding by the producing analog engine and its
 glue: ADR-003 D3 (plan step 4, Amendment 4). `adc_in`: ADR-003 D6 (plan step
-9, Amendments 5 and 10).
+9, Amendments 5 and 10), and ADR-005 D3/D5 (the code12 push key, raw
+microvolt delivery, timed inputs and the sampled-input rule).
 
 Every component pin has **exactly one** pin model, supplied by its package (in
 Phase 0, hand-written in the board netlist). The kernel connects pins to nets
@@ -104,24 +105,49 @@ boundary as `Analog` transitions of its trace, only at lattice points:
   delivers `uV = clamp(round(volts * 1e6), 0, round(vref * 1e6))`, whole
   microvolts clamped to `[0, vref]` (real converters saturate; Renode's
   model does not).
-- It emits a transition at `kL` only where the push key `floor(uV / 1000)`
-  (whole millivolts) changes, delivering exactly that many millivolts. That
-  is all Renode 1.17.0's `STM32_ADC_Common` converts:
-  `code = round_half_even(floor(uV / 1000) / (vref * 1000) * (2^bits - 1))`
-  (ADR-003 Amendment 5). So the rule is exact whatever resolution or
-  alignment the firmware selects, and `bits` documents the code mapping
-  only. A reference mode pushes `uV` at every lattice point; the converter
-  sees the same values (`bb run --adc-push every`).
+- It emits a transition at `kL` only where the **push key** changes: the
+  finest value the consumer's converter can see (ADR-005 D5).
+  - Breadboard's STM32F072 ADC model (the default, `bb run --adc-model bb`):
+    the key is
+    `code12 = min(4095, round_half_up(uV * 4095 / Vref_uV))` with
+    `Vref_uV = round(vref * 1e6)` (RM0091 13.9: `FULL_SCALE = 4095`;
+    saturating, as silicon does; ADR-005 approver decision 2), and the
+    delivered value is the **raw clamped `uV`** of the lattice point. The
+    model converts exactly that mapping and derives every lower resolution
+    and the analog watchdog from `code12` with low bits cleared, so the rule
+    is exact whatever resolution or alignment the firmware selects. `bits`
+    must be 12 and `vref` the model's reference (3.3 V; `bb` checks).
+  - Renode 1.17.0's stock `STM32_ADC_Common` (`bb run --adc-model stock`,
+    ADR-003 Amendments 5 and 10): the key is whole millivolts,
+    `floor(uV / 1000)`, delivered as exactly that many millivolts, because
+    the stock model converts
+    `code = round_half_even(floor(uV / 1000) / (vref * 1000) * (2^bits - 1))`
+    and nothing finer; `bits` documents the code mapping only.
+
+  A reference mode pushes `uV` at every lattice point; the converter sees
+  the same values (`bb run --adc-push every`).
 - The value at t = 0 is the value delivered at the initial solver point.
 - The pin's boundary value is the last delivered value; a pin without a
   transition in the grant did not change.
-- The consumer applies a push at its lattice point `t`, never earlier
-  (Renode: External Control `ADC SetValue` on the channel while paused at
-  `t`, splitting its advance there). A conversion therefore sees the value
-  of the latest lattice point, at most `L` old, in every partition.
-- A watched `adc_in` pin (`advance_until`, CPU lookahead) stops the
-  producer at its first push: a change of the converted value is an input
-  change of the CPU (the code-change watch).
+- The consumer applies a push at its lattice point `t`, never earlier.
+  Breadboard's model: the push is a **timed input** (written to the model's
+  host port before Renode runs past it); a conversion whose sample instant
+  is `s` (the end of its sampling phase, a clock limit) converts the latest
+  push with `t < s`, strictly earlier, so a sample exactly on a lattice point
+  sees the previous cell's value. The stock model: External Control `ADC
+  SetValue` on the channel while paused at `t`, splitting the advance there.
+  Either way a conversion sees the value of the latest lattice point, at most
+  `L` old, in every partition.
+- On Breadboard's model the pin is a **sampled input**
+  (`spec/time-grant.md`, ADR-005 D3): the model reads it only at sample
+  instants, which the CPU's lookahead promise never passes, so the kernel
+  does not watch it and a quiet grant does not stop at a push. The analog
+  watchdog flag and interrupt appear at the end of a conversion only: an
+  out-of-window push is reported at the next end of conversion of that
+  channel (RM0091 13.8). On the stock model a watched `adc_in` pin
+  (`advance_until`, CPU lookahead) stops the producer at its first push: a
+  change of the converted value is an input change of the CPU (the
+  code-change watch, ADR-003 D6).
 
 No glue: the input is ideal (no load). The ADC channel follows from the pin
 and the platform (STM32F0x2: `PA0`..`PA7` are channels 0..7, `PB0`..`PB1`

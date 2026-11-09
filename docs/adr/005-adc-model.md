@@ -883,3 +883,59 @@ existing equivalence gates apply unchanged.
   `PromiseBroken` from its advance. `make check`, `make partition`, `make
   lookahead-equiv` and `make adc-equiv` green with every committed hash
   unchanged (no engine declares a sampled input yet).
+
+### Amendment 2: step 4 (Renode engine integration) as implemented (2026-11-09)
+
+- **Timed inputs.** For an `adc_in` pin on `Platform::Stm32f072Bb`
+  (`PinState::timed`), `apply_one` appends the push `(t_ns, pin, uV)` to a
+  pending batch instead of queuing a `RUN_FOR` split; `t_ns` is the entry's
+  lattice time (a snapshot: `now`). `advance_inner` writes the batch before
+  its first `RUN_FOR` (`flush_adc_batch`: header `0xBA7C0000 | n`, three
+  words per entry, at most 1 020 words per `SYSTEM_BUS` request through the
+  new `Client::sysbus_write_u32s`). Digital inputs and the stock ADC keep
+  the D2 splits. A push therefore costs no `RUN_FOR` split and no Renode
+  pause of its own; a quiet grant carries all of its pushes in one write.
+- **`input_is_sampled(pin)`** is `true` exactly for such a pin.
+  `quiet_inner` needed no change: timed pushes never enter `pending`, so
+  a promise is no longer capped at an ADC push.
+- **Verify** (`verify_pins`) reads, for a timed pin, the port's latest timed
+  input of the channel (`0x100 + 4ch`) against the last value written and
+  the port's error word, which must be 0 (a late or out-of-order timed
+  input is an `EngineError::Protocol` at the next cross-check: after every
+  grant with `--verify every`, after a grant with a push with the default
+  `edges`, at the end of the run with `final`). D5.3 asked for the error
+  after the advance; reading it with the cross-check avoids a request per
+  grant and still fails the run (deviation, recorded).
+- **`bb run --adc-model bb|stock`.** `bb`: `Platform::Stm32f072Bb`, ADC
+  `bbAdc`, pushes keyed by `code12` and delivered raw (`AdcKey::Code12`);
+  `bb` checks `vref = 3.3` and `bits = 12`. `stock`: the stock platform,
+  ADC `adc`, the whole-millivolt key (`AdcKey::Millivolts`), `SetValue`
+  splits and the code-change watch, exactly the ADR-003 path. The default
+  stays `stock` in this step (the goldens change in step 5).
+- **`bbcore::pin`**: `AdcKey { Code12 (default), Millivolts }`, a field of
+  `AdcIn` (`#[serde(default)]`); `AdcIn::code12`, `push_key(&self, uv)`,
+  `key_microvolts(&self, uv)`. `AdcIn::code` stays the stock model's
+  conversion. ngspice uses `model.push_key` / `model.key_microvolts`
+  instead of the former whole-millivolt functions. `spec/pin-model.md`
+  `adc_in`: the push key per model, raw delivery, timed inputs and the
+  sampled-input rule.
+- **Pool:** the bb overlay pre-warm also writes an empty batch and reads a
+  channel back, so the timed-input path is compiled before a lease.
+- **Gates.**
+  - `la_adc` (test plan 4, `engines/cpu-renode/tests/lookahead.rs
+    gate_adc_pushes_inside_promises`): `adc_board.elf` on the overlay with a
+    triangle on ADC_IN (a push every 30 µs, four window crossings in
+    40 ms): lookahead gives the one-cell edges (74) in 148 grants against
+    4 000, every promise honoured, and 1 296 of the 1 333 pushes fall inside
+    a promised window. **Deviation:** the gate uses the board firmware
+    (`examples/adc/firmware/build/adc_board.elf`) rather than a new
+    `la_adc` firmware in `engines/cpu-renode/tests/firmware`; that firmware
+    is exactly the TRGO-triggered, interrupt-driven case the gate needs.
+  - `make check` (default `--adc-model stock`): `make adc` gives the
+    committed ADR-003 hashes, so the stock path is unchanged.
+  - A first run of the board on the model (`--adc-model bb`, 300 ms,
+    lookahead on, single run, load about 5): **1 209 grants** (300
+    `engine:U1`, 908 `loop_quantum`, 1 `engine:ngspice`, **0
+    `stop:ngspice`**), **1.50 s** of simulation, `nets.csv`, `nets.vcd` and
+    every non-grant record byte-identical to the one-cell
+    every-lattice-point reference (30 000 grants, 17.88 s).

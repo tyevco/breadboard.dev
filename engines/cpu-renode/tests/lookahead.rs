@@ -501,3 +501,138 @@ fn plugin_startup_overhead() {
         mb - ma
     );
 }
+
+/// ADR-005 test plan 4 (`la_adc`): Breadboard's STM32F072 with its ADC
+/// model, the board firmware (`examples/adc/firmware/build/adc_board.elf`:
+/// TIM3 TRGO conversions, no TIM3 interrupt, the ADC ISR drives PA4-PA7)
+/// and ADC pushes at lattice points, many of them inside promised windows.
+/// The input is sampled (`input_is_sampled`), so a promise is not cut at a
+/// push; every promise must be honoured and the edges must equal the
+/// one-cell reference's (pushes delivered before each advance in both).
+#[test]
+fn gate_adc_pushes_inside_promises() {
+    let Some(renode) = find_renode() else {
+        skip("renode not installed (run `make setup`, or set BB_RENODE)");
+        return;
+    };
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fw_dir = root.join("examples/adc/firmware");
+    {
+        let _g = BUILD.lock().unwrap_or_else(|e| e.into_inner());
+        let ok = Command::new("make")
+            .arg("-s")
+            .arg("-C")
+            .arg(&fw_dir)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            skip("arm-none-eabi-gcc not installed (run `make setup`)");
+            return;
+        }
+    }
+    let mut cfg = RenodeConfig::stm32f103(renode, fw_dir.join("build/adc_board.elf"));
+    cfg.name = "U1".into();
+    cfg.platform = bb_cpu_renode::Platform::Stm32f072Bb;
+    cfg.pins = ["PA4", "PA5", "PA6", "PA7"]
+        .iter()
+        .map(|p| PinSpec::stm32(p, PinDirection::Output).unwrap())
+        .collect();
+    cfg.pins
+        .push(PinSpec::adc("PA1", bb_cpu_renode::BB_ADC_NAME, 1));
+    cfg.quantum = L;
+    // A triangle on ADC_IN: a push every 30 us, across the watchdog window
+    // [1.0 V, 2.0 V] four times in 40 ms.
+    let pushes: Vec<(Time, f64)> = (0..1333u64)
+        .map(|k| {
+            let t = Time::from_us(30 * k);
+            let phase = (k % 333) as f64 / 333.0;
+            let v = if phase < 0.5 {
+                phase * 2.0
+            } else {
+                (1.0 - phase) * 2.0
+            } * 2.8
+                + 0.2;
+            (t, (v * 1e6).round() / 1e6)
+        })
+        .collect();
+    let t_end = Time::from_ms(40);
+    let run = |mode: Mode| drive_adc(&with_mode(&cfg, mode), t_end, &pushes);
+    let reference = run(Mode::ArmedOff);
+    assert!(reference.err.is_none(), "reference: {:?}", reference.err);
+    let on = run(Mode::On);
+    assert!(on.err.is_none(), "lookahead run: {:?}", on.err);
+    let pa5 = reference.edges.iter().filter(|e| e.1 == "PA5").count();
+    assert!(pa5 >= 4, "the watchdog must fire (PA5 edges: {pa5})");
+    assert_eq!(on.edges, reference.edges, "lookahead changed the edges");
+    check_honest("la_adc", &reference, &on);
+    let inside = pushes
+        .iter()
+        .filter(|(t, _)| on.promises.iter().any(|(a, b)| t > a && t < b))
+        .count();
+    eprintln!(
+        "la_adc: reference {} edges in {} grants, lookahead {} grants, {} promises, {inside} of {} \
+         pushes inside a promised window",
+        reference.edges.len(),
+        reference.grants.len(),
+        on.grants.len(),
+        on.stats.promises,
+        pushes.len()
+    );
+    assert!(inside > 500, "{inside} pushes inside promised windows");
+    assert!(on.grants.len() * 4 < reference.grants.len());
+}
+
+/// [`drive`] with ADC pushes on `PA1`: before each advance, every push in
+/// the coming grant is delivered (`apply_input_trace`, as the kernel does
+/// for a producer that runs first).
+fn drive_adc(cfg: &RenodeConfig, t_end: Time, pushes: &[(Time, f64)]) -> Drive {
+    let mut e = RenodeEngine::start(cfg).expect("start renode");
+    assert!(e.input_is_sampled("PA1"));
+    let mut d = Drive {
+        startup: e.lookahead_startup(),
+        ..Drive::default()
+    };
+    let mut base = bbcore::PinSignals::new();
+    base.insert("PA1".into(), PinSignal::analog(pushes[0].1));
+    e.apply_inputs(&base).unwrap();
+    let mut now = Time::ZERO;
+    while now < t_end {
+        assert_eq!(e.next_safe_time(now), Time::MAX);
+        let q = e.quiet_until(now);
+        if q > now {
+            d.promises.push((now, q));
+        }
+        let g = floor_l(q.min(now + MAX_GRANT).min(t_end)).max(now + L);
+        let trace: Vec<bbcore::Transition> = pushes
+            .iter()
+            .filter(|(t, _)| *t > now && *t <= g)
+            .map(|&(t, v)| bbcore::Transition {
+                t,
+                pin: "PA1".into(),
+                signal: PinSignal::analog(v),
+            })
+            .collect();
+        if !trace.is_empty() {
+            e.apply_input_trace(&base, &trace).unwrap();
+            base.insert("PA1".into(), trace.last().unwrap().signal);
+        }
+        if let Err(err) = e.advance_to(g) {
+            d.err = Some((now, err));
+            break;
+        }
+        for tr in e.read_output_trace().unwrap().expect("trace") {
+            let PinSignal::Digital { level, .. } = tr.signal else {
+                panic!("analog output from renode")
+            };
+            d.edges.push((tr.t, tr.pin, level == bbcore::Level::High));
+        }
+        d.grants.push((now, g));
+        now = g;
+    }
+    if d.err.is_none() {
+        e.end_of_run().expect("end-of-run verify");
+    }
+    d.stats = e.lookahead_stats();
+    d
+}

@@ -41,8 +41,9 @@ use crate::console::{Console, COMMAND_ERROR};
 use crate::pool::{canonical_renode, PROTOCOL};
 use crate::protocol::Client;
 use crate::{
-    free_port, plugin_cache_path, write_plugin_loader, BB_ADC_NAME, LOOKAHEAD_ADDRESS,
-    LOOKAHEAD_NAME, PLUGIN_ERR, PLUGIN_LOADER, STM32F072_BB_REPL, STM32F103_OFFLINE_REPL,
+    free_port, plugin_cache_path, write_plugin_loader, BB_ADC_NAME, BB_ADC_PORT_ADDRESS,
+    LOOKAHEAD_ADDRESS, LOOKAHEAD_NAME, PLUGIN_ERR, PLUGIN_LOADER, STM32F072_BB_REPL,
+    STM32F103_OFFLINE_REPL,
 };
 
 /// Configuration of a [`Manager`].
@@ -663,6 +664,11 @@ fn warm_external_control(
     let sb = c.get_sysbus(md, "sysbus")?;
     if plugin {
         let _ = c.sysbus_read_u32s(sb, LOOKAHEAD_ADDRESS, 8)?;
+    }
+    if adc == Some(BB_ADC_NAME) {
+        // The timed-input path (ADR-005 D5): an empty batch and a readback.
+        c.sysbus_write_u32s(sb, BB_ADC_PORT_ADDRESS + 0x1000, &[0xBA7C_0000])?;
+        let _ = c.sysbus_read_u32s(sb, BB_ADC_PORT_ADDRESS + 0x100, 1)?;
     }
     for _ in 0..5 {
         c.run_for(10_000)?;

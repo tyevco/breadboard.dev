@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use bb_analog_ngspice::{
     AdcOutputBinding, AdcPush, Drive, InputBinding, NgspiceConfig, NgspiceEngine, OutputBinding,
 };
-use bbcore::{AdcIn, DigitalOut, Engine, Level, PinSignal, PinSignals, Time, Transition};
+use bbcore::{AdcIn, AdcKey, DigitalOut, Engine, Level, PinSignal, PinSignals, Time, Transition};
 
 static NGSPICE: Mutex<()> = Mutex::new(());
 
@@ -23,6 +23,12 @@ const ADC: &str = "U1.PA1";
 
 /// The `examples/adc` divider: a 25 ohm STM32 output, 10k into ADC_IN,
 /// 33k and 470 nF to ground (tau = 3.614 ms, 2.531087 V high).
+/// The stock model's key (whole millivolts, ADR-003 Amendment 10).
+const STOCK: AdcIn = AdcIn {
+    key: AdcKey::Millivolts,
+    ..AdcIn::STM32_12BIT_3V3
+};
+
 fn divider(t_end: Time, push: AdcPush) -> NgspiceConfig {
     let mut cfg = NgspiceConfig::new(
         "R1 drv adc_in 10k\nR2 adc_in 0 33k\nC1 adc_in 0 470n\n\
@@ -47,7 +53,7 @@ fn divider(t_end: Time, push: AdcPush) -> NgspiceConfig {
     cfg.adc_outputs.push(AdcOutputBinding {
         pin: ADC.into(),
         node: "adc_in".into(),
-        model: AdcIn::STM32_12BIT_3V3,
+        model: STOCK,
     });
     cfg.adc_push = push;
     cfg
@@ -173,13 +179,13 @@ fn pushes_are_partition_independent_and_stop_the_watch() {
         every.points, one.points,
         "the push mode never changes the solver"
     );
-    let a = AdcIn::STM32_12BIT_3V3;
+    let a = STOCK;
     // OnChange = the reference's entries where the whole mV change,
     // delivered as exactly that many millivolts.
-    let mut key = AdcIn::push_key(uv(&every.boundary[0].1));
+    let mut key = a.push_key(uv(&every.boundary[0].1));
     let mut expect = Vec::new();
     for tr in &every.trace {
-        let k = AdcIn::push_key(uv(&tr.signal));
+        let k = a.push_key(uv(&tr.signal));
         assert!(uv(&tr.signal) <= 3_300_000);
         if k != key {
             key = k;

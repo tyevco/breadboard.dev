@@ -287,7 +287,11 @@ pub fn parse(text: &str) -> Result<Board, String> {
                             })?;
                         PinKind::Adc {
                             net,
-                            model: AdcIn { vref, bits },
+                            model: AdcIn {
+                                vref,
+                                bits,
+                                key: bbcore::AdcKey::Code12,
+                            },
                             channel,
                         }
                     }

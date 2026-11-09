@@ -59,8 +59,8 @@ use bb_cpu_renode::{
     find_renode, LookaheadCfg, PinDirection, PinSpec, Platform, RenodeConfig, RenodeEngine, Verify,
 };
 use bbcore::{
-    CsvWriter, Direction, Engine, EventSink, Level, Probe, Scheduler, SchedulerConfig, Time,
-    VcdKind, VcdWriter,
+    AdcIn, AdcKey, CsvWriter, Direction, Engine, EventSink, Level, Probe, Scheduler,
+    SchedulerConfig, Time, VcdKind, VcdWriter,
 };
 use board::PinKind;
 
@@ -69,7 +69,8 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
-              [--lookahead on|off] [--adc-push change|every] [--renode-pool env|off]
+              [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
+              [--renode-pool env|off]
        bb pool run|start|stop|status ...   (bb pool --help)
 
   --netlist    board file: SPICE body plus *bb directives (examples/spike/board.cir)
@@ -122,6 +123,13 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  every lattice point, with the value in whole microvolts
                  (the reference of the equivalence gate). The MCU sees the
                  same conversions either way (a test knob)
+  --adc-model    the STM32F072's ADC (ADR-005): bb, Breadboard's
+                 model (hardware triggers, conversion timing, the analog
+                 watchdog; pushes are timed inputs, a sampled input), or
+                 stock (default until ADR-005 step 5), Renode's STM32F0_ADC on the stock platform (ADR-003
+                 D6: SetValue at each push, the code-change watch; keep it
+                 for comparisons). Changes results: each has its own
+                 references
   --renode-pool  env (default): lease a pre-warmed Renode from the pool in
                  $BB_RENODE_POOL when one is idle (`bb pool run`, ADR-004),
                  else start Renode fresh; off: always fresh. Never changes
@@ -146,6 +154,8 @@ struct RunArgs {
     lookahead: Option<bool>,
     plugin: PluginMode,
     adc_push: AdcPush,
+    /// `--adc-model`: Breadboard's ADC model (true) or the stock one.
+    adc_bb: bool,
     /// `--renode-pool env` (true, the default) or `off`.
     renode_pool: bool,
 }
@@ -268,6 +278,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut lookahead = None;
     let mut plugin = PluginMode::Auto;
     let mut adc_push = AdcPush::OnChange;
+    let mut adc_bb = ADC_MODEL_DEFAULT_BB;
     let mut renode_pool = true;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -328,6 +339,13 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--adc-push" => {
                 adc_push = parse_adc_push(&val(a)?).map_err(|e| format!("--adc-push: {e}"))?
             }
+            "--adc-model" => {
+                adc_bb = match val(a)?.as_str() {
+                    "bb" => true,
+                    "stock" => false,
+                    v => return Err(format!("--adc-model: {v:?}: expected bb or stock")),
+                }
+            }
             "--renode-pool" => {
                 renode_pool = match val(a)?.as_str() {
                     "env" => true,
@@ -378,9 +396,13 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         lookahead,
         plugin,
         adc_push,
+        adc_bb,
         renode_pool,
     })
 }
+
+/// The default of `--adc-model`.
+const ADC_MODEL_DEFAULT_BB: bool = false;
 
 /// Output writers buffer 1 MiB: every write(2) to a slow file system
 /// (WSL's /mnt/c: up to ~10 ms each under host load) is paid during the
@@ -446,11 +468,35 @@ fn run(a: RunArgs) -> Result<(), String> {
     } else {
         None
     };
+    // The STM32F072's ADC: Breadboard's model on its overlay (ADR-005 D6:
+    // bbAdc, BbStm32Timer TRGO; pushes keyed by code12 and delivered as
+    // timed inputs), or Renode 1.17.0's stock platform (ADC =
+    // Analog.STM32F0_ADC, instance `adc`; pushes keyed by whole millivolts,
+    // ADR-003 Amendments 5 and 10).
+    let (adc_name, adc_key) = if a.adc_bb {
+        (bb_cpu_renode::BB_ADC_NAME, AdcKey::Code12)
+    } else {
+        ("adc", AdcKey::Millivolts)
+    };
     if part.platform == "stm32f072" {
-        // Renode 1.17.0's stock STM32F072 (ADC = Analog.STM32F0_ADC,
-        // instance `adc`). Breadboard's overlay (ADR-005) holds its own ADC
-        // model now, which the engine drives from ADR-005 step 4 on.
-        rcfg.platform = Platform::Repl("platforms/cpus/stm32f072.repl".into());
+        rcfg.platform = if a.adc_bb {
+            Platform::Stm32f072Bb
+        } else {
+            Platform::Repl("platforms/cpus/stm32f072.repl".into())
+        };
+    }
+    for p in &mcu_pins {
+        if let PinKind::Adc { model, .. } = &p.kind {
+            // Breadboard's model converts 12 bits against its 3.3 V
+            // reference (the overlay's referenceVoltage, ADR-005 D5.2).
+            if a.adc_bb && (model.vref != 3.3 || model.bits != 12) {
+                return Err(format!(
+                    "{}.{}: adc_in vref={} bits={}: Breadboard's STM32F072 ADC model needs \
+                     vref=3.3 bits=12 (or --adc-model stock)",
+                    p.part, p.pin, model.vref, model.bits
+                ));
+            }
+        }
     }
     rcfg.pins = mcu_pins
         .iter()
@@ -459,7 +505,7 @@ fn run(a: RunArgs) -> Result<(), String> {
             PinKind::Out { .. } | PinKind::OutUnconnected => {
                 PinSpec::stm32(&p.pin, PinDirection::Output)
             }
-            PinKind::Adc { channel, .. } => Ok(PinSpec::adc(&p.pin, "adc", channel)),
+            PinKind::Adc { channel, .. } => Ok(PinSpec::adc(&p.pin, adc_name, channel)),
         })
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
@@ -519,7 +565,10 @@ fn run(a: RunArgs) -> Result<(), String> {
             PinKind::Adc { net, model, .. } => ncfg.adc_outputs.push(AdcOutputBinding {
                 pin: p.kernel_net(),
                 node: net.clone(),
-                model: *model,
+                model: AdcIn {
+                    key: adc_key,
+                    ..*model
+                },
             }),
             PinKind::OutUnconnected => {}
         }

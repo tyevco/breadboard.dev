@@ -92,17 +92,31 @@ impl DigitalIn {
     }
 }
 
-/// An ADC input (ADR-003 D6, Amendment 5, Amendment 10). A *push* model:
-/// the producing analog engine reads the net at every lattice point and
-/// emits an `Analog` transition, at that lattice point, whenever the value
-/// the consumer's ADC can see changes. For Renode's STM32 ADC
-/// (`STM32_ADC_Common`) that value is the whole number of millivolts of
-/// the delivered voltage: [`AdcIn::delivered_microvolts`] clamps to
-/// `[0, vref]` (real silicon saturates; the model does not) and the model
-/// converts `floor(uV / 1000)`. So the push rule "emit when
-/// [`AdcIn::push_key`] changes" is exact whatever resolution or alignment
-/// the firmware selects, and the value delivered is
-/// [`AdcIn::key_volts`] of that key.
+/// What an `adc_in` push key is: the finest value the consumer's converter
+/// can see (ADR-005 D5, `spec/pin-model.md`).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdcKey {
+    /// The 12-bit code [`AdcIn::code12`] of the delivered microvolts, which
+    /// are delivered raw: Breadboard's ADC model (ADR-005), the default.
+    #[default]
+    Code12,
+    /// Whole millivolts, delivered as exactly that many millivolts:
+    /// Renode 1.17.0's stock `STM32_ADC_Common`, which converts
+    /// `floor(uV / 1000)` (ADR-003 Amendments 5 and 10; `bb run
+    /// --adc-model stock`).
+    Millivolts,
+}
+
+/// An ADC input (ADR-003 D6, ADR-005 D5). A *push* model: the producing
+/// analog engine reads the net at every lattice point and emits an `Analog`
+/// transition, at that lattice point, whenever the value the consumer's
+/// converter can see changes: [`AdcIn::push_key`] of
+/// [`AdcIn::delivered_microvolts`] (clamped to `[0, vref]`), delivered as
+/// [`AdcIn::key_microvolts`]. With [`AdcKey::Code12`] the key is the 12-bit
+/// code and the raw microvolts are delivered, so every resolution and
+/// alignment converts what the every-lattice-point reference converts; with
+/// [`AdcKey::Millivolts`] (the stock model) the key is whole millivolts.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdcIn {
     /// Reference voltage (V), the full-scale input.
@@ -110,14 +124,50 @@ pub struct AdcIn {
     /// Converter resolution (bits); documents the code mapping
     /// ([`AdcIn::code`]), never the push rule.
     pub bits: u32,
+    /// The push key (which converter consumes the pushes).
+    #[serde(default)]
+    pub key: AdcKey,
 }
 
 impl AdcIn {
-    /// The STM32 12-bit ADC at 3.3 V.
+    /// The STM32 12-bit ADC at 3.3 V, on Breadboard's ADC model.
     pub const STM32_12BIT_3V3: AdcIn = AdcIn {
         vref: 3.3,
         bits: 12,
+        key: AdcKey::Code12,
     };
+
+    /// `vref` in whole microvolts.
+    pub fn vref_microvolts(&self) -> u64 {
+        u64::try_from(crate::signal::volts_to_microvolts(self.vref).max(1)).unwrap_or(1)
+    }
+
+    /// Breadboard's ADC model conversion (ADR-005 D5.2, approver decision
+    /// 2): `min(4095, round_half_up(uV * 4095 / Vref_uV))` in integers,
+    /// whatever `bits` (lower resolutions use `code12` with low bits
+    /// cleared).
+    pub fn code12(&self, uv: u32) -> u32 {
+        let v = self.vref_microvolts();
+        let c = (2 * u64::from(uv) * 4095 + v) / (2 * v);
+        u32::try_from(c.min(4095)).unwrap_or(4095)
+    }
+
+    /// The push key of a delivered value ([`AdcKey`]).
+    pub fn push_key(&self, uv: u32) -> u32 {
+        match self.key {
+            AdcKey::Code12 => self.code12(uv),
+            AdcKey::Millivolts => uv / 1000,
+        }
+    }
+
+    /// The value delivered at a push of `uv`: `uv` itself
+    /// ([`AdcKey::Code12`]) or its whole millivolts ([`AdcKey::Millivolts`]).
+    pub fn key_microvolts(&self, uv: u32) -> u32 {
+        match self.key {
+            AdcKey::Code12 => uv,
+            AdcKey::Millivolts => uv / 1000 * 1000,
+        }
+    }
 
     /// The voltage delivered to the ADC, in integer microvolts: `volts`
     /// rounded half away from zero ([`crate::volts_to_microvolts`]) and
@@ -128,24 +178,12 @@ impl AdcIn {
         u32::try_from(uv).unwrap_or(u32::MAX)
     }
 
-    /// The push key of a delivered value: whole millivolts,
-    /// `floor(uV / 1000)`, which is all the converter sees.
-    pub const fn push_key(uv: u32) -> u32 {
-        uv / 1000
-    }
-
-    /// The voltage a key is delivered as: `key` millivolts exactly
-    /// (`key * 1000` µV once rounded back to microvolts).
-    pub fn key_volts(key: u32) -> f64 {
-        f64::from(key) / 1000.0
-    }
-
     /// The conversion of `uv` by Renode 1.17.0's `STM32_ADC_Common`
     /// (Amendment 5, fact 1): `round_half_even(floor(uV / 1000) / (vref *
     /// 1000) * (2^bits - 1))` in IEEE double. For checks and documentation;
     /// the engines never convert.
     pub fn code(&self, uv: u32) -> u32 {
-        let mv = f64::from(Self::push_key(uv));
+        let mv = f64::from(uv / 1000);
         let full = f64::from((1u32 << self.bits) - 1);
         (mv / (self.vref * 1000.0) * full).round_ties_even() as u32
     }
@@ -220,11 +258,31 @@ mod tests {
         assert_eq!(a.delivered_microvolts(3.4), 3_300_000);
         assert_eq!(a.delivered_microvolts(1.2345674), 1_234_567);
         assert_eq!(a.delivered_microvolts(0.0019999996), 2_000);
-        // Whole millivolts, and back.
-        assert_eq!(AdcIn::push_key(2_000_999), 2000);
-        assert_eq!(AdcIn::push_key(999_999), 999);
-        let v = AdcIn::key_volts(2531);
-        assert_eq!(a.delivered_microvolts(v), 2_531_000);
+        // The stock key: whole millivolts, delivered as such.
+        let mv = AdcIn {
+            key: AdcKey::Millivolts,
+            ..a
+        };
+        assert_eq!(mv.push_key(2_000_999), 2000);
+        assert_eq!(mv.push_key(999_999), 999);
+        assert_eq!(mv.key_microvolts(2_531_087), 2_531_000);
+        // Breadboard's model: code12, round half up, saturated; raw uV.
+        assert_eq!(a.key_microvolts(2_531_087), 2_531_087);
+        for (uv, code) in [
+            (0, 0),
+            (402, 0),
+            (403, 1),
+            (329_999, 409),
+            (330_000, 410),
+            (1_650_000, 2048),
+            (2_531_087, 3141),
+            (3_299_999, 4095),
+            (3_300_000, 4095),
+            (4_000_000, 4095),
+        ] {
+            assert_eq!(a.code12(uv), code, "{uv} uV");
+            assert_eq!(a.push_key(uv), code);
+        }
         // Amendment 5's pinned conversions.
         for (uv, code) in [
             (1_500_000, 1861),

@@ -78,12 +78,24 @@
 //! so this is not a free-run. A transition delivered at a boundary
 //! (`edge_time <= now`) takes effect at once, at `now`.
 //!
-//! ADC inputs ([`PinDirection::Adc`], ADR-003 D6) work the same way: the
-//! producer pushes `Analog` values at lattice points, and the engine sets
-//! each one with the External Control `ADC` command (`SetValue`, whole
-//! microvolts, on the channel's default sample) while Renode is paused on
-//! that lattice point. [`bbcore::Engine::apply_input_trace`] takes each
-//! entry's time from the trace, because an `Analog` value carries none.
+//! ADC inputs ([`PinDirection::Adc`], ADR-003 D6) on Renode's stock ADC
+//! model work the same way: the producer pushes `Analog` values at lattice
+//! points, and the engine sets each one with the External Control `ADC`
+//! command (`SetValue`, whole microvolts, on the channel's default sample)
+//! while Renode is paused on that lattice point.
+//! [`bbcore::Engine::apply_input_trace`] takes each entry's time from the
+//! trace, because an `Analog` value carries none.
+//!
+//! On Breadboard's STM32F072 ([`Platform::Stm32f072Bb`], ADR-005) the ADC
+//! model reads its inputs only at its own sample instants, which are clock
+//! limits. There the pushes are **timed inputs**: the engine collects them
+//! and, before its next `RUN_FOR`, writes them in one batch (one
+//! `SYSTEM_BUS` write) to the model's host port ([`BB_ADC_PORT_ADDRESS`]);
+//! a sample at `s` reads the latest entry with `t < s`. No `RUN_FOR` is
+//! split for them, and the pin is a sampled input
+//! ([`bbcore::Engine::input_is_sampled`], ADR-005 D3), so a quiet grant does
+//! not stop at a push. The cross-check reads the port's per-channel value
+//! and its error word (a timed input that came too late for a sample).
 //!
 //! # Determinism
 //!
@@ -180,6 +192,16 @@ pub const STM32F072_BB_REPL: &str = include_str!("../platforms/stm32f072-bb.repl
 
 /// Monitor name of the ADC on [`Platform::Stm32f072Bb`].
 pub const BB_ADC_NAME: &str = "bbAdc";
+
+/// Bus address of the ADC model's host port on [`Platform::Stm32f072Bb`]
+/// (`bbAdcPort`, ADR-005 D5; next to the lookahead block).
+pub const BB_ADC_PORT_ADDRESS: u64 = 0x5FFF_0100;
+
+/// Offset of the host port's batch window (header, then `(t_ns low, t_ns
+/// high | channel << 16, uV)` per entry).
+const PORT_BATCH: u64 = 0x1000;
+/// Words per `SYSTEM_BUS` write into the batch window (its size is 0x1000).
+const PORT_BATCH_WORDS: usize = 1020;
 
 /// Every C# source of Breadboard's Renode plugins, compiled together into
 /// one cached assembly (ADR-005 D6): `(file name, source)`.
@@ -919,6 +941,9 @@ struct PinState {
     scheduled_uv: Option<u32>,
     /// ADC input: the last value (µV) set (for the cross-check).
     applied_uv: Option<u32>,
+    /// ADC input on Breadboard's model: pushes are timed inputs through the
+    /// host port (a sampled input, ADR-005 D3), not `SetValue` splits.
+    timed: bool,
 }
 
 /// What an input transition drives.
@@ -961,6 +986,9 @@ pub struct RenodeEngine {
     /// Input transitions queued for a lattice point inside the next advance,
     /// sorted by `at_ns` (stable: delivery order within a point).
     pending: Vec<PendingInput>,
+    /// Timed ADC inputs `(t_ns, pin, uV)` not yet written to the host port
+    /// (ADR-005 D5), in delivery order.
+    adc_batch: Vec<(u64, usize, u32)>,
     /// GPIO events stamped exactly at the last grant end: they belong to the
     /// next grant (lattice rule 3).
     carried: Vec<protocol::GpioEvent>,
@@ -1273,6 +1301,7 @@ impl RenodeEngine {
                         scheduled: None,
                         scheduled_uv: None,
                         applied_uv: None,
+                        timed: cfg.platform == Platform::Stm32f072Bb,
                     });
                     continue;
                 }
@@ -1289,6 +1318,7 @@ impl RenodeEngine {
                     scheduled: None,
                     scheduled_uv: None,
                     applied_uv: None,
+                    timed: false,
                 });
             }
             let t0 = client.get_time()?;
@@ -1363,6 +1393,7 @@ impl RenodeEngine {
             pins,
             trace: Vec::new(),
             pending: Vec::new(),
+            adc_batch: Vec::new(),
             carried: Vec::new(),
             run_for_calls: 0,
             boundary_edges: 0,
@@ -1603,6 +1634,15 @@ impl Engine for RenodeEngine {
         Some(Time::from_ns(self.quantum_ns))
     }
 
+    /// ADR-005 D3: an ADC input on Breadboard's model is sampled. The model
+    /// reads it only at its sample instants, each a clock limit at or after
+    /// the lookahead promise, and a push changes nothing else in Renode.
+    fn input_is_sampled(&self, pin: &str) -> bool {
+        self.pins
+            .iter()
+            .any(|p| p.spec.name == pin && p.spec.direction == PinDirection::Adc && p.timed)
+    }
+
     fn advance_to(&mut self, t: Time) -> Result<(), EngineError> {
         // A grant outside the promise or off the lattice is the caller's
         // error; Renode was not touched, so there is no log worth keeping.
@@ -1722,6 +1762,45 @@ impl RenodeEngine {
     /// rule 3), the level of its last carried event: Renode already shows it.
     fn verify_pins(&mut self) -> Result<(), EngineError> {
         for (i, p) in self.pins.iter().enumerate() {
+            if p.spec.direction == PinDirection::Adc && p.timed {
+                // The host port: the channel's latest timed input, and no
+                // timed input that came too late for a sample (ADR-005 D5.3).
+                let ch = u64::try_from(p.spec.index).unwrap_or(0);
+                let id = match self.sysbus {
+                    Some(id) => id,
+                    None => self
+                        .client
+                        .get_sysbus(self.machine, "sysbus")
+                        .map_err(proto)?,
+                };
+                let got = self
+                    .client
+                    .sysbus_read_u32s(id, BB_ADC_PORT_ADDRESS + 0x100 + 4 * ch, 1)
+                    .map_err(proto)?[0];
+                let err = self
+                    .client
+                    .sysbus_read_u32s(id, BB_ADC_PORT_ADDRESS + 4, 4)
+                    .map_err(proto)?;
+                if err[0] != 0 {
+                    return Err(EngineError::Protocol(format!(
+                        "verify: {}: the ADC host port reports error {:#x} (first at {} ns, \
+                         channel {}): a timed input arrived after a sample it would have changed",
+                        p.spec.name,
+                        err[0],
+                        u64::from(err[1]) | (u64::from(err[2]) << 32),
+                        err[3]
+                    )));
+                }
+                if let Some(want) = p.applied_uv {
+                    if got != want {
+                        return Err(EngineError::Protocol(format!(
+                            "verify: {}: ADC channel {} holds {got} uV at {} ns, pushed {want} uV",
+                            p.spec.name, p.spec.index, self.renode_ns
+                        )));
+                    }
+                }
+                continue;
+            }
             if p.spec.direction == PinDirection::Adc {
                 // ADC GetValue must read back the last value set.
                 if let Some(want) = p.applied_uv {
@@ -1812,6 +1891,8 @@ impl RenodeEngine {
         // Events carried over from the previous grant end come first: they
         // are stamped `start_ns` (lattice rule 3).
         let mut events = std::mem::take(&mut self.carried);
+        // Timed ADC inputs go to the model before Renode runs (ADR-005 D5).
+        self.flush_adc_batch()?;
         // Split the advance at each queued input's lattice point and drive
         // the input while Renode is paused there (ADR-003 D2: never early).
         // Every segment ends on the lattice at or before `t`.
@@ -1952,6 +2033,15 @@ impl RenodeEngine {
                     return Ok(());
                 }
                 self.pins[i].scheduled_uv = Some(uv);
+                if self.pins[i].timed {
+                    // A timed input from `t` on (a lattice point, or `now`
+                    // for a snapshot): samples strictly after it read it.
+                    let at = t.max(self.now);
+                    let t_ns = at.as_fs().div_ceil(FS_PER_NS);
+                    self.adc_batch.push((t_ns, i, uv));
+                    self.input_applied = true;
+                    return Ok(());
+                }
                 InputValue::Microvolts(uv)
             }
             (PinDirection::Input, PinSignal::Analog { .. }) => {
@@ -1984,6 +2074,42 @@ impl RenodeEngine {
                     value,
                 },
             );
+        }
+        Ok(())
+    }
+
+    /// Write the queued timed ADC inputs to the model's host port: one
+    /// batch (a header and three words per entry), in `SYSTEM_BUS` writes of
+    /// at most [`PORT_BATCH_WORDS`] words. Changes nothing in Renode but the
+    /// model's input lists (ADR-005 D5.1).
+    fn flush_adc_batch(&mut self) -> Result<(), EngineError> {
+        if self.adc_batch.is_empty() {
+            return Ok(());
+        }
+        let batch = std::mem::take(&mut self.adc_batch);
+        for chunk in batch.chunks(0xFFFF) {
+            let mut words = Vec::with_capacity(1 + 3 * chunk.len());
+            words.push(0xBA7C_0000 | chunk.len() as u32);
+            for &(t_ns, i, uv) in chunk {
+                let ch = u32::try_from(self.pins[i].spec.index).unwrap_or(u32::MAX) & 0xFF;
+                if t_ns >> 48 != 0 {
+                    return Err(EngineError::Protocol(format!(
+                        "timed ADC input at {t_ns} ns: beyond the host port's 48-bit time"
+                    )));
+                }
+                words.push(t_ns as u32);
+                words.push(((t_ns >> 32) as u32) | (ch << 16));
+                words.push(uv);
+            }
+            let id = self.sysbus_id()?;
+            for w in words.chunks(PORT_BATCH_WORDS) {
+                self.client
+                    .sysbus_write_u32s(id, BB_ADC_PORT_ADDRESS + PORT_BATCH, w)
+                    .map_err(proto)?;
+            }
+        }
+        for &(_, i, uv) in &batch {
+            self.pins[i].applied_uv = Some(uv);
         }
         Ok(())
     }

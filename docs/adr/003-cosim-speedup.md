@@ -44,6 +44,8 @@ binding on the implementation.
    platform for the ADC demo; verify it in the 1.17.0 install first (for
    example `STM32_ADC_Common`, or the F0/G0/F4 platforms). Write a minimal
    in-repo STM32F1 ADC peripheral only if no existing model works.
+   *(Superseded for the STM32F072 board by ADR-005 approver decision 1,
+   2026-11-08: Breadboard writes its own ADC model, `BbStm32F0Adc`.)*
 5. **Schema bump.** event-stream v1 and regenerating the `events.jsonl`
    golden hash are approved.
 6. **+1 fs convention.** Accepted: a genuine write exactly on a lattice point
@@ -427,6 +429,12 @@ quiet.
     what a one-cell run computes.
 
 ### D6. ADC (Part C)
+
+*Amended by ADR-005 (D3, D5): on Breadboard's ADC model the push key is the
+12-bit code with the raw microvolts delivered, the pushes are timed inputs,
+and the `adc_in` pin is a sampled input that the code-change watch no longer
+watches. The stock model (`bb run --adc-model stock`) keeps this section's
+rules.*
 
 - **New pin model.** `adc_in{vref, bits}` is added to `spec/pin-model.md`. It
   is a *push* model: the producing analog engine emits a transition, carrying
@@ -1290,7 +1298,21 @@ digital crossing is an ordinary trace (Amendment 3).
 
 **Status:** Accepted. Resolves Context fact 8 and Open question 4 for
 Part C. No `spec/`, kernel or engine change: `examples/adc` is a Renode-only
-platform check that step 9 builds on. The facts below were checked against
+platform check that step 9 builds on.
+
+> **Superseded for the STM32F072 board by ADR-005** (2026-11-09,
+> `docs/adr/005-adc-model.md`, approver decision 1). The facts below about
+> Renode's `STM32F0_ADC` still hold, and this amendment's test still runs
+> (`make adc-renode`, the stock model), but `examples/adc` now runs on
+> Breadboard's own ADC model (`BbStm32F0Adc`: TIM3 TRGO hardware triggers,
+> RM0091 conversion timing, the analog watchdog at the end of conversion)
+> with `BbStm32Timer` (TRGO), on the overlay
+> `engines/cpu-renode/platforms/stm32f072-bb.repl`. Its pushes are keyed by
+> the 12-bit code and delivered as timed inputs of a sampled input
+> (ADR-005 D3, D5), which amends D6 and Amendment 10 below. The stock path
+> stays reachable as `bb run --adc-model stock` (firmware
+> `adc_board_isr.elf`, the former `adc_board.elf`) with its own committed
+> references (`tests/golden/adc-stock`, `tests/golden/adc-open-stock`). The facts below were checked against
 the Renode 1.17.0 install and its sources (renode `v1.17.0`, infrastructure
 submodule `066a7f13`), and then measured.
 
@@ -1946,6 +1968,12 @@ of theirs is unchanged. On `examples/feedback` the default run's
   and adds one cost-table row for the default feedback run.
 
 ### Amendment 10: step 9 (ADC, D6) as implemented (2026-11-08)
+
+*Amended by ADR-005 (2026-11-09): the whole-millivolt push key, `SetValue`
+splits and the code-change watch below now apply to `--adc-model stock`
+only; `examples/adc` runs on Breadboard's model with the code12 key, timed
+inputs and no watch on the ADC pin. The goldens of this amendment moved to
+`tests/golden/adc-stock` and `tests/golden/adc-open-stock`.*
 
 **Status:** Accepted with step 9. It builds on Amendment 5 (the platform:
 Renode 1.17.0's STM32F072 and its `STM32F0_ADC`). `spec/pin-model.md` is

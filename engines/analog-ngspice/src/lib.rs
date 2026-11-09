@@ -173,9 +173,9 @@ pub struct AdcOutputBinding {
 /// When an `adc_in` output emits a transition (ADR-003 Amendment 10).
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum AdcPush {
-    /// At the lattice points where the push key ([`AdcIn::push_key`],
-    /// whole millivolts) changes, delivering exactly that many millivolts.
-    /// The default.
+    /// At the lattice points where the push key ([`AdcIn::push_key`]: the
+    /// 12-bit code, or whole millivolts for the stock model) changes,
+    /// delivering [`AdcIn::key_microvolts`]. The default.
     #[default]
     OnChange,
     /// At every lattice point, delivering the clamped value in whole
@@ -521,7 +521,7 @@ impl Until {
         {
             for (a, v) in self.adcs.iter_mut().zip(&nodes[self.pins.len()..]) {
                 let uv = a.model.delivered_microvolts(last(v)?);
-                let key = AdcIn::push_key(uv);
+                let key = a.model.push_key(uv);
                 if a.push == AdcPush::EveryLattice || key != a.key {
                     adc_stop = Some(lp);
                 }
@@ -1549,19 +1549,19 @@ impl NgspiceEngine {
             if initial {
                 let v = *vals.last().ok_or("no sample at t = 0")?;
                 a.uv = a.model.delivered_microvolts(v);
-                a.key = AdcIn::push_key(a.uv);
+                a.key = a.model.push_key(a.uv);
                 if self.adc_push == AdcPush::OnChange {
-                    a.uv = a.key * 1000;
+                    a.uv = a.model.key_microvolts(a.uv);
                 }
                 a.start_uv = a.uv;
                 continue;
             }
             for &(lp, k) in &points {
                 let uv = a.model.delivered_microvolts(vals[k]);
-                let key = AdcIn::push_key(uv);
+                let key = a.model.push_key(uv);
                 let delivered = match self.adc_push {
                     AdcPush::EveryLattice => uv,
-                    AdcPush::OnChange if key != a.key => key * 1000,
+                    AdcPush::OnChange if key != a.key => a.model.key_microvolts(uv),
                     AdcPush::OnChange => continue,
                 };
                 a.key = key;

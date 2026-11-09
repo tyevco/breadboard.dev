@@ -283,6 +283,19 @@ impl Client {
         Ok(())
     }
 
+    /// Write `values` as consecutive 32-bit words from `address` (one
+    /// request; Renode performs one bus write per word, in order).
+    pub fn sysbus_write_u32s(&mut self, bus: i32, address: u64, values: &[u32]) -> Result<()> {
+        let count = u32::try_from(values.len())
+            .map_err(|_| ProtocolError::Server("SYSTEM_BUS write: too many words".into()))?;
+        let mut d = sysbus_header(bus, SYSBUS_WRITE, SYSBUS_WIDTH_DOUBLE_WORD, address, count);
+        for v in values {
+            d.extend_from_slice(&v.to_le_bytes());
+        }
+        self.request(CMD_SYSTEM_BUS, &d)?;
+        Ok(())
+    }
+
     /// Run the emulation for exactly `ns` nanoseconds of virtual time and
     /// block until Renode has paused again.
     pub fn run_for(&mut self, ns: u64) -> Result<()> {
