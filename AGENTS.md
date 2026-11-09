@@ -213,6 +213,12 @@ feedback board).
   runtime writes it. Deleting the directory only costs that one gather.
   `BB_RENODE_JIT_PROFILE=off` disables it. It changes JIT timing only; a
   new board must still give its committed hashes with and without it.
+- The repository lives on WSL's `/mnt/c`, where every open or stat can
+  cost 10-130 ms while Windows is busy (ADR-004 Amendment 7). Keep files
+  that Renode or a hot loop reads off it: the Renode engine hands Renode a
+  copy of the firmware in its temp workdir, and `bb run` writes outputs
+  through 1 MiB buffers. Do not reintroduce per-run reads of repository
+  files from inside Renode or small unbuffered writes.
 - Renode is installed at `~/.local/opt/renode-1.17.0` (symlink
   `~/.local/bin/renode`). `libngspice.so.0` is in `/usr/lib/x86_64-linux-gnu`.
 

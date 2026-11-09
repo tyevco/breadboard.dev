@@ -871,3 +871,105 @@ downloaded or run besides Renode (compare decision 3, crossgen2).
   table and its startup paragraph are in the README. The host was slower
   than in Amendment 5's session and its speed drifted, so the simulation
   and total-wall figures are not comparable across sessions.
+
+### Amendment 7: slow-file-system costs, and G2 on a busy host (2026-11-08)
+
+**Status:** Implemented. Engine-internal (`engines/cpu-renode`) and CLI
+output buffering only. Nothing in `spec/`, the time-grant protocol, the
+output formats or the hashes changes.
+
+- **Why G2 failed.** Amendment 6 blamed the host for G2. Tracing a lease
+  line by line (a temporary instrumented build, not committed) showed where
+  the time went. On this host, with Windows under load, every open or stat
+  on WSL's `/mnt/c` (where the repository lives) took 10–130 ms (measured:
+  10 opens of `blinky.elf` 0.007–0.134 s each, of `board.cir` 0.006–0.092 s,
+  a `stat` 0.013–0.095 s). Two things in a run paid that cost many times:
+  - **`sysbus LoadELF`** opens the firmware about a dozen times (`strace`
+    of a fresh run: 13 `openat`, 15 `fstat`, 24 `pread64` on
+    `blinky.elf`). In a lease it took 0.09–1.19 s. The same ELF copied to
+    `/tmp` loaded in 0.004–0.19 s (0.004–0.008 s once warm). `LoadPlatformDescription` (0.06–0.12 s)
+    and `Clear` (< 0.02 s) were the rest of the include.
+  - **The output writers** used `BufWriter`'s 8 KiB default, so the
+    spike's 1.7 MB `nets.csv` took about 200 `write` calls during the
+    simulation. With `out/` on `/mnt/c`, the spike's pooled simulation
+    had a median of 2.30 s (`make pool-perf`) against 0.35–0.6 s with
+    `--out` in `/tmp`.
+- **Changes.**
+  - **F1, the firmware read once** (`RenodeEngine::start`): `bb` reads the
+    firmware once (`std::fs::read`; this replaces the `canonicalize`,
+    which walked the path on `/mnt/c`) and writes it to
+    `<workdir>/fw/<its file name>` in the temp directory. Renode's
+    `LoadELF` gets that copy, the same bytes under the same file name,
+    fresh and leased alike. The workdir is removed with the engine, as
+    before.
+  - **F2, 1 MiB output buffers** (`cli/src/main.rs`, `create`) for
+    `nets.csv`, `nets.vcd` and `events.jsonl`. The bytes written and the
+    flush points (end of run, and before an error is reported, ADR-003
+    D4) are unchanged.
+  - **F3, pre-warm runs `LoadELF`** (`manager::warm_elf`): the throwaway
+    pre-warm machines load a generated 32-bit ARM ELF (the same vector
+    table and `wfi; b .-2` the `WriteDoubleWord` lines wrote before, plus
+    a two-entry symbol table) with `sysbus LoadELF`, so Renode's ELF and
+    symbol code is compiled before the first lease. A unit test checks
+    the ELF's structure and, when `arm-none-eabi-readelf` is installed,
+    that it reads it cleanly.
+- **Determinism.** Renode loads the same bytes; only the path differs,
+  and no output depends on it (the workdir path already differed per
+  run). Buffer size changes only how many `write` calls produce the same
+  bytes. Pre-warm machines are cleared before any lease (Lease 4). The
+  gates below hold the evidence.
+- **Effect on a lease** (spike, 12 leases each, 1 slot, load 3.5–6, the
+  temporary per-line trace): before F1, `LoadELF` 0.09–1.19 s and lease
+  startup 0.17–1.91 s; with the firmware in `/tmp`, `LoadELF`
+  0.004–0.19 s and startup 0.11–0.35 s. With F1, the firmware read
+  itself (one open on `/mnt/c`) took 0.006–0.13 s and lease startup
+  0.14–0.28 s. Before F2, with `out/` on `/mnt/c`, the spike's pooled
+  simulation had a median of 2.30 s; after it, medians of 0.38–0.85 s in
+  the G2 runs below.
+- **Rejected in this round:** `DOTNET_TieredCompilation=0` for pool
+  processes (lease startup 1.1–1.5 s either way while `LoadELF`
+  dominated; pre-warm 4.8–5.9 s against 3.4–7.2 s, N = 2 each).
+- **G3, both modes** (`~/bbgates/a7`, all rc = 0): fresh (`POOL=0`)
+  `make check` 284 s (load 6.1 → 12), `partition`, `lattice-check`,
+  `feedback-open`, `lookahead-inert`, `lookahead-equiv`, `adc-equiv`,
+  `spike-verify-every`, `determinism`, `feedback-determinism`; on the pool
+  (`POOL=1`), `make check` 246 s (load 3.1 → 9.5) and the same targets.
+  Nothing under `tests/golden` changed. No Renode process was left.
+- **G4.** `make pool-equiv` passes: 20 leases, 20 kept, 0 discarded,
+  0 leaked listeners. **G6.** `make lookahead-startup` passes, difference
+  0.106 s (1.957 s without the plugin, 2.063 s with it).
+- **G2 passes**, three times on the same busy host:
+
+  | Run | First lease | Median startup (spike / feedback / adc) | Spike wall | Load |
+  | --- | --- | --- | --- | --- |
+  | In the gate suite | 0.11 s | 0.08 / 0.09 / 0.09 s | 0.51 s | 3.1–4.1 |
+  | Standalone 1 | 0.13 s | 0.19 / 0.10 / 0.11 s | 0.99 s | 1.4–2.6 |
+  | Standalone 2 | 0.27 s | 0.13 / 0.11 / 0.09 s | 1.11 s | 2.4–5.4 |
+
+  The spike's wall still follows the host (simulation 0.38–0.85 s here),
+  and its margin is smallest under load (1.11 s against 1.2 s).
+  Amendment 6's conclusion that G2's failure was "the host, not bb" was
+  only half right: the host made `/mnt/c` slow, and bb paid that cost
+  many times per run. F1 and F2 remove most of it.
+- **G1** (`make startup-perf`, stock baseline, N = 7, interleaved,
+  medians, outputs identical, load 2.9–3.6): spike 2.54 → 1.77 s,
+  −0.770 s (30.3 %), pass; feedback 3.45 → 2.28 s, −1.170 s (33.9 %),
+  pass.
+- **Against the commit before ADR-004** (`dcc9d66`: its sources in
+  `~/bbbase-startup` were checked equal to the commit's `bbcore`, `cli`,
+  `engines` and Cargo files; binary `~/.cache/bb-target-base`), N = 5,
+  interleaved, medians, outputs identical, load 1.4–3.1: spike
+  2.54 → 1.45 s, −1.09 s (42.9 %); feedback 2.78 → 1.83 s, −0.95 s
+  (34.2 %). Both pass G1's thresholds.
+- **Cost table** (`make cost-table`, load 2.3–6.6): all 8 A/B comparisons
+  pass with B identical to A except for the grant records, and all 40
+  pool runs were leased (40 kept, 0 discarded, 0 leaked listeners). Engine
+  startup 2.02–2.28 s fresh and 0.08–0.39 s on the pool. The README table
+  and its startup paragraph carry these figures. Its simulation figures
+  are lower than Amendment 6's mostly because of F2, so they are not
+  comparable with earlier sessions.
+- **Still open, unchanged:** ReadyToRun via crossgen2 (approver decision
+  3: not approved, not measured); pool processes start without A3; Renode
+  1.17.0's External Control server binds 0.0.0.0 (Amendment 2). A3
+  (Amendment 6) still awaits the approver's review. F1–F3 are
+  engine-internal and recorded here for the same review.

@@ -172,37 +172,39 @@ fresh runs.
 
 | Board, run | Simulated | Grants | Simulation (median) | Engine startup, fresh | Engine startup, pool | Total wall, fresh | Total wall, pool |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| spike, `--max-quantum 10us` (the Phase 0 setting: one-cell lockstep) | 500 ms | 50 000 | 35.42 s | 3.13 s | 0.46 s | 38.82 s | 34.38 s |
-| spike, defaults (`make spike`: 10 ms grants) | 500 ms | 50 | **2.15 s** (16×) | 2.74 s | **0.22 s** | 4.41 s | 2.26 s |
-| `examples/feedback --lookahead off` (a feedback loop: one-cell grants whatever `--max-quantum` is) | 500 ms | 50 000 | 32.15 s | 2.48 s | 0.21 s | 36.82 s | 28.83 s |
-| `examples/feedback`, defaults (`make feedback`: CPU lookahead on) | 500 ms | 117 | **3.31 s** (9.7×) | 2.09 s | **0.18 s** | 5.59 s | 1.50 s |
-| `examples/feedback-open` (the loop opened), `--max-quantum 10us` | 500 ms | 50 000 | 29.70 s | 2.26 s | 0.19 s | 32.06 s | 22.09 s |
-| `examples/feedback-open`, defaults (10 ms grants) | 500 ms | 50 | **2.03 s** (15×) | 2.15 s | **0.36 s** | 4.24 s | 1.21 s |
-| `examples/adc --lookahead off` (one-cell grants) | 300 ms | 30 000 | 25.02 s | 2.79 s | 0.39 s | 28.32 s | 17.49 s |
-| `examples/adc`, defaults (`make adc`: lookahead on) | 300 ms | 6 344 | **11.39 s** (2.2×) | 2.16 s | **0.36 s** | 13.73 s | 9.07 s |
+| spike, `--max-quantum 10us` (the Phase 0 setting: one-cell lockstep) | 500 ms | 50 000 | 23.52 s | 2.02 s | 0.15 s | 25.66 s | 24.89 s |
+| spike, defaults (`make spike`: 10 ms grants) | 500 ms | 50 | **0.81 s** (29×) | 2.04 s | **0.18 s** | 3.02 s | 1.16 s |
+| `examples/feedback --lookahead off` (a feedback loop: one-cell grants whatever `--max-quantum` is) | 500 ms | 50 000 | 24.74 s | 2.13 s | 0.30 s | 27.04 s | 24.66 s |
+| `examples/feedback`, defaults (`make feedback`: CPU lookahead on) | 500 ms | 117 | **1.19 s** (21×) | 2.22 s | **0.39 s** | 3.49 s | 1.78 s |
+| `examples/feedback-open` (the loop opened), `--max-quantum 10us` | 500 ms | 50 000 | 24.36 s | 2.25 s | 0.08 s | 26.86 s | 22.63 s |
+| `examples/feedback-open`, defaults (10 ms grants) | 500 ms | 50 | **0.56 s** (44×) | 2.05 s | **0.10 s** | 2.66 s | 0.50 s |
+| `examples/adc --lookahead off` (one-cell grants) | 300 ms | 30 000 | 23.80 s | 2.26 s | 0.09 s | 26.12 s | 14.96 s |
+| `examples/adc`, defaults (`make adc`: lookahead on) | 300 ms | 6 344 | **10.09 s** (2.4×) | 2.28 s | **0.12 s** | 14.06 s | 6.75 s |
 
-**This measurement ran on a slow, busy host** (ADR-004 Amendment 6, with
-the cached JIT startup profile). The load average was 2.5–6.5 while
-another agent's layout job ran, and simulation was 1.5–3× slower than at
-ADR-003 step 10 (load 1.8–2.8: spike defaults 1.01 s simulation and 2.54 s
-startup; feedback 1.19 s; feedback-open 0.98 s; adc 7.64 s; the one-cell
-rows 16–22 s). The host's speed also drifted within the session. That is
-why the same B runs simulated faster in the pool session (spike 1.88 s,
-feedback 1.08 s, feedback-open 0.76 s, adc 8.77 s) than in the fresh one.
-So compare within a row and between the two startup columns, not with
-older figures or between the two total-wall columns.
+Measured on 2026-11-09 (ADR-004 Amendment 7), load average 2.3–6.6
+while another agent's job ran on the host, so the figures are noisy. They
+are not comparable with the figures of earlier sessions (ADR-003 step 10,
+ADR-004 Amendments 5 and 6), which ran with 8 KiB output buffers: with
+`out/` on WSL's `/mnt/c`, writing `nets.csv` then cost up to about 2 s of
+"simulation" on a loaded host. The pool session's simulation figures
+differ from the fresh ones (for example feedback-open defaults 0.36 s,
+adc defaults 6.60 s) because the host's speed drifted, so compare within
+a row and between the two startup columns.
 
 **Engine startup** is the time `bb run` waits before the first grant.
 Almost all of it is Renode's own start: .NET, Renode init and the platform
 load (ADR-004). A fresh run sets `DOTNET_TieredPGO=0` on Renode, plays
 back a cached .NET multi-core JIT startup profile (`~/.cache/bb/renode-jit`;
 the first run for a Renode install, platform and plugin setting gathers
-it), and polls its External Control server every 5 ms. Together these cut
-fresh startup by 0.76–0.93 s against the stock runtime, and by about
-1.3 s against the commit before ADR-004 (ADR-004 Part A, Amendment 6). On
+it), polls its External Control server every 5 ms, and hands Renode a copy
+of the firmware in its temp workdir, read once (Renode's `LoadELF` opens
+the file about a dozen times, each costly on `/mnt/c`). Together these cut
+fresh startup by 0.77–1.17 s against the stock runtime, and by 0.95–1.09 s
+against the commit before ADR-004 (ADR-004 Part A, Amendments 6 and 7). On
 a warm pool (`bb pool run -- <command>`), each run leases a pre-warmed
-Renode process instead of starting one, and startup falls to 0.18–0.46 s. `make test` and the gate targets run on a pool by
-default (`POOL=0` runs them fresh).
+Renode process instead of starting one, and startup falls to 0.08–0.39 s.
+`make test` and the gate targets run on a pool by default (`POOL=0` runs
+them fresh).
 
 The ADC board gains least: the firmware converts every 999 µs and every
 change of ADC_IN by a whole millivolt stops a quiet grant, so while the RC
