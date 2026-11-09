@@ -51,6 +51,8 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `bb pool run -- <cmd>` | Run `<cmd>` with a warm Renode pool in `BB_RENODE_POOL` (`--slots N`, `--max-runs K`); `bb pool start` / `stop` / `status` for an interactive shell (`bb pool --help`). `bb run --renode-pool off` ignores a pool |
 | `make golden-update` | Regenerate the golden snapshots, the spike output hashes and the partition hashes (spike, feedback, feedback-open), the feedback one-cell reference hashes and the ADC reference hashes from fresh, checked runs. Review the diff before committing it: a change to an equivalence reference is a change to results and needs a reason (and, for the protocol, an ADR) |
 | `make cost-table` | The README cost table with the measurement protocol (`scripts/perf_ab.sh`, interleaved, N = `PERF_N`, medians): the spike at 10 µs vs 10 ms grants, `examples/feedback` and `examples/adc` with lookahead off vs on, `examples/feedback-open` at 10 µs vs 10 ms. Reports only; no gate. Run it on an otherwise idle host |
+| `make dms-source` | Phase 1 M0: the vendored dial-me-spinner KiCad inputs (`examples/dial-me-spinner/kicad/`) against the sha256s in `examples/dial-me-spinner/SOURCE`, and against `git show <commit>:<path>` when `DMS_REPO` (default `../dial-me-spinner`) exists (`scripts/dms_source_check.sh`) |
+| `make dms-suite-check` | Phase 1 M0 gate: re-run the dial-me-spinner SPICE suite (`-m "not slow"`) at the reference commit `6854d25` from a `git archive` export in `~/.cache/bb-dms-suite` (`scripts/dms_suite.sh`, about 4-5 min) and require `out/dms-suite/results.json` to equal the committed `examples/dial-me-spinner/suite/results.json` byte for byte (checks, test outcomes, every deck's numeric fallback level, ngspice version). `make dms-suite-update` regenerates it. Never check out, stash or write in the dial-me-spinner repository |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
@@ -77,6 +79,9 @@ examples/adc/           STM32F072 ADC board (adc_in PA1 reads the divider PA4 dr
                         board-open.cir), its firmware (adc_board.elf on Breadboard's ADC model,
                         adc_board_isr.elf on the stock one, test firmware), bb_adc_test.py (the
                         ADR-005 model tests) and renode_adc_test.py (the stock model's test)
+examples/dial-me-spinner/ Phase 1 reference board (dial-me-spinner 6854d25): SOURCE (commits and
+                        sha256 of every vendored file), kicad/ (main and base projects; kicad9-dc96515/
+                        the secondary KiCad 9 netlists), suite/results.json (the suite re-run, M0)
 tests/golden/spike/     led_a.csv waveform snapshot, default-run output hashes, partition hashes
 tests/golden/feedback/  SENSE / LED_B snapshots, exact pin_edge list, one-cell reference hashes
 tests/golden/feedback-open/ partition hashes of the one-cell reference
@@ -88,7 +93,9 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         partition.sh, perf.sh, perf_ab.sh (also make cost-table),
                         check_resample.py, check_feedback.py, lookahead_inert.sh,
                         lookahead_equiv.sh, check_adc.py, adc_equiv.sh, startup_perf.sh,
-                        with_pool.sh, pool_equiv.sh, pool_perf.sh
+                        with_pool.sh, pool_equiv.sh, pool_perf.sh, dms_vendor.sh,
+                        dms_source_check.sh, dms_suite.sh (+ dms_suite_plugin.py,
+                        dms_suite_collect.py)
 ```
 
 ## The three invariants

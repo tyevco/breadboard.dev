@@ -13,7 +13,7 @@ CARGO ?= cargo
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
         adc-equiv adc-renode adc-model adc-startup adc-stock adc-order adc-determinism pooled-adc-determinism adc-stock-ref adc-open-stock-ref adc-speed \
         cost-table cost-table-runs startup-perf ec-reconnect ec-long \
-        pool-equiv pool-perf \
+        pool-equiv pool-perf dms-source dms-suite dms-suite-check dms-suite-update \
         pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
 
 # --- Phase 0 spike ---------------------------------------------------------
@@ -555,6 +555,37 @@ adc-model: firmware
 # model; about 15 s).
 adc-renode:
 	$(MAKE) -C examples/adc test
+
+# --- Phase 1 M0: dial-me-spinner reference inputs and its SPICE suite -----
+# The reference board is dial-me-spinner 6854d25 (plan, approver decision C).
+# DMS_REPO is a local dial-me-spinner repository; it is only read with
+# `git archive` / `git show`, never checked out.
+DMS_REPO          ?= $(abspath $(CURDIR)/../dial-me-spinner)
+DMS_SUITE_OUT     ?= out/dms-suite
+DMS_SUITE_RESULTS := examples/dial-me-spinner/suite/results.json
+
+# The vendored KiCad inputs against examples/dial-me-spinner/SOURCE (and,
+# when DMS_REPO exists, each file against git show <commit>:<path>).
+dms-source:
+	bash scripts/dms_source_check.sh $(wildcard $(DMS_REPO))
+
+# Re-run the suite (`-m "not slow"`) at the reference commit from a git
+# archive export in ~/.cache/bb-dms-suite (about 4-5 min on 12 jobs).
+dms-suite:
+	bash scripts/dms_suite.sh --repo $(DMS_REPO) --out $(DMS_SUITE_OUT)/results.json
+
+# M0 gate: a fresh run reproduces the committed results.json byte for byte
+# (checks, test outcomes, decks and their fallback levels, tool versions).
+dms-suite-check: dms-suite
+	@if cmp -s $(DMS_SUITE_OUT)/results.json $(DMS_SUITE_RESULTS); then \
+	    echo "dms-suite-check: PASS ($(DMS_SUITE_OUT)/results.json identical to $(DMS_SUITE_RESULTS), sha256 $$(sha256sum < $(DMS_SUITE_RESULTS) | cut -c1-16))"; \
+	else diff -u $(DMS_SUITE_RESULTS) $(DMS_SUITE_OUT)/results.json | head -60; \
+	    echo "dms-suite-check: FAIL (results differ)"; exit 1; fi
+
+# Regenerate the committed results.json (review the diff: it is the source
+# of the package test vectors, ADR-006 D9 rule 5).
+dms-suite-update: dms-suite
+	cp $(DMS_SUITE_OUT)/results.json $(DMS_SUITE_RESULTS)
 
 fmt:
 	$(CARGO) fmt --all

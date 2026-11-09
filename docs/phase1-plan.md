@@ -1,7 +1,9 @@
 # Phase 1 plan: a real board from KiCad (dial-me-spinner rev A)
 
 - **Status:** Accepted (2026-11-09), with the approver decisions below
-  (revised 2026-11-09 after two design reviews). Milestones start with M0.
+  (revised 2026-11-09 after two design reviews). M0 done (2026-11-09:
+  inputs vendored with `SOURCE`, suite re-run committed and reproduced;
+  see Review notes).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -526,3 +528,31 @@ ADR-006/007/008. Items not adopted as proposed:
   M11 adds no schema change.
 - **The 26.6 ms QOD worst case** is dropped from E1 rather than
   re-scoped: it depends on tolerance and DC-bias views that are `pi` work.
+
+## Review notes: M0 (2026-11-09)
+
+- **Inputs.** `examples/dial-me-spinner/kicad/` holds the main and base
+  projects at `6854d25` (netlists, `.kicad_pro`, every sheet,
+  `sym-lib-table`, the project symbol library) and `kicad9-dc96515/` the two
+  KiCad 9.0.9 netlists of the secondary check. `SOURCE` gives both commit
+  ids and each file's sha256 and `commit:path`; `make dms-source` checks
+  them, and against `git show` when the repository is present. A fresh
+  `kicad-cli` 10.0.8 export of the vendored schematics matches the vendored
+  netlists on every component, net, node and `libpart`, so the set is
+  complete for the `kicad=` route.
+- **Suite.** `make dms-suite-check` re-runs the suite at `6854d25` from a
+  `git archive` export (no KiCad needed; ngspice 42+ds-3build1) and requires
+  the committed `examples/dial-me-spinner/suite/results.json` byte for
+  byte. 718 passed, 44 xfailed, 4 465 checks, 2 318 decks: 2 314 at
+  fallback level 0, 4 at level 1 (all in `test_load_switches.py`, including
+  `test_u2_qod_discharge[usb5.0]`), none at level 2, no timeouts. Three runs
+  (12, 12 and 5 jobs) gave the same bytes.
+- **What "the suite" means here.** The committed run is the everyday subset,
+  `-m "not slow"`, the one the reference commit gates on and the one §1
+  cites. The tests marked `slow` (Monte Carlo and sweeps) are not in `results.json`;
+  `scripts/dms_suite.sh --select ''` runs them if a package vector ever
+  needs one.
+- **Reproducibility limit.** A retry after a hang depends on wall time (90 s
+  per attempt in `test_load_switches.py`), so a heavily loaded host could
+  move a deck to a higher fallback level; `summary.decks_with_timeouts`
+  shows it. None occurred in M0's runs.

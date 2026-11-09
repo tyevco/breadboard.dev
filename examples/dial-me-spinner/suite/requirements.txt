@@ -1,0 +1,12 @@
+# Python packages for re-running the dial-me-spinner SPICE suite (scripts/dms_suite.sh).
+# The suite's CI installs pytest, numpy and scipy unpinned; these pins are the versions
+# results.json was produced with. Python 3.12 (Ubuntu 24.04); ngspice 42 from apt.
+execnet==2.1.2
+iniconfig==2.3.1
+numpy==2.5.4
+packaging==26.3
+pluggy==1.7.0
+pygments==2.21.0
+pytest==9.2.0
+pytest-xdist==3.8.0
+scipy==1.18.1
