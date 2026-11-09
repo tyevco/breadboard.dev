@@ -454,3 +454,85 @@ is weakened. A gate that turns out infeasible gets an amendment here.
   `spike-verify-every`. Nothing under `tests/golden/` changed.
 - **G6** passed: `make lookahead-startup`, without the plugin 2.204 s,
   with it 2.194 s (difference −0.010 s ≤ 0.3 s, N = 7, load 4.2).
+
+### Amendment 2: step 2 (the engine host and the console) (2026-11-08)
+
+**Status:** Accepted with step 2. Engine-internal; it answers open
+questions 3 and 4 (approver decisions 5 and 6).
+
+- **Host.** `RenodeEngine` holds a `Host`: a spawned `Child` (killed on
+  drop, as before) or a `pool::Lease`. With `RenodeConfig::pool` (default
+  `$BB_RENODE_POOL`; nothing sets it in this step) the engine asks the
+  pool before spawning. `BUSY`, `NOMATCH`, no pool behind the socket, or
+  an error all mean a fresh start. A leased run writes the same
+  `session.resc` without the plugin loader `include`, has the manager run
+  it (`RUN <workdir> <script> <port>` → `READY` or `ERR`), connects to its
+  External Control server and continues as a fresh run would. On drop it
+  closes External Control first, then sends `END ok` or `END failed` (a
+  failed engine or a panic) and waits for `DONE`. `renode_pid()` and
+  `leased()` report where the Renode came from.
+- **Console facts** (Renode 1.17.0 over pipes, `src/console.rs`, tested
+  in `tests/console.rs`): each line is echoed, then its output, then the
+  prompt `(monitor) ` or `(<machine>) ` with no newline. A failed command
+  prints `There was an error executing command '<cmd>'`, and inside an
+  `include` the rest of that script is skipped. An unknown word prints
+  `No such command or device: <word>`. `Console::run` therefore ends each
+  batch with `bbsync_<n>` and waits for that line. The console runs lines
+  in order, so the line cannot appear before the batch is done; a
+  prompt-based wait would race with log lines from other threads.
+  Renode's default log level is INFO (1) on the console and memory
+  backends; a lease restores it before its script, which sets 2 as a
+  fresh run's does.
+- **Open question 4, the lingering listener: root cause.** In
+  `ExternalControlSocket.RxThreadBody` (1.17.0), when the client
+  disconnects, the receive thread calls `Disconnect(State.Unconnected)`.
+  That runs `RestartConnection()`, which binds a new listening socket on
+  the same port with a new receive thread. A `Clear` disposes the
+  emulation's externals on the monitor thread
+  (`Dispose → Disconnect(Disposed)`). If it runs while the receive thread
+  is still in that restart, one of two things happens. It may close the
+  half-built socket, and the receive thread then dies in
+  `Socket.Bind` with an unhandled `ObjectDisposedException`, which kills
+  Renode (stack trace captured). Or it may run before the new socket
+  exists and null the fields afterwards, so a listener remains that no
+  one closes. The prototype's first lease was the slow, not yet compiled
+  path of that race.
+  Reproduced (`leak_probe.py`, 20 lease cycles per session, `Clear` sent
+  straight after the disconnect): 5 sessions gave 1 leaked listener, 0, and 3 Renode
+  crashes. `tests/console.rs::external_control_relisten_and_clear`
+  checks the state the fix relies on: after the disconnect Renode listens
+  again on the port, and a `Clear` with the server back in `Accept`
+  releases it.
+- **The fix (step 3):** at the end of a lease the manager waits (up to
+  2 s, polling `/proc/<pid>/fd` against `/proc/net/tcp`) until the
+  process listens on the lease's port again. Only then does it send
+  `Clear`, and it requires afterwards that the process listens on no port.
+  A process still listening, or one whose console does not answer, is
+  discarded. With the wait, 4 sessions of 20 cycles gave 0 leaks and
+  0 crashes. The engine closes External Control before `END` for the
+  same reason.
+- **Open question 3, loopback-only binding: not supported by 1.17.0.**
+  `RestartConnection` binds `new IPEndPoint(IPAddress.Any, port)`, and
+  neither `CreateExternalControlServer(name, port)` nor any setting
+  selects an address. `CreateExternalControlClient` makes Renode connect
+  out to `IPAddress.Loopback`, which would avoid the listener. But it
+  reverses the roles: Renode sends `CHECK_VERSION`, and the handlers
+  choose message ids differently (`GetHandlerForCurrentThread`). That
+  means a new client implementation, so it is not adopted here. **The
+  exposure:** the port listens on all interfaces (1) from
+  `CreateExternalControlServer` until `bb` connects (milliseconds;
+  `Accept` closes the listener, and the backlog is 1), and (2) from the
+  run's disconnect until the process is killed (fresh) or cleared (pool:
+  the manager clears right after the re-listen, so also milliseconds). In
+  those windows a host that can reach the port could take the connection.
+  It would get the External Control commands (run, time, GPIO, ADC,
+  system-bus reads and writes of the emulated machine), which include no
+  monitor or Python access. A connection held in window 1 makes the `bb`
+  run fail (its connect is refused until the startup timeout). One that
+  connects, acts and disconnects before `bb` connects could change the
+  run: the `GET_TIME == 0` check catches a `RUN_FOR`, but not a GPIO,
+  ADC or bus write. This exposure predates ADR-004 and is unchanged by
+  it. In WSL2 the VM's NAT and the host firewall keep the ports off the
+  network. A pool process listens on no TCP port
+  between leases: it is driven by its console pipe and has no monitor
+  port (`--port -1`).

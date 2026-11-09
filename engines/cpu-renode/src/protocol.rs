@@ -140,6 +140,11 @@ impl Client {
         Ok(c)
     }
 
+    /// Close the connection (both directions). Later requests fail.
+    pub fn close(&mut self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
+
     /// Descriptor of the machine called `name`.
     pub fn get_machine(&mut self, name: &str) -> Result<i32> {
         let mut d = Vec::new();

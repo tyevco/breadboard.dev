@@ -124,6 +124,16 @@
 //! source and the Renode install) and loads it with `TypeManager.ScanFile`
 //! from a generated Python snippet in later runs (ADR-003 Amendment 8).
 
+//!
+//! # Startup (ADR-004)
+//!
+//! A fresh Renode is started with [`renode_command`]: `DOTNET_TieredPGO=0`
+//! (Part A) and kill-on-parent-death. With [`RenodeConfig::pool`] the
+//! engine first asks a warm Renode pool for a process ([`pool`], Part B);
+//! the rest of the engine does not depend on where its Renode came from.
+
+pub mod console;
+pub mod pool;
 pub mod protocol;
 
 use std::collections::BTreeSet;
@@ -435,6 +445,10 @@ pub struct RenodeConfig {
     /// the self-test fail). Never set by `bb`.
     #[doc(hidden)]
     pub extra_monitor: Vec<String>,
+    /// A warm Renode pool's socket (ADR-004 Part B): lease a pre-warmed
+    /// process from it when one matches and is idle, else start Renode
+    /// fresh. Never changes results. Default: [`pool::POOL_ENV`].
+    pub pool: Option<PathBuf>,
 }
 
 impl RenodeConfig {
@@ -455,6 +469,86 @@ impl RenodeConfig {
             io_timeout: Duration::from_secs(120),
             lookahead: LookaheadCfg::default(),
             extra_monitor: Vec::new(),
+            pool: pool::from_env(),
+        }
+    }
+}
+
+/// Where the compiled lookahead block for `renode` is cached (ADR-003
+/// Amendment 8): `<cache_dir>/bb_lookahead-<key>.dll`, the key a hash of
+/// the source and the canonical Renode launcher.
+pub fn plugin_cache_path(renode: &Path, cache_dir: Option<&Path>) -> Result<PathBuf, EngineError> {
+    let cache_dir = cache_dir
+        .map(Path::to_path_buf)
+        .or_else(default_cache_dir)
+        .ok_or_else(|| {
+            EngineError::Other(
+                "no cache directory for the lookahead plugin (set BB_CACHE_DIR or HOME)".into(),
+            )
+        })?;
+    let renode_id = pool::canonical_renode(renode);
+    let key = fnv1a64(&[
+        BB_LOOKAHEAD_CS.as_bytes(),
+        renode_id.to_string_lossy().as_bytes(),
+    ]);
+    Ok(cache_dir.join(format!("bb_lookahead-{key:016x}.dll")))
+}
+
+/// Write the lookahead source and its loader into `dir`; returns the
+/// loader (a Python file the monitor `include`s).
+pub fn write_plugin_loader(dir: &Path, cache: &Path, err: &Path) -> Result<PathBuf, EngineError> {
+    let src = dir.join("bb_lookahead.cs");
+    std::fs::write(&src, BB_LOOKAHEAD_CS)?;
+    let loader = dir.join("bb_lookahead_load.py");
+    std::fs::write(
+        &loader,
+        plugin_loader_py(
+            &monitor_path(&src)?,
+            &monitor_path(cache)?,
+            &monitor_path(err)?,
+        ),
+    )?;
+    Ok(loader)
+}
+
+/// Where the engine's Renode came from.
+enum Host {
+    /// Spawned by this engine; killed on drop.
+    Child(Child),
+    /// A process leased from a warm pool (ADR-004 Part B); handed back on
+    /// drop.
+    Lease(pool::Lease),
+}
+
+impl Host {
+    /// Startup failed: kill the child, or discard the leased process.
+    fn abort(self) {
+        match self {
+            Host::Child(mut c) => {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            Host::Lease(mut l) => {
+                let _ = l.end(false);
+            }
+        }
+    }
+
+    fn pid(&self) -> u32 {
+        match self {
+            Host::Child(c) => c.id(),
+            Host::Lease(l) => l.pid(),
+        }
+    }
+
+    /// A note for error messages: the child's exit status, or the pool.
+    fn status_note(&mut self) -> String {
+        match self {
+            Host::Child(c) => match c.try_wait() {
+                Ok(Some(status)) => format!("renode exited ({status}); "),
+                _ => String::new(),
+            },
+            Host::Lease(l) => format!("pooled renode pid {}; ", l.pid()),
         }
     }
 }
@@ -652,7 +746,7 @@ pub struct RenodeEngine {
     machine: i32,
     /// `"sysbus"` bus-context descriptor, fetched on first use.
     sysbus: Option<i32>,
-    child: Child,
+    host: Host,
     workdir: PathBuf,
     client: Client,
     now: Time,
@@ -780,40 +874,45 @@ impl RenodeEngine {
             ));
         }
         let plugin_err = workdir.join("bb_lookahead.err");
-        let (plugin_load, plugin_arm) = if la.plugin {
-            let src = workdir.join("bb_lookahead.cs");
-            std::fs::write(&src, BB_LOOKAHEAD_CS)?;
-            let cache_dir = la
-                .cache_dir
-                .clone()
-                .or_else(default_cache_dir)
-                .ok_or_else(|| {
-                    EngineError::Other(
-                        "no cache directory for the lookahead plugin (set BB_CACHE_DIR or HOME)"
-                            .into(),
-                    )
-                })?;
-            let renode_id =
-                std::fs::canonicalize(&cfg.renode).unwrap_or_else(|_| cfg.renode.clone());
-            let key = fnv1a64(&[
-                BB_LOOKAHEAD_CS.as_bytes(),
-                renode_id.to_string_lossy().as_bytes(),
-            ]);
-            let cache = cache_dir.join(format!("bb_lookahead-{key:016x}.dll"));
-            let loader = workdir.join("bb_lookahead_load.py");
-            std::fs::write(
-                &loader,
-                plugin_loader_py(
-                    &monitor_path(&src)?,
-                    &monitor_path(&cache)?,
-                    &monitor_path(&plugin_err)?,
-                ),
-            )?;
+        let plugin_cache = if la.plugin {
+            Some(plugin_cache_path(&cfg.renode, la.cache_dir.as_deref())?)
+        } else {
+            None
+        };
+        // ADR-004 Part B: a warm process from the pool, if one is idle and
+        // matches this Renode and plugin; otherwise a fresh Renode.
+        let lease = match &cfg.pool {
+            Some(sock) => {
+                let key = pool::PoolKey {
+                    renode: pool::canonical_renode(&cfg.renode)
+                        .to_string_lossy()
+                        .into_owned(),
+                    plugin: plugin_cache
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned()),
+                };
+                match pool::Lease::acquire(sock, &key, Duration::from_secs(10)) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("{}: {e}; starting Renode fresh", cfg.name);
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+        let (plugin_load, plugin_arm) = if let Some(cache) = &plugin_cache {
+            // A pool process loaded the cached assembly at pre-warm, so a
+            // lease leaves the loader out (ADR-004 "Lease" 2).
+            let load = if lease.is_some() {
+                String::new()
+            } else {
+                let loader = write_plugin_loader(&workdir, cache, &plugin_err)?;
+                format!("include @{}\n", monitor_path(&loader)?)
+            };
             (
                 format!(
-                    "include @{}\n\
-                     machine LoadPlatformDescriptionFromString \"{LOOKAHEAD_NAME}: Miscellaneous.BbLookahead @ sysbus {:#x}\"\n",
-                    monitor_path(&loader)?,
+                    "{load}machine LoadPlatformDescriptionFromString \"{LOOKAHEAD_NAME}: Miscellaneous.BbLookahead @ sysbus {:#x}\"\n",
                     la.address
                 ),
                 format!("sysbus.{LOOKAHEAD_NAME} Arm\n"),
@@ -843,23 +942,10 @@ impl RenodeEngine {
         let script_path = workdir.join("session.resc");
         std::fs::write(&script_path, script)?;
         let log_path = workdir.join("renode.log");
-        let log = std::fs::File::create(&log_path)?;
 
-        let child = renode_command(&cfg.renode)
-            .args(["--disable-xwt", "--plain", "--port", "-1"])
-            .arg(&script_path)
-            .current_dir(&workdir)
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log)
-            .spawn()
-            .map_err(|e| EngineError::Other(format!("spawn {}: {e}", cfg.renode.display())))?;
-
-        let mut engine_child = Some(child);
-        let fail = |child: &mut Option<Child>, msg: String| -> EngineError {
-            if let Some(mut c) = child.take() {
-                let _ = c.kill();
-                let _ = c.wait();
+        let fail = |host: &mut Option<Host>, msg: String| -> EngineError {
+            if let Some(h) = host.take() {
+                h.abort();
             }
             let tail = log_tail(&log_path);
             let plugin = std::fs::read_to_string(&plugin_err)
@@ -868,15 +954,45 @@ impl RenodeEngine {
             let _ = std::fs::remove_dir_all(&workdir);
             EngineError::Other(format!("{msg}{plugin}\n--- renode log (tail) ---\n{tail}"))
         };
+        let mut host = Some(match lease {
+            Some(l) => Host::Lease(l),
+            None => {
+                let log = std::fs::File::create(&log_path)?;
+                let child = renode_command(&cfg.renode)
+                    .args(["--disable-xwt", "--plain", "--port", "-1"])
+                    .arg(&script_path)
+                    .current_dir(&workdir)
+                    .stdin(Stdio::null())
+                    .stdout(log.try_clone()?)
+                    .stderr(log)
+                    .spawn()
+                    .map_err(|e| {
+                        EngineError::Other(format!("spawn {}: {e}", cfg.renode.display()))
+                    })?;
+                Host::Child(child)
+            }
+        });
+        // A leased process runs the same script from its console; the
+        // manager copies its output into this run's renode.log.
+        if let Some(Host::Lease(l)) = host.as_mut() {
+            if let Err(e) = l.run(
+                &monitor_path(&workdir)?,
+                &monitor_path(&script_path)?,
+                port,
+                cfg.startup_timeout,
+            ) {
+                return Err(fail(&mut host, format!("pooled renode: {e}")));
+            }
+        }
 
         // Wait for the External Control server.
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let deadline = Instant::now() + cfg.startup_timeout;
         let stream = loop {
-            if let Some(c) = engine_child.as_mut() {
+            if let Some(Host::Child(c)) = host.as_mut() {
                 if let Ok(Some(status)) = c.try_wait() {
                     return Err(fail(
-                        &mut engine_child,
+                        &mut host,
                         format!("renode exited during startup ({status})"),
                     ));
                 }
@@ -894,7 +1010,7 @@ impl RenodeEngine {
                 Err(_) if Instant::now() < deadline => std::thread::sleep(connect_poll()),
                 Err(e) => {
                     return Err(fail(
-                        &mut engine_child,
+                        &mut host,
                         format!("no External Control server on port {port}: {e}"),
                     ))
                 }
@@ -955,11 +1071,11 @@ impl RenodeEngine {
         };
         let (client, machine, pins, t0, la_words) = match setup() {
             Ok(v) => v,
-            Err(e) => return Err(fail(&mut engine_child, format!("setup failed: {e}"))),
+            Err(e) => return Err(fail(&mut host, format!("setup failed: {e}"))),
         };
         if t0 != 0 {
             return Err(fail(
-                &mut engine_child,
+                &mut host,
                 format!("Renode virtual time is {t0} ns at start, expected 0"),
             ));
         }
@@ -970,14 +1086,14 @@ impl RenodeEngine {
                 Ok(st) if st.armed() => st,
                 Ok(st) => {
                     return Err(fail(
-                        &mut engine_child,
+                        &mut host,
                         format!(
                             "lookahead block at {:#x} is not armed (STATUS {:#x})",
                             cfg.lookahead.address, st.status
                         ),
                     ))
                 }
-                Err(e) => return Err(fail(&mut engine_child, e.to_string())),
+                Err(e) => return Err(fail(&mut host, e.to_string())),
             };
             if !st.self_test_ok() {
                 eprintln!(
@@ -1005,7 +1121,7 @@ impl RenodeEngine {
             fault: None,
             machine,
             sysbus,
-            child: engine_child.take().expect("child present"),
+            host: host.take().expect("host present"),
             workdir,
             client,
             now: Time::ZERO,
@@ -1194,14 +1310,22 @@ impl RenodeEngine {
         &self.workdir
     }
 
+    /// The process id of this engine's Renode.
+    pub fn renode_pid(&self) -> u32 {
+        self.host.pid()
+    }
+
+    /// The Renode process was leased from a warm pool (ADR-004 Part B)
+    /// rather than spawned for this engine.
+    pub fn leased(&self) -> bool {
+        matches!(self.host, Host::Lease(_))
+    }
+
     /// Mark the engine failed and attach the Renode log tail (and where the
     /// full log is kept) to an error from the running phase.
     fn failure(&mut self, e: EngineError) -> EngineError {
         self.failed = true;
-        let exited = match self.child.try_wait() {
-            Ok(Some(status)) => format!("renode exited ({status}); "),
-            _ => String::new(),
-        };
+        let exited = self.host.status_note();
         let log = self.workdir.join("renode.log");
         let msg = format!(
             "{e}\n--- {exited}renode log kept at {} (tail) ---\n{}",
@@ -1668,8 +1792,23 @@ fn ceil_lattice_ns(t: Time, quantum_ns: u64) -> u64 {
 
 impl Drop for RenodeEngine {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        match &mut self.host {
+            Host::Child(c) => {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            Host::Lease(l) => {
+                // Close External Control first: the manager clears the
+                // process only after Renode has seen the disconnect
+                // (ADR-004 Amendment 2). A failed engine or a panic
+                // discards the process.
+                self.client.close();
+                let ok = !self.failed && !std::thread::panicking();
+                if let Err(e) = l.end(ok) {
+                    eprintln!("{}: {e}", self.name);
+                }
+            }
+        }
         if self.failed {
             eprintln!(
                 "{}: Renode workdir kept for diagnosis: {}",
