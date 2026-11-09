@@ -3,7 +3,8 @@
 - **Status:** Accepted (2026-11-09), with the approver decisions below
   (revised 2026-11-09 after two design reviews). M0 done (2026-11-09:
   inputs vendored with `SOURCE`, suite re-run committed and reproduced;
-  see Review notes).
+  see Review notes). M1 done (2026-11-09: the promise clamp, ADR-008
+  Amendment 1).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -556,3 +557,24 @@ ADR-006/007/008. Items not adopted as proposed:
   per attempt in `test_load_switches.py`), so a heavily loaded host could
   move a deck to a higher fallback level; `summary.decks_with_timeouts`
   shows it. None occurred in M0's runs.
+
+## Review notes: M1 (2026-11-09)
+
+- **The fix.** `quiet_until` in the Renode engine clamps a promise to
+  `MAX_PROMISE_NS` (18 446 744 073 709 ns, the last whole nanosecond
+  `Time` holds) before converting it, instead of panicking in
+  `Time::from_ns` (ADR-008 D6, Amendment 1).
+- **Gate.** The new Renode test drives the real engine with a promise of
+  `u64::MAX` ns (`Fault::StretchPromise { ns: u64::MAX }`). It panicked
+  with "Time overflow" before the fix. It now gets the clamped promise,
+  the grant that relies on it is capped at 10 ms, and the audit catches
+  the stretch. A unit test covers the clamp and a `bbcore` test covers a
+  `Time::MAX` promise in the scheduler. `make test` (pool and `POOL=0`) and
+  `make lookahead-equiv` (pool and `POOL=0`) are green and unchanged. A
+  build before the fix and one after it give byte-identical `events.jsonl`,
+  grant records included, on the feedback and ADC boards.
+- **Deviations (recorded in ADR-008 Amendment 1).** The engine does not
+  know `t_end`, so the clamp is to the type's limit only; the kernel
+  already takes the minimum with `t_end` and `--max-quantum`. D6's nRF
+  gate firmware (a TIMER compare followed by a long sleep) moves to M2's
+  `make nrf-gates`, because it needs M2's platform.

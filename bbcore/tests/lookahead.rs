@@ -587,6 +587,31 @@ fn broken_promises_and_wakes_raise_promise_broken() {
     }
 }
 
+/// ADR-008 D6 (Phase 1 M1): a CPU that promises `Time::MAX` (the clamp of
+/// a promise past `Time`'s range) gets grants capped at `max_quantum` and
+/// at the producer's early stops, never past them, and the run's records
+/// are the one-cell run's except `grant`.
+#[test]
+fn a_promise_of_time_max_is_capped_by_max_quantum() {
+    let t_end = Time::from_ms(50);
+    let (s, j) = board(true, |c| c.wakes.clear());
+    let on = run(s, &j, t_end).unwrap();
+    let (s, j) = board(false, |c| c.wakes.clear());
+    let off = run(s, &j, t_end).unwrap();
+    assert_eq!(on.non_grant(), off.non_grant());
+    assert!(on
+        .journal
+        .iter()
+        .any(|l| l.ends_with(&format!("-> {}", Time::MAX.as_fs()))));
+    assert!(on
+        .grants
+        .iter()
+        .all(|(a, b, _)| *b - *a <= Time::from_ms(10)));
+    assert!(on.grants.iter().any(|(_, _, l)| l == "max_quantum"));
+    assert!(on.grants.len() < off.grants.len());
+    assert_eq!(on.grants.last().unwrap().1, t_end);
+}
+
 /// Gate: the query back-off is a function of the simulated history only.
 /// A CPU that never promises is asked at grants 1, 4, 9, 18, 35, 68, 133,
 /// 198, ...: after k consecutive misses the next min(2^k, 64) one-cell grants

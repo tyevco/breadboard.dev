@@ -175,6 +175,21 @@ pub const STM32F103_OFFLINE_REPL: &str = include_str!("../platforms/stm32f103-of
 /// Renode's virtual-time resolution.
 pub const RENODE_RESOLUTION: Time = Time::from_ns(1);
 
+/// The largest quiet promise, in ns, that [`bbcore::Engine::quiet_until`]
+/// returns: the last whole nanosecond [`Time`] can hold (about 18 446 s).
+/// A promise further away (an nRF TIMER past its compare never wraps; an
+/// RTC with a large prescaler) is clamped to it instead of overflowing in
+/// `Time::from_ns` (ADR-008 D6). A shorter promise is always honest, and
+/// the kernel caps every grant at `--max-quantum` anyway, so the clamp
+/// changes no grant.
+pub const MAX_PROMISE_NS: u64 = Time::MAX.as_fs() / FS_PER_NS;
+
+/// A promise of `p_ns` (Renode virtual time) as a [`Time`], clamped to
+/// [`MAX_PROMISE_NS`].
+fn promise_time(p_ns: u64) -> Time {
+    Time::from_ns(p_ns.min(MAX_PROMISE_NS))
+}
+
 /// Source of the lookahead register block (ADR-003 D5), mapped when
 /// [`LookaheadCfg::plugin`] is set.
 pub const BB_LOOKAHEAD_CS: &str = include_str!("../platforms/bb_lookahead.cs");
@@ -1506,7 +1521,7 @@ impl RenodeEngine {
         if let Some(first) = self.pending.first() {
             p_ns = p_ns.min(first.at_ns);
         }
-        let until = Time::from_ns(p_ns);
+        let until = promise_time(p_ns);
         if until <= now {
             return Ok(now);
         }
@@ -2431,6 +2446,42 @@ mod tests {
             (0x20, Some(123))
         );
         assert!(LookaheadStatus::from_words(0, &w[..7]).is_err());
+    }
+
+    /// ADR-008 D6 (M1): a promise past `Time`'s range is clamped, never a
+    /// "Time overflow" panic; promises in range are exact.
+    #[test]
+    fn promise_is_clamped_to_time_range() {
+        assert_eq!(MAX_PROMISE_NS, 18_446_744_073_709);
+        let clamped = Time::from_ns(MAX_PROMISE_NS);
+        assert_eq!(promise_time(u64::MAX), clamped);
+        assert_eq!(promise_time(MAX_PROMISE_NS + 1), clamped);
+        assert_eq!(promise_time(MAX_PROMISE_NS), clamped);
+        assert!(Time::MAX.as_fs() - clamped.as_fs() < FS_PER_NS);
+        assert_eq!(promise_time(50_000_000), Time::from_ms(50));
+        assert_eq!(promise_time(0), Time::ZERO);
+        // A snapshot whose clock limit is past Time's range (an nRF TIMER
+        // after its compare counts on without wrapping): the promise is
+        // valid in ns and clamped as a Time.
+        let quiet = LookaheadStatus::ARMED
+            | LookaheadStatus::SELF_TEST_OK
+            | LookaheadStatus::IN_WFI
+            | LookaheadStatus::HAS_LIMIT;
+        let limit: u64 = 20_000_000_000_000; // 20 000 s
+        let clock: u64 = 1_000_000;
+        let w = [
+            quiet,
+            limit as u32,
+            (limit >> 32) as u32,
+            clock as u32,
+            (clock >> 32) as u32,
+            0,
+            u32::MAX,
+            u32::MAX,
+        ];
+        let st = LookaheadStatus::from_words(clock, &w).unwrap();
+        assert_eq!(st.promise_ns(), Some(limit + clock));
+        assert_eq!(promise_time(st.promise_ns().unwrap()), clamped);
     }
 
     #[test]

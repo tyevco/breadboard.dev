@@ -4,7 +4,8 @@
   (revised 2026-11-09 after two design reviews, see Review notes).
   Written before implementation because D7
   changes the `adc_in` pin model (`spec/pin-model.md`) and D6 fixes a
-  lookahead bug in the Renode engine.
+  lookahead bug in the Renode engine. D6 implemented (M1, 2026-11-09,
+  Amendment 1).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -653,7 +654,7 @@ a `la_*` gate. Each bumps the platform major (D1).
 
 | Gate | Milestone | Content |
 | --- | --- | --- |
-| `make nrf-gates` | M2 | D3, including `nrf-busywait` (D1) |
+| `make nrf-gates` | M2 | D3, including `nrf-busywait` (D1), and D6's TIMER-compare-then-long-sleep firmware (Amendment 1) |
 | Promise-clamp unit test | M1 | D6 |
 | `make pool-equiv` with nRF configurations | M2 | AGENTS.md rule |
 | `make dms-rail` | M6 | E1: one-cell equivalence, determinism, goldens. The PIN_CNF audit (D4) is clean for the correct firmware |
@@ -735,3 +736,63 @@ identity. Not adopted as proposed:
   otherwise.
 - **"Require Renode-first order for loaded pins."** Rejected in favour of
   the toggle design, which needs no order (D7, Rejected for SAADC).
+
+## Amendments
+
+### Amendment 1: D6 as implemented (M1, 2026-11-09)
+
+- **The fix.** `engines/cpu-renode/src/lib.rs`: `MAX_PROMISE_NS =
+  Time::MAX.as_fs() / FS_PER_NS` (18 446 744 073 709 ns, the last whole
+  nanosecond `Time` holds) and `promise_time(p_ns)`, which `quiet_inner`
+  now uses in place of `Time::from_ns(p_ns)`. A promise further away is
+  clamped to it; a promise in range is unchanged, bit for bit. A shorter
+  promise is always honest, and the audit compares against the clamped
+  value, so nothing else in the engine changes.
+- **Deviation from the D6 text ("or to the run's `t_end`, whichever is
+  smaller").** The engine does not know `t_end`: `bbcore::Engine` has no
+  such call, and adding one would change the kernel interface for no
+  effect. The kernel already takes the minimum of every promise with
+  `t_end`, `--max-quantum`, aligned samples and the other engines' bounds
+  before it rounds to the lattice (`Scheduler::query_quiet`), so a clamp to
+  the type's limit gives the same grants. No protocol or `spec/` change.
+- **Gate (the plan's M1 row), three tests:**
+  - `bb-cpu-renode` unit test `promise_is_clamped_to_time_range`:
+    `promise_time(u64::MAX)` and `promise_time(MAX_PROMISE_NS + 1)` give
+    `Time::from_ns(MAX_PROMISE_NS)`; in-range promises are exact; a
+    lookahead snapshot whose clock limit is 20 000 s away (an nRF TIMER
+    after its compare) gives a valid `promise_ns` and a clamped `Time`.
+  - `bb-cpu-renode` Renode test `promise_of_u64_max_ns_is_clamped`
+    (`tests/lookahead.rs`): the real engine on `la_silent` with
+    `Fault::StretchPromise { ns: u64::MAX }`, so the promise is `u64::MAX`
+    ns. **Before the fix it panicked** ("Time overflow: value does not fit
+    in u64 femtoseconds", `bbcore/src/time.rs:37`); after it, the promise
+    is `Time::from_ns(MAX_PROMISE_NS)`, the grant that relied on it is
+    capped at the maximum quantum (`(20 µs, 10.02 ms]`), and the audit
+    raises `PromiseBroken` inside that grant.
+  - `bbcore` scheduler test `a_promise_of_time_max_is_capped_by_max_quantum`
+    (`tests/lookahead.rs`): a mock CPU with no timer wakes promises
+    `Time::MAX` on the feedback board; every grant is at most
+    `max_quantum` (10 ms), some are limited by it, the run ends exactly at
+    `t_end`, and every non-grant record equals the `--lookahead off`
+    run's.
+- **Gate results** (2026-11-09, on `f7a6f8d` plus the change, load 4–11):
+  `make check` green on the pool (304 s; the three tests above included),
+  `make test POOL=0` green (353 s), `make lookahead-equiv` PASS on the pool
+  and with `POOL=0` (73 s each; committed one-cell hashes, no promise
+  broken). The clamp moves no grant on today's boards: `bb run` built
+  from `f7a6f8d` and from the change give byte-identical `events.jsonl`,
+  **grant records included**, plus `nets.csv` and `nets.vcd`, on
+  `examples/feedback` at `--max-quantum` 10 ms (117 grants) and 1 ms (562)
+  and on `examples/adc` (1 209).
+- **Moved to M2:** D6's second gate item, "an nRF gate firmware whose
+  TIMER compare is followed by a long sleep", needs the nRF52840 platform
+  and gate-firmware build that M2 adds. It becomes part of `make
+  nrf-gates` (M2). Until then the clamp is exercised by the injected
+  `u64::MAX` promise on the STM32F103, which reaches the same line.
+- **Observed, not changed:** when a quiet grant holds both an output
+  change and an earlier silent WFI exit, `PromiseBroken` names the output
+  change, because the audit checks output changes first (the test above:
+  PA5's toggle at 10 ms + 1 fs, while the SysTick wake was at about
+  1 ms). The run fails either way; only the `at` in the message is not
+  the earliest violation. Left as is, since M1 changes nothing outside
+  the clamp.

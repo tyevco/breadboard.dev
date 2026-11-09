@@ -374,6 +374,49 @@ fn injected_early_wake_without_edge_is_promise_broken() {
     assert!(d.edges.is_empty(), "{:?}", d.edges);
 }
 
+/// ADR-008 D6 (Phase 1 M1): a promise of `u64::MAX` ns (past `Time`'s
+/// range of about 18 446 s) is clamped to the largest representable whole
+/// nanosecond instead of panicking with "Time overflow" in
+/// `Time::from_ns`. The grant stays capped at the maximum quantum, and the
+/// wake audit still sees the 1 ms SysTick wake inside it.
+#[test]
+fn promise_of_u64_max_ns_is_clamped() {
+    let Some(cfg) = config("la_silent", &["PA5", "PA6"]) else {
+        return;
+    };
+    let cfg = with_mode(&cfg, Mode::On);
+    let d = drive(
+        &cfg,
+        Time::from_ms(20),
+        Some(Fault::StretchPromise { ns: u64::MAX }),
+    );
+    let (from, err) = d.err.expect("the stretched promise must be caught");
+    eprintln!(
+        "u64::MAX ns promise: promises {:?}, grants {:?}, after {from}: {err}",
+        d.promises, d.grants
+    );
+    let EngineError::PromiseBroken { promised, at } = err else {
+        panic!("expected PromiseBroken, got {err}")
+    };
+    let clamped = Time::from_ns(bb_cpu_renode::MAX_PROMISE_NS);
+    assert_eq!(d.promises.len(), 1, "{:?}", d.promises);
+    assert_eq!(d.promises[0].1, clamped);
+    assert_eq!(promised, clamped);
+    assert!(Time::MAX.as_fs() - clamped.as_fs() < 1_000_000);
+    // The failed grant is the one that relied on the promise: capped at
+    // the maximum quantum, not at the promise. The audit reports a
+    // violation inside it: the SysTick wake at ~1 ms or (the audit checks
+    // output changes first) PA5's first toggle at 10 ms + 1 fs.
+    assert_eq!(d.promises[0].0, from);
+    assert!(from < Time::from_us(100), "{from}");
+    let g = floor_l(from + MAX_GRANT);
+    assert!(
+        at > from && at <= g + Time::from_fs(1) && at < promised,
+        "broken at {at}, grant ({from}, {g}]"
+    );
+    assert!(d.edges.is_empty(), "{:?}", d.edges);
+}
+
 /// A failed self-test (a host backend on a UART) gives no promise: the run
 /// is the one-cell reference, and only the grant sequence differs from a
 /// run whose self-test passes.
