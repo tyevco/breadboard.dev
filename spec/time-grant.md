@@ -15,7 +15,8 @@ lookahead (`quiet_until`), the per-grant plan, the early stop
 the Part B half of example 3 are ADR-003 plan step 8 (Amendment 9); ADC
 pushes (`Analog` trace entries at lattice points), their delivery at their
 own time and the code-change watch are ADR-003 D6 (plan step 9, Amendment
-10).
+10); sampled inputs (`input_is_sampled`) and their exclusion from the
+early-stop watch are ADR-005 D3 (plan step 3).
 Implementation: `bbcore::Scheduler`. Changing this file requires an ADR (see
 `AGENTS.md`).
 
@@ -89,7 +90,17 @@ touch an engine adapter.
   outputs stay constant on `(now, quiet_until)`. `now` (the default) is no
   promise; a promise is *useful* when `floor_L(quiet_until) > now`. Asked
   only with lookahead on, in Query, before any input of the grant is
-  delivered; a pure read.
+  delivered; a pure read. The promise holds for *any* values on the
+  engine's **sampled inputs** (below), provided each change of them is
+  delivered before the engine advances past it (ADR-005 D3).
+- **sampled input** (ADR-005 D3): an input pin of an engine whose value can
+  affect the engine's outputs and internal state only at *sample instants*
+  the engine itself schedules, where the engine's `quiet_until` promise never
+  extends past its next sample instant. The engine declares it through
+  `input_is_sampled(pin)` (default `false`), a pure query of its
+  configuration. Renode: an `adc_in` pin on Breadboard's STM32F072 ADC model,
+  which reads a channel only at the end of its sampling phase, a clock limit
+  (`spec/pin-model.md`).
 - **lookahead:** a scheduler setting, on by default (`SchedulerConfig`,
   and `bb` on every board that loads Renode's lookahead plugin, i.e. every
   board with a feedback loop). Off, every grant of a cyclic graph is
@@ -104,7 +115,9 @@ touch an engine adapter.
   pin in `watch` at `t_x`, stops at `r = ceil_L(t_x)` (at most `t`) and
   returns `r`; with no such change it returns `t`. A watched `adc_in` pin
   changes only at lattice points (its pushes), so it stops at the push
-  itself: the code-change watch of ADR-003 D6.
+  itself: the code-change watch of ADR-003 D6. A pin read only through
+  sampled inputs is never watched (ADR-005 D3); with an empty watch the
+  engine returns `t`.
 - **t_end:** end of the run.
 
 ## State machine
@@ -232,8 +245,12 @@ For each engine *i* in plan order:
    and **never earlier**. Several transitions of one pin inside one lattice
    cell are all applied, in order, at `ceil_L` (ADR-003 approver decision 2).
    An ADC push (an `Analog` entry of an `adc_in` pin) is at a lattice point
-   `t` and is applied at `t` (Renode: `ADC SetValue` while paused there),
-   never earlier.
+   `t` and is applied at `t` (Renode's stock ADC: `ADC SetValue` while paused
+   there), never earlier. A push to a sampled input may be delivered ahead
+   of its time, and the engine uses it only for sample instants strictly
+   after `t`, never earlier (Breadboard's ADC model: a timed input written to
+   the model before Renode runs; a sample at `s` reads the latest push with
+   `t < s`, ADR-005 D5).
    An engine whose inputs did not change in this grant gets no pre-advance
    call.
 2. `advance_to(g)`.
@@ -273,7 +290,10 @@ the `loop_quantum` term:
    static plan (`loop_quantum`, plan order).
 3. **Early stop.** The grant's order is that Kahn order. Engine `p` runs
    `advance_until(G, watch)`, with `watch` its output pins whose nets an
-   engine in `Q` reads, and returns `r`. The `grant` record `(now, r]` is
+   engine in `Q` reads through an input that is **not** sampled (ADR-005
+   D3: a sampled input is read only at sample instants at or after the
+   promise, so a change of it cannot end the quiet window), and returns
+   `r`. The `grant` record `(now, r]` is
    emitted then, labelled `stop:<p>` when `r < G` and otherwise by `G`'s
    bound. Every later engine gets its pre-advance delivery as usual and
    `advance_to(r)`. Engines of `Q` thus receive a change of `p` at `t_x`
@@ -495,3 +515,9 @@ at `ceil_L(t_x)`, so the outputs equal the one-cell run's byte for byte.
 - Change state in `quiet_until` (it may be skipped by the back-off), promise
   quiet outputs it cannot guarantee, or stop `advance_until` anywhere but the
   first lattice point at or after the first watched change (or `t`).
+- Declare an input sampled (`input_is_sampled`) whose value can affect its
+  outputs or state other than at a sample instant at or after the end of its
+  current `quiet_until` promise, or let a promise extend past its next
+  sample instant. The promise audit (invariant 8) remains the safety net: a
+  wake or an output change before the promise fails the run with
+  `PromiseBroken`.

@@ -158,6 +158,23 @@ pub trait Engine {
         now
     }
 
+    /// Whether input pin `pin` is a **sampled input** (ADR-005 D3,
+    /// `spec/time-grant.md`): a change of its value affects this engine's
+    /// outputs and internal state only at *sample instants* the engine
+    /// itself schedules, and its [`Engine::quiet_until`] promise never
+    /// extends past its next sample instant. The promise then holds for any
+    /// values on the pin, as long as each change is delivered before the
+    /// engine advances past it, so the kernel leaves the producer's pin out
+    /// of a quiet grant's early-stop watch. Renode: an `adc_in` pin on
+    /// Breadboard's ADC model, which reads its inputs only at its sample
+    /// instants (clock limits). The promise audit (invariant 8,
+    /// [`EngineError::PromiseBroken`]) stays the safety net. A pure query
+    /// of the engine's configuration. Default `false`.
+    fn input_is_sampled(&self, pin: &str) -> bool {
+        let _ = pin;
+        false
+    }
+
     /// Whether this engine implements [`Engine::advance_until`] (ADR-003
     /// D5): it can stop at the first lattice point at or after the first
     /// change on a watched output. Default `false` (Renode: there is no

@@ -883,11 +883,16 @@ impl Scheduler {
         }
         let can_stop: Vec<bool> = self.engines.iter().map(|e| e.can_stop_early()).collect();
         let (order, p) = quiet_order(n, &self.edges, &in_q, &can_stop)?;
-        // The producer's output pins whose nets an engine in Q reads.
+        // The producer's output pins whose nets an engine in Q reads through
+        // an input that is not sampled (ADR-005 D3): a sampled input reads
+        // its value only at sample instants at or after the promise, so a
+        // change of it cannot end the quiet window.
         let mut watch = Vec::new();
         let mut watch_nets = Vec::new();
         for o in self.outputs.iter().filter(|o| o.engine == p) {
-            let feeds_q = self.inputs.iter().any(|i| i.net == o.net && in_q[i.engine]);
+            let feeds_q = self.inputs.iter().any(|i| {
+                i.net == o.net && in_q[i.engine] && !self.engines[i.engine].input_is_sampled(&i.pin)
+            });
             if feeds_q && !watch.contains(&o.pin) {
                 watch.push(o.pin.clone());
                 watch_nets.push(o.net.clone());

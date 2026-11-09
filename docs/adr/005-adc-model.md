@@ -735,3 +735,151 @@ existing equivalence gates apply unchanged.
    in D3 acceptable for `spec/time-grant.md`, or should it be limited to
    `adc_in` pins?
 6. **F1 front-end (step 7)** now, or when an F103 board needs an ADC?
+
+## Amendments
+
+### Amendment 1: steps 1-3 as implemented (2026-11-09)
+
+**Step 1 (plugin bundling, `BbStm32Timer`, the overlay; commit `ba883f0`).**
+
+- One assembly, `bb_plugins-<key>.dll` in `~/.cache/bb/renode-plugins`,
+  keyed by FNV-1a 64 over every source's file name and text
+  (`PLUGIN_SOURCES`: `bb_lookahead.cs`, `bb_stm32_timer.cs` and, from step
+  2, `bb_stm32f0_adc.cs`) and the canonical Renode launcher. The loader
+  (`bb_plugins_load.py`) compiles all sources in one `AdHocCompiler` call
+  on a miss. It is now the first line of `session.resc`, before `mach
+  create` and `LoadPlatformDescription`, and runs whenever the lookahead
+  plugin is configured **or** the platform names a plugin type
+  (`Platform::needs_plugins`, true for `Platform::Stm32f072Bb`); the
+  lookahead block is still mapped and armed only with
+  `LookaheadCfg::plugin`. The pool's pre-warm loads the same assembly and,
+  when it holds it, also pre-warms the overlay (third platform after the
+  F103 and the stock F072).
+- `BbStm32Timer` as D1.2. Implementation notes: the base constructor calls
+  `Reset()` before the subclass constructor creates `TRGO`, so `Reset`
+  tolerates a null `TRGO`; `CR2` writes reach the base model with the MMS
+  bits masked out, so the stock tag warning no longer appears; the
+  update-disable state before an `EGR` write decides whether UG pulses
+  TRGO with `MMS = 010`; `TrgoPulses` counts pulses (a monitor property, for
+  debugging).
+- The overlay restates the stock interrupt, DMA and alternate-function
+  wiring for `bbTimer1/2/3/15`, including the `gpioPortX: n -> timerN@m`
+  inputs. The unregistered stock timers keep their old GPIO connections,
+  which never fire.
+- Gates: `make check` green with every committed hash unchanged (the ADC
+  board ran on the overlay's timers with the stock ADC and gave its
+  ADR-003 hashes); `make lookahead-inert` green; `make lookahead-startup`
+  +0.069 s with the bigger assembly (N = 7, load 5.2; gate 0.3 s); TIM3 CH1
+  PWM on PA6 (`tim3_pwm.elf`) through the restated AF wiring gives the
+  stock platform's 19 PA6 edges in 1 ms, byte for byte.
+- **Deviation (test order):** the TRGO tests of test plan 1 need an
+  observer of the TRGO line. They use the ADC model's trigger-edge ring
+  (port offset `0xA00`), so they landed with step 2 rather than step 1.
+- Firmware: the former `adc_board.elf` is now built as
+  `adc_board_isr.elf` (byte-identical, sha256 `b262c0eb…`), the ADR-003
+  board on the stock model; `adc_board.elf` is the D7 build
+  (`-DADC_BOARD -DADC_BB_MODEL`); `adc.elf` and `adc_hwtrig.elf` are
+  byte-identical to before (the Amendment 5 test pins them). Test firmware
+  `bbtest.c`: `adc_idle.elf` (wfi forever) and `tim3_pwm.elf`.
+
+**Step 2 (`BbStm32F0Adc`, `BbAdcHostPort`; commit `6b55b19`).**
+
+- As D2, D4 and D5, with these implementation choices:
+  - One one-shot 1 GHz `LimitTimer` (`bbAdcEvents`) for all pending events,
+    armed for the earliest of a time-ordered list (sample, end of
+    conversion, end of calibration). With slow DR write latencies the end
+    of conversion `i` can come after the sample of conversion `i + 1`
+    (`CKMODE = 10`: `t_W` = 2.125 ADC cycles > `t_SMPL` = 1.5), which one
+    timer per event kind could not express.
+  - The next conversion of a chain is scheduled when the previous one's
+    sample instant fires, so a limit is always armed at or before the next
+    sample instant (D3 item 2).
+  - `cpu.SyncTime()` (the instruction-accurate time of an `ADSTART` write
+    or of the `DR` read / `EOC` clear that ends a `WAIT` hold) is called only
+    for a register access by the CPU itself, never from inside the model's
+    clock event or a trigger edge (both are clock handlers, already at their
+    exact time; a nested `ReportProgress` would re-enter the clock source).
+  - `WAIT` with a hardware trigger: a trigger that arrives while `EOC` is
+    still set is accepted and held; the chain starts (with its trigger
+    latency) when the data is read.
+  - Channels 16-18 with no timed input and a zero channel source read the
+    constructor defaults (`tempSensorMicrovolts` 1 430 000, `vrefintMicrovolts`
+    1 230 000, `vbatMicrovolts` 1 650 000, the datasheet typicals); with
+    `TSEN`/`VREFEN`/`VBATEN` clear they convert 0 (warning once).
+  - Host port layout (D5.1 left it to step 2): reads `0x000` ID
+    `0x50414242`, `0x004` sticky error word (bit 0 late, 1 out of order,
+    2 framing, 3 firmware access, 4 bad channel; a host write clears it),
+    `0x008/0x00C/0x010` the first error's time and channel, `0x014` inputs
+    accepted, `0x018` conversions, `0x01C` samples, `0x020/0x024` triggers
+    accepted/ignored, `0x028` DMA requests, `0x02C` trigger-input edges,
+    `0x030 + 4n` rising edges on TRGn, `0x058/0x05C` the ADC's clock time,
+    `0x100 + 4ch` the channel's latest timed input, `0x200 + 32j` a ring of
+    the last 64 conversions (`T`, `s`, `c`, channel and flags, `code12 |
+    DR << 16`), `0xA00 + 8j` a ring of the last 64 trigger-input edges.
+    Writes into `0x1000-0x1FFF` are one stream, whatever the offset: header
+    `0xBA7C0000 | n`, then `n` entries `(t_ns low, t_ns high (16 bits) |
+    channel << 16, uV)`. The engine writes at most 1 020 words per
+    `SYSTEM_BUS` request.
+- `bb run` kept the stock platform during this step (no output changed).
+- Gates (`make adc-model`, `examples/adc/bb_adc_test.py`, in `make test`;
+  `make check` green with every committed hash unchanged):
+  - **trgo** (test plan 1): TIM1/2/3/15 with `MMS = 010` pulse TRGO at
+    exactly `t0 + k · 99 µs` (host-programmed `PSC = 9`, `ARR = 99`: ARR
+    ticks at 1 MHz) with `UIE` 0 and 1; none with `UDIS`; one pulse per
+    `EGR.UG` with `MMS = 000` and `010`; `MMS` reads back; `MMS = 100` gives
+    none and one warning.
+  - **registers** (test plan 2): reset values (`ADC_TR` 0x0FFF0000);
+    `ADRDY`; `ADCAL` clears exactly 5 929 ns after the write (83 cycles of
+    14 MHz) with `DR` = the calibration factor; **96/96** `SMP × RES ×
+    CKMODE` sample and end-of-conversion instants equal the D4 formulas
+    (computed independently with Python fractions); sample-and-hold: a
+    push at lattice `T` is not seen by a sample at `T`, is seen at `T + 1
+    ns`; `code12` rounding half up and saturation (0, 1, 402, 403, 329 999,
+    330 000, …, 4 000 000 µV); `RES × ALIGN` per Figure 37; AWD single
+    channel, all channels, `AWDEN = 0`, the 8-bit raw comparison (a code
+    inside the 12-bit window, outside after clearing the low bits) and left
+    alignment; `EOC` cleared by a `DR` read; `OVR` with `OVRMOD` 0 and 1;
+    `CONT` back to back at the D4 instants; `ADSTP`; `WAIT`; `DISCEN` with
+    `SCANDIR`; `EXTEN` rising, falling and both from TIM3 TRGO (with both,
+    the falling half of each blink arrives during the conversion of its
+    rising half and is ignored: 10 accepted, 10 ignored); `ADSTART` kept in
+    hardware-trigger single mode; DMA (DMA1 channel 1 circular: 2 requests
+    for a 2-channel sequence, RAM = `DR`, no `OVR`); a late push sets the
+    port's error word; two runs byte-identical.
+  - **firmware** (test plan 3, `adc_board.elf`, 31 ms): 31 conversions at
+    `s_k = T_k + 1 063 ns` and `c_k = T_k + 4 750 ns`, `T_k` the TRGO
+    instants, 999 µs apart (`T_1` = 1 019 750 ns: TIM3 starts at the end of
+    the calibration, 20 750 ns); ALARM at `c_k` of exactly the
+    out-of-window conversions, or at the next lattice point when the ISR's
+    write crosses one (16 010 000 ns for `c_k` = 16 009 500 ns: Renode
+    stamps a write with the sync point opening its slice, D2 of ADR-003);
+    31 WFI exits for 31 conversions (no push batch woke the CPU); the
+    timed-input path and the `SetValue` path give byte-identical
+    transcripts; after a `SetValue` crossing (0.6 V at 3.5 ms) the AWD
+    interrupt drives ALARM at 4 021 500 ns, the end of the first conversion
+    sampled after it.
+- **Correction to D7:** "every PA4/PA5/PA6/PA7 edge is stamped `c_k`
+  exactly" holds only for writes before the next lattice point; a write
+  after it is stamped with that lattice point (+1 fs). `check_adc.py`
+  accepts exactly these two stamps.
+
+**Step 3 (the kernel; this commit).**
+
+- `Engine::input_is_sampled(&self, pin) -> bool`, default `false`
+  (`bbcore/src/engine.rs`), and the watch filter in `query_quiet`: a
+  producer's output pin enters `watch` only if an engine of `Q` reads its
+  net through an input it does not declare sampled. Nothing else in the
+  scheduler changed. `spec/time-grant.md`: the sampled-input definition,
+  `quiet_until`, the early stop, Quiet grants step 3, Advance step 1 and
+  "What engines MUST NOT do", as D3 specified.
+- Gates: `bbcore/tests/sampled_input.rs` (test plan 5): with the input
+  declared sampled, no grant stops at a push and every record but the
+  grants equals the one-cell run (198 grants for 50 ms against 5 000; two
+  pushes exactly on on-lattice sample instants are not seen there); the
+  control (same engine, nothing declared) stops 100+ times (487 grants)
+  with the same records; an engine that declares the input sampled but
+  changes its output at a push fails with `PromiseBroken` from the kernel
+  audit (invariant 8), and one that reports its own wake fails with
+  `PromiseBroken` from its advance. `make check`, `make partition`, `make
+  lookahead-equiv` and `make adc-equiv` green with every committed hash
+  unchanged (no engine declares a sampled input yet).
