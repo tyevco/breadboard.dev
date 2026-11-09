@@ -848,3 +848,26 @@ downloaded or run besides Renode (compare decision 3, crossgen2).
   slower: load 5–7, and another agent's layout job was using half a core.
   Pool startup itself stays within its 0.30 s gate. G2 stays as written,
   and the result is recorded, not waived.
+
+  To check that A3 does not cause this, `make pool-perf` was run four
+  times, alternating the step-5 binary (`f5b6009`, built in its own tree
+  and target directory) with this one:
+
+  | Round, binary | First lease | Median startup (spike / feedback / adc) | Spike wall | Load |
+  | --- | --- | --- | --- | --- |
+  | 1, `f5b6009` | 0.32 s | 0.26 / 0.23 / 0.21 s | 1.21 s, fail | 3.5–4.6 |
+  | 1, A3 | 0.29 s | 0.23 / 0.23 / 0.26 s | 1.24 s, fail | 3.8–4.3 |
+  | 2, `f5b6009` | 0.45 s | 0.34 / 0.50 / 0.35 s, fail | 1.39 s, fail | 4.6–5.6 |
+  | 2, A3 | 0.43 s | 0.36 / 0.27 / 0.39 s, fail | 1.29 s, fail | 5.2–5.9 |
+
+  Both binaries pass and fail on the same lines, by similar margins. So
+  this is the host, not A3. G2 needs a re-run on an idle host. It passed
+  there in step 3.
+- **Cost table** (`make cost-table`, on the A3 tree, load 2.5–6.5): all
+  8 A/B comparisons pass, with B identical to A except for the grant
+  records, and every one of the 40 pool runs was leased (40 kept,
+  0 discarded, 0 leaked listeners). Engine startup was 2.09–3.13 s fresh
+  (2.09–2.74 s for the defaults rows) and 0.18–0.46 s on the pool. The
+  table and its startup paragraph are in the README. The host was slower
+  than in Amendment 5's session and its speed drifted, so the simulation
+  and total-wall figures are not comparable across sessions.
