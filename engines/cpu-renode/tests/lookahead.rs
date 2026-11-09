@@ -463,9 +463,11 @@ fn median(v: &mut [f64]) -> f64 {
 #[test]
 #[ignore]
 fn plugin_startup_overhead() {
-    let Some(cfg) = config("la_silent", &["PA5"]) else {
+    let Some(mut cfg) = config("la_silent", &["PA5"]) else {
         return;
     };
+    // A fresh-start gate: never lease from a pool (ADR-004).
+    cfg.pool = None;
     let n: usize = std::env::var("BB_LA_STARTUP_N")
         .ok()
         .and_then(|v| v.parse().ok())

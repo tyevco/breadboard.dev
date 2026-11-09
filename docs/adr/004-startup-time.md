@@ -627,3 +627,54 @@ any output.
   starts fresh, and after `stop` the socket and the process are gone.
 - **G3 (fresh)**: `make check` passes (188 s, load 10); `tests/golden`
   unchanged.
+
+### Amendment 4: step 4 (make and CI on the pool) (2026-11-08)
+
+**Status:** Accepted with step 4.
+
+- **Make.** `test`, `partition`, `lattice-check`, `feedback-open`,
+  `lookahead-inert`, `lookahead-equiv`, `adc-equiv`, `spike-verify-every`,
+  `determinism` and `feedback-determinism` build the firmware and `bb`,
+  then run their recipe (now `pooled-<target>`) through
+  `scripts/with_pool.sh`. That script calls `bb pool run --slots
+  $(POOL_SLOTS)` (default 5), or joins the pool already in
+  `BB_RENODE_POOL`, so a nested make (`make test` → `make determinism`)
+  uses one pool. `POOL=0` replaces the wrapper with
+  `env -u BB_RENODE_POOL`, so everything runs fresh. The performance
+  targets (`perf`, `lookahead-perf`, `startup-perf`, `lookahead-startup`,
+  `cost-table`) are not wrapped. `scripts/determinism.sh` also reports how
+  its runs got their Renode.
+- **Cargo tests.** `RenodeConfig::stm32f103` takes `BB_RENODE_POOL`, so
+  the Renode engine tests lease under `make test`. Tests that need a
+  fresh start set `pool = None` or remove the variable:
+  `plugin_startup_overhead` (G6), the orphan test and the CLI pool tests.
+  `plugin_is_compiled_once_and_cached` uses its own cache directory, so it
+  never matches a pool.
+- **CI.** A new job, `fresh`, runs `make test POOL=0`. The other jobs use
+  the pool by default.
+- **G3 in both modes: pass.** Every target below passed, and
+  `tests/golden/` is unchanged in both modes:
+
+  | Target | Pool (default) | Fresh (`POOL=0`) |
+  | --- | --- | --- |
+  | `make check` | 160 s, load 7.6–9.6 | 383 s, load 8–10 |
+  | `partition` | 32 s | 42 s |
+  | `lattice-check` | 14 s | 22 s |
+  | `feedback-open` | 33 s | 82 s |
+  | `lookahead-inert` | 50 s | 177 s |
+  | `lookahead-equiv` | 92 s | 226 s |
+  | `adc-equiv` | 86 s | 221 s |
+  | `spike-verify-every` | 37 s | 47 s |
+
+  Pool counters over these runs: 0 discarded, 0 recycled, 0 leaked
+  listeners. The `make test` pool served 41 leases, and 30 runs found
+  every slot busy and started fresh: the cargo tests run more Renode
+  engines in parallel than 5 slots. Two `NOMATCH`es came from the
+  test that uses its own plugin cache.
+- **`make check` wall time.** Before this step (fresh, the same tree at
+  `590ff34`): 190 s, load 5.9–11.3. After it, on the pool: 160 s, load
+  7.6–9.6. The fresh run of the same tree took 383 s, but at load 8–10
+  with another agent's job on the host, so the two fresh figures do not
+  compare. The cut is smaller than the per-run startup gain because the
+  cargo tests' own work and their parallel fresh starts dominate.
+  Reported, not gated.

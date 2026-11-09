@@ -39,6 +39,31 @@ jobs:
       - name: Test
         run: make test
 
+  # ADR-004: `make test` runs on a warm Renode pool by default; this job
+  # keeps the fresh path (one Renode per run) covered.
+  fresh:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/bb-target
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .cache/bb-target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+
+      - name: Setup toolchain (make setup)
+        run: make setup
+
+      - name: Test, every Renode fresh (POOL=0)
+        run: make test POOL=0
+
   # ADR-003 D1.2: the default cross-check is `--verify edges`; this job runs
   # the spike with the check after every grant and requires identical outputs.
   verify-every:

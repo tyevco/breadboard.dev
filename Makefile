@@ -12,7 +12,8 @@ CARGO ?= cargo
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
         adc-equiv adc-renode cost-table startup-perf \
-        pool-equiv pool-perf
+        pool-equiv pool-perf \
+        pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -65,6 +66,24 @@ ADC_GOLDEN  := tests/golden/adc
 ADC_HASHES  := $(ADC_GOLDEN)/outputs.sha256
 ADC_OPEN_HASHES := tests/golden/adc-open/outputs.sha256
 
+# --- ADR-004 Part B: make test and the gates on a warm Renode pool ---------
+# Each target below runs its recipe (pooled-<target>) under `bb pool run`
+# (scripts/with_pool.sh), so its bb runs and the Renode engine tests lease
+# pre-warmed Renode processes; a nested make joins the pool already in
+# BB_RENODE_POOL. A run that finds no idle process starts Renode fresh, and
+# the outputs are the same either way (make pool-equiv). POOL=0 runs
+# everything fresh (CI job `fresh`); POOL_SLOTS sets the pool size.
+POOL       ?= 1
+POOL_SLOTS ?= 5
+ifeq ($(POOL),0)
+WITH_POOL = env -u BB_RENODE_POOL
+else
+WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
+endif
+POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism
+$(POOLED_TARGETS): firmware bb
+	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
+
 setup:
 	bash scripts/setup.sh
 
@@ -89,7 +108,7 @@ cargo-test:
 
 # The exit gate: unit/engine tests, then the end-to-end spike, 10-run
 # determinism and the golden-waveform diff (golden reuses the spike output).
-test:
+pooled-test:
 	$(MAKE) cargo-test
 	$(MAKE) spike
 	$(MAKE) determinism
@@ -111,7 +130,7 @@ spike: firmware bb
 # job `verify-every`). The checks are pure reads, so the outputs must be
 # byte-identical to the default (`--verify edges`) spike run.
 VERIFY_EVERY_OUT ?= out/spike-verify-every
-spike-verify-every: spike
+pooled-spike-verify-every: spike
 	$(BB) run $(SPIKE_ARGS) --verify every --out $(VERIFY_EVERY_OUT)
 	$(PYTHON) scripts/check_spike.py $(VERIFY_EVERY_OUT)
 	set -e; for f in nets.csv events.jsonl nets.vcd; do cmp $(SPIKE_OUT)/$$f $(VERIFY_EVERY_OUT)/$$f; done
@@ -124,7 +143,7 @@ spike-verify-every: spike
 # crossing check interpolates between samples and needs samples much closer
 # than its 0.1 ms spacing tolerance (ADR-003 Amendment 2).
 LATTICE_OUT ?= out/lattice
-lattice-check: spike
+pooled-lattice-check: spike
 	$(BB) run $(SPIKE_ARGS) --max-quantum 1ms --out $(LATTICE_OUT)/mq1ms
 	$(PYTHON) scripts/check_spike.py $(LATTICE_OUT)/mq1ms
 	cmp $(SPIKE_OUT)/nets.csv $(LATTICE_OUT)/mq1ms/nets.csv
@@ -141,7 +160,7 @@ lattice-check: spike
 PARTITION_OUT    ?= out/partition
 PARTITION_QUANTA ?= 10us,100us,10ms,50ms,500ms
 PARTITION_JOBS   ?= 5
-partition: firmware bb
+pooled-partition: firmware bb
 	bash scripts/partition.sh $(BB) $(PARTITION_OUT) $(PARTITION_JOBS) $(PARTITION_HASHES) \
 	    $(PARTITION_QUANTA) -- $(SPIKE_ARGS)
 
@@ -154,7 +173,7 @@ PERF_N   ?= 5
 perf: firmware bb
 	bash scripts/perf.sh $(BB) $(PERF_OUT) $(PERF_N) 10us 10ms 50 2.0 15 -- $(SPIKE_ARGS)
 
-determinism: firmware bb
+pooled-determinism: firmware bb
 	bash scripts/determinism.sh $(BB) out/determinism $(DET_RUNS) $(DET_JOBS) -- $(SPIKE_ARGS)
 
 # Diff LED_A against the committed snapshot (1 mV / 1 sample), then check
@@ -237,14 +256,14 @@ feedback-order: feedback
 
 # 10 runs of the feedback board (DET_RUNS, DET_JOBS): byte-identical
 # outputs. CI job `feedback`.
-feedback-determinism: firmware bb
+pooled-feedback-determinism: firmware bb
 	bash scripts/determinism.sh $(BB) out/feedback-determinism $(DET_RUNS) $(DET_JOBS) -- $(FEEDBACK_ARGS)
 
 # examples/feedback-open, the acyclic variant (ngspice -> U1 only): long
 # grants, inputs applied at ceil_L(t_x). Partition gate: every max_quantum
 # gives the committed one-cell reference hashes; the 10 ms run passes
 # check_feedback.py --open. CI job `feedback`.
-feedback-open: firmware bb
+pooled-feedback-open: firmware bb
 	bash scripts/partition.sh $(BB) $(FEEDBACK_OPEN_OUT) $(PARTITION_JOBS) $(FEEDBACK_OPEN_HASHES) \
 	    $(FEEDBACK_OPEN_QUANTA) -- $(FEEDBACK_OPEN_ARGS)
 	$(PYTHON) scripts/check_feedback.py $(FEEDBACK_OPEN_OUT)/mq-10ms --open
@@ -259,7 +278,7 @@ feedback-open: firmware bb
 # byte-identical; with lookahead on (the default since step 8) only the
 # grant records may differ. CI job `feedback`.
 LOOKAHEAD_INERT_OUT ?= out/lookahead-inert
-lookahead-inert: firmware bb
+pooled-lookahead-inert: firmware bb
 	bash scripts/lookahead_inert.sh $(BB) $(LOOKAHEAD_INERT_OUT) $(FEEDBACK_HASHES) -- $(FEEDBACK_ARGS)
 	$(BB) run $(SPIKE_ARGS) --lookahead-plugin always --out $(LOOKAHEAD_INERT_OUT)/spike
 	cd $(LOOKAHEAD_INERT_OUT)/spike && grep -v '"type":"grant"' events.jsonl > non-grant-records \
@@ -276,7 +295,7 @@ lookahead-inert: firmware bb
 # ceil_L(t_x)), so it is held to the same hashes. CI job `feedback`.
 LOOKAHEAD_EQUIV_OUT  ?= out/lookahead-equiv
 LOOKAHEAD_MAX_GRANTS ?= 200
-lookahead-equiv: firmware bb
+pooled-lookahead-equiv: firmware bb
 	bash scripts/lookahead_equiv.sh $(BB) $(LOOKAHEAD_EQUIV_OUT) $(LOOKAHEAD_MAX_GRANTS) \
 	    feedback=$(FEEDBACK_ELF):$(FEEDBACK_HASHES) poll=$(FEEDBACK_POLL_ELF):$(FEEDBACK_HASHES) \
 	    -- $(FEEDBACK_BOARD_ARGS)
@@ -412,7 +431,7 @@ adc-open-ref: firmware bb
 # (committed hashes) except grant records; no promise broken; early stops at
 # pushes. CI job `adc`.
 ADC_EQUIV_OUT ?= out/adc-equiv
-adc-equiv: firmware bb
+pooled-adc-equiv: firmware bb
 	bash scripts/adc_equiv.sh $(BB) $(ADC_EQUIV_OUT) $(ADC_HASHES) $(ADC_OPEN_HASHES) \
 	    "$(ADC_ARGS)" -- "$(ADC_OPEN_ARGS)"
 

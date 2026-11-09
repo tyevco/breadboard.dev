@@ -34,5 +34,7 @@ for f in nets.csv events.jsonl nets.vcd; do
   fi
 done
 grep -h 'wall time' "$root"/run-*.log | sed 's/^/determinism: /' || true
+grep -h '^bb run: renode:' "$root"/run-*.log | sed 's/ (pid [0-9]*)//' | sort | uniq -c \
+  | sed 's/^ */determinism: renode: /' || true
 if [[ $status -eq 0 ]]; then echo "determinism: PASS ($runs runs)"; fi
 exit $status
