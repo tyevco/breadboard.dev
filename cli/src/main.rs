@@ -36,8 +36,14 @@
 //! delivered whole millivolts change (`--adc-push every`: at every lattice
 //! point, the reference) and Renode sets each value on the ADC channel
 //! while paused there. With lookahead, a push stops ngspice early.
+//!
+//! With `BB_RENODE_POOL` set (`bb pool run`, ADR-004 Part B) the Renode
+//! engine leases a pre-warmed Renode from that pool when one is idle and
+//! starts one fresh otherwise; `--renode-pool off` ignores the pool. The
+//! outputs are the same either way.
 
 mod board;
+mod pool;
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -63,7 +69,8 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
-              [--lookahead on|off] [--adc-push change|every]
+              [--lookahead on|off] [--adc-push change|every] [--renode-pool env|off]
+       bb pool run|start|stop|status ...   (bb pool --help)
 
   --netlist    board file: SPICE body plus *bb directives (examples/spike/board.cir)
   --firmware     ELF loaded into the target MCU
@@ -114,7 +121,11 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  millivolts change, which is all Renode's ADC converts; or
                  every lattice point, with the value in whole microvolts
                  (the reference of the equivalence gate). The MCU sees the
-                 same conversions either way (a test knob)";
+                 same conversions either way (a test knob)
+  --renode-pool  env (default): lease a pre-warmed Renode from the pool in
+                 $BB_RENODE_POOL when one is idle (`bb pool run`, ADR-004),
+                 else start Renode fresh; off: always fresh. Never changes
+                 the outputs";
 
 struct RunArgs {
     netlist: PathBuf,
@@ -135,6 +146,8 @@ struct RunArgs {
     lookahead: Option<bool>,
     plugin: PluginMode,
     adc_push: AdcPush,
+    /// `--renode-pool env` (true, the default) or `off`.
+    renode_pool: bool,
 }
 
 fn parse_adc_push(s: &str) -> Result<AdcPush, String> {
@@ -255,6 +268,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut lookahead = None;
     let mut plugin = PluginMode::Auto;
     let mut adc_push = AdcPush::OnChange;
+    let mut renode_pool = true;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -314,6 +328,13 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--adc-push" => {
                 adc_push = parse_adc_push(&val(a)?).map_err(|e| format!("--adc-push: {e}"))?
             }
+            "--renode-pool" => {
+                renode_pool = match val(a)?.as_str() {
+                    "env" => true,
+                    "off" => false,
+                    v => return Err(format!("--renode-pool: {v:?}: expected env or off")),
+                }
+            }
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -357,6 +378,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         lookahead,
         plugin,
         adc_push,
+        renode_pool,
     })
 }
 
@@ -412,6 +434,12 @@ fn run(a: RunArgs) -> Result<(), String> {
     rcfg.quantum = a.renode_quantum;
     rcfg.seed = a.seed;
     rcfg.verify = a.verify;
+    // ADR-004 Part B: only $BB_RENODE_POOL names a pool (approver decision 4).
+    rcfg.pool = if a.renode_pool {
+        bb_cpu_renode::pool::from_env()
+    } else {
+        None
+    };
     if part.platform == "stm32f072" {
         // Renode 1.17.0's stock STM32F072 (ADC = Analog.STM32F0_ADC,
         // instance `adc`; it loads offline). ADR-003 Amendment 5.
@@ -505,6 +533,11 @@ fn run(a: RunArgs) -> Result<(), String> {
     fs::create_dir_all(&a.out).map_err(|e| format!("create {}: {e}", a.out.display()))?;
     let wall = Instant::now();
     let cpu = RenodeEngine::start(&rcfg).map_err(|e| format!("start Renode: {e}"))?;
+    let renode_how = if cpu.leased() {
+        format!("leased from the pool (pid {})", cpu.renode_pid())
+    } else {
+        format!("started fresh (pid {})", cpu.renode_pid())
+    };
     let analog = NgspiceEngine::new(ncfg).map_err(|e| format!("start ngspice: {e}"))?;
     let analog_name = analog.name().to_string();
     let startup_s = wall.elapsed().as_secs_f64();
@@ -656,6 +689,7 @@ fn run(a: RunArgs) -> Result<(), String> {
              0 promises broken"
         );
     }
+    let _ = writeln!(so, "bb run: renode: {renode_how}");
     let _ = writeln!(
         so,
         "bb run: wall time {total_s:.2} s total ({startup_s:.2} s engine startup, {run_s:.2} s simulation); outputs in {}",
@@ -674,6 +708,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("pool") => pool::main(&args[1..]),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             ExitCode::SUCCESS
@@ -771,5 +806,11 @@ mod tests {
         let mut lb = v.clone();
         lb.extend(["--lookahead".into(), "maybe".into()]);
         assert!(parse_args(&lb).is_err());
+        assert!(a.renode_pool, "default: the pool in $BB_RENODE_POOL");
+        let mut po = v.clone();
+        po.extend(["--renode-pool".into(), "off".into()]);
+        assert!(!parse_args(&po).unwrap().renode_pool);
+        po.extend(["--renode-pool".into(), "always".into()]);
+        assert!(parse_args(&po).is_err());
     }
 }

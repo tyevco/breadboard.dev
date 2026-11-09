@@ -133,6 +133,7 @@
 //! the rest of the engine does not depend on where its Renode came from.
 
 pub mod console;
+pub mod manager;
 pub mod pool;
 pub mod protocol;
 
@@ -168,7 +169,7 @@ pub const BB_LOOKAHEAD_CS: &str = include_str!("../platforms/bb_lookahead.cs");
 pub const LOOKAHEAD_ADDRESS: u64 = 0x5FFF_0000;
 
 /// Monitor name of the lookahead block on `sysbus`.
-const LOOKAHEAD_NAME: &str = "bbLookahead";
+pub(crate) const LOOKAHEAD_NAME: &str = "bbLookahead";
 
 /// CPU lookahead configuration (ADR-003 D5).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -815,7 +816,7 @@ fn ns_to_seconds_str(ns: u64) -> String {
 /// one server port and one would connect to the other's Renode.
 static PORTS: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
 
-fn free_port() -> Result<u16, EngineError> {
+pub(crate) fn free_port() -> Result<u16, EngineError> {
     for _ in 0..64 {
         let l = TcpListener::bind("127.0.0.1:0")?;
         let port = l.local_addr()?.port();

@@ -11,7 +11,8 @@ CARGO ?= cargo
         golden-update feedback-run feedback feedback-order feedback-determinism \
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
-        adc-equiv adc-renode cost-table startup-perf
+        adc-equiv adc-renode cost-table startup-perf \
+        pool-equiv pool-perf
 
 # --- Phase 0 spike ---------------------------------------------------------
 BB          := $(CARGO_TARGET_DIR)/release/bb
@@ -336,6 +337,39 @@ startup-perf: firmware bb
 	    $(STARTUP_MIN_S) $(STARTUP_BASE) -- $(SPIKE_ARGS)
 	bash scripts/startup_perf.sh $(BB) $(STARTUP_OUT)/feedback $(STARTUP_N) $(STARTUP_MIN_FRAC) \
 	    $(STARTUP_MIN_S) $(STARTUP_BASE) -- $(FEEDBACK_ARGS)
+
+# --- ADR-004 Part B: the warm Renode pool ----------------------------------
+# G4 pool equivalence (scripts/pool_equiv.sh): one pool process serves every
+# configuration below, in alternating order over POOL_EQUIV_ROUNDS rounds;
+# each pooled run must be leased and byte-identical (nets.csv, nets.vcd,
+# events.jsonl, non-grant records) to a fresh run of the same configuration
+# and to the committed hashes. A new board or platform must pass it before
+# it uses the pool.
+POOL_EQUIV_OUT    ?= out/pool-equiv
+POOL_EQUIV_ROUNDS ?= 2
+pool-equiv: firmware bb
+	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
+	    "spike;$(SPIKE_HASHES);all;$(SPIKE_ARGS)" \
+	    "spike-1ms;$(PARTITION_HASHES);all;$(SPIKE_ARGS) --max-quantum 1ms" \
+	    "spike-500ms;$(PARTITION_HASHES);all;$(SPIKE_ARGS) --max-quantum 500ms" \
+	    "feedback;$(FEEDBACK_HASHES);nongrant;$(FEEDBACK_ARGS)" \
+	    "feedback-off;$(FEEDBACK_HASHES);all;$(FEEDBACK_ARGS) --lookahead off" \
+	    "feedback-noplugin;$(FEEDBACK_HASHES);all;$(FEEDBACK_ARGS) --lookahead-plugin never" \
+	    "feedback-poll;$(FEEDBACK_HASHES);nongrant;$(FEEDBACK_POLL_ARGS)" \
+	    "adc;$(ADC_HASHES);nongrant;$(ADC_ARGS)" \
+	    "adc-off;$(ADC_HASHES);nongrant;$(ADC_ARGS) --lookahead off" \
+	    "adc-open;$(ADC_OPEN_HASHES);nongrant;$(ADC_OPEN_ARGS)"
+
+# G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
+# pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
+# rounds of the spike, the feedback board and the ADC board: median engine
+# startup <= 0.30 s each, spike median total wall <= 1.2 s, every run
+# leased. Wall-clock: run it on an otherwise idle host.
+POOL_PERF_OUT ?= out/pool-perf
+POOL_PERF_N   ?= 7
+pool-perf: firmware bb
+	$(BB) pool run --slots 1 -- bash scripts/pool_perf.sh $(BB) $(POOL_PERF_OUT) $(POOL_PERF_N) \
+	    0.5 0.30 1.2 -- "spike;$(SPIKE_ARGS)" "feedback;$(FEEDBACK_ARGS)" "adc;$(ADC_ARGS)"
 
 # The feedback-open one-cell reference (max_quantum = the lattice), for
 # golden-update.

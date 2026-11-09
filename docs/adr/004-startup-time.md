@@ -536,3 +536,94 @@ questions 3 and 4 (approver decisions 5 and 6).
   network. A pool process listens on no TCP port
   between leases: it is driven by its console pipe and has no monitor
   port (`--port -1`).
+
+### Amendment 3: step 3 (`bb pool`) as implemented (2026-11-08)
+
+**Status:** Accepted with step 3. No change to `spec/`, the protocol or
+any output.
+
+- **Manager** (`engines/cpu-renode/src/manager.rs`, so that engine tests
+  can run it in-process). `PoolConfig` has slots (default 1), `max_runs`
+  (100), `rss_limit` (2 GiB), the private directory, the plugin and a
+  console timeout (120 s; at most 20 s for an end-of-lease `Clear`). The
+  directory is created 0700 and must be owned by the user, and the
+  socket is `<dir>/pool-<pid>-<n>.sock`. The default directory is
+  `$XDG_RUNTIME_DIR/bb`, else `$BB_CACHE_DIR/pool`, else
+  `~/.cache/bb/pool`. Each slot has a long-lived thread that spawns,
+  pre-warms and replaces its process. That makes it the parent thread of
+  `PR_SET_PDEATHSIG`: the processes die with the manager, however it
+  ends. Each lease runs on its own connection thread, takes an idle
+  process (`BUSY` if none; a lease never waits) and gives it back idle,
+  or retired (the slot thread kills it and spawns a pre-warmed
+  replacement).
+- **Pre-warm, as built.** The plugin loader runs once (it compiles and
+  caches the assembly if it is not cached yet). If it fails, the pool
+  carries on without the plugin, and leases that need it get `NOMATCH`.
+  Then a throwaway machine of the offline STM32F103 and of the stock
+  STM32F072 is built. No ELF is loaded: three `sysbus WriteDoubleWord`
+  put a vector table and `wfi; b .-2` in flash, and
+  `cpu VectorTableOffset 0x08000000` covers the F072, whose flash is not
+  aliased at 0. The machine gets the determinism settings, the
+  lookahead block and `Arm`, and an External Control server. Over that
+  server the manager makes the calls an engine makes (handshake,
+  machine, GPIO, ADC on the F072, the lookahead read, 5 one-cell
+  `RUN_FOR`s, `GET_TIME`), then ends the session as a lease ends it
+  (Amendment 2). Pre-warm of one slot took 2.6 s (`pool-perf`); 5 slots
+  in parallel took 6.6 s.
+- **End of lease**, as Amendment 2 decided: wait for the re-listen,
+  `Clear`, then require that no port is listening (otherwise
+  `leaked_listeners` is counted and the process is discarded).
+  `logLevel 1` and the run's `include` start each lease. The
+  console's output goes to `<workdir>/renode.log` for the length of the
+  lease.
+- **CLI** (`cli/src/pool.rs`). `bb pool run [--slots N] [--max-runs K]
+  [--rss-limit-mb M] [--renode P] [--dir D] [--no-wait] -- <cmd>`
+  waits for the pre-warm by default, runs the command with
+  `BB_RENODE_POOL`, prints the lease counters, stops the pool and exits
+  with the command's status (128 + signal for a signalled command).
+  `bb pool start` runs `bb pool serve` in its own session (`setsid`),
+  logging to `<dir>/serve-<pid>.log`. It waits for the pre-warm, then
+  prints `export BB_RENODE_POOL=...`. It exits after `--idle-exit`
+  without a lease (default 1800 s; `never` disables it), or on
+  `bb pool stop`. `bb pool status` prints each slot (state, pid, runs) and
+  the counters. `bb run --renode-pool off|env` (default `env`). `bb run`
+  prints `bb run: renode: leased from the pool (pid N)` or `started fresh
+  (pid N)`, on stdout only. `make pool-equiv` and `make pool-perf`
+  (`scripts/pool_equiv.sh`, `scripts/pool_perf.sh`) are added in this
+  step because they gate it.
+- **G2** (`make pool-perf`, 1 slot, N = 7, load 3.4): first lease 0.31 s
+  (≤ 0.5). Median engine startup: spike 0.14 s, feedback 0.15 s, adc
+  0.16 s (≤ 0.30). Spike median total wall 0.85 s (≤ 1.2). Every run was
+  leased. **Pass.**
+- **G4** (`make pool-equiv`, 1 slot, 2 rounds, forward then reversed).
+  The configurations: spike default, 1 ms and 500 ms; feedback on,
+  `--lookahead off`, `--lookahead-plugin never` and `feedback_poll.elf`;
+  adc on and off; adc-open. All 20 pooled runs were served by one Renode
+  process. Each was byte-identical to its fresh run (`nets.csv`,
+  `nets.vcd`, `events.jsonl`, non-grant records) and to the committed
+  hashes. Counters: 20 kept, 0 discarded, 0 leaked listeners.
+  `bb pool run --slots 5 -- make determinism feedback-determinism`
+  (10 runs each, 5 parallel) passed both with 20 leases, 0 `BUSY` and
+  0 leaked listeners, in 18 s for the two targets. **Pass.**
+- **G5** (`engines/cpu-renode/tests/pool.rs`; in-process pools; the
+  spike blinky to 250 ms and the lookahead firmware `la_silent`):
+  - leases equal a fresh run, the second lease reuses the process, and
+    `max_runs 2` puts the third on a new process (3 leases, 2 kept,
+    1 recycled, no listener left);
+  - a Renode SIGKILLed at 100 ms fails the run, is discarded, and the
+    next lease (new pid) equals the fresh run;
+  - an injected protocol error (`RunForExtraNs` under `--verify every`)
+    and a broken promise (`StretchPromise`) are discarded the same way;
+    after the broken promise, the lease on the replacement equals a
+    fresh lookahead run;
+  - a foreign Renode path and a plugin from another cache get `NOMATCH`
+    (fresh), a busy pool gets `BUSY` (fresh), and a socket with no pool
+    behind it means fresh.
+  All 5 pass. `cli/tests/pool.rs` checks three things. `bb pool run`
+  passes the socket and the exit status and removes the socket. A
+  SIGKILLed `bb pool run` leaves neither of its 2 Renode processes
+  alive. `bb pool start`, `status` and `stop` work, a pooled `bb run` of
+  the spike is byte-identical to a fresh one, `--renode-pool off`
+  starts fresh, and after `stop` the socket and the process are gone.
+- **G3 (fresh)**: `make check` passes (188 s, load 10); `tests/golden`
+  unchanged.
