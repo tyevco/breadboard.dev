@@ -11,7 +11,7 @@ CARGO ?= cargo
         golden-update feedback-run feedback feedback-order feedback-determinism \
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
-        adc-equiv adc-renode cost-table startup-perf \
+        adc-equiv adc-renode cost-table cost-table-runs startup-perf \
         pool-equiv pool-perf \
         pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
 
@@ -323,13 +323,19 @@ lookahead-perf: firmware bb
 # cyclic boards with --lookahead off). Every B run must match A in nets.csv,
 # nets.vcd and the non-grant records. No speed gate (that is `make perf` and
 # `make lookahead-perf`). Wall-clock: run it on an otherwise idle host.
+# ADR-004: the table is measured twice, every Renode fresh ($(COST_OUT)/fresh)
+# and on a 1-slot warm pool ($(COST_OUT)/pool, every run leased), for the
+# startup columns.
 COST_OUT ?= out/cost-table
 cost-table: firmware bb
-	bash scripts/perf_ab.sh $(BB) $(COST_OUT)/spike $(PERF_N) "--max-quantum 10us" "" - - - -- $(SPIKE_ARGS)
-	bash scripts/perf_ab.sh $(BB) $(COST_OUT)/feedback $(PERF_N) "--lookahead off" "" - - - -- $(FEEDBACK_ARGS)
-	bash scripts/perf_ab.sh $(BB) $(COST_OUT)/feedback-open $(PERF_N) "--max-quantum 10us" "" - - - \
+	env -u BB_RENODE_POOL $(MAKE) --no-print-directory cost-table-runs COST_RUN_OUT=$(COST_OUT)/fresh
+	$(BB) pool run --slots 1 -- $(MAKE) --no-print-directory cost-table-runs COST_RUN_OUT=$(COST_OUT)/pool
+cost-table-runs:
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/spike $(PERF_N) "--max-quantum 10us" "" - - - -- $(SPIKE_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/feedback $(PERF_N) "--lookahead off" "" - - - -- $(FEEDBACK_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/feedback-open $(PERF_N) "--max-quantum 10us" "" - - - \
 	    -- $(FEEDBACK_OPEN_ARGS)
-	bash scripts/perf_ab.sh $(BB) $(COST_OUT)/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
 
 # ADR-003 step 5 startup-cost gate: with the cached plugin, Renode engine
 # startup is within 0.3 s of a start without it (interleaved, N =

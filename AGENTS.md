@@ -16,7 +16,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc` (`make check` took 2 min 36 s on an otherwise lightly loaded host at ADR-003 step 10, and up to about 8 min under load) |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -36,6 +36,10 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make adc-equiv` | ADR-003 step 9 gates (`scripts/adc_equiv.sh`): Part A (one cell) and Part B (lookahead, 1 ms and 10 ms) on `examples/adc`, and `board-open.cir` (acyclic) at 1, 10 and 50 ms, all identical except `grant` records to the every-lattice-point references (`tests/golden/adc*/outputs.sha256`); no promise broken; the watchdog's window crossings stop quiet grants (`stop:ngspice`) (CI job `adc`) |
 | `make adc-renode` | The Renode-only ADC model test of ADR-003 Amendment 5 (`make -C examples/adc test`, about 15 s; CI job `adc`) |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
+| `make startup-perf` | ADR-004 G1: fresh `bb run` engine startup of the spike and the feedback board at least 12 % and 0.3 s below `BB_RENODE_STOCK_RUNTIME=1` (the stock .NET settings and 100 ms connect poll), interleaved, N = 7 (`STARTUP_N`), medians, outputs identical; `STARTUP_BASE=<bb>` compares against another binary. Run it on an idle host |
+| `make pool-equiv` | ADR-004 G4: one pool process serves the spike (default, 1 ms, 500 ms), feedback (on, off, plugin never, polling firmware), adc (on, off) and adc-open twice, in alternating order; every pooled run must be leased and byte-identical to its fresh run and to the committed hashes (`scripts/pool_equiv.sh`) |
+| `make pool-perf` | ADR-004 G2: on a 1-slot pool, the first lease starts in at most 0.5 s, median engine startup is at most 0.30 s for spike, feedback and adc (N = 7), and spike total wall at most 1.2 s (`scripts/pool_perf.sh`). Run it on an idle host |
+| `bb pool run -- <cmd>` | Run `<cmd>` with a warm Renode pool in `BB_RENODE_POOL` (`--slots N`, `--max-runs K`); `bb pool start` / `stop` / `status` for an interactive shell (`bb pool --help`). `bb run --renode-pool off` ignores a pool |
 | `make golden-update` | Regenerate the golden snapshots, the spike output hashes and the partition hashes (spike, feedback, feedback-open), the feedback one-cell reference hashes and the ADC reference hashes from fresh, checked runs. Review the diff before committing it: a change to an equivalence reference is a change to results and needs a reason (and, for the protocol, an ADR) |
 | `make cost-table` | The README cost table with the measurement protocol (`scripts/perf_ab.sh`, interleaved, N = `PERF_N`, medians): the spike at 10 µs vs 10 ms grants, `examples/feedback` and `examples/adc` with lookahead off vs on, `examples/feedback-open` at 10 µs vs 10 ms. Reports only; no gate. Run it on an otherwise idle host |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
@@ -51,8 +55,9 @@ lookahead gate firmware in `engines/cpu-renode/tests/firmware`) on their own.
 bbcore/                 kernel: Time, PinSignal, Engine trait, Scheduler, EventSink, CsvWriter, VcdWriter
 engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
 engines/cpu-renode/     Renode engine over the External Control API; platforms/bb_lookahead.cs
-                        (the lookahead plugin, ADR-003 D5); tests/firmware (its gate firmware)
-cli/                    `bb` binary (`bb run`, board-file parser)
+                        (the lookahead plugin, ADR-003 D5); tests/firmware (its gate firmware);
+                        console.rs, pool.rs, manager.rs (the warm Renode pool, ADR-004)
+cli/                    `bb` binary (`bb run`, `bb pool`, board-file parser)
 examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings)
 examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware and a polling variant
 examples/feedback-open/ the same with the loop opened (acyclic, long grants)
@@ -67,7 +72,8 @@ docs/adr/               architecture decision records
 scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh,
                         partition.sh, perf.sh, perf_ab.sh (also make cost-table),
                         check_resample.py, check_feedback.py, lookahead_inert.sh,
-                        lookahead_equiv.sh, check_adc.py, adc_equiv.sh
+                        lookahead_equiv.sh, check_adc.py, adc_equiv.sh, startup_perf.sh,
+                        with_pool.sh, pool_equiv.sh, pool_perf.sh
 ```
 
 ## The three invariants
@@ -125,6 +131,18 @@ feedback board).
   one-cell reference before it is on by default, and its cost-table row is
   measured with `make cost-table` (the ADR-003 measurement protocol), never
   from one run.
+- **The Renode pool is not an engine** (ADR-004 Part B). It holds no
+  simulated time and, between leases, no machine. A lease runs the same
+  `session.resc` a fresh run does, and nothing about a run's results may
+  depend on whether its Renode was leased or spawned. A new board, a new
+  platform or a new peripheral with process-wide state must pass
+  `make pool-equiv` (added to its configuration list) before it runs on
+  the pool. A pool process is never reused after a failed lease. Only
+  `BB_RENODE_POOL` names a pool; nothing discovers one.
+- **No orphans.** Every Renode is spawned through
+  `bb_cpu_renode::renode_command` (kill on the death of the spawning
+  thread). Spawn it from a thread that lives as long as the process is
+  used.
 - Git is local only: never push and never add remotes. Commit messages end with
   the co-author trailer given by the orchestrator.
 
@@ -154,6 +172,10 @@ feedback board).
   `nets.csv` alone.** Compare `nets.csv`, `nets.vcd` and the non-grant
   records (`grep -v '"type":"grant"'`); grant records differ by design
   between partitions and lookahead settings.
+- **Sending `Clear` to a Renode right after its External Control client
+  disconnected.** Renode 1.17.0 restarts the server then, and a `Clear`
+  that races the restart leaks the listener or crashes Renode (ADR-004
+  Amendment 2). The pool waits for the re-listen first; keep it that way.
 - **Parsing KiCad files with regex.** Use a real S-expression parser.
 - Using float seconds for scheduling. Convert at the engine's FFI boundary only.
 - Assuming engines advance in registration order. They advance in the plan

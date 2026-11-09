@@ -163,25 +163,50 @@ These figures were measured in WSL2 Ubuntu 24.04 on the development machine
 (24 logical CPUs) with `make cost-table`, which follows ADR-003's
 measurement protocol: for each board, the one-cell run (A) and `bb`'s
 defaults (B) interleaved, N = 5 of each, medians, engine startup reported
-separately from simulation, user+sys CPU and the load average recorded. The
-load average was 1.8–2.8. Every B run gave the same `nets.csv`, `nets.vcd`
-and non-grant `events.jsonl` records as A (ADR-003 Amendment 11).
+separately from simulation, user+sys CPU and the load average recorded.
+`make cost-table` measures every row twice (ADR-004): every Renode started
+fresh, and on a one-slot warm Renode pool (`bb pool run`; all 40 pool runs
+were leased). Every B run gave the same `nets.csv`, `nets.vcd` and
+non-grant `events.jsonl` records as A. The simulation column is from the
+fresh runs.
 
-| Board, run | Simulated | Grants | Simulation (median) | Total wall (median) |
-| --- | --- | --- | --- | --- |
-| spike, `--max-quantum 10us` (the Phase 0 setting: one-cell lockstep) | 500 ms | 50 000 | 21.58 s | 24.07 s |
-| spike, defaults (`make spike`: 10 ms grants) | 500 ms | 50 | **1.01 s** (21×) | 3.57 s, of which 2.54 s engine startup |
-| `examples/feedback --lookahead off` (a feedback loop: one-cell grants whatever `--max-quantum` is) | 500 ms | 50 000 | 20.85 s | 23.56 s |
-| `examples/feedback`, defaults (`make feedback`: CPU lookahead on) | 500 ms | 117 | **1.19 s** (18×) | 3.77 s |
-| `examples/feedback-open` (the loop opened), `--max-quantum 10us` | 500 ms | 50 000 | 20.63 s | 23.12 s |
-| `examples/feedback-open`, defaults (10 ms grants) | 500 ms | 50 | **0.98 s** (21×) | 3.58 s |
-| `examples/adc --lookahead off` (one-cell grants) | 300 ms | 30 000 | 16.13 s | 18.60 s |
-| `examples/adc`, defaults (`make adc`: lookahead on) | 300 ms | 6 344 | **7.64 s** (2.1×) | 10.13 s |
+| Board, run | Simulated | Grants | Simulation (median) | Engine startup, fresh | Engine startup, pool | Total wall, fresh | Total wall, pool |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| spike, `--max-quantum 10us` (the Phase 0 setting: one-cell lockstep) | 500 ms | 50 000 | 31.68 s | 3.38 s | 0.32 s | 34.78 s | 26.26 s |
+| spike, defaults (`make spike`: 10 ms grants) | 500 ms | 50 | **2.90 s** (11×) | 3.31 s | **0.23 s** | 6.33 s | 1.76 s |
+| `examples/feedback --lookahead off` (a feedback loop: one-cell grants whatever `--max-quantum` is) | 500 ms | 50 000 | 29.55 s | 2.82 s | 0.37 s | 32.58 s | 33.73 s |
+| `examples/feedback`, defaults (`make feedback`: CPU lookahead on) | 500 ms | 117 | **1.45 s** (20×) | 2.95 s | **0.32 s** | 4.41 s | 3.65 s |
+| `examples/feedback-open` (the loop opened), `--max-quantum 10us` | 500 ms | 50 000 | 27.11 s | 2.86 s | 0.36 s | 31.05 s | 33.78 s |
+| `examples/feedback-open`, defaults (10 ms grants) | 500 ms | 50 | **1.10 s** (25×) | 2.53 s | **0.17 s** | 3.91 s | 2.10 s |
+| `examples/adc --lookahead off` (one-cell grants) | 300 ms | 30 000 | 17.85 s | 2.79 s | 0.46 s | 20.88 s | 24.76 s |
+| `examples/adc`, defaults (`make adc`: lookahead on) | 300 ms | 6 344 | **9.10 s** (2.0×) | 2.95 s | **0.23 s** | 12.50 s | 12.32 s |
+
+**This measurement ran on a slow host.** The load average was 2.1–4.6
+fresh and 2.8–5.6 on the pool, while another agent's job was running, and
+the machine was 1.5–3× slower than at the previous measurement. That was
+ADR-003 step 10, at load 1.8–2.8: spike defaults 1.01 s simulation and
+2.54 s startup; feedback 1.19 s; feedback-open 0.98 s; adc 7.64 s; the
+one-cell rows 16–22 s. So compare within a row and between the two
+startup columns, not with older figures. The two total-wall columns come
+from separate sessions, and the host's speed changed between them, which
+is why the one-cell totals differ in both directions (spike 34.78 s fresh
+against 26.26 s pooled, feedback 32.58 s against 33.73 s; ADR-004
+Amendment 5).
+
+**Engine startup** is the time `bb run` waits before the first grant.
+Almost all of it is Renode's own start: .NET, Renode init and the platform
+load (ADR-004). A fresh run sets `DOTNET_TieredPGO=0` on Renode and polls
+its External Control server every 5 ms, which saves about 0.3–0.4 s
+(ADR-004 Part A). On a warm pool (`bb pool run -- <command>`), each run
+leases a pre-warmed Renode process instead of starting one, and startup
+falls to 0.17–0.46 s. `make test` and the gate targets run on a pool by
+default (`POOL=0` runs them fresh).
 
 The ADC board gains least: the firmware converts every 999 µs and every
 change of ADC_IN by a whole millivolt stops a quiet grant, so while the RC
 node moves grants stay short (ADR-003 D6, "no gain while the analog side
-moves"). Per-run numbers are in `out/cost-table/*/results.tsv` after a run.
+moves"). Per-run numbers are in `out/cost-table/{fresh,pool}/*/results.tsv`
+after a run.
 `make perf` and `make lookahead-perf` are the speed gates of plan steps 3
 and 8; `make cost-table` only reports.
 

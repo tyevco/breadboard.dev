@@ -678,3 +678,59 @@ any output.
   compare. The cut is smaller than the per-run startup gain because the
   cargo tests' own work and their parallel fresh starts dominate.
   Reported, not gated.
+
+### Amendment 5: step 5, final numbers and the open gate (2026-11-08)
+
+**Status:** Accepted with step 5. README (cost table with fresh and pool
+startup columns, the startup paragraph) and AGENTS.md (the new commands,
+the "pool is not an engine" and `make pool-equiv` rule, the no-orphans
+rule, the `Clear` race as a known bad idea) are updated.
+
+- **Startup against the commit before ADR-004** (`dcc9d66`, built in a
+  separate tree with its own target directory). Interleaved, N = 5,
+  medians, `scripts/startup_perf.sh` with `STARTUP_BASE`; outputs
+  identical in every run:
+
+  | Session | Board | `dcc9d66` | This change | Cut |
+  | --- | --- | --- | --- | --- |
+  | step 1, load 3 | spike | 2.44 s | 2.32 s fresh | −0.12 s (4.9 %), fail |
+  | final, slow host | spike | 3.62 s | 3.19 s fresh | −0.43 s (11.9 %), fail on 12 % |
+  | final | spike | 2.63 s | 0.22 s pool | −2.41 s (91.6 %), pass |
+  | final | feedback | 3.45 s | 0.17 s pool | −3.28 s (95.1 %), pass | During the final session the
+  host ran 1.5–3× slower than earlier (spike simulation 3 s instead of 1
+  s; Windows reported 34 % CPU load outside WSL). The fresh comparison
+  stopped after the spike in both sessions, because make stops at the
+  first failing line. The pool comparison passes G1's thresholds for both
+  boards by a wide margin.
+- **G1 is not stably met at N = 7 on this host. This is a recorded
+  deviation, not a weakened gate.** Every `make startup-perf` attempt
+  (stock baseline, N = 7):
+
+  | Attempt | spike cut | feedback cut |
+  | --- | --- | --- |
+  | 1 (step 1) | −0.350 s, 13.8 % pass | −0.140 s, 5.5 % fail |
+  | 2 (step 1) | — | −0.400 s, 15.2 % pass |
+  | 3 (step 1) | −0.370 s, 14.6 % pass | −0.280 s, 10.9 % fail |
+  | 4 (final, slow host) | −0.170 s, 4.7 % fail | not run (make stopped) |
+  | 5 (final) | −0.470 s, 11.9 % fail (≥ 0.3 s met, 12 % missed) | −0.430 s, 15.6 % pass |
+
+  Five of eight board attempts cleared 0.3 s, and four of eight cleared
+  both thresholds. The ADR's prototype estimate (−0.46 to −0.54 s) is
+  within the range of the passing attempts. Failures follow 1.5–5 s
+  outlier runs (one B run took 8.77 s) and phases where the whole host
+  slowed down. Without those, Part A measures −0.35 to −0.47 s. The
+  stock-vs-A1-only-vs-Part-A check of Amendment 1 had outliers on both
+  sides, so Part A does not cause them. The gate stays as written
+  (N = 7, ≥ 12 % and ≥ 0.3 s). It should be re-run on an idle host
+  before Part A is called met.
+- **G2, G4, G5** passed in step 3, and **G3** in both modes in step 4.
+  **G6** passed three times: −0.010 s (step 1), and 0.139 s in the
+  final session (≤ 0.3 s), measured while the host was slow.
+- **The cost table** (README), `make cost-table`, both passes on the
+  slow host. Engine startup was 2.53–3.38 s fresh and 0.17–0.46 s on the
+  pool. All 40 pool runs were leased; counters 40 kept, 0 discarded,
+  0 leaked listeners. All 8 A/B comparisons gave identical outputs.
+- **Deferred, unchanged:** ReadyToRun via crossgen2 (approver decision 3:
+  not approved, not run); the trimmed install view; a client-mode
+  External Control connection that would avoid the listener
+  (Amendment 2).

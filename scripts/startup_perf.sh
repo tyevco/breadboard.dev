@@ -13,7 +13,9 @@
 #   <min_s>     median(A) - median(B) >= min_s seconds          (- = no check)
 #   <bb run args> without --out
 #
-# Both cases run fresh (BB_RENODE_POOL is removed from their environment).
+# Both cases run fresh (BB_RENODE_POOL is removed from their environment),
+# except that with STARTUP_B_POOL=1 case B keeps BB_RENODE_POOL (run under
+# `bb pool run`: the pool against the baseline; every B run must be leased).
 # Every B run must match the first A run in nets.csv, nets.vcd and the
 # non-grant event records: Part A changes no result.
 set -euo pipefail
@@ -37,6 +39,9 @@ run_one() { # <k> <case>
   shift 2
   load=$(cut -d' ' -f1 /proc/loadavg)
   local -a cmd=(env -u BB_RENODE_POOL)
+  if [[ $c == B && ${STARTUP_B_POOL:-0} == 1 ]]; then
+    cmd=(env)
+  fi
   if [[ $c == A && $base == stock ]]; then
     cmd+=(BB_RENODE_STOCK_RUNTIME=1 "$bb")
   elif [[ $c == A ]]; then
@@ -51,6 +56,9 @@ run_one() { # <k> <case>
   startup=$(sed -n 's/.*(\([0-9.]*\) s engine startup.*/\1/p' "$dir.log")
   sim=$(sed -n 's/.*, \([0-9.]*\) s simulation).*/\1/p' "$dir.log")
   grep -v '"type":"grant"' "$dir/events.jsonl" > "$dir/non-grant-records"
+  if [[ $c == B && ${STARTUP_B_POOL:-0} == 1 ]] && ! grep -q '^bb run: renode: leased' "$dir.log"; then
+    echo "startup-perf: FAIL: $dir was not leased from the pool"; exit 1
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$k" "$c" "$startup" "$sim" "$total" "$load" >> "$results"
   echo "startup-perf: run $k $c: startup $startup s, sim $sim s, total $total s, load $load"
 }
