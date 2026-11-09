@@ -742,7 +742,7 @@ existing equivalence gates apply unchanged.
 
 ### Amendment 1: steps 1-3 as implemented (2026-11-09)
 
-**Step 1 (plugin bundling, `BbStm32Timer`, the overlay; commit `ba883f0`).**
+**Step 1 (plugin bundling, `BbStm32Timer`, the overlay; commit `7cd043a`).**
 
 - One assembly, `bb_plugins-<key>.dll` in `~/.cache/bb/renode-plugins`,
   keyed by FNV-1a 64 over every source's file name and text
@@ -1071,3 +1071,10 @@ of three sources compiled by `AdHocCompiler`, the JIT profile cache kept)
 2.64 s (**+1.17 s** over warm, gate 3 s). On the pool the ADC board starts
 in 0.09 s (cost table). ADR-004's startup work is unaffected: one assembly,
 one `ScanFile` per fresh start, nothing per lease.
+
+**Fresh-process re-run (2026-11-09, after step 6).** Every gate above that
+ran on the warm pool was run again with `POOL=0` and no `BB_RENODE_POOL`
+(every Renode started fresh; 0 leases in the log): `make check` (fmt,
+clippy, `make test` with `adc`, `adc-order`, `adc-stock`, `adc-model`),
+`make partition`, `make lookahead-equiv`, `make adc-equiv` and
+`make adc-determinism` (10 runs): all green, with the committed hashes.
