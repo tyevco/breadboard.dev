@@ -34,6 +34,15 @@ Recorded after the human approver reviewed this ADR and ADR-005.
    and the engines must never leave orphans (kill on parent death,
    process-group cleanup), with a test.
 
+### Follow-up approval (2026-11-09)
+
+8. **Amendments 6 and 7 are approved:** A3 (the cached startup JIT
+   profile) and F1–F3 (Renode loads the firmware from a temp-workdir copy,
+   1 MiB output buffers, and the pool pre-warm LoadELF). None of them
+   changes spec/, the time-grant protocol or any output.
+9. **The Renode 1.17.0 External Control stack leak (Amendment 8)** stays
+   worked around in the engine. Filing it upstream is not planned for now.
+
 ## Context
 
 After ADR-003, simulation is no longer the main cost of a typical `bb run`.
@@ -971,8 +980,8 @@ output formats or the hashes changes.
 - **Still open, unchanged:** ReadyToRun via crossgen2 (approver decision
   3: not approved, not measured); pool processes start without A3; Renode
   1.17.0's External Control server binds 0.0.0.0 (Amendment 2). A3
-  (Amendment 6) still awaits the approver's review. F1–F3 are
-  engine-internal and recorded here for the same review.
+  (Amendment 6) and F1–F3 were approved on 2026-11-09 (approver
+  decision 8).
 
 ### Amendment 8: External Control message limit, and the startup claims re-measured (2026-11-09)
 
