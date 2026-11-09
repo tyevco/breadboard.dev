@@ -999,14 +999,29 @@ impl RenodeEngine {
                 cfg.quantum
             )));
         }
-        let firmware = std::fs::canonicalize(&cfg.firmware)
-            .map_err(|e| EngineError::Other(format!("firmware {}: {e}", cfg.firmware.display())))?;
+        // Renode's LoadELF opens the firmware about a dozen times. On a slow
+        // file system (WSL's /mnt/c: 10-130 ms an open or stat under host
+        // load) that cost 0.1-1.1 s of startup, so bb reads it once and
+        // Renode loads a copy in the workdir: the same bytes under the same
+        // file name (ADR-004 Amendment 7).
+        let fw_err = |e: &dyn std::fmt::Display| {
+            EngineError::Other(format!("firmware {}: {e}", cfg.firmware.display()))
+        };
+        let fw_name = cfg
+            .firmware
+            .file_name()
+            .ok_or_else(|| fw_err(&"no file name"))?;
+        let fw_bytes = std::fs::read(&cfg.firmware).map_err(|e| fw_err(&e))?;
 
         let instance = INSTANCE.fetch_add(1, Ordering::Relaxed);
         let workdir =
             std::env::temp_dir().join(format!("bb-renode-{}-{instance}", std::process::id()));
         let _ = std::fs::remove_dir_all(&workdir);
         std::fs::create_dir_all(&workdir)?;
+        let firmware = workdir.join("fw").join(fw_name);
+        std::fs::create_dir_all(workdir.join("fw"))?;
+        std::fs::write(&firmware, &fw_bytes)?;
+        drop(fw_bytes);
         let platform = match &cfg.platform {
             Platform::Stm32f103Offline => {
                 let p = workdir.join("platform.repl");

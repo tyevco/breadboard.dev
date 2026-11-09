@@ -382,9 +382,15 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     })
 }
 
+/// Output writers buffer 1 MiB: every write(2) to a slow file system
+/// (WSL's /mnt/c: up to ~10 ms each under host load) is paid during the
+/// simulation, and an 8 KiB buffer made ~200 of them for the spike's
+/// nets.csv (ADR-004 Amendment 7). The bytes written are the same.
+const OUTPUT_BUFFER: usize = 1 << 20;
+
 fn create(path: &PathBuf) -> Result<BufWriter<File>, String> {
     File::create(path)
-        .map(BufWriter::new)
+        .map(|f| BufWriter::with_capacity(OUTPUT_BUFFER, f))
         .map_err(|e| format!("create {}: {e}", path.display()))
 }
 

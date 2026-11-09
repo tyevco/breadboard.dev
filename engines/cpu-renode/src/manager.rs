@@ -209,6 +209,7 @@ impl Manager {
         let _ = std::fs::remove_dir_all(&work);
         std::fs::create_dir_all(&work)?;
         std::fs::write(work.join("platform.repl"), STM32F103_OFFLINE_REPL)?;
+        std::fs::write(work.join("bbwarm.elf"), warm_elf())?;
         let plugin_cache = if cfg.plugin {
             let cache = plugin_cache_path(&cfg.renode, cfg.plugin_cache_dir.as_deref())
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -486,6 +487,7 @@ fn warm_process(inner: &Inner) -> Result<Console, String> {
             }
         }
     }
+    let warm_elf = inner.work.join("bbwarm.elf");
     let f103 = inner.work.join("platform.repl");
     let platforms = [
         (f103.to_string_lossy().into_owned(), false),
@@ -505,12 +507,11 @@ fn warm_process(inner: &Inner) -> Result<Console, String> {
                  Miscellaneous.BbLookahead @ sysbus {LOOKAHEAD_ADDRESS:#x}\""
             ));
         }
-        // A vector table and `wfi; b .-2` in flash: the CPU sleeps.
+        // A vector table and `wfi; b .-2` in flash, loaded with LoadELF like
+        // a run's firmware (so its code is compiled): the CPU sleeps.
+        lines.push(format!("sysbus LoadELF @{}", warm_elf.display()));
         lines.extend(
             [
-                "sysbus WriteDoubleWord 0x08000000 0x20002000",
-                "sysbus WriteDoubleWord 0x08000004 0x08000009",
-                "sysbus WriteDoubleWord 0x08000008 0xE7FDBF30",
                 "cpu VectorTableOffset 0x08000000",
                 "emulation SetSeed 0",
                 "emulation SetGlobalQuantum \"0.000010000\"",
@@ -536,6 +537,100 @@ fn warm_process(inner: &Inner) -> Result<Console, String> {
     let out = con.run(&["logLevel 1"], t).map_err(|e| e.to_string())?;
     ok(&out, "logLevel")?;
     Ok(con)
+}
+
+/// The pre-warm firmware: a 32-bit little-endian ARM ELF with one loadable
+/// segment at 0x08000000 (initial SP 0x20002000, reset vector 0x08000009,
+/// `wfi; b .-2`) and a symbol table, so that pre-warm runs Renode's ELF
+/// loading and symbol code as a run's `LoadELF` does (ADR-004 Amendment 7).
+pub fn warm_elf() -> Vec<u8> {
+    const BASE: u32 = 0x0800_0000;
+    let text: [u32; 3] = [0x2000_2000, BASE | 9, 0xE7FD_BF30];
+    let strtab = b"\0Reset_Handler\0bbwarm_vectors\0";
+    let shstrtab = b"\0.text\0.symtab\0.strtab\0.shstrtab\0";
+    // name, value, size, info (bind << 4 | type), shndx
+    let syms: [(u32, u32, u32, u8, u16); 3] = [
+        (0, 0, 0, 0, 0),
+        (1, BASE | 9, 4, 0x12, 1), // GLOBAL FUNC
+        (15, BASE, 8, 0x11, 1),    // GLOBAL OBJECT
+    ];
+    let le16 = |v: &mut Vec<u8>, x: u16| v.extend_from_slice(&x.to_le_bytes());
+    let le32 = |v: &mut Vec<u8>, x: u32| v.extend_from_slice(&x.to_le_bytes());
+    let text_off = 52 + 32;
+    let sym_off = text_off + 12;
+    let str_off = sym_off + 16 * syms.len();
+    let shs_off = str_off + strtab.len();
+    let sh_off = (shs_off + shstrtab.len()).next_multiple_of(4);
+    let mut e = Vec::new();
+    e.extend_from_slice(&[0x7f, b'E', b'L', b'F', 1, 1, 1, 0]);
+    e.extend_from_slice(&[0; 8]);
+    le16(&mut e, 2); // ET_EXEC
+    le16(&mut e, 40); // EM_ARM
+    le32(&mut e, 1);
+    le32(&mut e, BASE | 9); // entry
+    le32(&mut e, 52); // phoff
+    le32(&mut e, sh_off as u32);
+    le32(&mut e, 0x0500_0200); // EABI version 5, soft-float
+    le16(&mut e, 52);
+    le16(&mut e, 32);
+    le16(&mut e, 1);
+    le16(&mut e, 40);
+    le16(&mut e, 5);
+    le16(&mut e, 4); // shstrndx
+                     // PT_LOAD, R+X
+    for x in [1, text_off as u32, BASE, BASE, 12, 12, 5, 4] {
+        le32(&mut e, x);
+    }
+    for w in text {
+        le32(&mut e, w);
+    }
+    for (name, value, size, info, shndx) in syms {
+        le32(&mut e, name);
+        le32(&mut e, value);
+        le32(&mut e, size);
+        e.push(info);
+        e.push(0);
+        le16(&mut e, shndx);
+    }
+    e.extend_from_slice(strtab);
+    e.extend_from_slice(shstrtab);
+    e.resize(sh_off, 0);
+    // name, type, flags, addr, offset, size, link, info, align, entsize
+    let shdrs: [[u32; 10]; 5] = [
+        [0; 10],
+        [1, 1, 6, BASE, text_off as u32, 12, 0, 0, 4, 0], // .text PROGBITS AX
+        [
+            7,
+            2,
+            0,
+            0,
+            sym_off as u32,
+            (16 * syms.len()) as u32,
+            3,
+            1,
+            4,
+            16,
+        ], // .symtab
+        [15, 3, 0, 0, str_off as u32, strtab.len() as u32, 0, 0, 1, 0], // .strtab
+        [
+            23,
+            3,
+            0,
+            0,
+            shs_off as u32,
+            shstrtab.len() as u32,
+            0,
+            0,
+            1,
+            0,
+        ], // .shstrtab
+    ];
+    for sh in shdrs {
+        for x in sh {
+            le32(&mut e, x);
+        }
+    }
+    e
 }
 
 /// The External Control calls an engine makes, once, so they are compiled.
@@ -836,6 +931,70 @@ fn serve_lease(
             }
             eprintln!("bb pool: pid {}: {e}", con.pid());
             Ok(false)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::warm_elf;
+
+    fn u16_at(e: &[u8], o: usize) -> u16 {
+        u16::from_le_bytes([e[o], e[o + 1]])
+    }
+    fn u32_at(e: &[u8], o: usize) -> u32 {
+        u32::from_le_bytes([e[o], e[o + 1], e[o + 2], e[o + 3]])
+    }
+
+    #[test]
+    fn warm_elf_is_well_formed() {
+        let e = warm_elf();
+        assert_eq!(&e[..6], &[0x7f, b'E', b'L', b'F', 1, 1]);
+        assert_eq!((u16_at(&e, 16), u16_at(&e, 18)), (2, 40)); // ET_EXEC, EM_ARM
+        let (phoff, shoff) = (u32_at(&e, 28) as usize, u32_at(&e, 32) as usize);
+        let (shnum, shstrndx) = (u16_at(&e, 48) as usize, u16_at(&e, 50) as usize);
+        assert_eq!(shoff + 40 * shnum, e.len());
+        assert!(shstrndx < shnum);
+        // The segment: PT_LOAD of the vector table and `wfi; b .-2`.
+        assert_eq!(u32_at(&e, phoff), 1);
+        let (off, vaddr, filesz) = (
+            u32_at(&e, phoff + 4) as usize,
+            u32_at(&e, phoff + 8),
+            u32_at(&e, phoff + 16) as usize,
+        );
+        assert_eq!((vaddr, filesz), (0x0800_0000, 12));
+        let words: Vec<u32> = (0..3).map(|i| u32_at(&e, off + 4 * i)).collect();
+        assert_eq!(words, [0x2000_2000, 0x0800_0009, 0xE7FD_BF30]);
+        // Every section lies inside the file; names resolve.
+        let sh = |i: usize, f: usize| u32_at(&e, shoff + 40 * i + 4 * f) as usize;
+        let shstr = sh(shstrndx, 4);
+        let name = |i: usize| {
+            let s = &e[shstr + sh(i, 0)..];
+            String::from_utf8_lossy(&s[..s.iter().position(|&b| b == 0).unwrap()]).into_owned()
+        };
+        let names: Vec<String> = (1..shnum).map(name).collect();
+        assert_eq!(names, [".text", ".symtab", ".strtab", ".shstrtab"]);
+        for i in 1..shnum {
+            assert!(sh(i, 4) + sh(i, 5) <= shoff, "section {i}");
+        }
+        // External tools agree, when present.
+        let p = std::env::temp_dir().join(format!("bbwarm-{}.elf", std::process::id()));
+        std::fs::write(&p, &e).unwrap();
+        let out = std::process::Command::new("arm-none-eabi-readelf")
+            .arg("-a")
+            .arg(&p)
+            .output();
+        let _ = std::fs::remove_file(&p);
+        if let Ok(out) = out {
+            let (text, err) = (
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            );
+            assert!(out.status.success() && err.is_empty(), "{err}");
+            assert!(
+                text.contains("Reset_Handler") && text.contains("bbwarm_vectors"),
+                "{text}"
+            );
         }
     }
 }
