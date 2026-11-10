@@ -74,10 +74,23 @@ missing=()
 for p in "${APT_PACKAGES[@]}"; do
   dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "install ok installed" || missing+=("$p")
 done
+# An Ubuntu mirror in the middle of a sync serves index files that do not match
+# their Release file ("File has unexpected size ... Mirror sync in progress?"),
+# and apt-get update then exits 100. The Phase 1 M7 stranger test hit this, so
+# apt retries each download and the whole command, three times each.
+apt_retry() {
+  local i
+  for i in 1 2 3; do
+    "$@" && return 0
+    [ "$i" = 3 ] || { log "apt: failed (attempt $i of 3; a mirror sync?), retrying in 30 s"; sleep 30; }
+  done
+  return 1
+}
 if ((${#missing[@]})); then
   log "apt: installing ${missing[*]}"
-  "${SUDO[@]}" apt-get update
-  "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+  apt_retry "${SUDO[@]}" apt-get -o Acquire::Retries=3 update
+  apt_retry "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y \
+    --no-install-recommends "${missing[@]}"
 else
   log "apt: all packages present"
 fi

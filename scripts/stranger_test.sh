@@ -61,8 +61,8 @@ git -C "$REPO" show HEAD:README.md | awk '
   inblk { print }
   /<!-- stranger-test:begin -->/ { inblk = 1 }' > "$OUT/readme-steps.sh"
 [[ -s $OUT/readme-steps.sh ]] || { echo "stranger_test: README.md at HEAD has no stranger-test block" >&2; exit 1; }
-grep -q '<CLONE-URL>' "$OUT/readme-steps.sh" || { echo "stranger_test: the block has no <CLONE-URL>" >&2; exit 1; }
-sed "s|<CLONE-URL>|$URL|g" "$OUT/readme-steps.sh" > "$OUT/steps.sh"
+grep -q 'git clone <CLONE-URL> ' "$OUT/readme-steps.sh" || { echo "stranger_test: the block has no 'git clone <CLONE-URL>'" >&2; exit 1; }
+sed "s|git clone <CLONE-URL> |git clone $URL |" "$OUT/readme-steps.sh" > "$OUT/steps.sh"
 HEAD_ID=$(git -C "$REPO" rev-parse HEAD)
 
 # The runner, inside the clean environment: runner.sh <steps> <outdir>
