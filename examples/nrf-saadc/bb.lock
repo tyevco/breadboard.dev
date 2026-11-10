@@ -1,0 +1,14 @@
+# bb.lock: written by `bb open` (ADR-006 D8). Do not edit; `bb open --update-lock`
+# rewrites the entries whose package tree or platform content changed.
+schema = "bb-lock/0"
+
+[[package]]
+id = "nordic/nrf52840-qiaa"
+version = "0.1.0"
+path = "../../packages/nordic/nrf52840-qiaa"
+tree = "sha256:ea0efcab5ba5dcf44b346e2cba8b56854ed7b562783927c9278bbeb685c65cf6"
+
+[[platform]]
+id = "renode:nrf52840-bb@2"
+content = "sha256:e6e904d6aeea79bb199b2c366e68e5a5dc8efaae0d1b39591aec8b7eb7beab4b"
+renode = "1.17.0"

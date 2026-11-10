@@ -1,7 +1,7 @@
 # raytac/mdbt50q-u1mv2: Raytac MDBT50Q-U1MV2, an nRF52840 module with a u.FL antenna connector (Phase 1
 # plan M5, ADR-006 D1 and D9). A module package maps its pads onto its chip package
 # (module-pinmap.csv: pad -> nordic/nrf52840-qiaa pin name); the chip supplies the behavioural layer
-# (Renode platform nrf52840-bb@1) and the pin models (ADR-006 Amendment 3).
+# (Renode platform nrf52840-bb@2) and the pin models (ADR-006 Amendment 3).
 schema = "bb-part/0"
 
 [part]

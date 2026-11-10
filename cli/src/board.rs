@@ -53,11 +53,12 @@ use bbpkg::value::{to_f64, Dim};
 use crate::platforms;
 
 /// The platforms `bb run` supports. `nrf52840` (Phase 1 M2, ADR-008 D1/D2)
-/// is Breadboard's nRF52840 (`nrf52840-bb@1`: Renode's stock nRF52840
-/// without the SVD download, at 64 MIPS). Its pins are written
-/// `<ref>.P<port>.<nn>` (`U1.P0.13`; the reference ends at the first `.`);
-/// P0.00-P0.31 and P1.00-P1.15. It has no ADC model yet (the SAADC is M8),
-/// so `adc_in` is refused there.
+/// is Breadboard's nRF52840 (`nrf52840-bb@2`: Renode's stock nRF52840
+/// without the SVD download, at 64 MIPS, with Breadboard's SAADC). Its pins
+/// are written `<ref>.P<port>.<nn>` (`U1.P0.13`; the reference ends at the
+/// first `.`); P0.00-P0.31 and P1.00-P1.15. An `adc_in` reads an AIN pin or
+/// `VDD` through the SAADC (Phase 1 M8, ADR-008 D7; [`nrf_adc_input`]),
+/// with `load=<pin_load view>|none` and `trace_samples=true|false`.
 pub const PLATFORMS: [&str; 3] = ["stm32f103", "stm32f072", "nrf52840"];
 
 /// A part simulated by a CPU engine.
@@ -98,12 +99,35 @@ pub enum PinKind {
     OutUnconnected,
     /// `digital_in` reading circuit node `net`.
     In { net: String, model: DigitalIn },
-    /// `adc_in` reading circuit node `net` on ADC channel `channel`.
+    /// `adc_in` reading circuit node `net` on ADC channel `channel` (on the
+    /// nRF52840: the SAADC input, AIN0-7 = 0-7, VDD = 8).
     Adc {
         net: String,
         model: AdcIn,
         channel: i32,
+        /// The loading `adc_in` (ADR-008 D7): the part package's `pin_load`
+        /// view that loads the pad, or `None` (`load = "none"`: ideal, no
+        /// glue).
+        load: Option<String>,
+        /// `trace_samples`: every sample becomes a `debug` log record
+        /// (ADR-008 D7).
+        trace: bool,
     },
+}
+
+/// The nRF52840 SAADC input that reads pin `pin` (ADR-008 D2, D7): AIN0-3
+/// are P0.02-P0.05, AIN4-7 P0.28-P0.31; `VDD` is input 8 (`PSELP = VDD` and
+/// the `VDD1_4` reference).
+pub fn nrf_adc_input(pin: &str) -> Option<i32> {
+    if pin == "VDD" {
+        return Some(8);
+    }
+    let (port, n) = bb_cpu_renode::nrf_pin(pin)?;
+    match (port, n) {
+        (0, 2..=5) => Some(n as i32 - 2),
+        (0, 28..=31) => Some(n as i32 - 24),
+        _ => None,
+    }
 }
 
 /// An MCU pin bound through its pin model.
@@ -267,6 +291,16 @@ impl<'a> Params<'a> {
     fn first_key(&self) -> Option<&str> {
         self.map.keys().next().copied()
     }
+    /// An optional identifier parameter (`model`, `load`).
+    fn name(&mut self, key: &str) -> Result<Option<String>, String> {
+        let ctx = &self.ctx;
+        match self.map.remove(key) {
+            None => Ok(None),
+            Some(Val::Text(v)) => Ok(Some(v.to_string())),
+            Some(Val::Pkg(Param::Name(n))) => Ok(Some(n)),
+            Some(Val::Pkg(_)) => Err(format!("{ctx}: {key}: expected a name")),
+        }
+    }
 }
 
 fn parse_kv<'a>(
@@ -334,6 +368,19 @@ fn package_adc_channel(pkg: &Package, pin: &str) -> Option<i32> {
         .strip_prefix("IN")?
         .parse()
         .ok()
+}
+
+/// The SAADC input of an nRF52840 package pin: its `pins.toml`
+/// `adc = { channel = "AIN<n>" }` (ADR-008 D2).
+fn package_nrf_input(pkg: &Package, pin: &str) -> Option<i32> {
+    pkg.pins
+        .by_name(pin)?
+        .adc_channel
+        .as_deref()?
+        .strip_prefix("AIN")?
+        .parse()
+        .ok()
+        .filter(|n| (0..8).contains(n))
 }
 
 /// Parse a board file, resolving `package=` parts through `lookup`.
@@ -526,6 +573,37 @@ pub fn build_pin(r: &PinReq, warnings: &mut Vec<String>) -> Result<PinKind, Stri
             "{ctx}: set= needs a part given by package= (a parameter set of its pins.toml)"
         ));
     }
+    let nrf = r.part.platform == "nrf52840";
+    // `trace_samples` is a binding option, not a pin-model parameter
+    // (ADR-008 D7): every sample of the SAADC input becomes a log record.
+    let mut trace = false;
+    let mut explicit: Vec<(&str, &str)> = Vec::new();
+    for &(k, v) in r.explicit {
+        if k == "trace_samples" {
+            trace = match v {
+                "1" | "true" => true,
+                "0" | "false" => false,
+                _ => {
+                    return Err(format!(
+                        "{ctx}: trace_samples={v:?}: expected true or false"
+                    ))
+                }
+            };
+            if !(nrf && model_kind == "adc_in") {
+                return Err(format!(
+                    "{ctx}: trace_samples is for an adc_in on the nRF52840's SAADC"
+                ));
+            }
+        } else {
+            explicit.push((k, v));
+        }
+    }
+    // The SAADC's VDD input (ADR-008 D7): an adc_in on the supply pin VDD
+    // pushes the net's voltage to the model (PSELP = VDD, REFSEL = VDD1_4).
+    // A supply pin has no pin models in pins.toml, so its parameters are
+    // the binding's own.
+    let vdd_sense = nrf && pin == "VDD" && model_kind == "adc_in";
+    let pkg = if vdd_sense { None } else { r.pkg };
     // The parameters: the board's own text, or (a package part) the
     // package's set overridden by explicit keys.
     let mut params = Params {
@@ -533,9 +611,9 @@ pub fn build_pin(r: &PinReq, warnings: &mut Vec<String>) -> Result<PinKind, Stri
         map: BTreeMap::new(),
         supply: r.supply,
     };
-    match r.pkg {
+    match pkg {
         None => {
-            for (k, v) in r.explicit {
+            for (k, v) in explicit.iter().copied() {
                 params.map.insert(k, Val::Text(v));
             }
         }
@@ -568,26 +646,27 @@ pub fn build_pin(r: &PinReq, warnings: &mut Vec<String>) -> Result<PinKind, Stri
             } else {
                 BTreeMap::new()
             };
-            // `model` and `load` (adc_in, ADR-008 D7) are not Phase 0
-            // parameters: refuse what bb run cannot honour.
+            // `model` and `load` (adc_in, ADR-008 D7) are honoured on the
+            // nRF52840's SAADC only: refuse what bb run cannot honour.
             for k in ["model", "load"] {
-                if from_pkg.remove(k).is_some() {
+                if !nrf && from_pkg.remove(k).is_some() {
                     return Err(format!(
-                        "{ctx}: {name}: the package's adc_in set has {k}=, which bb run does not support yet"
+                        "{ctx}: {name}: the package's adc_in set has {k}=, which bb run supports \
+                         on the nRF52840's SAADC only"
                     ));
                 }
             }
-            for (k, v) in r.explicit {
+            for (k, v) in explicit.iter().copied() {
                 let pk = spec
                     .iter()
-                    .find(|(p, ..)| p == k)
+                    .find(|(p, ..)| *p == k)
                     .map(|(_, kind, _)| *kind)
                     .ok_or_else(|| format!("{ctx}: unknown key {k:?}"))?;
-                if matches!(pk, ParamKind::Name) {
+                if matches!(pk, ParamKind::Name) && !(nrf && matches!(k, "load" | "model")) {
                     return Err(format!("{ctx}: {k}= is not supported here"));
                 }
                 let explicit = parse_param(v, pk).map_err(|e| format!("{ctx}: {k}: {e}"))?;
-                if let Some(pv) = from_pkg.get(*k) {
+                if let Some(pv) = from_pkg.get(k) {
                     if *pv != explicit {
                         warnings.push(format!(
                             "{ctx}: {name}: {k}={v} overrides {}'s value (set {})",
@@ -647,6 +726,73 @@ pub fn build_pin(r: &PinReq, warnings: &mut Vec<String>) -> Result<PinKind, Stri
             PinKind::In { net, model }
         }
         ("digital_in", None) => return Err(format!("{ctx}: digital_in needs net=")),
+        ("adc_in", Some(net)) if nrf => {
+            // Breadboard's nRF52840 SAADC (ADR-008 D7): the channel is the
+            // SAADC input (the package's `adc = { channel = "AIN<n>" }`, or
+            // VDD); `vref` is the clamp `[0, vref]` of the pushed value (the
+            // ADR's `vmax`), `bits` documents only; pushes are raw uV.
+            let channel = if vdd_sense {
+                Some(8)
+            } else {
+                match r.pkg {
+                    Some(pkg) => package_nrf_input(pkg, pin),
+                    None => nrf_adc_input(pin),
+                }
+            }
+            .ok_or_else(|| {
+                format!(
+                    "{ctx}: {name}: no SAADC input on this pin of platform=nrf52840 (AIN0-3 = \
+                     P0.02-P0.05, AIN4-7 = P0.28-P0.31, and VDD)"
+                )
+            })?;
+            let vref = params.volts("vref")?;
+            if vref <= 0.0 {
+                return Err(format!("{ctx}: vref must be > 0"));
+            }
+            let bits = if params.map.contains_key("bits") {
+                params.bits("bits")?
+            } else {
+                12
+            };
+            if let Some(m) = params.name("model")? {
+                if m != "nrf_saadc" {
+                    return Err(format!(
+                        "{ctx}: {name}: model={m}: the nRF52840's adc_in model is nrf_saadc"
+                    ));
+                }
+            }
+            let load = params.name("load")?.filter(|l| l != "none");
+            if let Some(l) = &load {
+                let Some(pkg) = r.pkg.filter(|_| !vdd_sense) else {
+                    return Err(format!(
+                        "{ctx}: {name}: load={l}: a loading adc_in needs a part given by \
+                         package= (its pin_load view) on an AIN pin; or load=none"
+                    ));
+                };
+                if !pkg
+                    .part
+                    .analog
+                    .iter()
+                    .any(|v| v.name == *l && v.kind == "pin_load")
+                {
+                    return Err(format!(
+                        "{ctx}: {name}: load={l}: {} has no pin_load view {l}",
+                        pkg.part.id
+                    ));
+                }
+            }
+            PinKind::Adc {
+                net,
+                model: AdcIn {
+                    vref,
+                    bits,
+                    key: bbcore::AdcKey::Microvolts,
+                },
+                channel,
+                load,
+                trace,
+            }
+        }
         ("adc_in", Some(net)) => {
             let platform = &part_def.platform;
             let channel = match r.pkg {
@@ -656,7 +802,8 @@ pub fn build_pin(r: &PinReq, warnings: &mut Vec<String>) -> Result<PinKind, Stri
             .ok_or_else(|| {
                 format!(
                     "{ctx}: {name}: no ADC channel on this pin of \
-                     platform={platform} (adc_in needs stm32f072: PA0-7, PB0-1, PC0-5)"
+                     platform={platform} (adc_in needs stm32f072: PA0-7, PB0-1, PC0-5, or \
+                     nrf52840)"
                 )
             })?;
             let vref = params.volts("vref")?;
@@ -672,6 +819,8 @@ pub fn build_pin(r: &PinReq, warnings: &mut Vec<String>) -> Result<PinKind, Stri
                     key: bbcore::AdcKey::Code12,
                 },
                 channel,
+                load: None,
+                trace: false,
             }
         }
         ("adc_in", None) => return Err(format!("{ctx}: adc_in needs net=")),
@@ -939,9 +1088,13 @@ mod tests {
             PinKind::Adc {
                 net: "ADC_IN".into(),
                 model: AdcIn::STM32_12BIT_3V3,
-                channel: 1
+                channel: 1,
+                load: None,
+                trace: false,
             }
         );
+        assert!(ok("*bb pin U1.PA1 net=X model=adc_in vref=3.3 bits=12 trace_samples=1").is_err());
+        assert!(ok("*bb pin U1.PA1 net=X model=adc_in vref=3.3 bits=12 load=x").is_err());
         assert!(ok("*bb pin U1.PA1 model=adc_in vref=3.3 bits=12").is_err());
         assert!(ok("*bb pin U1.PA1 net=X model=adc_in vref=0 bits=12").is_err());
         assert!(ok("*bb pin U1.PA1 net=X model=adc_in vref=3.3 bits=17").is_err());
@@ -977,10 +1130,42 @@ mod tests {
             ("U1", "P0.13")
         );
         assert_eq!(b.pins[1].kernel_net(), "U1.P0.11");
-        assert!(parse(&format!(
-            "{part}*bb pin U1.P0.02 net=X model=adc_in vref=3.6 bits=12\n"
+        // The SAADC (Phase 1 M8, ADR-008 D7): AIN inputs, VDD, raw uV pushes.
+        let b = parse(&format!(
+            "{part}*bb pin U1.P0.02 net=X model=adc_in vref=3.6 trace_samples=1\n\
+             *bb pin U1.P0.31 net=Y model=adc_in vref=3.6 bits=12 load=none\n\
+             *bb pin U1.VDD net=VDD model=adc_in vref=3.6\n"
         ))
-        .is_err());
+        .unwrap();
+        let chans: Vec<(i32, bool)> = b
+            .pins
+            .iter()
+            .map(|p| match &p.kind {
+                PinKind::Adc {
+                    channel,
+                    model,
+                    load: None,
+                    trace,
+                    ..
+                } => {
+                    assert_eq!(model.key, bbcore::AdcKey::Microvolts);
+                    (*channel, *trace)
+                }
+                k => panic!("{k:?}"),
+            })
+            .collect();
+        assert_eq!(chans, [(0, true), (7, false), (8, false)]);
+        // Not an AIN pin; a load without a package; trace on a digital pin.
+        for bad in [
+            "*bb pin U1.P0.06 net=X model=adc_in vref=3.6",
+            "*bb pin U1.P0.02 net=X model=adc_in vref=3.6 load=saadc_se",
+            "*bb pin U1.P0.13 net=X model=digital_in vih=2 vil=1 cin=0 trace_samples=1",
+        ] {
+            assert!(parse(&format!("{part}{bad}\n")).is_err(), "{bad}");
+        }
+        assert_eq!(nrf_adc_input("P0.05"), Some(3));
+        assert_eq!(nrf_adc_input("P0.28"), Some(4));
+        assert_eq!(nrf_adc_input("P0.27"), None);
     }
 
     #[test]

@@ -210,12 +210,18 @@ pub const BB_STM32_TIMER_CS: &str = include_str!("../platforms/bb_stm32_timer.cs
 /// STM32F0 ADC model and its host port (ADR-005 D1-D5).
 pub const BB_STM32F0_ADC_CS: &str = include_str!("../platforms/bb_stm32f0_adc.cs");
 
+/// Source of `Analog.BbNrf52Saadc`, `Miscellaneous.BbSaadcHostPort` and
+/// `Miscellaneous.BbUartLog`: the nRF52840 SAADC model, its host port and
+/// the UARTE tap (ADR-008 D7, D8).
+pub const BB_NRF52_SAADC_CS: &str = include_str!("../platforms/bb_nrf52_saadc.cs");
+
 /// Breadboard's STM32F072 overlay (ADR-005 D6), written next to the
 /// generated script for [`Platform::Stm32f072Bb`].
 pub const STM32F072_BB_REPL: &str = include_str!("../platforms/stm32f072-bb.repl");
 
-/// Breadboard's nRF52840, platform `nrf52840-bb@1` (ADR-008 D1): Renode's
-/// stock nRF52840 without the SVD download, at 64 MIPS. Written next to the
+/// Breadboard's nRF52840, platform `nrf52840-bb@2` (ADR-008 D1, D7, D8):
+/// Renode's stock nRF52840 without the SVD download, at 64 MIPS, with
+/// Breadboard's SAADC, its host port and the UARTE tap. Written next to the
 /// generated script for [`Platform::Nrf52840Bb`].
 pub const NRF52840_BB_REPL: &str = include_str!("../platforms/nrf52840-bb.repl");
 
@@ -246,6 +252,45 @@ pub const BB_ADC_NAME: &str = "bbAdc";
 /// (`bbAdcPort`, ADR-005 D5; next to the lookahead block).
 pub const BB_ADC_PORT_ADDRESS: u64 = 0x5FFF_0100;
 
+/// Monitor name of the SAADC on [`Platform::Nrf52840Bb`] (ADR-008 D7). Its
+/// host port (`bbSaadcPort`) is at [`BB_ADC_PORT_ADDRESS`] too, with the
+/// STM32 port's layout where they share a meaning (timed inputs, the
+/// per-input latest value, the error word).
+pub const BB_SAADC_NAME: &str = "bbSaadc";
+
+/// The SAADC's host-port inputs (ADR-008 D7): AIN0-AIN7 are 0-7, VDD is 8
+/// (`PSELP = VDD`, and the reference of `REFSEL = VDD1_4`).
+pub const SAADC_VDD_INPUT: i32 = 8;
+
+/// Bus address of `bbUartLog`, the UARTE0/1 tap on [`Platform::Nrf52840Bb`]
+/// (ADR-008 D8).
+pub const BB_UART_LOG_ADDRESS: u64 = 0x5FFF_8000;
+
+/// SAADC host-port offsets (`bb_nrf52_saadc.cs`): the status block (error
+/// word to the first refused acquisition's TACQ), the configuration, and
+/// the acquisition and sample rings.
+const SAADC_STATUS: u64 = 0x004;
+const SAADC_STATUS_WORDS: u32 = 13;
+/// The configuration words: L in ns, then the loaded and the traced input
+/// masks (0x080, 0x084, 0x088).
+const SAADC_CFG_LATTICE: u64 = 0x080;
+const SAADC_ACQ_RING: u64 = 0x2000;
+const SAADC_SAMPLE_RING: u64 = 0x3000;
+const SAADC_RING: u64 = 256;
+/// Error-word bit of a refused acquisition (TACQ < 2 L on a loaded input).
+const SAADC_ERR_TACQ: u32 = 1 << 5;
+const UART_LOG_RING: u64 = 1024;
+/// The External Control event descriptor of the UART tap's line, which
+/// toggles at every `\n` (and every 512th byte): the engine reads the tap
+/// only in an advance that has such an event.
+const UART_EVENT_DESC: i32 = 0x7FFF_0001;
+/// The event descriptor of the SAADC host port's line, which toggles at
+/// every ring entry and error: the engine polls the port only in an
+/// advance that has such an event.
+const SAADC_EVENT_DESC: i32 = 0x7FFF_0002;
+/// A UART line longer than this is logged in pieces.
+const UART_LINE_MAX: usize = 1024;
+
 /// Offset of the host port's batch window (header, then `(t_ns low, t_ns
 /// high | channel << 16, uV)` per entry).
 const PORT_BATCH: u64 = 0x1000;
@@ -258,6 +303,7 @@ pub const PLUGIN_SOURCES: &[(&str, &str)] = &[
     ("bb_lookahead.cs", BB_LOOKAHEAD_CS),
     ("bb_stm32_timer.cs", BB_STM32_TIMER_CS),
     ("bb_stm32f0_adc.cs", BB_STM32F0_ADC_CS),
+    ("bb_nrf52_saadc.cs", BB_NRF52_SAADC_CS),
 ];
 
 /// Default address of the lookahead block: unused on the STM32F103.
@@ -398,9 +444,9 @@ pub enum Platform {
     /// before the platform, whatever [`LookaheadCfg::plugin`] says.
     Stm32f072Bb,
     /// [`NRF52840_BB_REPL`]: Renode's stock nRF52840 without the SVD
-    /// download, at 64 MIPS (`nrf52840-bb@1`, ADR-008 D1). No Breadboard
-    /// peripheral (Phase 1 M2), so it needs the plugin assembly only for the
-    /// lookahead block.
+    /// download, at 64 MIPS, with Breadboard's SAADC and UARTE tap
+    /// (`nrf52840-bb@2`, ADR-008 D1, D7, D8). Loads the plugin assembly
+    /// before the platform.
     Nrf52840Bb,
     /// A path understood by Renode's `LoadPlatformDescription`, e.g. the stock
     /// `platforms/cpus/stm32f103.repl` (relative to the Renode install) or an
@@ -412,7 +458,7 @@ impl Platform {
     /// The platform names types from Breadboard's plugin assembly, which
     /// must then be loaded before `LoadPlatformDescription`.
     pub fn needs_plugins(&self) -> bool {
-        matches!(self, Platform::Stm32f072Bb)
+        matches!(self, Platform::Stm32f072Bb | Platform::Nrf52840Bb)
     }
 }
 
@@ -429,6 +475,13 @@ pub enum PinDirection {
     /// pin [`PinSpec::gpio`] names the ADC peripheral (e.g. `adc`) and
     /// [`PinSpec::index`] is the channel.
     Adc,
+    /// The `#smp` toggle of a loading `adc_in` (ADR-008 D7): an output of
+    /// the engine (not a GPIO) that changes level at every acquisition start
+    /// of SAADC input [`PinSpec::index`], read from the SAADC's acquisition
+    /// ring after each advance. [`PinSpec::gpio`] names the SAADC. Its
+    /// presence marks the input as loaded, which arms the TACQ >= 2 L
+    /// refusal.
+    AdcSample,
 }
 
 /// One MCU pin exposed to the kernel.
@@ -493,6 +546,17 @@ impl PinSpec {
             gpio: adc.to_string(),
             index: channel,
             direction: PinDirection::Adc,
+        }
+    }
+
+    /// The `#smp` toggle output of a loading `adc_in` on input `input` of the
+    /// SAADC `adc` (ADR-008 D7), e.g. `P0.02#smp`.
+    pub fn adc_sample(name: &str, adc: &str, input: i32) -> PinSpec {
+        PinSpec {
+            name: name.to_string(),
+            gpio: adc.to_string(),
+            index: input,
+            direction: PinDirection::AdcSample,
         }
     }
 }
@@ -757,6 +821,13 @@ pub struct RenodeConfig {
     /// after the last grant, so it never changes a result; its findings are
     /// available from [`RenodeEngine::pin_cnf_findings`].
     pub pin_cnf_audit: Vec<PinCnfAudit>,
+    /// `adc_in` pins (by [`PinSpec::name`]) on the nRF52840's SAADC whose
+    /// samples become `debug` log records at their sample instants
+    /// (`trace_samples`, ADR-008 D7). Empty: none.
+    pub adc_trace: Vec<String>,
+    /// Turn every line the firmware writes to UARTE0/1 into an `info` log
+    /// record (ADR-008 D8; [`Platform::Nrf52840Bb`] only).
+    pub uart_log: bool,
 }
 
 /// The default of [`RenodeConfig::ec_messages_per_connection`]: a quarter
@@ -797,10 +868,12 @@ impl RenodeConfig {
             pool: pool::from_env(),
             ec_messages_per_connection: ec_messages_from_env(),
             pin_cnf_audit: Vec::new(),
+            adc_trace: Vec::new(),
+            uart_log: false,
         }
     }
 
-    /// Breadboard's nRF52840 (`nrf52840-bb@1`, ADR-008 D1) with P0.13 as an
+    /// Breadboard's nRF52840 (`nrf52840-bb@2`, ADR-008 D1) with P0.13 as an
     /// output and a 10 us quantum.
     pub fn nrf52840(renode: PathBuf, firmware: PathBuf) -> RenodeConfig {
         RenodeConfig {
@@ -1239,6 +1312,48 @@ struct PendingInput {
     value: InputValue,
 }
 
+/// The SAADC host-port masks of a configuration (ADR-008 D7): `(loaded,
+/// traced)` input bits, or `None` when it has neither (nothing to poll).
+fn saadc_masks(cfg: &RenodeConfig) -> Option<(u32, u32)> {
+    let bit = |i: i32| {
+        u32::try_from(i)
+            .ok()
+            .filter(|i| *i < 32)
+            .map_or(0, |i| 1u32 << i)
+    };
+    let loaded = cfg
+        .pins
+        .iter()
+        .filter(|p| p.direction == PinDirection::AdcSample)
+        .fold(0, |m, p| m | bit(p.index));
+    let trace = cfg
+        .pins
+        .iter()
+        .filter(|p| p.direction == PinDirection::Adc && cfg.adc_trace.contains(&p.name))
+        .fold(0, |m, p| m | bit(p.index));
+    (loaded | trace != 0).then_some((loaded, trace))
+}
+
+/// What the engine reads from the SAADC's host port after each advance
+/// (ADR-008 D7).
+struct SaadcPoll {
+    loaded: u32,
+    trace: u32,
+    /// Ring entries consumed so far (acquisitions, samples).
+    acq_seen: u32,
+    smp_seen: u32,
+    /// `#smp` toggles stamped after the last grant end (at a lattice point
+    /// that ends a grant: lattice rule 3), `(t, pin)`.
+    carried: Vec<(Time, usize)>,
+}
+
+/// The UARTE tap's reader (ADR-008 D8): bytes consumed and the open line
+/// of each UART.
+struct UartPoll {
+    seen: u32,
+    lines: [Vec<u8>; 2],
+}
+
 /// A [`bbcore::Engine`] backed by one headless Renode process.
 pub struct RenodeEngine {
     name: String,
@@ -1297,6 +1412,11 @@ pub struct RenodeEngine {
     /// The findings of the last end-of-run `PIN_CNF` audit (ADR-008 D4),
     /// shared with whoever holds [`RenodeEngine::pin_cnf_findings`].
     pin_cnf_findings: std::sync::Arc<Mutex<Option<Vec<PinCnfFinding>>>>,
+    /// ADR-008 D7: the SAADC's loaded and traced inputs, polled after each
+    /// advance.
+    saadc: Option<SaadcPoll>,
+    /// ADR-008 D8: the UARTE tap.
+    uart: Option<UartPoll>,
 }
 
 /// The External Control connection's parameters, for reconnecting.
@@ -1445,6 +1565,33 @@ impl RenodeEngine {
                 a.pin
             )));
         }
+        // ADR-008 D7/D8: the SAADC's loading toggles, sample records and the
+        // UART lines exist on Breadboard's nRF52840 only.
+        let nrf_only = cfg.uart_log
+            || !cfg.adc_trace.is_empty()
+            || cfg
+                .pins
+                .iter()
+                .any(|p| p.direction == PinDirection::AdcSample);
+        if nrf_only && cfg.platform != Platform::Nrf52840Bb {
+            return Err(EngineError::Other(
+                "a loading adc_in (#smp), trace_samples and UART log lines are for the nRF52840 \
+                 platform only"
+                    .into(),
+            ));
+        }
+        for name in &cfg.adc_trace {
+            if !cfg
+                .pins
+                .iter()
+                .any(|p| &p.name == name && p.direction == PinDirection::Adc)
+            {
+                return Err(EngineError::Other(format!(
+                    "trace_samples: {name:?} is not an adc_in pin of this engine"
+                )));
+            }
+        }
+        let saadc_cfg = saadc_masks(cfg);
         let plugin_err = workdir.join(PLUGIN_ERR);
         // The plugin assembly holds the lookahead block and the platform's
         // Breadboard peripherals (ADR-005 D6): loaded for either.
@@ -1632,6 +1779,21 @@ impl RenodeEngine {
             let md = client.get_machine(&cfg.machine)?;
             let mut pins = Vec::new();
             for (i, spec) in cfg.pins.iter().enumerate() {
+                if spec.direction == PinDirection::AdcSample {
+                    // Not a GPIO: its edges come from the SAADC's
+                    // acquisition ring (ADR-008 D7).
+                    pins.push(PinState {
+                        spec: spec.clone(),
+                        gpio: -1,
+                        level: Level::Low,
+                        edge_time: Time::ZERO,
+                        scheduled: None,
+                        scheduled_uv: None,
+                        applied_uv: None,
+                        timed: false,
+                    });
+                    continue;
+                }
                 if spec.direction == PinDirection::Adc {
                     let adc = client.get_adc(md, &spec.gpio)?;
                     let n = client.adc_channel_count(adc)?;
@@ -1649,7 +1811,7 @@ impl RenodeEngine {
                         scheduled: None,
                         scheduled_uv: None,
                         applied_uv: None,
-                        timed: cfg.platform == Platform::Stm32f072Bb,
+                        timed: matches!(cfg.platform, Platform::Stm32f072Bb | Platform::Nrf52840Bb),
                     });
                     continue;
                 }
@@ -1669,7 +1831,28 @@ impl RenodeEngine {
                     timed: false,
                 });
             }
+            if cfg.uart_log {
+                let tap = client.get_gpio(md, "bbUartLog")?;
+                client.gpio_register_event(tap, 0, UART_EVENT_DESC)?;
+            }
             let t0 = client.get_time()?;
+            // ADR-008 D7: tell the SAADC the lattice (for the TACQ >= 2 L
+            // refusal), its loaded inputs (the #smp toggles) and its traced
+            // inputs. Host-port configuration only: no emulation state.
+            if let Some((loaded, trace)) = saadc_cfg {
+                let port = client.get_gpio(md, "bbSaadcPort")?;
+                client.gpio_register_event(port, 0, SAADC_EVENT_DESC)?;
+                let sb = client.get_sysbus(md, "sysbus")?;
+                let words = [quantum_ns as u32, loaded, trace];
+                client.sysbus_write_u32s(sb, BB_ADC_PORT_ADDRESS + SAADC_CFG_LATTICE, &words)?;
+                let back =
+                    client.sysbus_read_u32s(sb, BB_ADC_PORT_ADDRESS + SAADC_CFG_LATTICE, 3)?;
+                if back != words {
+                    return Err(ProtocolError::Server(format!(
+                        "SAADC host port: configuration {words:?} reads back {back:?}"
+                    )));
+                }
+            }
             // The startup snapshot of the lookahead block: armed, self-test.
             let la = if cfg.lookahead.plugin {
                 let sb = client.get_sysbus(md, "sysbus")?;
@@ -1769,7 +1952,203 @@ impl RenodeEngine {
             pin_cnf_state: vec![(NRF_PIN_CNF_RESET, None); cfg.pin_cnf_audit.len()],
             logs: Vec::new(),
             pin_cnf_findings: Default::default(),
+            saadc: saadc_cfg.map(|(loaded, trace)| SaadcPoll {
+                loaded,
+                trace,
+                acq_seen: 0,
+                smp_seen: 0,
+                carried: Vec::new(),
+            }),
+            uart: cfg.uart_log.then(|| UartPoll {
+                seen: 0,
+                lines: [Vec::new(), Vec::new()],
+            }),
         })
+    }
+
+    /// ADR-008 D7, after an advance to `target_ns`: fail on the host port's
+    /// error word (a refused acquisition, a late push), turn the new
+    /// acquisition starts of loaded inputs into `#smp` toggles (returned as
+    /// `(t, pin)`, the lattice +1 fs rule of GPIO stamps) and the new samples
+    /// of traced inputs into `debug` log records at their sample instants.
+    fn poll_saadc(&mut self) -> Result<Vec<(Time, usize)>, EngineError> {
+        let Some(mut sp) = self.saadc.take() else {
+            return Ok(Vec::new());
+        };
+        let r = self.poll_saadc_inner(&mut sp);
+        self.saadc = Some(sp);
+        r
+    }
+
+    fn poll_saadc_inner(&mut self, sp: &mut SaadcPoll) -> Result<Vec<(Time, usize)>, EngineError> {
+        let st = self.sysbus_read_u32s(BB_ADC_PORT_ADDRESS + SAADC_STATUS, SAADC_STATUS_WORDS)?;
+        // st[k] is the word at 0x004 + 4k.
+        let (err, first_ns, input, acq_n, smp_n, tacq) = (
+            st[0],
+            u64::from(st[1]) | (u64::from(st[2]) << 32),
+            st[3],
+            st[10],
+            st[11],
+            st[12],
+        );
+        if err & SAADC_ERR_TACQ != 0 {
+            let l = self.quantum_ns;
+            return Err(EngineError::Other(format!(
+                "{}: the SAADC acquired the loaded input {} (AIN{input}) at {first_ns} ns with \
+                 TACQ {} us < 2 L = {} us (ADR-008 D7: the sample cap cannot be read settled). \
+                 Remedies: --renode-quantum {} (L <= TACQ / 2), or load = \"none\" on the binding \
+                 (an unloaded, ideal input; run.json records it)",
+                self.name,
+                self.saadc_pin_name(input).unwrap_or("?"),
+                tacq / 1000,
+                2 * l / 1000,
+                if tacq >= 2000 {
+                    format!("{}us", tacq / 2000)
+                } else {
+                    format!("{}ns", tacq / 2)
+                }
+            )));
+        }
+        if err != 0 {
+            return Err(EngineError::Protocol(format!(
+                "{}: the SAADC host port reports error {err:#x} (first at {first_ns} ns, input \
+                 {input})",
+                self.name
+            )));
+        }
+        let mut toggles = Vec::new();
+        if sp.loaded != 0 {
+            let new = acq_n.wrapping_sub(sp.acq_seen);
+            if u64::from(new) > SAADC_RING {
+                return Err(EngineError::Protocol(format!(
+                    "{}: {new} SAADC acquisitions in one advance overflow the host port's ring \
+                     of {SAADC_RING} (lower --max-quantum)",
+                    self.name
+                )));
+            }
+            for k in 0..new {
+                let j = u64::from(sp.acq_seen.wrapping_add(k)) % SAADC_RING;
+                let w = self.sysbus_read_u32s(BB_ADC_PORT_ADDRESS + SAADC_ACQ_RING + 16 * j, 3)?;
+                let a_ns = u64::from(w[0]) | (u64::from(w[1]) << 32);
+                let inp = i32::try_from(w[2] & 0xFF).unwrap_or(-1);
+                let pin = self
+                    .pins
+                    .iter()
+                    .position(|p| {
+                        p.spec.direction == PinDirection::AdcSample && p.spec.index == inp
+                    })
+                    .ok_or_else(|| {
+                        EngineError::Protocol(format!(
+                            "SAADC acquisition on input {inp}, which has no #smp pin"
+                        ))
+                    })?;
+                toggles.push((lattice_edge_time(a_ns, self.quantum_ns), pin));
+            }
+            sp.acq_seen = acq_n;
+        }
+        if sp.trace != 0 {
+            let new = smp_n.wrapping_sub(sp.smp_seen);
+            if u64::from(new) > SAADC_RING {
+                return Err(EngineError::Protocol(format!(
+                    "{}: {new} SAADC samples in one advance overflow the host port's ring of \
+                     {SAADC_RING} (lower --max-quantum)",
+                    self.name
+                )));
+            }
+            for k in 0..new {
+                let j = u64::from(sp.smp_seen.wrapping_add(k)) % SAADC_RING;
+                let w =
+                    self.sysbus_read_u32s(BB_ADC_PORT_ADDRESS + SAADC_SAMPLE_RING + 16 * j, 4)?;
+                let s_ns = u64::from(w[0]) | (u64::from(w[1]) << 32);
+                let uv = w[2];
+                let code = i32::from((w[3] & 0xFFFF) as u16 as i16);
+                let inp = (w[3] >> 16) & 0xFF;
+                let chn = w[3] >> 24;
+                let pin = self.saadc_pin_name(inp).unwrap_or("?").to_string();
+                self.logs.push(bbcore::LogRecord {
+                    t: Time::from_ns(s_ns),
+                    level: bbcore::LogLevel::Debug,
+                    msg: format!("saadc sample: {pin} (AIN{inp}, CH{chn}) {uv} uV, code {code}"),
+                });
+            }
+            sp.smp_seen = smp_n;
+        }
+        Ok(toggles)
+    }
+
+    /// The `adc_in` pin bound to SAADC input `input`.
+    fn saadc_pin_name(&self, input: u32) -> Option<&str> {
+        self.pins
+            .iter()
+            .find(|p| {
+                p.spec.direction == PinDirection::Adc
+                    && u32::try_from(p.spec.index).ok() == Some(input)
+            })
+            .map(|p| p.spec.name.as_str())
+    }
+
+    /// ADR-008 D8: read the UARTE tap's new bytes and turn every complete
+    /// line into an `info` log record at the virtual time of its `\n` (the
+    /// instruction-accurate time of the write that sent it). `\r` is
+    /// dropped; bytes outside printable ASCII are written `\xNN`.
+    fn poll_uart(&mut self) -> Result<(), EngineError> {
+        let Some(mut up) = self.uart.take() else {
+            return Ok(());
+        };
+        let r = self.poll_uart_inner(&mut up);
+        self.uart = Some(up);
+        r
+    }
+
+    fn poll_uart_inner(&mut self, up: &mut UartPoll) -> Result<(), EngineError> {
+        let n = self.sysbus_read_u32s(BB_UART_LOG_ADDRESS + 4, 1)?[0];
+        let new = n.wrapping_sub(up.seen);
+        if new == 0 {
+            return Ok(());
+        }
+        if u64::from(new) > UART_LOG_RING {
+            return Err(EngineError::Protocol(format!(
+                "{}: {new} UART bytes in one advance overflow the tap's ring of {UART_LOG_RING} \
+                 (lower --max-quantum)",
+                self.name
+            )));
+        }
+        // One read of the ring part that holds the new bytes (in two when
+        // it wraps).
+        let first = u64::from(up.seen) % UART_LOG_RING;
+        let mut words = Vec::with_capacity(2 * new as usize);
+        let head = (UART_LOG_RING - first).min(u64::from(new));
+        words.extend(
+            self.sysbus_read_u32s(BB_UART_LOG_ADDRESS + 0x100 + 8 * first, 2 * head as u32)?,
+        );
+        if u64::from(new) > head {
+            let rest = u64::from(new) - head;
+            words.extend(self.sysbus_read_u32s(BB_UART_LOG_ADDRESS + 0x100, 2 * rest as u32)?);
+        }
+        for e in words.chunks(2) {
+            let t_ns = u64::from(e[0]) | (u64::from(e[1] & 0xFFFF) << 32);
+            let uart = ((e[1] >> 16) & 0xFF) as usize;
+            let b = (e[1] >> 24) as u8;
+            let Some(line) = up.lines.get_mut(uart) else {
+                continue;
+            };
+            match b {
+                b'\r' => {}
+                b'\n' => {
+                    let text = std::mem::take(line);
+                    self.logs.push(uart_record(uart, &text, t_ns));
+                }
+                _ => {
+                    line.push(b);
+                    if line.len() >= UART_LINE_MAX {
+                        let text = std::mem::take(line);
+                        self.logs.push(uart_record(uart, &text, t_ns));
+                    }
+                }
+            }
+        }
+        up.seen = n;
+        Ok(())
     }
 
     /// Read the `PIN_CNF` write hooks' new lines (ADR-008 D4) and turn each
@@ -1897,7 +2276,7 @@ impl RenodeEngine {
     fn quiet_inner(&mut self, now: Time) -> Result<Time, EngineError> {
         // Outputs change right after `now`: an event stamped at the last
         // grant end is reported at `now + 1 fs` (lattice rule 3).
-        if !self.carried.is_empty() {
+        if !self.carried.is_empty() || self.saadc.as_ref().is_some_and(|s| !s.carried.is_empty()) {
             return Ok(now);
         }
         let st = match self.la.cached {
@@ -2189,7 +2568,12 @@ impl Engine for RenodeEngine {
         Ok(self
             .pins
             .iter()
-            .filter(|p| p.spec.direction == PinDirection::Output)
+            .filter(|p| {
+                matches!(
+                    p.spec.direction,
+                    PinDirection::Output | PinDirection::AdcSample
+                )
+            })
             .map(|p| {
                 (
                     p.spec.name.clone(),
@@ -2422,10 +2806,10 @@ impl RenodeEngine {
         let mut client = Client::handshake(stream, self.ec.io_timeout).map_err(proto)?;
         let md = client.get_machine(&self.ec.machine).map_err(proto)?;
         for p in &mut self.pins {
-            p.gpio = if p.spec.direction == PinDirection::Adc {
-                client.get_adc(md, &p.spec.gpio).map_err(proto)?
-            } else {
-                client.get_gpio(md, &p.spec.gpio).map_err(proto)?
+            p.gpio = match p.spec.direction {
+                PinDirection::Adc => client.get_adc(md, &p.spec.gpio).map_err(proto)?,
+                PinDirection::AdcSample => -1,
+                _ => client.get_gpio(md, &p.spec.gpio).map_err(proto)?,
             };
         }
         if self.sysbus.is_some() {
@@ -2481,6 +2865,12 @@ impl RenodeEngine {
             }
         }
         self.run_to(target_ns, &mut events)?;
+        // ADR-008 D8: the UART tap's line toggled (a line ended).
+        let uart_due = events.iter().any(|e| e.descriptor == UART_EVENT_DESC);
+        // ADR-008 D7: the SAADC recorded an acquisition or a sample, or
+        // set an error bit.
+        let saadc_due = events.iter().any(|e| e.descriptor == SAADC_EVENT_DESC);
+        events.retain(|e| e.descriptor != UART_EVENT_DESC && e.descriptor != SAADC_EVENT_DESC);
         if let Some(Fault::DropGpioEvent { at_ns }) = self.fault {
             if let Some(k) = events.iter().position(|e| e.time_ns >= at_ns) {
                 events.remove(k);
@@ -2551,6 +2941,50 @@ impl RenodeEngine {
                 signal: PinSignal::digital(level, edge_time),
             });
         }
+        // ADR-008 D7: the `#smp` toggles of the acquisitions this advance
+        // started (and those carried from the last grant end), one edge per
+        // acquisition. A start stamped at the grant end itself is reported
+        // 1 fs after it, in the next grant (lattice rules 1 and 3).
+        if self.saadc.is_some() {
+            let mut toggles = std::mem::take(&mut self.saadc.as_mut().expect("some").carried);
+            if saadc_due {
+                toggles.extend(self.poll_saadc()?);
+            }
+            let mut carried = Vec::new();
+            for (edge_time, i) in toggles {
+                if edge_time > t {
+                    carried.push((edge_time, i));
+                    continue;
+                }
+                if last_change[i].is_some_and(|x| edge_time <= x) {
+                    return Err(EngineError::Protocol(format!(
+                        "{}: two acquisitions start at {edge_time} or out of order",
+                        self.pins[i].spec.name
+                    )));
+                }
+                last_change[i] = Some(edge_time);
+                let pin = &mut self.pins[i];
+                let level = if pin.level == Level::High {
+                    Level::Low
+                } else {
+                    Level::High
+                };
+                pin.level = level;
+                pin.edge_time = edge_time;
+                self.trace.push(Transition {
+                    t: edge_time,
+                    pin: pin.spec.name.clone(),
+                    signal: PinSignal::digital(level, edge_time),
+                });
+            }
+            self.saadc.as_mut().expect("some").carried = carried;
+            // Emulation order is time order; GPIO edges and toggles merge.
+            self.trace.sort_by_key(|tr| tr.t);
+        }
+        if uart_due {
+            self.poll_uart()?;
+        }
+        self.logs.sort_by_key(|r| r.t);
         self.now = t;
         if check {
             self.verify_pins()?;
@@ -2715,6 +3149,24 @@ fn lattice_edge_time(stamp_ns: u64, quantum_ns: u64) -> Time {
         t + Time::from_fs(1)
     } else {
         t
+    }
+}
+
+/// One UART line as an `info` log record (ADR-008 D8) at `t_ns`, the
+/// virtual time of the byte that ended it.
+fn uart_record(uart: usize, line: &[u8], t_ns: u64) -> bbcore::LogRecord {
+    let mut text = String::with_capacity(line.len());
+    for &b in line {
+        if (0x20..0x7F).contains(&b) {
+            text.push(char::from(b));
+        } else {
+            text.push_str(&format!("\\x{b:02x}"));
+        }
+    }
+    bbcore::LogRecord {
+        t: Time::from_ns(t_ns),
+        level: bbcore::LogLevel::Info,
+        msg: format!("uart{uart}: {text}"),
     }
 }
 

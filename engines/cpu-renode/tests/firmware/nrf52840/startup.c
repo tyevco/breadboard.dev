@@ -23,6 +23,7 @@ WEAK(PendSV_Handler);
 WEAK(SysTick_Handler);
 WEAK(POWER_CLOCK_IRQHandler);
 WEAK(GPIOTE_IRQHandler);
+WEAK(SAADC_IRQHandler);
 WEAK(TIMER0_IRQHandler);
 WEAK(TIMER1_IRQHandler);
 WEAK(TIMER2_IRQHandler);
@@ -45,6 +46,7 @@ __attribute__((section(".isr_vector"), used)) void (*const vector_table[16 + 48]
     [15] = SysTick_Handler,
     [IRQ(0)] = POWER_CLOCK_IRQHandler,
     [IRQ(6)] = GPIOTE_IRQHandler,
+    [IRQ(7)] = SAADC_IRQHandler,
     [IRQ(8)] = TIMER0_IRQHandler,
     [IRQ(9)] = TIMER1_IRQHandler,
     [IRQ(10)] = TIMER2_IRQHandler,

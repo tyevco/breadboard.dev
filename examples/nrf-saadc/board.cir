@@ -1,0 +1,40 @@
+* Breadboard nRF52840 SAADC board (Phase 1 M8, ADR-008 D7/D8; make nrf-saadc-model):
+* the loading adc_in, counted.
+*
+*   SRC 1.2 V -> RLEAK 1 TOhm -> AIN; C1 100 pF AIN -> GND   (a pad that keeps its charge)
+*   AIN -> U1.P0.02 (AIN0), adc_in with the package's pin_load view saadc_se (the default
+*          load): CPAD 3 pF on the pad, CS 2.5 pF pre-charged to VPRE = V(VDD) at every
+*          acquisition, then shared with the pad through RSW 5 kOhm
+*   VDD 3.0 V -> U1.VDD, the SAADC's VDD input (PSELP = VDD), and the view's VPRE
+*   U1.P0.13 -> 1 kOhm -> GND (a burst marker)
+*
+* Firmware (engines/cpu-renode/tests/firmware/nrf52840/nrf_saadc_burst.c): every 164 LFCLK
+* ticks (5.005 ms) one SAMPLE task runs an 8x BURST on AIN0 (TACQ 40 us, gain 1/6, 0.6 V
+* reference, 12 bits), then one VDD sample, and prints "b=<k> ain0=<code> vdd=<code>" on
+* UARTE0 (a log record, D8).
+*
+* Each acquisition moves the pad charge-shared with CS towards VPRE:
+*   V_n = VPRE - (VPRE - V_0) * (1 - a)^n,  a = CS / (CS + C1 + CPAD) = 2.5 / 105.5,
+* so the n-th sample (trace_samples: V(hold) at s_n, settled through RSW) counts the charge
+* transfers exactly (scripts/check_nrf_saadc.py): one more or one fewer moves it by about
+* a * (VPRE - V) = 20-40 mV.
+*
+* The binding graph is U1 -> ngspice (P0.13, and P0.02's #smp toggle) and ngspice -> U1
+* (P0.02, VDD): a feedback loop, so lookahead is on by default; --lookahead off is the
+* one-cell reference (tests/golden/nrf-saadc/outputs.sha256).
+*
+*bb part U1 package=nordic/nrf52840-qiaa
+*bb pin U1.P0.02 net=AIN model=adc_in vref=3.6 trace_samples=true
+*bb pin U1.VDD net=VDD model=adc_in vref=3.6
+*bb pin U1.P0.13 net=MARK model=digital_out voh=3.0
+
+* Circuit body. Node 0 is GND.
+VSRC SRC 0 1.2
+RLEAK SRC AIN 1e12
+C1 AIN 0 100p
+VVDD VDD 0 3.0
+RMARK MARK 0 1k
+
+* Solver tolerances, as in the spike.
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

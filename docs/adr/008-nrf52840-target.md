@@ -7,7 +7,8 @@
   lookahead bug in the Renode engine. D6 implemented (M1, 2026-11-09,
   Amendment 1). D1-D4 implemented (M2, 2026-11-09, Amendment 2). D5's
   example firmware, the image hash and D4 for projects implemented (M6,
-  2026-11-09, Amendment 3).
+  2026-11-09, Amendment 3). D7 and D8 implemented, M8's first half (the
+  model, the loading `adc_in`, the UART lines; 2026-11-10, Amendment 4).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -1062,3 +1063,201 @@ identity. Not adopted as proposed:
   repeats its cycle, so a 120 ms run holds one complete off sequence, and
   LSW-2 is evaluated on that one. (4) `fw-rebuild` is a make target and a
   CI job; it ran here, but CI is not run (the repository has no remote).
+
+### Amendment 4: D7 and D8 as implemented, M8's first half (2026-11-10)
+
+M8 is split in two. This half is the model and the pin model: the SAADC,
+its host port, the loading `adc_in`, the per-sample records, the UART lines
+and the VDD input, wired into `nrf52840-bb@2` and the Renode engine, with
+the gate `make nrf-saadc-model`. The second half is E2 itself (`vsense.elf`,
+the dial-me-spinner project's `[[bind]]` of `VSYS_SENSE` and VDD, the
+benches, `make dms-vsense` and its cost-table row).
+
+- **The model** (`engines/cpu-renode/platforms/bb_nrf52_saadc.cs`,
+  `Analog.BbNrf52Saadc` at `0x40007000`, `-> nvic@7`; in `PLUGIN_SOURCES`,
+  so every Renode platform's content hash and the plugin cache key change).
+  As D7, with these implementation choices:
+  - One one-shot 1 GHz `LimitTimer` for every pending event (sample, DONE,
+    the internal timer's tick, CALIBRATEDONE), armed for the earliest of a
+    time-ordered list, as `BbStm32F0Adc`. The next acquisition of a burst
+    or scan is started in the DONE handler, so a limit is always armed at
+    or before the next sample instant (D7's sampled-input argument).
+  - Scan mode: one SAMPLE converts every channel with `PSELP != NC`, in
+    channel order, back to back (`a` of the next channel = DONE of the
+    previous). A SAMPLE while a scan runs (`STATUS` busy) is ignored and
+    counted. Oversampling without BURST takes one acquisition per SAMPLE
+    and the result follows the `2^OVERSAMPLE`-th (nrfx's
+    `oversampling_without_burst`). `SAMPLERATE.MODE = Timers`: after
+    SAMPLE a scan starts at `a_0 + ceil(k * CC * 62.5 ns)`, never
+    accumulated, until STOP.
+  - **Rounding** (approver decision A5 fixes it per sample): each sample's
+    code is `round_half_up` at the configured resolution, saturated
+    (single-ended `[0, 2^RES - 1]`, differential `[-2^(RES-1),
+    2^(RES-1) - 1]`, sign-extended to 16 bits); the oversampled result is
+    the mean of the codes, **also rounded half up** (the PS gives no rule
+    for either; recorded here as the model's choice).
+  - **EasyDMA:** `RESULT.PTR` and `MAXCNT` are latched at START (STARTED at
+    once); each result is a 16-bit system-bus write at `PTR + 2 * AMOUNT`;
+    END when `AMOUNT` reaches `MAXCNT`, after which results are dropped
+    (counted, a warning) until the next START. STOP cancels every pending
+    acquisition, ends a started buffer (END, as nrfx_saadc.c says: "the
+    STOP task also triggers the END event") and sets STOPPED.
+  - LIMITH/LIMITL are set at the DONE that completes a result, for
+    `result >= HIGH` and `result <= LOW`.
+  - **Inputs** of the host port: 0-7 are AIN0-7, 8 is VDD (`PSELP = VDD`,
+    and the reference of `REFSEL = VDD1_4`, read at the sample instant like
+    any input), 9 is VDDH (`PSELP = VDDHDIV5` converts VDDH/5, rounded half
+    up). Without a timed input an input reads its constructor default (AIN
+    0 V, VDD and VDDH 3.3 V) or its `IADC` channel source.
+  - CALIBRATEOFFSET sets CALIBRATEDONE after `calibrationNs` (2 us, an
+    assumption: the PS gives no figure) and changes no result.
+  - Not modelled (a warning once each): offset and gain errors, the
+    RESP/RESN ladders, PPI event outputs (a PPI-triggered SAMPLE needs the
+    Breadboard PPI of D3 first), oversampling over several channels (each
+    channel averages its own samples; the PS calls it undefined).
+- **The host port** (`Miscellaneous.BbSaadcHostPort` at `0x5FFF0100`, ID
+  `BBSP`): ADR-005's layout where the meaning is shared (the batch window
+  at `0x1000`, the per-input latest value at `0x100 + 4i`, the error word
+  and the first error at `0x004-0x010`), so the engine's timed-input
+  batches and its `Verify` cross-check are unchanged. New: error bit 5 (a
+  refused acquisition, with its TACQ at `0x034`); the configuration words
+  `0x080` (L in ns), `0x084` (loaded inputs), `0x088` (traced inputs),
+  which the engine writes once at startup; an acquisition ring of the
+  loaded inputs (`0x2000`, 256 entries) and a sample ring of the traced
+  inputs (`0x3000`, 256 entries: `s`, input, channel, uV, code). Its
+  GPIO output 0 toggles at every ring entry and error bit; the engine
+  registers an External Control GPIO event on it and reads the port only
+  in an advance that had such an event, so a board pays no per-grant read
+  for the SAADC. **Deviation from D7's text:** L reaches the model through the host port,
+  not as a constructor parameter, so the overlay (and the platform
+  identity) does not depend on `--renode-quantum`.
+- **The loading `adc_in`, as D7 specifies,** with two refinements:
+  - The `#smp` toggle is **not a GPIO**: after each advance the engine reads
+    the acquisition ring and reports each start `a_k` as a toggle of the
+    output `<pin>#smp` (`PinDirection::AdcSample`), stamped with the lattice
+    rule of GPIO edges (exact; 1 fs after a lattice point; a start at the
+    grant end carried into the next grant). A GPIO line set from the
+    model's timer callback would carry the time source's slice-start stamp
+    instead of `a_k`. The toggles merge with the GPIO edges in time order;
+    the lookahead audit sees them as output changes.
+  - The view (`packages/nordic/nrf52840-qiaa/analog/saadc_se.lib`,
+    `pin_load`, ports pad / ctrl `smp` / observe `hold` / pin `VDD`):
+    the edge detector `d = |V(smp) - V(smp delayed by tpre)|` opens the
+    sample switch while `d > 0.3` (about 24 ns) and pre-charges CS to
+    `VPRE = vpre_vdd * V(VDD)` through 100 Ohm while `d > 0.5` (about
+    14 ns), so the pad never sees VPRE through the switch. A first version
+    with one window for both drew 0.37 pC more per acquisition (3.5 mV on
+    the test pad) through the half-open switch at the window's edges; the
+    nested windows give the analytic charge sharing to 1 uV. Every element
+    is a B conductance (no branch-current unknown, AGENTS.md).
+  - Glue (`spec/pin-model.md` rule 9; rule 8 was taken by ADR-007): the
+    view's instance `X_bbload_<part>_<pin>`, the toggle's rule-1 source
+    `V_bb_<part>_<pin>_smp` (0 V / 1 V, 1 ns edges, no `zout`) on
+    `__smp_<part>_<pin>`, the hold node `__hold_<part>_<pin>`, which the
+    analog engine pushes, and the VDD port on the net of the VDD binding.
+  - **The VDD binding:** an `adc_in` on the package's supply pin `VDD`
+    (role `power_in`, no pin model in `pins.toml`) is the SAADC's VDD input
+    with the binding's own parameters; `spec/package.md` section 4 states
+    this one exception to the role rule, as D7 describes it.
+  - **Parameters:** `vref` is the clamp of the pushed value (D7's `vmax`;
+    the key name is kept so the package schema needs no change), `bits`
+    documents only, `model = "nrf_saadc"`, `load = "<pin_load view>"` or
+    `"none"`. The push key is raw uV (`AdcKey::Microvolts`). The
+    `nordic/nrf52840-qiaa` package gives the eight AIN pins `adc_in` with
+    `adc = { channel = "AIN<n>" }` and a default set `vref = "VDD"`,
+    `bits = "12"`, `model = "nrf_saadc"`, `load = "saadc_se"`.
+  - `trace_samples = true` is a binding option of the board-file grammar:
+    each sample becomes a `debug` log record (`saadc sample: <pin>
+    (AIN<n>, CH<m>) <uV> uV, code <c>`) at `s_k`.
+  - **The refusal** (approver decision A4): the engine fails the run on
+    error bit 5 with "the SAADC acquired the loaded input <pin> (AIN<n>) at
+    <t> ns with TACQ <x> us < 2 L = <y> us ... Remedies: --renode-quantum
+    <TACQ/2>, or load = "none" on the binding". There is no fallback.
+- **D8, the UART lines.** `Miscellaneous.BbUartLog` (`0x5FFF8000`, in the
+  overlay) subscribes to `CharReceived` of `uart0` and `uart1` and records
+  each byte with the instruction-accurate time of the register write that
+  sent it (`cpu.SyncTime()`, as the ADC models do), in a 1 024-entry ring,
+  and toggles its GPIO output 0 at every `\n` and every 512th byte. After
+  an advance with such a toggle (an External Control GPIO event) the
+  engine reads the new bytes and turns each line
+  (ended by `\n`; `\r` dropped; other non-printable bytes `\xNN`; split at
+  1 024 bytes) into an `info` log record `uart<n>: <text>` at the time of
+  its `\n`. `bb run --uart-log on|off` (default on, nRF52840 only). Cost:
+  none measurable without UART output (`examples/nrf-feedback
+  --lookahead off`, 50 000 grants, three interleaved pairs at load 2.8-9:
+  15.01 s on against 14.89 s off, medians, outputs byte-identical). A
+  first version read the tap (and the SAADC port) after every advance;
+  the GPIO events replaced that before any gate result recorded here. A
+  ring overflow in one advance (more than 1 024 bytes, or 256 acquisitions
+  or samples) fails the run with a message to lower `--max-quantum`;
+  nothing is dropped silently.
+- **Platform identity:** `nrf52840-bb@2` (`cli/src/platforms.rs`); the
+  overlay names Breadboard types, so `Platform::needs_plugins()` is true
+  for it and the plugin assembly loads before it on every nRF52840 run.
+  `make locks`: every `bb.lock` (the plugin sources are in every
+  platform's hash), `examples/adc/kicad/board.bbm` (the platform content)
+  and `examples/dial-me-spinner/board.bbm` (the platform id and content,
+  and the module package's tree) changed; no other field.
+- **Not done in this half, and why.** The project path (`bb.toml`
+  `[[bind]]` with `load`, `trace_samples` and the VDD input) has no example
+  yet: the board-file path is the one gated here, and the project path
+  goes through the same `run()` glue but is exercised first by E2.
+  `saadc_se` has no test vectors, so it is not lattice-qualified
+  (`bb pkg lint` warns); `bb pkg test` has no `pin_load` harness yet. The
+  board gate's analytic charge-sharing check is its qualification here;
+  E2's project run must qualify it (or pass `--allow-unqualified`)
+  before `make dms-vsense`. The `la_saadc` gate of the Gates table is
+  covered by `bb_saadc_test.py firmware` (WFI exits unchanged across a
+  push batch) and by the board gate's lookahead runs (no broken promise
+  with pushes inside promised windows, a burst included), not as a
+  separate `lookahead.rs` test. M8's measurement against the suite's
+  356/761 uV and its tolerance belong to `make dms-vsense`.
+- **Gate `make nrf-saadc-model`** (in `make test`, about 25 s):
+  - `examples/nrf-saadc/bb_saadc_test.py registers` (`nrf_saadc_idle.elf`,
+    the host drives the SAADC; run twice, transcripts byte-identical):
+    reset values; ENABLE gating; **144/144** TACQ x RESOLUTION x
+    {OVERSAMPLE 1, 2, 8} x BURST cases give `a_k`, `s_k = a_k + TACQ`,
+    `a_(k+1) = s_k + 2 us` (BURST) and END exactly at `s_last + 2 us`
+    (not 1 ns earlier); the 8x BURST: one SAMPLE, 8 acquisitions 42 us
+    apart, codes 1138 1138 1139 1139 1140 1140 1141 1141, result 1140
+    (the mean 1139.5 rounded half up); 8 gains x {0.6 V, VDD/4} x 6
+    inputs, differential sign extension, PSELP = VDD and VDDHDIV5; a push
+    at lattice `T` is not seen at `s = T`, is at `T + 1 ns`; LIMITH/LIMITL
+    at DONE and not 1 ns before; EasyDMA (PTR latched, MAXCNT 3, AMOUNT,
+    END, nothing written without START, STOP ends the buffer); SAMPLE
+    while busy ignored; timer mode `CC = 801` starts at 0, 50 063,
+    100 125, ... ns; CALIBRATEDONE at 2 us; IRQ 7 pends on END with
+    INTEN.END only; the refusal at TACQ 10 us on a loaded input with
+    L = 10 us (error bit 5, TACQ 10 000 ns reported), none at 20 us or
+    unloaded; a late push sets error bit 0.
+  - `firmware` (`nrf_saadc_burst.elf`, lookahead block armed): 3 bursts of
+    8 acquisitions 42 us apart in 20 ms, the first at 5 005 250 ns; the
+    UART tap's lines `b=<k> ain0=<mean code> vdd=3413`; the lookahead
+    block's WFI-exit counter unchanged across a push batch.
+  - `scripts/nrf_saadc_board.sh` on `examples/nrf-saadc` (30 ms, 5 bursts):
+    40 `#smp` toggles, 40 samples, each within 1 uV of the charge-sharing
+    model (one transfer per acquisition, the 1 TOhm leak included; one
+    transfer more or fewer is 20-40 mV away), every code and UART line as
+    predicted, no `stop:`; the one-cell every-lattice-point reference
+    (3 000 grants) gives the committed `tests/golden/nrf-saadc/
+    outputs.sha256`; one cell with pushes on change, lookahead at 1 ms
+    (233 grants) and 10 ms (209 grants, 0 promises broken) and
+    `--engine-order analog-first` (byte-identical to mcu-first, grant
+    records included) equal it in `nets.csv`, `nets.vcd` and the non-grant
+    records; `--renode-quantum 25us` fails with "TACQ 40 us < 2 L = 50 us
+    ... --renode-quantum 20us, or load = "none""; the same board with
+    `load=none` at 25 us runs, with no toggle and every sample 1 200 000 uV.
+  - One burst sample at a lattice point (the SAMPLE write at exactly
+    20.02 ms in burst 4): its toggle is reported at 20.02 ms + 1 fs, as a
+    GPIO write there would be, and its transfer is still exact.
+- **Other gates** (2026-11-10, on `8efb0b5` plus this change; load noted
+  as `/proc/loadavg` at start and end): `make check POOL=0` green
+  (9 min 21 s, load 2.2-1.4; 207 cargo tests), `make check` on the pool
+  green (7 min 35 s, load 1.1-1.5), `make nrf-gates POOL=0` PASS
+  (1 min 27 s; every committed nRF hash unchanged on `nrf52840-bb@2`),
+  `make pool-equiv` PASS (21 configurations with `nrf-saadc` and
+  `nrf-saadc-ref` added, 2 rounds, every pooled run leased and identical
+  to its fresh run and the committed hashes; 11 min 47 s). Every committed
+  golden is unchanged (spike, feedback, ADC, `nrf-feedback`, `dms-rail`,
+  `adc-kicad`): the plugin assembly grew and every platform's content hash
+  changed, results did not.

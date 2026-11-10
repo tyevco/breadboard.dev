@@ -77,7 +77,7 @@ assert st == {"generic": 118, "no_model": 12, "mpn": 51, "unresolved": 19, "over
 mpn = collections.Counter(i["package"]["id"] for i in inst if i["resolution"]["stage"] == "mpn")
 print(f"kicad-import: M4f: by MPN {dict(sorted(mpn.items()))}")
 assert mpn == {"ti/tps22917": 2, "worldsemi/ws2812c-2020": 48, "raytac/mdbt50q-u1mv2": 1}, "M4f mpn (plan M5)"
-assert sorted(b["platforms"], key=lambda x: x["id"])[0]["id"] == "renode:nrf52840-bb@1", "the module's chip platform"
+assert sorted(b["platforms"], key=lambda x: x["id"])[0]["id"] == "renode:nrf52840-bb@2", "the module's chip platform"
 assert gen == {"generic/capacitor": 89, "generic/resistor": 28, "generic/inductor": 1}, "M4f generic"
 nm = sorted(i["footprint"].split(":")[0] for i in inst if i["resolution"]["stage"] == "no_model")
 assert collections.Counter(nm) == {"MountingHole": 3, "TestPoint": 9}, nm

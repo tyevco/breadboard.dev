@@ -137,6 +137,7 @@ pooled-test:
 	$(MAKE) adc-order
 	$(MAKE) adc-stock
 	$(MAKE) adc-model
+	$(MAKE) nrf-saadc-model
 	$(MAKE) adc-kicad
 	$(MAKE) dms-rail-test
 	$(MAKE) ec-reconnect
@@ -384,6 +385,16 @@ cost-table-runs:
 	$(MAKE) --no-print-directory dms-rail-prepare
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-rail $(PERF_N) "--max-quantum 10us" "" - - - \
 	    -- $(DMS_RAIL_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/nrf-saadc $(PERF_N) "--lookahead off" "" - - - \
+	    -- $(NRF_SAADC_ARGS)
+
+# The Phase 1 M8 row alone (examples/nrf-saadc, the loading adc_in): lookahead off (one cell) vs
+# bb's defaults, fresh and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
+cost-table-nrf-saadc: firmware bb
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/nrf-saadc $(PERF_N) "--lookahead off" "" \
+	    - - - -- $(NRF_SAADC_ARGS)
+	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/nrf-saadc $(PERF_N) \
+	    "--lookahead off" "" - - - -- $(NRF_SAADC_ARGS)
 
 # The Phase 1 M6 row alone (E1, examples/dial-me-spinner, ok-cold): one-cell vs bb's defaults, fresh
 # and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
@@ -478,7 +489,9 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare
 	    "adc-kicad;$(ADC_KICAD_HASHES);nongrant;$(ADC_KICAD_ARGS)" \
 	    "nrf-feedback;$(NRF_FEEDBACK_HASHES);nongrant;$(NRF_FEEDBACK_ARGS)" \
 	    "nrf-feedback-off;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead off" \
-	    "nrf-feedback-noplugin;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead-plugin never"
+	    "nrf-feedback-noplugin;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead-plugin never" \
+	    "nrf-saadc;$(NRF_SAADC_HASHES);nongrant;$(NRF_SAADC_ARGS)" \
+	    "nrf-saadc-ref;$(NRF_SAADC_HASHES);all;$(NRF_SAADC_ARGS) --lookahead off --adc-push every"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -655,6 +668,32 @@ ec-reconnect: firmware bb
 ec-long: firmware bb
 	bash scripts/ec_long.sh $(BB) $(EC_LONG_OUT) -- $(subst --for $(ADC_FOR),--for $(EC_LONG_FOR),$(ADC_ARGS))
 
+# --- Phase 1 M8 (first half): Breadboard's nRF52840 SAADC (ADR-008 D7/D8) --
+# nrf52840-bb@2: BbNrf52Saadc (BURST/oversampling, TACQ, EasyDMA, the TACQ
+# >= 2 L refusal) with its host port, the loading adc_in (one #smp toggle
+# per acquisition into the package's pin_load view saadc_se), per-sample
+# log records, the VDD input and the UARTE tap. make nrf-saadc-model (in
+# make test, about 25 s): the Renode-only register and timing tests
+# (examples/nrf-saadc/bb_saadc_test.py, ADR-005 test-plan shape; twice,
+# byte-identical), then the board gates of scripts/nrf_saadc_board.sh on
+# examples/nrf-saadc (8 #smp toggles and 8 charge transfers per 8x burst,
+# against the analytic charge sharing; every partition, lookahead and
+# engine order equal to the every-lattice-point one-cell reference
+# $(NRF_SAADC_HASHES); the refusal and its message; the load=none escape).
+.PHONY: nrf-saadc-model nrf-saadc-update cost-table-nrf-saadc
+NRF_SAADC_ELF    := $(NRF_FW)/build/nrf_saadc_burst.elf
+NRF_SAADC_OUT    ?= out/nrf-saadc
+NRF_SAADC_HASHES := tests/golden/nrf-saadc/outputs.sha256
+NRF_SAADC_ARGS    = --netlist examples/nrf-saadc/board.cir --target U1 --firmware $(NRF_SAADC_ELF) \
+                    --for 30ms --probe net:AIN --probe net:MARK
+nrf-saadc-model: firmware bb
+	$(PYTHON) examples/nrf-saadc/bb_saadc_test.py --out out/nrf-saadc-model
+	bash scripts/nrf_saadc_board.sh $(BB) $(NRF_SAADC_OUT) $(NRF_SAADC_HASHES)
+	@echo "nrf-saadc-model: PASS"
+# Rewrite the reference hashes from a fresh, checked run (review the diff).
+nrf-saadc-update: firmware bb
+	bash scripts/nrf_saadc_board.sh $(BB) $(NRF_SAADC_OUT) $(NRF_SAADC_HASHES) update
+
 # ADR-005 test plan 1-3: Renode-only tests of Breadboard's STM32F072 ADC
 # model and BbStm32Timer TRGO (examples/adc/bb_adc_test.py: pwm, trgo,
 # registers, firmware; about 80 s). In `make test`.
@@ -754,7 +793,7 @@ kicad-import: bb
 # The example boards whose parts come from packages; each has a bb.lock.
 PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir \
-              examples/adc/kicad examples/dial-me-spinner
+              examples/adc/kicad examples/dial-me-spinner examples/nrf-saadc/board.cir
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages
 

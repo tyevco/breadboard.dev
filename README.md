@@ -218,6 +218,11 @@ The run writes these files to `out/spike/`:
    `make adc-stock` (the ADR-003 board on Renode's stock ADC, `--adc-model
    stock`, against its own references) and `make adc-model` (the Renode-only
    tests of Breadboard's ADC model and timer TRGO, ADR-005).
+   `make nrf-saadc-model` (Phase 1 M8, ADR-008 D7/D8): the Renode-only tests
+   of Breadboard's nRF52840 SAADC, then `examples/nrf-saadc`, whose AIN0
+   input loads its pad (one charge transfer per acquisition, counted
+   against the analytic charge sharing) and whose firmware's UART lines
+   become log records, against its one-cell every-lattice-point reference.
 8. `make packages` (ADR-006): the package files and lockfiles against
    `spec/schema`, `bb pkg lint`, `bb pkg test` (each view's test vectors
    through the ngspice engine at two grant partitions) and the examples'

@@ -1,5 +1,5 @@
 //! Phase 1 M2 (ADR-008 D1-D4, D6): Breadboard's nRF52840 platform
-//! (`nrf52840-bb@1`) under the Renode engine, with the bare-metal gate
+//! (`nrf52840-bb@2`) under the Renode engine, with the bare-metal gate
 //! firmware in `tests/firmware/nrf52840/` and the prebuilt Zephyr gate image
 //! in `tests/firmware/nrf52840/zephyr/`. `make nrf-gates` runs these
 //! together with the board-level gate (`examples/nrf-feedback`).

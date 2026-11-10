@@ -37,10 +37,10 @@ pub const PLATFORMS: &[PlatformDef] = &[
         board_name: "stm32f072",
         repl: ("stm32f072-bb.repl", STM32F072_BB_REPL),
     },
-    // ADR-008 D1 (Phase 1 M2): no SVD download, 64 MIPS. M8's SAADC model
-    // makes it @2.
+    // ADR-008 D1 (Phase 1 M2): no SVD download, 64 MIPS; @2 (Phase 1 M8,
+    // D1, D7, D8): Breadboard's SAADC, its host port and the UARTE tap.
     PlatformDef {
-        id: "nrf52840-bb@1",
+        id: "nrf52840-bb@2",
         board_name: "nrf52840",
         repl: ("nrf52840-bb.repl", NRF52840_BB_REPL),
     },
@@ -94,7 +94,7 @@ mod tests {
         assert_ne!(c[0], c[1]);
         assert!(c.iter().all(|h| h.starts_with("sha256:") && h.len() == 71));
         assert_eq!(find("stm32f072-bb@1").unwrap().board_name, "stm32f072");
-        assert_eq!(find("nrf52840-bb@1").unwrap().board_name, "nrf52840");
+        assert_eq!(find("nrf52840-bb@2").unwrap().board_name, "nrf52840");
         assert!(c[2] != c[0] && c[2] != c[1]);
     }
 }

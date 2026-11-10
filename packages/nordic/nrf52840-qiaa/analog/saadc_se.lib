@@ -1,0 +1,23 @@
+* nordic/nrf52840-qiaa saadc_se: the SAADC's single-ended sampling load on its pad (ADR-008 D7,
+* Phase 1 M8), a pin_load view. Ports:
+*   pad   the bound AIN pin's net (pad capacitance CPAD, and the sample cap CS through RSW)
+*   smp   the CPU engine's #smp toggle (0 V / 1 V): one edge, either direction, per acquisition
+*   hold  the sample cap's node, the value pushed to the SAADC model (V(hold))
+*   vdd   the VDD pin's net: the pre-charge level VPRE = vpre_vdd * V(vdd) (approver decision A6:
+*         VPRE = VDD; vpre_vdd = 0 is the 0 V alternative)
+* An edge detector inside the view (d = |smp - smp delayed by an RC of time constant tpre|, 1 right
+* after an edge, decaying) opens the sample switch while d > 0.3 (tpre * ln(1/0.3) = 24 ns) and,
+* nested inside that, pre-charges CS to VPRE through rpre while d > 0.5 (tpre * ln 2 = 14 ns), so
+* the pad never sees VPRE through the switch. After the window CS settles towards the pad through
+* RSW: each acquisition draws CS * (VPRE - V(pad)) from the pad once, however the edge arrived.
+* Simplification (ADR-008 D7, bounded): between acquisitions CS stays connected to the pad
+* through RSW (silicon disconnects it), adding 2.5 pF to the pad.
+* Elements are B conductances, not voltage sources (AGENTS.md: no branch-current unknown).
+.subckt NRF_SAADC_SE pad smp hold vdd params: cs=2.5e-12 cpad=3e-12 rsw=5000 tpre=2e-8 rpre=100 vpre_vdd=1
+Cpad pad 0 {cpad}
+Cs hold 0 {cs}
+Rdly smp dly 1000
+Cdly dly 0 {tpre/1000}
+Bsw pad hold I=(V(pad)-V(hold))/{rsw}*(0.5-0.5*tanh(40*(abs(V(smp)-V(dly))-0.3)))
+Brst hold 0 I=(V(hold)-{vpre_vdd}*V(vdd))/{rpre}*(0.5+0.5*tanh(40*(abs(V(smp)-V(dly))-0.5)))
+.ends NRF_SAADC_SE

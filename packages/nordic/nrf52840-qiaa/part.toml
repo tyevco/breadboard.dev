@@ -1,12 +1,13 @@
 # nordic/nrf52840-qiaa: the Nordic nRF52840 SoC, aQFN73 (Phase 1 plan M5, ADR-006 D9, ADR-008 D1-D2).
 #
-# The behavioural layer is Breadboard's Renode platform nrf52840-bb@1 (ADR-008 D1: Renode 1.17.0's
+# The behavioural layer is Breadboard's Renode platform nrf52840-bb@2 (ADR-008 D1: Renode 1.17.0's
 # nRF52840 without the SVD download, 64 MIPS). The pins carry the GPIO pin models resolved against the
 # PS (pins.toml says how). The suite's GPIO "views" (ADR-006 D9's gpio_led, gpio_lsw, ...) are pad
 # DRIVERS: in a co-simulation the pad's driver is the pin model, so a circuit view of it would put a
 # second driver on the net (the pin-boundary contract allows one). They become pins.toml's named
-# parameter sets instead, and the package has no analog view (ADR-006 Amendment 3). The SAADC's
-# pin_load view (saadc_se) arrives with plan M8.
+# parameter sets instead, and the package has no circuit view (ADR-006 Amendment 3). Its one analog
+# view is the SAADC's pin_load view saadc_se (plan M8, ADR-008 D7), the load a bound adc_in puts on
+# its pad; the behavioural platform nrf52840-bb@2 has the SAADC model it feeds.
 schema = "bb-part/0"
 
 [part]
@@ -27,10 +28,36 @@ file = "pins.toml"
 
 [behavioral]
 engine = "renode"
-platform = "nrf52840-bb@1"
+platform = "nrf52840-bb@2"
 
 [provenance]
 source = "datasheet"
 refs = ["nRF52840 PS v1.1 section 6.9.3.1 (GPIO electrical specification)", "nRF52840 PS v1.1 section 7 (pin assignments, aQFN73)"]
-not_modelled = ["the GPIO pad's ESD clamps and its I-V beyond the 0.4 V point", "internal pull resistors", "SAADC loading (plan M8)"]
+not_modelled = ["the GPIO pad's ESD clamps and its I-V beyond the 0.4 V point", "internal pull resistors"]
 confidence = "datasheet_checked"
+
+[[analog]]
+name = "saadc_se"
+kind = "pin_load"
+purpose = "SAADC single-ended input (ADR-008 D7): pad capacitance, and the sample capacitor pre-charged to VPRE and charged from the pad once per acquisition"
+fidelity = ["fast"]
+default_for = ["fast"]
+file = "analog/saadc_se.lib"
+subckt = "NRF_SAADC_SE"
+ports = [{ role = "pad" }, { role = "ctrl", signal = "smp" }, { role = "observe", signal = "hold" }, { role = "pin", pin = "VDD" }]
+params = { cs = "2.5p", cpad = "3p", rsw = "5k", tpre = "20n", rpre = "100", vpre_vdd = "1" }
+
+[analog.provenance]
+source = "agent_generated"
+base = "breadboard.dev's own view of ADR-008 D7 (one charge transfer per acquisition, the pre-charge inside the view), with the dial-me-spinner suite's SAADC constants"
+refs = [
+  "CS 2.5 pF, CPAD 3 pF, RSW 5 kOhm (assumed, checked by the suite against the PS acquisition-time table), VPRE before every acquisition: dial-me-spinner@6854d25:hardware/sim/models/vsys_sense__nrf52840_saadc.lib, from nRF52840 PS v1.1 section 6.23",
+  "VPRE = VDD (the suite's worst case): ADR-008 approver decision A6",
+]
+deviations = [
+  "CS stays connected to the pad through RSW between acquisitions (silicon opens the switch): 2.5 pF more on the pad (ADR-008 D7)",
+  "the pre-charge lasts about tpre * ln 2 = 14 ns after each #smp edge through rpre, inside a 24 ns window with the sample switch open (the PS does not say how CS is reset)",
+]
+not_modelled = ["the input resistor ladders RESP/RESN", "differential mode (PSELN)", "gain and offset errors", "the input's leakage"]
+generated_by = "Claude (Phase 1 M8)"
+confidence = "unchecked"

@@ -4,8 +4,8 @@
 # names ("AIN0/P0.02", "P0.18/~{RESET}") keep their other functions in `alt` (ADR-006 Amendment 3).
 #
 # Pin models (Phase 1 M5; ADR-006 D9 rule 2: the suite's conflicting GPIO numbers resolved against the
-# PS). Every GPIO offers digital_out and digital_in; adc_in arrives with the SAADC model (plan M8,
-# ADR-008 D7). The output stage is the Thevenin form of spec/pin-model.md: a pad drives VDD or 0 V
+# PS). Every GPIO offers digital_out and digital_in; the eight AIN pins also offer adc_in, Breadboard's
+# SAADC (plan M8, ADR-008 D7; set below). The output stage is the Thevenin form of spec/pin-model.md: a pad drives VDD or 0 V
 # through zout = 0.4 V / I, where I is nRF52840 PS v1.1 section 6.9.3.1's current at a 0.4 V drop
 # (IOH/IOL; the source side is used for both edges, as the dial-me-spinner suite does). The named sets
 # are the PIN_CNF DRIVE values the firmware may use and the PS's min/typ/max columns:
@@ -37,7 +37,8 @@ name = "P0.31"
 role = "io"
 supply = "VDD"
 alt = ["AIN7"]
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN7" }
 
 [[pin]]
 number = "A10"
@@ -45,7 +46,8 @@ name = "P0.29"
 role = "io"
 supply = "VDD"
 alt = ["AIN5"]
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN5" }
 
 [[pin]]
 number = "A12"
@@ -53,7 +55,8 @@ name = "P0.02"
 role = "io"
 supply = "VDD"
 alt = ["AIN0"]
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN0" }
 
 [[pin]]
 number = "A14"
@@ -117,7 +120,8 @@ name = "P0.30"
 role = "io"
 supply = "VDD"
 alt = ["AIN6"]
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN6" }
 
 [[pin]]
 number = "B11"
@@ -125,7 +129,8 @@ name = "P0.28"
 role = "io"
 supply = "VDD"
 alt = ["AIN4"]
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN4" }
 
 [[pin]]
 number = "B13"
@@ -133,7 +138,8 @@ name = "P0.03"
 role = "io"
 supply = "VDD"
 alt = ["AIN1"]
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN1" }
 
 [[pin]]
 number = "B15"
@@ -222,7 +228,8 @@ name = "P0.04"
 role = "io"
 supply = "VDD"
 alt = ["AIN2"]
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN2" }
 
 [[pin]]
 number = "J24"
@@ -238,7 +245,8 @@ name = "P0.05"
 role = "io"
 supply = "VDD"
 alt = ["AIN3"]
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN3" }
 
 [[pin]]
 number = "L1"
@@ -575,3 +583,13 @@ zout = "28.5714"
 vih = "0.7*VDD"
 vil = "0.3*VDD"
 cin = "3p"
+
+# adc_in (Phase 1 M8, ADR-008 D7): Breadboard's SAADC. vref is the clamp of the pushed value (the
+# pad cannot exceed VDD: spec/pin-model.md's vmax); bits documents the 12-bit code E2 reads (the
+# SAADC's resolution is the firmware's choice); the loading view saadc_se (part.toml) is on by
+# default, load = "none" on a binding makes the input ideal.
+[defaults.adc_in.default]
+vref = "VDD"
+bits = "12"
+model = "nrf_saadc"
+load = "saadc_se"

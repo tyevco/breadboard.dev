@@ -89,7 +89,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
               [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
-              [--renode-pool env|off]
+              [--renode-pool env|off] [--uart-log on|off]
        bb pool run|start|stop|status ...   (bb pool --help)
        bb open [<dir>|<.kicad_pro>|<.net>|<board.cir>] [--check] [--update-lock]   (bb open --help)
        bb flash --target <instance> <file.elf> [--kind elf] [--project <dir>]
@@ -174,7 +174,10 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
   --renode-pool  env (default): lease a pre-warmed Renode from the pool in
                  $BB_RENODE_POOL when one is idle (`bb pool run`, ADR-004),
                  else start Renode fresh; off: always fresh. Never changes
-                 the outputs";
+                 the outputs
+  --uart-log     on (default) or off: on the nRF52840, every line the firmware
+                 writes to UARTE0/1 becomes an info log record at the time of
+                 its last byte (ADR-008 D8)";
 
 struct RunArgs {
     /// `--netlist`: a Phase 0 board file; `None`: a project.
@@ -206,6 +209,8 @@ struct RunArgs {
     adc_bb: bool,
     /// `--renode-pool env` (true, the default) or `off`.
     renode_pool: bool,
+    /// `--uart-log on` (true, the default) or `off` (ADR-008 D8).
+    uart_log: bool,
 }
 
 fn parse_adc_push(s: &str) -> Result<AdcPush, String> {
@@ -332,6 +337,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut plugin = PluginMode::Auto;
     let mut adc_push = AdcPush::OnChange;
     let mut adc_bb = ADC_MODEL_DEFAULT_BB;
+    let mut uart_log = true;
     let mut renode_pool = true;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -402,6 +408,13 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
                     "bb" => true,
                     "stock" => false,
                     v => return Err(format!("--adc-model: {v:?}: expected bb or stock")),
+                }
+            }
+            "--uart-log" => {
+                uart_log = match val(a)?.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    v => return Err(format!("--uart-log: {v:?}: expected on or off")),
                 }
             }
             "--renode-pool" => {
@@ -480,6 +493,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         adc_push,
         adc_bb,
         renode_pool,
+        uart_log,
     })
 }
 
@@ -496,6 +510,169 @@ fn create(path: &PathBuf) -> Result<BufWriter<File>, String> {
     File::create(path)
         .map(|f| BufWriter::with_capacity(OUTPUT_BUFFER, f))
         .map_err(|e| format!("create {}: {e}", path.display()))
+}
+
+/// One loading `adc_in` (ADR-008 D7) and its generated glue.
+struct LoadGlue {
+    /// The bound pin (`P0.02`) and its circuit net (the pad).
+    pin: String,
+    net: String,
+    /// The SAADC input.
+    channel: i32,
+    /// The CPU engine's toggle output (`P0.02#smp`), its kernel net
+    /// (`U1.P0.02#smp`) and the full name `U1.P0.02#smp`.
+    cpu_pin: String,
+    kernel_net: String,
+    cpu_pin_full: String,
+    /// The generated glue net the toggle drives (`__smp_U1_P0_02`) and the
+    /// view's observe node (`__hold_U1_P0_02`).
+    smp_node: String,
+    hold_node: String,
+    /// The package and its pin_load view.
+    package: String,
+    view: String,
+}
+
+/// The `#smp` toggle's drive into its glue net (ADR-008 D7): 0 V / 1 V,
+/// 1 ns edges, no output resistance (the view's edge detector is the only
+/// load).
+const SMP_DRIVE: bbcore::DigitalOut = bbcore::DigitalOut {
+    voh: 1.0,
+    vol: 0.0,
+    rise: Time::from_ns(1),
+    fall: Time::from_ns(1),
+    zout: 0.0,
+};
+
+/// A name with every character other than an ASCII letter or digit
+/// replaced by `_` (glue rule 3).
+fn spice_name(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// The loading `adc_in` bindings of a board (ADR-008 D7).
+fn load_glue(board: &board::Board, pins: &[&board::PinBinding]) -> Result<Vec<LoadGlue>, String> {
+    let mut out = Vec::new();
+    for p in pins {
+        let PinKind::Adc {
+            net,
+            channel,
+            load: Some(view),
+            ..
+        } = &p.kind
+        else {
+            continue;
+        };
+        let part = board
+            .parts
+            .iter()
+            .find(|x| x.reference == p.part)
+            .ok_or_else(|| format!("{}: no part {}", p.pin, p.part))?;
+        let package = part
+            .package
+            .clone()
+            .ok_or_else(|| format!("{}.{}: load={view} needs a package part", p.part, p.pin))?;
+        let id = spice_name(&format!("{}_{}", p.part, p.pin));
+        out.push(LoadGlue {
+            pin: p.pin.clone(),
+            net: net.clone(),
+            channel: *channel,
+            cpu_pin: format!("{}#smp", p.pin),
+            kernel_net: format!("{}.{}#smp", p.part, p.pin),
+            cpu_pin_full: format!("{}.{}#smp", p.part, p.pin),
+            smp_node: format!("__smp_{id}"),
+            hold_node: format!("__hold_{id}"),
+            package,
+            view: view.clone(),
+        });
+    }
+    Ok(out)
+}
+
+/// The SPICE text of the loads (glue rule 9, ADR-008 D7): the pin_load
+/// views' definitions, then one instance per load, its ports in the view's
+/// order (pad: the pin's net; ctrl: the toggle's glue net; observe: the
+/// hold node; pin: the net of that package pin's binding, which for the
+/// SAADC's `VDD` is the VDD input's `adc_in`), with the view's params.
+fn load_deck(board: &board::Board, loads: &[LoadGlue]) -> Result<String, String> {
+    use bbpkg::package::Port;
+    let mut views: Vec<(String, String)> = Vec::new();
+    let mut instances = Vec::new();
+    for l in loads {
+        let pkg = board
+            .packages
+            .iter()
+            .find(|p| p.part.id == l.package)
+            .ok_or_else(|| format!("package {} not loaded", l.package))?;
+        let v = pkg
+            .part
+            .analog
+            .iter()
+            .find(|v| v.name == l.view && v.kind == "pin_load")
+            .ok_or_else(|| format!("{}: no pin_load view {}", l.package, l.view))?;
+        let path = pkg.dir.join(&v.file);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("{}: {}: {e}", l.package, path.display()))?;
+        let label = format!("{}:{}", l.package, l.view);
+        if !views.iter().any(|(n, _)| *n == label) {
+            views.push((label, text));
+        }
+        let mut nodes = Vec::new();
+        for port in &v.ports {
+            nodes.push(match port {
+                Port::Pad => l.net.clone(),
+                Port::Ctrl { .. } => l.smp_node.clone(),
+                Port::Observe { .. } => l.hold_node.clone(),
+                Port::OtherPin { pin } => board
+                    .pins
+                    .iter()
+                    .find(|b| b.pin == *pin && matches!(b.kind, PinKind::Adc { .. }))
+                    .and_then(|b| match &b.kind {
+                        PinKind::Adc { net, .. } => Some(net.clone()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "{}: the load view {} needs the net of pin {pin}: bind it \
+                             (`*bb pin <part>.{pin} net=<net> model=adc_in vref=<V>`, the SAADC's \
+                             {pin} input)",
+                            l.pin, l.view
+                        )
+                    })?,
+                Port::Pin(n) => {
+                    return Err(format!("{}: a circuit port {n} in a pin_load view", l.view))
+                }
+            });
+        }
+        let params: String = v
+            .params
+            .iter()
+            .map(|(k, val)| format!(" {k}={}", spice_value(val)))
+            .collect();
+        instances.push(format!(
+            "X_bbload_{} {} {}{}{}",
+            spice_name(l.cpu_pin_full.trim_end_matches("#smp")),
+            nodes.join(" "),
+            v.subckt,
+            if params.is_empty() { "" } else { " params:" },
+            params
+        ));
+    }
+    let defs = bbpkg::spice::assemble(&views)?;
+    Ok(format!(
+        "* bb: loading adc_in (ADR-008 D7, glue rule 9)\n{defs}\n{}\n",
+        instances.join("\n")
+    ))
+}
+
+/// A view parameter value (the package value grammar) as a SPICE number.
+fn spice_value(v: &str) -> String {
+    match bbpkg::value::parse_number(v) {
+        Ok(d) => format!("{}", d.to_f64()),
+        Err(_) => v.to_string(),
+    }
 }
 
 fn run(a: RunArgs) -> Result<(), String> {
@@ -593,7 +770,7 @@ fn run(a: RunArgs) -> Result<(), String> {
         if let PinKind::Adc { model, .. } = &p.kind {
             // Breadboard's model converts 12 bits against its 3.3 V
             // reference (the overlay's referenceVoltage, ADR-005 D5.2).
-            if a.adc_bb && (model.vref != 3.3 || model.bits != 12) {
+            if part.platform == "stm32f072" && a.adc_bb && (model.vref != 3.3 || model.bits != 12) {
                 return Err(format!(
                     "{}.{}: adc_in vref={} bits={}: Breadboard's STM32F072 ADC model needs \
                      vref=3.3 bits=12 (or --adc-model stock)",
@@ -645,6 +822,12 @@ fn run(a: RunArgs) -> Result<(), String> {
                 .collect(),
         };
     }
+    // The nRF52840's SAADC (ADR-008 D7): pushes are raw uV timed inputs.
+    let adc_name = if nrf {
+        bb_cpu_renode::BB_SAADC_NAME
+    } else {
+        adc_name
+    };
     rcfg.pins = mcu_pins
         .iter()
         .map(|p| match p.kind {
@@ -654,17 +837,35 @@ fn run(a: RunArgs) -> Result<(), String> {
         })
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
+    // ADR-008 D7, the loading adc_in: per loaded pin, the CPU engine's
+    // `<pin>#smp` toggle (one edge per acquisition) drives a generated glue
+    // net through a rule-1 EXTERNAL source; the package's pin_load view sits
+    // on the pad, and the pushed value is the view's observe node (V(hold)).
+    let loads = load_glue(&board, &mcu_pins)?;
+    for l in &loads {
+        rcfg.pins
+            .push(PinSpec::adc_sample(&l.cpu_pin, adc_name, l.channel));
+    }
+    rcfg.adc_trace = mcu_pins
+        .iter()
+        .filter(|p| matches!(p.kind, PinKind::Adc { trace: true, .. }))
+        .map(|p| p.pin.clone())
+        .collect();
+    // ADR-008 D8: the firmware's UARTE lines become log records.
+    rcfg.uart_log = nrf && a.uart_log;
     // ADR-003 D5: the binding graph has a feedback loop when the MCU both
     // drives the circuit and reads it (U1 -> ngspice and ngspice -> U1; one
     // MCU and one analog engine in Phase 1). Such boards load the lookahead
     // plugin, with --lookahead off as well, so both modes run the same
-    // platform. Checked against the kernel's plan after the run.
+    // platform. Checked against the kernel's plan after the run. A loading
+    // adc_in is both (its #smp toggle drives the circuit).
     let cyclic = mcu_pins
         .iter()
         .any(|p| matches!(p.kind, PinKind::In { .. } | PinKind::Adc { .. }))
-        && mcu_pins
-            .iter()
-            .any(|p| matches!(p.kind, PinKind::Out { .. }));
+        && (!loads.is_empty()
+            || mcu_pins
+                .iter()
+                .any(|p| matches!(p.kind, PinKind::Out { .. })));
     let plugin = match a.plugin {
         PluginMode::Auto => cyclic,
         PluginMode::Always => true,
@@ -684,8 +885,33 @@ fn run(a: RunArgs) -> Result<(), String> {
     // ADR-003 D2: TMAX is the lattice, not min(max_quantum, sample period),
     // and ngspice lands on every lattice point, so its solver points do not
     // depend on the grant partition or the sample rate.
-    let mut ncfg = NgspiceConfig::new(board.spice.clone(), a.duration, a.renode_quantum);
+    let mut netlist = board.spice.clone();
+    if !loads.is_empty() {
+        // The board body up to its `.end`, then the loads (glue rule 9).
+        let mut body: Vec<&str> = Vec::new();
+        for l in board.spice.lines() {
+            if l.trim().eq_ignore_ascii_case(".end") {
+                break;
+            }
+            body.push(l);
+        }
+        netlist = body.join("\n");
+        netlist.push('\n');
+        netlist.push_str(&load_deck(&board, &loads)?);
+    }
+    let mut ncfg = NgspiceConfig::new(netlist, a.duration, a.renode_quantum);
     ncfg.lattice = Some(a.renode_quantum);
+    for l in &loads {
+        ncfg.inputs.push(InputBinding {
+            pin: l.kernel_net.clone(),
+            source: format!("V_bb_{}", spice_name(&l.cpu_pin_full)),
+            drive: Drive::Digital {
+                model: SMP_DRIVE,
+                initial: Level::Low,
+            },
+            glue_node: Some(l.smp_node.clone()),
+        });
+    }
     for p in &mcu_pins {
         match &p.kind {
             // An MCU output into the circuit: EXTERNAL source + zout glue.
@@ -708,11 +934,16 @@ fn run(a: RunArgs) -> Result<(), String> {
             }),
             // An MCU ADC input: ngspice pushes the node's value at lattice
             // points (ADR-003 D6).
+            // A loading adc_in pushes V(hold), the view's observe node
+            // (ADR-008 D7); the nRF52840's key is raw uV.
             PinKind::Adc { net, model, .. } => ncfg.adc_outputs.push(AdcOutputBinding {
                 pin: p.kernel_net(),
-                node: net.clone(),
+                node: loads
+                    .iter()
+                    .find(|l| l.pin == p.pin)
+                    .map_or_else(|| net.clone(), |l| l.hold_node.clone()),
                 model: AdcIn {
-                    key: adc_key,
+                    key: if nrf { model.key } else { adc_key },
                     ..*model
                 },
             }),
@@ -798,6 +1029,22 @@ fn run(a: RunArgs) -> Result<(), String> {
             }
         }
     }
+    for l in &loads {
+        bind(
+            &mut sched,
+            cpu_id,
+            &l.cpu_pin,
+            &l.kernel_net,
+            Direction::Output,
+        )?;
+        bind(
+            &mut sched,
+            an_id,
+            &l.kernel_net,
+            &l.kernel_net,
+            Direction::Input,
+        )?;
+    }
     for (n, _) in &analog_probes {
         bind(&mut sched, an_id, n, n, Direction::Output)?;
     }
@@ -826,7 +1073,10 @@ fn run(a: RunArgs) -> Result<(), String> {
         // (spec/event-stream.md); Phase 0 names are their own.
         vcd_refs.push(p.node.clone().unwrap_or_else(|| p.name.clone()));
     }
-    for n in &digital_nets {
+    for n in digital_nets
+        .iter()
+        .chain(loads.iter().map(|l| &l.kernel_net))
+    {
         if !probes.iter().any(|p| &p.name == n) {
             vcd_vars.push((n.as_str(), VcdKind::Wire));
             vcd_refs.push(n.clone());

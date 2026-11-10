@@ -30,7 +30,11 @@
   (`docs/phase1-exit-checklist.md`), and a timed run with the image's own
   apt sources inside the budget (the post-M7 review's took 19 min 58 s
   while the archive crawled). Review notes: M7, and "Review notes: after
-  M7".
+  M7". M8's first half done (2026-11-10): Breadboard's SAADC
+  (`BbNrf52Saadc`, `nrf52840-bb@2`), the loading `adc_in`, the per-sample
+  records, the UART lines and the VDD input, gated by `make
+  nrf-saadc-model` (ADR-008 Amendment 4). E2 itself (`make dms-vsense`) is
+  the second half.
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.

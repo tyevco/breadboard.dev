@@ -106,6 +106,10 @@ pub enum AdcKey {
     /// `floor(uV / 1000)` (ADR-003 Amendments 5 and 10; `bb run
     /// --adc-model stock`).
     Millivolts,
+    /// Raw whole microvolts, on every change: Breadboard's nRF52840 SAADC
+    /// (ADR-008 D7), whose gain, reference and resolution are run-time
+    /// choices, so no coarser key exists.
+    Microvolts,
 }
 
 /// An ADC input (ADR-003 D6, ADR-005 D5). A *push* model: the producing
@@ -157,6 +161,7 @@ impl AdcIn {
         match self.key {
             AdcKey::Code12 => self.code12(uv),
             AdcKey::Millivolts => uv / 1000,
+            AdcKey::Microvolts => uv,
         }
     }
 
@@ -164,7 +169,7 @@ impl AdcIn {
     /// ([`AdcKey::Code12`]) or its whole millivolts ([`AdcKey::Millivolts`]).
     pub fn key_microvolts(&self, uv: u32) -> u32 {
         match self.key {
-            AdcKey::Code12 => uv,
+            AdcKey::Code12 | AdcKey::Microvolts => uv,
             AdcKey::Millivolts => uv / 1000 * 1000,
         }
     }

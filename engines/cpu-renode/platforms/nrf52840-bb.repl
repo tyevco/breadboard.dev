@@ -1,5 +1,5 @@
-// Breadboard's nRF52840, platform nrf52840-bb@1 (ADR-008 D1): Renode
-// 1.17.0's stock platforms/cpus/nrf52840.repl with
+// Breadboard's nRF52840, platform nrf52840-bb@2 (ADR-008 D1, D7, D8):
+// Renode 1.17.0's stock platforms/cpus/nrf52840.repl with
 //   - the network-dependent init removed. The stock file's sysbus init block
 //     starts with
 //         ApplySVD @https://dl.antmicro.com/projects/renode/svd/NRF52840.svd.gz
@@ -10,14 +10,28 @@
 //   - the CPU at the part's clock, 64 MIPS (Renode's default is 100).
 //     Instruction-count timing is then right for code that averages about
 //     one instruction per cycle; nrfx busy-waits run at about 2/3 of their
-//     requested time (ADR-008 Context 2, the nrf-busywait gate).
-// No peripheral is replaced (Phase 1 M2), so this file names no Breadboard
-// plugin type. The lookahead block is mapped at 0x5FFF0000 by the engine on
-// boards that load it.
+//     requested time (ADR-008 Context 2, the nrf-busywait gate);
+//   - Phase 1 M8 (@2): Breadboard's SAADC (Analog.BbNrf52Saadc,
+//     platforms/bb_nrf52_saadc.cs; the stock platform has none) at its PS
+//     address with IRQ 7 (SAADC_IRQn), its host port at 0x5FFF0100 (next to
+//     the lookahead block, which the engine maps at 0x5FFF0000 on boards
+//     that load it), and the UART tap BbUartLog on UARTE0/1 at 0x5FFF8000
+//     (ADR-008 D8). The plugin assembly is therefore loaded before this
+//     file on every nRF52840 run.
 using "platforms/cpus/nrf52840.repl"
 
 cpu:
     PerformanceInMips: 64
+
+bbSaadc: Analog.BbNrf52Saadc @ sysbus 0x40007000
+    -> nvic@7
+
+bbSaadcPort: Miscellaneous.BbSaadcHostPort @ sysbus 0x5FFF0100
+    saadc: bbSaadc
+
+bbUartLog: Miscellaneous.BbUartLog @ sysbus 0x5FFF8000
+    uart0: uart0
+    uart1: uart1
 
 sysbus:
     init:

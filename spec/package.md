@@ -168,7 +168,10 @@ zout = "25"
   pins of one role may share a name (`VDD`, `VSS`). A role limits the
   models: `io` any; `input` `digital_in` or `adc_in`; `output`
   `digital_out`; `analog` `adc_in`; supply, ground, `nc` and `passive` pins
-  none.
+  none. One binding is not a pin model of `pins.toml`: on a part whose
+  platform is Breadboard's nRF52840, an `adc_in` binding on the supply pin
+  `VDD` is the SAADC's VDD input (ADR-008 D7), with the binding's own
+  parameters (`vref`).
 - **Pin models and their parameters** (`spec/pin-model.md`):
 
   | Model | Parameters (all required unless noted) |

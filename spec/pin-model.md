@@ -8,7 +8,9 @@ glue: ADR-003 D3 (plan step 4, Amendment 4). `adc_in`: ADR-003 D6 (plan step
 microvolt delivery, timed inputs and the sampled-input rule). Pin models
 from packages, named parameter sets and glue rule 7: ADR-006 (D4, Phase 1
 M3). Net naming in glue rule 3, glue rule 5 and rule 8 (unbound pins):
-ADR-007 (D5, D6; Phase 1 M4, Amendment 1).
+ADR-007 (D5, D6; Phase 1 M4, Amendment 1). `adc_in` on the nRF52840's
+SAADC, the raw-microvolt push key, the loading `adc_in` (`load`, the `#smp`
+toggle) and glue rule 9: ADR-008 D7 (Phase 1 M8, Amendment 4).
 
 Every component pin has **exactly one** pin model, supplied by its package
 from the package's `pins.toml` (ADR-006 D4, `spec/package.md`); `board.cir`
@@ -45,7 +47,7 @@ enum PinSignal {
 | --- | --- | --- |
 | `digital_out` | `voh` V, `vol` V, `rise` Time, `fall` Time, `zout` Ω | **yes** (STM32 PA5) |
 | `digital_in` | `vih` V, `vil` V, `cin` F | **yes** (STM32 PB0 in `examples/feedback`) |
-| `adc_in` | `vref` V, `bits` | **yes** (STM32F072 PA1, ADC channel 1, in `examples/adc`) |
+| `adc_in` | `vref` V, `bits`; `model`, `load` (ADR-008 D7) | **yes** (STM32F072 PA1, ADC channel 1, in `examples/adc`; nRF52840 AIN0 in `examples/nrf-saadc`) |
 | `analog` | none; bidirectional node, exchanged as volts | not yet (as a probe target only) |
 | `power` | `vmin` V, `vmax` V, `imax` A | not yet |
 | `passive` | none; exists only inside the analog engine (R, C, LED...) | **yes** (330 Ω, LED) |
@@ -133,6 +135,13 @@ boundary as `Analog` transitions of its trace, only at lattice points:
     the stock model converts
     `code = round_half_even(floor(uV / 1000) / (vref * 1000) * (2^bits - 1))`
     and nothing finer; `bits` documents the code mapping only.
+  - Breadboard's nRF52840 SAADC (`model = "nrf_saadc"`, ADR-008 D7): the
+    key is the **raw clamped `uV`** itself, delivered as is, on every
+    change, because gain, reference and resolution are run-time choices of
+    the firmware and no coarser key exists. `vref` is the clamp of the
+    pushed value (ADR-008's `vmax`; for this model the VDD of the bound
+    supply), and `bits` documents only. Because the pin is a sampled input,
+    pushes cost batch size, not grants.
 
   A reference mode pushes `uV` at every lattice point; the converter sees
   the same values (`bb run --adc-push every`).
@@ -148,7 +157,8 @@ boundary as `Analog` transitions of its trace, only at lattice points:
   SetValue` on the channel while paused at `t`, splitting the advance there.
   Either way a conversion sees the value of the latest lattice point, at most
   `L` old, in every partition.
-- On Breadboard's model the pin is a **sampled input**
+- On Breadboard's models (`BbStm32F0Adc`, ADR-005; `BbNrf52Saadc`,
+  ADR-008 D7) the pin is a **sampled input**
   (`spec/time-grant.md`, ADR-005 D3): the model reads it only at sample
   instants, which the CPU's lookahead promise never passes, so the kernel
   does not watch it and a quiet grant does not stop at a push. The analog
@@ -159,9 +169,34 @@ boundary as `Analog` transitions of its trace, only at lattice points:
   change of the converted value is an input change of the CPU (the
   code-change watch, ADR-003 D6).
 
-No glue: the input is ideal (no load). The ADC channel follows from the pin
-and the platform (STM32F0x2: `PA0`..`PA7` are channels 0..7, `PB0`..`PB1`
-8..9, `PC0`..`PC5` 10..15); only platforms with an ADC model accept it.
+Without `load` (or with `load = "none"`) there is no glue: the input is
+ideal (no load). The ADC channel follows from the pin and the platform, or
+from the package's `adc = { channel }` (STM32F0x2: `PA0`..`PA7` are
+channels 0..7, `PB0`..`PB1` 8..9, `PC0`..`PC5` 10..15; nRF52840: `AIN0`..
+`AIN3` are `P0.02`..`P0.05`, `AIN4`..`AIN7` `P0.28`..`P0.31`, and an
+`adc_in` on the supply pin `VDD` is the SAADC's VDD input, read by
+`PSELP = VDD` and by the `VDD1_4` reference); only platforms with an ADC
+model accept it.
+
+**Loading (ADR-008 D7).** An `adc_in` with `load = "<view>"` names a
+`pin_load` view of its package (`spec/package.md` section 4) that loads the
+pad (the nRF52840's `saadc_se`: pad capacitance and a sample capacitor). The
+CPU engine has one internal digital output per loaded pin, `<pin>#smp`,
+which **toggles at every acquisition start** of that input, in either
+direction: one edge per acquisition, stamped like a GPIO edge (the
+acquisition's exact time, or 1 fs after it when it falls on a lattice
+point). The view detects each edge itself and does the rest: it pre-charges
+its sample capacitor to `VPRE` (by default `VDD`) for a short internal time
+with the sample switch open, then lets it settle towards the pad, so the pad
+gives up one charge transfer per acquisition however late the edge was
+delivered (a toggle cannot be lost; two toggles could only cancel inside
+one lattice cell, which the rule below excludes). The value pushed to the
+model is the view's **observe** node (V(hold), the settled sample
+capacitor), not the pad. A loaded input whose acquisition time is shorter
+than `2 L` is refused (the model's error word fails the run; the message
+names `--renode-quantum` and `load = "none"`); there is no automatic
+fallback to an unloaded input. The pin is still a sampled input: `#smp`
+changes only at the model's own clock limits or at CPU writes.
 
 ### `analog`
 
@@ -201,12 +236,21 @@ boundary; the analog engine handles it entirely.
    the parameters of the part's package where the part comes from one
    (ADR-006). Schematics are read through KiCad's own netlist export and an
    S-expression parser, never with regex.
-6. A net driven by an analog engine and loaded by an `adc_in` gets no glue;
-   its value crosses the boundary as the pushed `Analog` trace above
-   (ADR-003 D6).
+6. A net driven by an analog engine and loaded by an `adc_in` without
+   `load` gets no glue; its value crosses the boundary as the pushed
+   `Analog` trace above (ADR-003 D6).
 7. An analog view's subckt ports and internal nodes never include `gnd`
    (in any case): ngspice treats a node named `gnd` as global ground even
    inside a subcircuit (ADR-006 Context 4; `bb pkg lint` refuses it).
 8. An unbound connected MCU pin (a project pin with no `[[bind]]`) gets no
    glue and loads nothing (high-Z), like an unconfigured nRF pin; its net
    is probe-only on the MCU side (ADR-007 D5).
+9. An `adc_in` with `load` (ADR-008 D7) gets its `pin_load` view's subckt
+   on the pad, instantiated `X_bbload_<part>_<pin>` with the view's ports
+   in order: the pad on the pin's net, the `ctrl` port on a generated glue
+   net `__smp_<part>_<pin>` driven by one `EXTERNAL` source
+   (`V_bb_<part>_<pin>_smp`, rule 1 with 0 V / 1 V, 1 ns edges and no
+   `zout`) from the CPU engine's `<pin>#smp` trace, the `observe` port on
+   `__hold_<part>_<pin>`, and a `pin` port on the net of that package pin's
+   binding (the nRF52840's `VDD` input). The analog engine pushes the
+   `observe` node.
