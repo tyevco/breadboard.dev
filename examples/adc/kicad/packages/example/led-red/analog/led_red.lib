@@ -1,0 +1,6 @@
+* example/led-red, view "diode": the LED of Phase 0's examples as a junction
+* diode (examples/spike/board.cir: D1 LED_A 0 LED_RED). Ports A, K.
+.subckt example_led_red A K
+D1 A K LED_RED
+.ends example_led_red
+.model LED_RED D(IS=1e-18 N=2 RS=2 CJO=10p)

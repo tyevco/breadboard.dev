@@ -15,6 +15,7 @@ CARGO ?= cargo
         cost-table cost-table-runs startup-perf ec-reconnect ec-long \
         pool-equiv pool-perf dms-source dms-suite dms-suite-check dms-suite-update \
         packages locks dms-values setup-container \
+        adc-kicad adc-kicad-prepare adc-kicad-ref kicad-import cost-table-adc-kicad \
         pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
 
 # --- Phase 0 spike ---------------------------------------------------------
@@ -136,6 +137,7 @@ pooled-test:
 	$(MAKE) adc-order
 	$(MAKE) adc-stock
 	$(MAKE) adc-model
+	$(MAKE) adc-kicad
 	$(MAKE) ec-reconnect
 	$(MAKE) packages
 
@@ -215,7 +217,7 @@ golden:
 # partition hashes (from its one-cell reference); and the hashes of the ADC
 # boards' every-lattice-point references.
 golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-open-ref \
-               adc-stock-ref adc-open-stock-ref nrf-feedback-ref
+               adc-stock-ref adc-open-stock-ref adc-kicad-ref nrf-feedback-ref
 	mkdir -p $(dir $(GOLDEN))
 	$(PYTHON) scripts/golden.py write $(SPIKE_OUT)/nets.csv $(GOLDEN)
 	cd $(SPIKE_OUT) && sha256sum nets.csv events.jsonl nets.vcd > $(CURDIR)/$(SPIKE_HASHES)
@@ -241,6 +243,9 @@ golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-ope
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_STOCK_HASHES)
 	cd $(ADC_OUT)-open-stock-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_OPEN_STOCK_HASHES)
+	mkdir -p $(dir $(ADC_KICAD_HASHES))
+	cd $(ADC_KICAD_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_KICAD_HASHES)
 	cd $(ADC_OUT)-open-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_OPEN_HASHES) \
 	    && rm non-grant-records
@@ -370,8 +375,17 @@ cost-table-runs:
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
 	PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc-stock $(PERF_N) "$(ADC_STOCK_FLAGS)" "" \
 	    - - - -- $(ADC_ARGS)
+	$(MAKE) --no-print-directory adc-kicad-prepare
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc-kicad $(PERF_N) "--lookahead off" "" - - - -- $(ADC_KICAD_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/nrf-feedback $(PERF_N) "--lookahead off" "" - - - \
 	    -- $(NRF_FEEDBACK_ARGS)
+
+# The Phase 1 M4 rows alone: examples/adc on board.cir and as the KiCad
+# project, each with lookahead off vs on (the same protocol). Run it on an
+# otherwise idle host.
+cost-table-adc-kicad: firmware bb adc-kicad-prepare
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/adc-kicad $(PERF_N) "--lookahead off" "" - - - -- $(ADC_KICAD_ARGS)
 
 # ADR-005 step 6 speed gates (scripts/perf_ab.sh, interleaved, N = PERF_N,
 # medians): examples/adc on Breadboard's ADC model (bb defaults) against the
@@ -431,7 +445,7 @@ startup-perf: firmware bb
 # it uses the pool.
 POOL_EQUIV_OUT    ?= out/pool-equiv
 POOL_EQUIV_ROUNDS ?= 2
-pool-equiv: firmware bb
+pool-equiv: firmware bb adc-kicad-prepare
 	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
 	    "spike;$(SPIKE_HASHES);all;$(SPIKE_ARGS)" \
 	    "spike-1ms;$(PARTITION_HASHES);all;$(SPIKE_ARGS) --max-quantum 1ms" \
@@ -445,6 +459,7 @@ pool-equiv: firmware bb
 	    "adc-open;$(ADC_OPEN_HASHES);nongrant;$(ADC_OPEN_ARGS)" \
 	    "adc-stock;$(ADC_STOCK_HASHES);nongrant;$(ADC_STOCK_ARGS)" \
 	    "adc-open-stock;$(ADC_OPEN_STOCK_HASHES);nongrant;$(ADC_OPEN_STOCK_ARGS)" \
+	    "adc-kicad;$(ADC_KICAD_HASHES);nongrant;$(ADC_KICAD_ARGS)" \
 	    "nrf-feedback;$(NRF_FEEDBACK_HASHES);nongrant;$(NRF_FEEDBACK_ARGS)" \
 	    "nrf-feedback-off;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead off" \
 	    "nrf-feedback-noplugin;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead-plugin never"
@@ -681,10 +696,51 @@ DMS_S1_N ?= 5
 dms-s1-cost:
 	DMS_REPO=$(DMS_REPO) bash scripts/dms_s1.sh cost $(DMS_S1_N)
 
+# --- Phase 1 M4: KiCad import, board.bbm, projects (ADR-007) ---------------
+# examples/adc drawn in KiCad (examples/adc/kicad), as a bb.toml project. Its
+# runs use a copy off /mnt/c with the firmware recorded by `bb flash`
+# ($(ADC_KICAD_WORK)/net; `make adc-kicad-prepare` makes it).
+ADC_KICAD_WORK ?= $(HOME)/.cache/bb-adc-kicad
+ADC_KICAD_OUT  ?= out/adc-kicad
+ADC_KICAD_ARGS  = --project $(ADC_KICAD_WORK)/net --for $(ADC_FOR)
+ADC_KICAD_HASHES := tests/golden/adc-kicad/outputs.sha256
+
+# Gate M4a (scripts/adc_kicad.sh; in `make test`): board.bbm current; the
+# project run equal to its one-cell reference and to the committed
+# $(ADC_KICAD_HASHES); the .net and kicad-cli routes byte-identical (when
+# kicad-cli is installed; KICAD_REQUIRED=1 makes it a failure otherwise);
+# against board.cir's committed reference the non-grant records byte for
+# byte and nets.csv/nets.vcd within 1 mV with digital values exact
+# (ADR-007 D9's fallback; the cause, C1's 470n against 4.7e-7, is checked
+# byte for byte); bb run writes nothing into the project.
+adc-kicad: firmware bb
+	ADC_KICAD_WORK=$(ADC_KICAD_WORK) bash scripts/adc_kicad.sh $(BB) $(ADC_KICAD_OUT)
+adc-kicad-prepare: firmware bb
+	ADC_KICAD_WORK=$(ADC_KICAD_WORK) bash scripts/adc_kicad.sh --prepare $(BB)
+# The project's one-cell reference (lookahead off, ADC pushed at every
+# lattice point), for golden-update.
+adc-kicad-ref: adc-kicad-prepare
+	$(BB) run $(ADC_KICAD_ARGS) --lookahead off --adc-push every --out $(ADC_KICAD_OUT)-ref
+	$(PYTHON) scripts/check_adc.py $(ADC_KICAD_OUT)-ref
+
+# Gates M4b-M4f on the dial-me-spinner main board at 6854d25
+# (scripts/kicad_import.sh, about 20 s): counts, resolution, one board.bbm
+# from the committed netlist, fresh Linux and Windows kicad-cli exports and
+# a partial KiCad 10 re-save (dc96515's KiCad 9 netlist as the secondary
+# check), byte-identical re-imports, unchanged sources, and the version
+# refusals. Needs KiCad 10 in WSL and, unless KICAD_WINDOWS=0, the Windows
+# kicad-cli.exe. Not in `make test` (CI has no KiCad); the synthetic
+# two-board fixture (cli/tests/kicad_import.rs) is.
+kicad-import: bb
+	bash scripts/kicad_import.sh $(BB) out/kicad-import
+
 # --- Phase 1 M3: component packages (ADR-006) ------------------------------
 # The example boards whose parts come from packages; each has a bb.lock.
 PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
-              examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir
+              examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir \
+              examples/adc/kicad examples/dial-me-spinner
+# Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
+PKG_LOCAL := examples/adc/kicad/packages
 
 # ADR-006 G1 and the package gates of `make test`: every part.toml, pins.toml,
 # test vector and bb.lock validates against spec/schema (python3-jsonschema);
@@ -693,8 +749,8 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
 # every example's bb.lock is current (`bb open --check`).
 packages: bb
 	$(PYTHON) scripts/validate_packages.py
-	$(BB) pkg lint
-	$(BB) pkg test
+	$(BB) pkg lint packages $(PKG_LOCAL)
+	$(BB) pkg test packages $(PKG_LOCAL)
 	set -e; for b in $(PKG_BOARDS); do $(BB) open --check $$b; done
 	@echo "packages: PASS"
 

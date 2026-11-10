@@ -4,6 +4,11 @@ Status: normative, schema version 1 (ADR-003 D3/D4, plan step 3; version 0
 was Phase 0). Implementation: `bbcore::event`. Changing a record's fields,
 their order, or their meaning requires an ADR.
 
+Net names (ADR-007 D6, Phase 1 M4): `net` in `pin_edge` and `net_sample`
+is the net's **display name** (a project's KiCad net name, or the kernel
+net `<ref>.<pin>` of an MCU pin); Phase 0 names are unchanged. No record
+gained or lost a field, so the schema version stays 1.
+
 Version 1 changes, all from `docs/adr/003-cosim-speedup.md`: `limited_by`
 gains `loop_quantum` and `stop:<engine>` (the early stop of ADR-003 D5,
 in use since plan step 6, Amendment 6); `pin_edge` may repeat a net within
@@ -115,11 +120,19 @@ Result of a check. Benches and tests emit it; the scheduler does not.
 
 ## Companion outputs (not part of this stream)
 
-- `nets.csv` (`bbcore::CsvWriter`): header `t_fs,<net>,...`, followed by one row
+- `nets.csv` (`bbcore::CsvWriter`): header `t_fs,<net>,...` (display names; a
+  name that contains `,`, `"` or a line break is quoted as RFC 4180 says,
+  `bbcore::csv_field`), followed by one row
   per sample instant `k * period`. Digital values are `0`/`1`, analog values are
   volts with exactly 6 decimals (printed through integer µV), and an undriven
   net is an empty field.
-- `nets.vcd` (`bbcore::VcdWriter`): `$timescale 1 fs`, with no `$date`. Digital
+- `nets.vcd` (`bbcore::VcdWriter`): `$timescale 1 fs`, with no `$date`. The
+  `$var` reference names of a project's analog nets are their SPICE names
+  (`spec/board-bbm.md` section 4), MCU pins keep their kernel net names;
+  when any reference differs from its display name, a `$comment` block
+  after `$timescale` maps each such reference to its display name
+  (`  <reference> = <display name>`, one per line, sorted). Phase 0 names
+  need no mapping, so every Phase 0 file is unchanged. Digital
   nets are `wire 1`, one change per transition, stamped at `edge_time`. Analog
   nets are `real`, written only when the µV-rounded value changes, stamped at
   the boundary (`VcdWriter::new`) or, as `bb run` writes it, at the fixed

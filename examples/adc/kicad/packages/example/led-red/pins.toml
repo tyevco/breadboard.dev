@@ -1,0 +1,12 @@
+# example/led-red pins: KiCad's Device:LED numbering (1 = K, 2 = A).
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "K"
+role = "passive"
+
+[[pin]]
+number = "2"
+name = "A"
+role = "passive"

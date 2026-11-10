@@ -9,6 +9,8 @@
 //!
 //! Protocol: `docs/adr/002-time-grant-protocol.md`, `spec/time-grant.md`.
 
+pub mod board;
+pub mod cjson;
 pub mod engine;
 pub mod event;
 pub mod pin;

@@ -1,0 +1,22 @@
+# A synthetic two-board system (ADR-007 gate M4b): both boards have U1, TP1
+# and a VSYS net. cli/tests/kicad_import.rs edits copies of this file.
+schema = "bb-project/0"
+
+[project]
+name = "two boards"
+simulate = "a"
+
+[[board]]
+id = "a"
+netlist = "a.net"
+
+[[board]]
+id = "b"
+netlist = "b.net"
+
+[packages]
+paths = ["packages"]
+
+[[connection]]
+a = "a:U1"
+b = "b:U1"

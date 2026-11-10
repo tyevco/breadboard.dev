@@ -1,0 +1,26 @@
+# examples/dial-me-spinner/bb.toml: the Phase 1 reference board as a
+# Breadboard project (ADR-007 D5, spec/project.md).
+#
+# The main board is imported from the netlist vendored at dial-me-spinner
+# 6854d25 (KiCad 10.0.8; SOURCE), so `bb open` needs no KiCad. With KiCad 9
+# or 10 installed, `kicad = "kicad/main/dial-me-spinner-main.kicad_pro"`
+# gives the same board.bbm (gate M4c, `make kicad-import`).
+#
+# M6 adds the E1 bindings, probes and firmware target; the base board and
+# the harness ([[connection]]) are M11.
+schema = "bb-project/0"
+
+[project]
+name = "dial-me-spinner rev A"
+simulate = "main"
+
+[[board]]
+id = "main"
+netlist = "kicad/main/dial-me-spinner-main.net"
+ground = "GND"
+
+# J11 is two solder pads for the NFC coil's flex tail: no MPN, no LCSC and
+# no generic footprint, so resolution needs a decision (ADR-007 D4).
+[instances."main:J11"]
+package = "none"
+reason = "NFC coil pads: no RF model in Phase 1"

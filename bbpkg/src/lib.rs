@@ -9,6 +9,7 @@
 //! - [`lock`]: tree hashes, platform content hashes and `bb.lock`;
 //! - [`schema`]: schema ids, the versioning policy, migrations;
 //! - [`optsets`]: named solver option sets;
+//! - [`pattern`]: `mpn_patterns`, anchored regular expressions (ADR-007 D4);
 //! - [`sha256`].
 
 pub mod lint;
@@ -16,6 +17,7 @@ pub mod lock;
 pub mod obj;
 pub mod optsets;
 pub mod package;
+pub mod pattern;
 pub mod pkgtest;
 pub mod schema;
 pub mod sha256;

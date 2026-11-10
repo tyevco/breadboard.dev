@@ -6,7 +6,9 @@
   Context below was measured at `dc96515` and re-checked at `6854d25`
   (Context 12). Written before implementation because it adds
   normative schemas to `spec/` and changes output naming rules in
-  `spec/event-stream.md` and `spec/pin-model.md`.
+  `spec/event-stream.md` and `spec/pin-model.md`. **Implemented in M4
+  (2026-11-09; Amendment 1):** gates M4a-M4g pass, M4a through D9's stated
+  fallback, with its cause measured.
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestone M4, M6
   for D5, and M11 for systems.
 - **Depends on:** ADR-006 (packages, views, `pins.toml`, `bb.lock`, the
@@ -815,3 +817,162 @@ systems moved to M11. Not adopted as proposed:
   `.net` route.
 - **"Prefix-rename every view's top-level names."** See ADR-006 Review
   notes: Phase 1 refuses differing duplicates instead.
+
+## Amendment 1 (2026-11-09): M4 as implemented
+
+Plan M4 implemented D1-D7 and D9: the crate `importers/kicad` (`bb-kicad`:
+the S-expression reader, the netlist model and its gates, the schematic
+gates, the `kicad-cli` runner), `bbcore::board` and `bbcore::cjson` (the
+elaborated board and the canonical JSON), and in `bb` the project file and
+bench (`cli/src/project.rs`), names (`names.rs`), import and resolution
+(`import.rs`), elaboration (`elab.rs`) and the verbs `bb open`, `bb flash`,
+`bb run`, `bb probe`. The `spec/` changes listed above are applied:
+`spec/board-bbm.md`, `spec/canonical-json.md`, `spec/project.md`, their
+schemas (`board-bbm`, `project`, `bench`), and the amendments to
+`spec/pin-model.md` (glue rules 3 and 5, new rule 8) and
+`spec/event-stream.md`. The kernel, the time-grant protocol and every
+Phase 0 output are unchanged (`make test` with no golden update). Where the
+implementation settled something this ADR left open, or differs from its
+text, it is recorded here.
+
+1. **Gate M4a: D9's fallback, with its cause measured.** `examples/adc` is
+   drawn in KiCad (`examples/adc/kicad`: `build_schematic.py` draws it with
+   wires using the board author's own generator, prettycoolboards
+   `tools/schgen.py`, read from `PCB_TOOLS` and never modified; ERC 0
+   errors; the four signal nets carry global labels so their KiCad names
+   are the board file's node names). Imported and run as a project
+   (`make adc-kicad`), it gives board.cir's committed non-grant records
+   (every `pin_edge` and log line) byte for byte, and `nets.csv`/`nets.vcd`
+   with **2 of 180 006 analog samples 1 µV apart** (every digital value and
+   time identical). So the target, byte identity with the hand-written
+   hashes, is not met, and the gate is D9's stated fallback: byte identity
+   between the two generated routes (`netlist =` and `kicad =`: yes), a
+   waveform diff within the golden tolerance (1 mV; measured 1 µV), and an
+   identical `pin_edge` list (all non-grant records identical). The cause
+   is **not** the element order D9 anticipated: board.cir with its elements
+   in the generated deck's sorted order gives board.cir's bytes. It is the
+   number text. ngspice reads a number on an element line by accumulating
+   its digits and multiplying by a power of ten, so board.cir's `470n` is
+   470 × 10^-9 = 4.7000000000000005e-07 (one ulp above 470 nF), while the
+   generated deck passes `value=4.7e-7` to the `bb_generic_capacitor`
+   subckt, which ngspice's parameter evaluator reads as the correctly
+   rounded 4.7e-07 (measured with `@c[capacitance]`: `470n` and `470e-9`
+   give the first, `4.7e-7` and `{pv}` the second). The gate therefore
+   also requires that board.cir with `C1 ADC_IN 0 4.7e-7` gives the KiCad
+   run's `nets.csv`, `nets.vcd` and non-grant records **byte for byte**,
+   which it does: the difference is that ulp and nothing else. The
+   importer's value is the exact decimal of the KiCad text (ADR-006 D5), so
+   it is board.cir's text, not the import, that is one ulp off; emitting
+   ngspice's own rounding would need letter suffixes or primitive elements,
+   which ADR-006 D5 and Amendment 1 item 5 rule out. The project run mode
+   also has its own one-cell reference (`--lookahead off --adc-push
+   every`): the default run equals it except grant records, and both equal
+   the committed `tests/golden/adc-kicad/outputs.sha256` (`make
+   golden-update` writes it). `make pool-equiv` has an `adc-kicad`
+   configuration and `make cost-table` an `adc-kicad` row.
+2. **Gates M4b-M4f at `6854d25`** (`make kicad-import`,
+   `scripts/kicad_import.sh`; the synthetic two-board system and the
+   ordering-code case are `cli/tests/kicad_import.rs`, in `make test`):
+   - M4b: 201 parts, 142 nets, 657 pin nodes from the vendored netlist.
+   - M4f: 118 generic passives (89 C, 28 R, 1 L), 12 that need no model (3
+     mounting holes, 9 test points), 70 MPN parts unresolved, J11 by its
+     `bb.toml` override; without the override J11 is the only part with
+     neither an MPN nor an LCSC. U43 (DNP) is among the 70 and is
+     `excluded`, so 69 are `unmodelled`.
+   - M4c: the committed KiCad 10.0.8 netlist, a fresh Linux `kicad-cli`
+     10.0.8 export (as a `.net` and through `kicad =`), a Windows
+     `kicad-cli.exe` 10.0.8 export (through `kicad =`, and as a CRLF `.net`)
+     and the `kicad =` route after a partial KiCad 10 re-save (`kicad-cli
+     sch upgrade` on the root, `mcu` and `leds` sheets: 20260306 next to
+     20250114) give one `board.bbm` (sha256 `ce34981e…`, committed as
+     `examples/dial-me-spinner/board.bbm`). **Secondary (approver decision
+     C):** `dc96515`'s KiCad 9.0.9 netlist gives the identical `board.bbm`,
+     as Context 12 predicted; there is no difference to record.
+   - M4d: two `bb open` runs give byte-identical `board.bbm`, `bb.lock`,
+     `.bb/resolution.json` and `.bb/unresolved.toml`; the KiCad sources are
+     unchanged after `bb open` (no `.kicad_prl`); `bb run` changes no file
+     of the project (`make adc-kicad`).
+   - M4e: refused with an error naming the file: a sheet stamped 20261106,
+     a `.net` from `Eeschema 11.0.0`, a netlist with a stacked pin `[1-4]`,
+     and (beyond the gate) a netlist of format "D".
+   - M4g: `bbcore::cjson` unit tests.
+3. **Schema id.** `board.bbm` is `bb-board/0`, not D6's example
+   `bb-board/1`: every Breadboard schema is at major 0 (ADR-006 D11).
+4. **`board.bbm` details D6 left open** (`spec/board-bbm.md`): every
+   instance has a `status` (`ok`, `no_model`, `excluded`, `unmodelled`)
+   next to its `resolution`; `fields` holds only the D3 fields that are
+   present and not `~`; `flags` lists the set flags; a generic passive's
+   `value` is `{ohm_u|farad_a|henry_f, tol_ppm?, rating_uv?, power_uw?,
+   dielectric?, technology?}`; a net from KiCad's `unconnected-(…)` carries
+   `unconnected: true`; instances keep their D3 content even when excluded.
+5. **DNP and `exclude_from_sim` are orthogonal to the stages.** D4 lists
+   them under stage 6, after the generic stage. Taken literally, a DNP
+   passive would resolve generically and be simulated. Instead, every
+   stage runs as written (so D4's counts hold: C43 and R11 are among the
+   118 generic passives) and the flag sets status `excluded` with a reason,
+   so a DNP part is never in a deck.
+6. **The generic stage** uses each generic package's `[footprints] kicad`
+   globs (`Resistor_SMD:*`). The reference-prefix rule for a custom
+   footprint applies when no generic package names the footprint and the
+   reference is `R`, `C` or `L` followed by digits only (not `RV1`).
+7. **The pin-name rule (D3)** applies to packages whose kind is not
+   `passive`: generic passives name their pins `1` and `2` in `pins.toml`,
+   KiCad's `Device:R` names them `~`. It also requires every KiCad pin
+   number to be in the package's `pins.toml`. Module `pinmap`s are M5.
+8. **`bb run`'s currency check without `kicad-cli` per run.** For a
+   `netlist =` board `bb run` re-imports the `.net` in memory and requires
+   the result to equal `board.bbm` byte for byte (it loads the packages on
+   the search path, so a new package that would change resolution is
+   caught too). For a `kicad =` board it reads the netlist `bb open` cached
+   in `.bb/<board>.net`, after checking the sha256 of every schematic file
+   it was exported from (and of the cache) against `.bb/import.json`. The
+   cost before the engines start is under 20 ms with the packages off
+   `/mnt/c` and 0.2-1.2 s with the first-party packages on `/mnt/c` (WSL
+   file I/O; README cost table notes).
+9. **One elaborated-board type, two front ends (D9).** The type both front
+   ends produce, and the only one `bb run` executes, is the run plan
+   (`cli/src/board.rs`: the MCU part, its pin bindings with their pin
+   models, the SPICE deck). A project reaches it through `board.bbm` and
+   `elab.rs`; a board file maps onto it directly with its SPICE body
+   verbatim, as before. `bb open <board.cir>` still writes only `bb.lock`
+   (ADR-006 Amendment 1 item 3): a hand-written board has no `bb.toml`, and
+   the board file itself is what a diff shows. `board.bbm`'s `spice_body`
+   key is defined for a later writer.
+10. **Probes and names.** A probe may name a bound MCU pin (`U1.PA4`); its
+    output name is the Phase 0 kernel net `U1.PA4`. Test-point aliases
+    follow the instance rule (`a:TP1`; a bare `TP1` is ambiguous when two
+    boards have one). A probe whose net has nothing in the deck (no
+    in-scope part, source or glue) is refused. `bb probe` writes the names
+    as given and prints what each resolves to.
+11. **Output naming (D6, `spec/event-stream.md`).** `nets.csv` quotes a
+    header field only when it needs it; `nets.vcd` uses SPICE names as
+    references for a project's analog nets and adds the `$comment` map only
+    when a reference differs from its display name. Phase 0 files and the
+    KiCad ADC board's (whose nets are named as in board.cir) are unchanged.
+12. **What `bb run` writes for a project:** the Phase 0 outputs, `run.json`
+    (`spec/project.md` section 6; the run options that can change results,
+    so not `--renode` or `--renode-pool`, which never change outputs) and
+    `deck.cir`, the elaborated deck, for review. `bb run --elaborate-only`
+    writes only `deck.cir` and `run.json` and starts no engine. `bb flash`
+    checks the ELF magic and the package's behavioural engine; a target is
+    keyed `<board>:<ref>`.
+13. **The bench (D5)** is implemented now (supplies with series R,
+    tracking supplies, DC loads, `[nominal]`, PWL sources, `.temp`, the
+    analog scope with `exclude`, the two-drivers rule, the named option
+    set and the qualification check of ADR-006 D6, `--allow-unqualified`).
+    Its E1 gates are M6's; M4 tests its deck in `cli/tests/kicad_import.rs`.
+14. **Systems (M11).** Several `[[board]]`s import, with qualified names,
+    per-board SPICE prefixes and grounds, and `[[connection]]` names are
+    checked against the instances; mating pins and harness views are M11.
+15. **`kicad-cli` on Windows from WSL** cannot open `\\wsl.localhost`
+    paths, so the runner copies the project to the Windows temporary
+    directory (`%TEMP%`, or `$BB_KICAD_WINTMP`) and passes paths through
+    `wslpath -w`. `.bb/import.json` records the routes, sources and their
+    sha256, schematic versions, the netlist and `kicad-cli` tool strings and
+    the host; no date (nothing needs one).
+16. **No new crates.** `mpn_patterns` are matched by `bbpkg::pattern`, a
+    small anchored regular-expression matcher (literals, classes, groups,
+    alternation, greedy quantifiers; anchors and anything else refused),
+    the common subset with Python's `re`, which `validate_packages.py`
+    compiles them with.
+17. **D8 (PCB cross-check)** is deferred, as approver decision A7 allows.

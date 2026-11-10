@@ -16,3 +16,4 @@ bbpkg = { path = "../bbpkg" }
 serde_json.workspace = true
 bb-analog-ngspice = { path = "../engines/analog-ngspice" }
 bb-cpu-renode = { path = "../engines/cpu-renode" }
+bb-kicad = { path = "../importers/kicad" }

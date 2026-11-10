@@ -5,6 +5,7 @@ members = [
     "bbpkg",
     "engines/analog-ngspice",
     "engines/cpu-renode",
+    "importers/kicad",
     "cli",
 ]
 

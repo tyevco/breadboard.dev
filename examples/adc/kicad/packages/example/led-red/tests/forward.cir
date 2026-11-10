@@ -1,0 +1,2 @@
+* example/led-red: 3.3 V through 330 ohm into X1 (A = led, K = 0).
+R1 in led 330

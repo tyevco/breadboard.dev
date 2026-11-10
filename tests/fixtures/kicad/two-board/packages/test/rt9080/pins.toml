@@ -1,0 +1,26 @@
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "VIN"
+role = "power_in"
+
+[[pin]]
+number = "2"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "3"
+name = "EN"
+role = "input"
+
+[[pin]]
+number = "4"
+name = "NC"
+role = "nc"
+
+[[pin]]
+number = "5"
+name = "VOUT"
+role = "power_out"

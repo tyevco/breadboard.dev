@@ -1,0 +1,42 @@
+# example/led-red: the red LED of Breadboard's examples (examples/spike and
+# examples/adc board.cir), as a project-local package of the KiCad drawing
+# of examples/adc (ADR-006 D1: a project's [packages] paths come before the
+# first-party directory). D1 names it with its bb:part field (ADR-007 D4
+# stage 2).
+schema = "bb-part/0"
+
+[part]
+id = "example/led-red"
+version = "0.1.0"
+kind = "discrete"
+license = "Apache-2.0"
+description = "A red LED: the diode model of Phase 0's examples (IS 1e-18, N 2, RS 2 ohm, CJO 10 pF)"
+
+[footprints]
+kicad = ["LED_SMD:LED_0603_1608Metric"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "diode"
+purpose = "the LED as a junction diode, as examples/spike and examples/adc state it"
+fidelity = ["fast"]
+default_for = ["fast"]
+file = "analog/led_red.lib"
+subckt = "example_led_red"
+ports = ["A", "K"]
+
+[analog.provenance]
+source = "estimated"
+base = "the .model LED_RED of examples/spike/board.cir (Phase 0)"
+not_modelled = ["light output", "temperature", "reverse breakdown", "colour-dependent forward voltage spread"]
+generated_by = "Claude (Phase 1 M4)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

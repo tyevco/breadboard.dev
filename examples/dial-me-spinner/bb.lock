@@ -1,0 +1,21 @@
+# bb.lock: written by `bb open` (ADR-006 D8). Do not edit; `bb open --update-lock`
+# rewrites the entries whose package tree or platform content changed.
+schema = "bb-lock/0"
+
+[[package]]
+id = "generic/capacitor"
+version = "0.1.0"
+path = "../../packages/generic/capacitor"
+tree = "sha256:f6f2a224bd735b89eb12d5f6baa3017a669a18c25bbeb146b7925e06ba140d60"
+
+[[package]]
+id = "generic/inductor"
+version = "0.1.0"
+path = "../../packages/generic/inductor"
+tree = "sha256:8206cbc66920565f9276342ee9d34eeb7e85c688fefbc051514b5e4a2f73c5c1"
+
+[[package]]
+id = "generic/resistor"
+version = "0.1.0"
+path = "../../packages/generic/resistor"
+tree = "sha256:f2dfbfccbbffbdae5524b6fe1c7cc0c01b066f7385799d289640cac8e47eb39a"

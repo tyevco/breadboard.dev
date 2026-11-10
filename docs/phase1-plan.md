@@ -10,7 +10,10 @@
   (ADR-006 Amendment 1), the Phase 0 examples through packages with their
   committed hashes, setup timed in a clean container; Review notes: M3).
   M2 done (2026-11-09: the nRF52840 platform and its gates, ADR-008
-  Amendment 2; Review notes: M2).
+  Amendment 2; Review notes: M2). M4 done (2026-11-09: the KiCad importer,
+  `board.bbm`, projects and `bb open`/`flash`/`run`/`probe`, ADR-007
+  Amendment 1; gate (a) through ADR-007 D9's stated fallback, with its
+  cause measured; Review notes: M4).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -741,3 +744,72 @@ ADR-006/007/008. Items not adopted as proposed:
   set, until packages (M5) and the importer (M4/M6) supply the set and the
   unbound pins. The platform identity `nrf52840-bb@1` is a row of M3's
   `cli/src/platforms.rs`; no package names it until M5.
+
+## Review notes: M4 (2026-11-09)
+
+- **What exists.** The crate `importers/kicad` (an S-expression reader, the
+  netlist model and its version gates, the schematic gates, the
+  `kicad-cli` runner on a temporary copy of the project, Linux or the
+  Windows build from WSL); `bbcore::board` and `bbcore::cjson` (`board.bbm`
+  and the integer-only canonical JSON); in `bb` the project file and bench,
+  names, resolution (D4, with `mpn_patterns` matched by `bbpkg::pattern`),
+  elaboration, and `bb open` (projects, `.kicad_pro`, `.net`), `bb flash`,
+  `bb run --project` (read-only; writes `run.json` and `deck.cir`;
+  `--elaborate-only`) and `bb probe`. Normative: `spec/board-bbm.md`,
+  `spec/canonical-json.md`, `spec/project.md` and the `board-bbm`,
+  `project` and `bench` schemas (validated in `make packages`), and the
+  ADR-007 amendments of `spec/pin-model.md` and `spec/event-stream.md`.
+  Examples: `examples/adc/kicad` (the ADC board drawn in KiCad, with the
+  local package `example/led-red`) and `examples/dial-me-spinner/bb.toml`
+  with its committed `board.bbm` and `bb.lock`. ADR-007 Amendment 1
+  records what the implementation settled.
+- **Gate (a), `make adc-kicad` (in `make test`).** The KiCad drawing of
+  `examples/adc`, imported and run as a project, gives board.cir's
+  committed non-grant records (every `pin_edge` and log line) byte for
+  byte; `nets.csv` and `nets.vcd` differ in 2 of 180 006 analog samples,
+  by 1 µV. So byte identity with the hand-written hashes is **not** met,
+  and the gate as applied is ADR-007 D9's stated fallback (byte identity
+  between the `.net` and `kicad-cli` routes: yes; within the golden
+  tolerance of 1 mV: 1 µV; an identical `pin_edge` list: yes). The cause
+  was measured, not assumed, and the script checks it: board.cir writes C1
+  as `470n`, which ngspice reads as 470 × 10^-9, one ulp above the
+  correctly rounded 4.7e-7 that the generated deck passes through a subckt
+  parameter; board.cir with `4.7e-7` gives the KiCad run's files byte for
+  byte, and the element order does not matter. The project run mode has
+  its own one-cell reference and committed hashes
+  (`tests/golden/adc-kicad`), a `make pool-equiv` configuration and a cost
+  row (README). `bb run` changes no file of the project.
+- **Gates (b)-(e), `make kicad-import` (KiCad 10.0.8 in WSL and on
+  Windows; about 20 s) and `cli/tests/kicad_import.rs` (in `make
+  test`).** (b) Main board at `6854d25`: 201 parts, 142 nets, 657 pin
+  nodes; the synthetic two-board fixture refuses a bare `U1` in
+  `[instances]`, `[[bind]]` and `--probe` with both candidates listed
+  (`a:U1 (RT9080-33GJ5), b:U1 (BQ25180YBGR)`), resolves `a:U1`, a leaf net
+  within the simulated board, and qualified test-point aliases. (c) One
+  `board.bbm` from the committed netlist, a fresh Linux `kicad-cli` export
+  (as a `.net` and through `kicad =`), the Windows `kicad-cli.exe` (through
+  `kicad =` and as a CRLF `.net`) and a partial KiCad 10 re-save (three
+  sheets at 20260306, four at 20250114). Secondary (decision C):
+  `dc96515`'s KiCad 9.0.9 netlist gives the **identical** `board.bbm`; no
+  difference to record. (d) Two imports byte-identical (`board.bbm`,
+  `bb.lock`, `.bb/resolution.json`, `.bb/unresolved.toml`); the KiCad
+  sources unchanged (no `.kicad_prl`). (e) Refused: a sheet stamped
+  20261106, a `.net` from Eeschema 11, a stacked pin `[1-4]`. ADR-007's own
+  M4f (resolution counts: 118 generic, 12 no-model, 70 MPN parts
+  unresolved, J11 the only part with no key; `RT9080-33GJ5` never binds to
+  a package that lists only `RT9080`) and M4g (canonical JSON) pass too.
+- **Deviations (ADR-007 Amendment 1).** Gate (a) through D9's fallback
+  (item 1); `bb-board/0`, not `/1` (item 3); DNP and `exclude_from_sim`
+  set status `excluded` without changing the stage, so D4's counts hold and
+  a DNP part is never simulated (item 5); the pin-name rule skips passive
+  packages (item 7); `bb run` checks currency by re-importing (or from the
+  netlist cached in `.bb/` after hashing every schematic) instead of
+  running `kicad-cli` per run (item 8); `bb open <board.cir>` still writes
+  only `bb.lock`, and the shared type of the two front ends is the run plan
+  (item 9); the bench of D5 is implemented now but gated at M6 (item 13);
+  the PCB cross-check (D8) is deferred (decision A7).
+- **Cost.** Simulation of the KiCad project equals the board file's
+  (README cost table: 1.13 s against 1.09 s of simulation, 2.64 s against
+  2.62 s in total, defaults, fresh, load 1.6-2.2). The front end (import,
+  lock and currency check, elaboration) takes under 20 ms with the packages
+  off `/mnt/c`, 0.2-1.2 s with the first-party packages on `/mnt/c`.

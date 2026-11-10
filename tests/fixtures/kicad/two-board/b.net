@@ -1,0 +1,18 @@
+(export (version "E")
+  (design (source "b.kicad_sch") (date "2026-11-09T00:00:00") (tool "Eeschema 9.0.9"))
+  (components
+    (comp (ref "U1") (value "BQ25180YBGR") (footprint "Package_BGA:Texas_DSBGA-8_0.9x1.6mm_Layout2x4_P0.4mm")
+      (fields (field (name "MPN") "BQ25180YBGR"))
+      (libsource (lib "Battery_Management") (part "BQ25180"))
+      (sheetpath (names "/") (tstamps "/")))
+    (comp (ref "TP1") (value "VBUS") (footprint "TestPoint:TestPoint_Pad_D1.0mm")
+      (libsource (lib "Connector") (part "TestPoint"))
+      (sheetpath (names "/") (tstamps "/"))))
+  (libparts
+    (libpart (lib "Battery_Management") (part "BQ25180")
+      (pins (pin (num "A1") (name "VIN") (type "power_in")) (pin (num "B1") (name "SYS") (type "power_out")) (pin (num "C1") (name "GND") (type "power_in"))))
+    (libpart (lib "Connector") (part "TestPoint") (pins (pin (num "1") (name "1") (type "passive")))))
+  (nets
+    (net (code "1") (name "VSYS") (node (ref "U1") (pin "B1")))
+    (net (code "2") (name "VBUS") (node (ref "U1") (pin "A1")) (node (ref "TP1") (pin "1")))
+    (net (code "3") (name "GND") (node (ref "U1") (pin "C1")))))

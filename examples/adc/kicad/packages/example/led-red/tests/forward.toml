@@ -1,0 +1,21 @@
+# The forward operating point: 3.3 V through 330 ohm (examples/adc's ALARM
+# path, R3 and D1).
+schema = "bb-pkgtest/0"
+view = "diode"
+circuit = "forward.cir"
+stop = "2ms"
+
+[ports]
+A = "led"
+K = "0"
+
+[[edge]]
+net = "in"
+model = { voh = "3.3V", vol = "0V", rise = "5ns", fall = "5ns", zout = "0" }
+at = [["1ms", "high"]]
+
+[[expect]]
+meas = { node = "led", at = "2ms" }
+value = "1.871157V"
+tol = "0.1mV"
+source = "analytic: Vd = N Vt ln(I/IS + 1) + I RS with I = (3.3 V - Vd)/330, Vt = kT/q at 27 C (25.8649 mV): Vd = 1.871157 V"

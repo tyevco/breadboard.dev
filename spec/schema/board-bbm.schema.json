@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://breadboard.dev/spec/schema/board-bbm.schema.json",
+  "title": "bb-board/0: board.bbm, the elaborated board (spec/board-bbm.md, ADR-007 D6). Canonical JSON, integers only (spec/canonical-json.md)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "boards", "nets", "instances", "platforms", "probes"],
+  "properties": {
+    "schema": { "const": "bb-board/0" },
+    "boards": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "ground"],
+        "properties": { "id": { "type": "string" }, "ground": { "type": "string" } }
+      }
+    },
+    "nets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "board", "spice", "nodes"],
+        "properties": {
+          "name": { "type": "string" },
+          "board": { "type": "string" },
+          "spice": { "type": "string", "pattern": "^(0|[A-Za-z_][A-Za-z0-9_]*)$" },
+          "nodes": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+          "unconnected": { "const": true }
+        }
+      }
+    },
+    "instances": { "type": "array", "items": { "$ref": "#/$defs/instance" } },
+    "platforms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "content"],
+        "properties": { "id": { "type": "string" }, "content": { "$ref": "#/$defs/hash" } }
+      }
+    },
+    "probes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alias", "net"],
+        "properties": { "alias": { "type": "string" }, "net": { "type": "string" } }
+      }
+    },
+    "connections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["a", "b"],
+        "properties": {
+          "a": { "type": "string" },
+          "b": { "type": "string" },
+          "model": { "type": "string" },
+          "pins": { "type": "array", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+        }
+      }
+    },
+    "spice_body": { "type": "string" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "int": { "type": "integer" },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "pin"],
+      "properties": { "ref": { "type": "string" }, "pin": { "type": "string" } }
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["board", "ref", "value_text", "footprint", "lib", "part", "sheet", "status", "resolution", "pins"],
+      "properties": {
+        "board": { "type": "string" },
+        "ref": { "type": "string" },
+        "value_text": { "type": "string" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "ohm_u": { "$ref": "#/$defs/int" },
+            "farad_a": { "$ref": "#/$defs/int" },
+            "henry_f": { "$ref": "#/$defs/int" },
+            "tol_ppm": { "$ref": "#/$defs/int" },
+            "rating_uv": { "$ref": "#/$defs/int" },
+            "power_uw": { "$ref": "#/$defs/int" },
+            "dielectric": { "type": "string" },
+            "technology": { "type": "string" }
+          },
+          "oneOf": [
+            { "required": ["ohm_u"] },
+            { "required": ["farad_a"] },
+            { "required": ["henry_f"] }
+          ]
+        },
+        "footprint": { "type": "string" },
+        "lib": { "type": "string" },
+        "part": { "type": "string" },
+        "sheet": { "type": "string" },
+        "fields": { "type": "object", "additionalProperties": { "type": "string" } },
+        "flags": { "type": "array", "items": { "enum": ["dnp", "exclude_from_bom", "exclude_from_sim"] } },
+        "package": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "tree"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z0-9._-]+/[a-z0-9._-]+$" },
+            "version": { "type": "string" },
+            "tree": { "$ref": "#/$defs/hash" }
+          }
+        },
+        "resolution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stage"],
+          "properties": {
+            "stage": { "enum": ["override", "bb_part", "mpn", "lcsc", "generic", "no_model", "unresolved"] },
+            "key": { "type": "string" }
+          }
+        },
+        "status": { "enum": ["ok", "no_model", "excluded", "unmodelled"] },
+        "reason": { "type": "string" },
+        "pins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["number", "name"],
+            "properties": { "number": { "type": "string" }, "name": { "type": "string" }, "net": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://breadboard.dev/spec/schema/bench.schema.json",
+  "title": "bb-bench/0: a Phase 1 bench (spec/project.md section 3, ADR-007 D5)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema"],
+  "properties": {
+    "schema": { "const": "bb-bench/0" },
+    "temp_c": { "type": "string" },
+    "supply": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["net", "volts"],
+        "properties": {
+          "net": { "type": "string" },
+          "volts": { "type": "string" },
+          "rs": { "type": "string" },
+          "track": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["net", "drop"],
+            "properties": { "net": { "type": "string" }, "drop": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "load": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["net", "amps"],
+        "properties": { "net": { "type": "string" }, "amps": { "type": "string" } }
+      }
+    },
+    "nominal": { "type": "object", "additionalProperties": { "type": "string" } },
+    "pwl": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["net", "points"],
+        "properties": {
+          "net": { "type": "string" },
+          "rs": { "type": "string" },
+          "points": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 }
+          }
+        }
+      }
+    },
+    "analog": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nets": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["set"],
+      "properties": { "set": { "type": "string" } }
+    }
+  }
+}

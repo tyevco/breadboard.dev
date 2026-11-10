@@ -1,0 +1,54 @@
+# examples/adc/kicad/bb.toml: examples/adc drawn in KiCad (Phase 1 plan M4,
+# gate M4a; ADR-007 D9), as a Breadboard project (ADR-007 D5).
+#
+# The circuit of ../board.cir, drawn by build_schematic.py and exported by
+# kicad-cli 10.0.8 to adc.net. `bb open` imports it, resolves U1 by its MPN
+# (st/stm32f072rb), R1-R3 and C1 by footprint plus value (generic/*) and D1
+# by its bb:part field (the local package example/led-red), and writes
+# board.bbm and bb.lock. `make adc-kicad` runs it and requires nets.csv,
+# nets.vcd and the non-grant records of ../board.cir's committed one-cell
+# reference (tests/golden/adc/outputs.sha256), byte for byte.
+#
+# The firmware target is not committed: the ELF is built by `make firmware`,
+# and `make adc-kicad` records it with `bb flash` in a copy of this
+# directory (bb run never writes into a project).
+schema = "bb-project/0"
+
+[project]
+name = "examples/adc, drawn in KiCad"
+
+[[board]]
+id = "main"
+netlist = "adc.net"            # or: kicad = "adc.kicad_pro" (the same board.bbm)
+ground = "GND"
+
+[packages]
+paths = ["packages"]
+
+# U1's pins, in board.cir's order, each with the package's parameter set
+# `default` (st/stm32f072rb pins.toml).
+[[bind]]
+pin = "U1.PA4"
+model = "digital_out"
+net = "DRIVE"
+
+[[bind]]
+pin = "U1.PA1"
+model = "adc_in"
+net = "ADC_IN"
+
+[[bind]]
+pin = "U1.PA5"
+model = "digital_out"
+net = "ALARM"
+
+[[bind]]
+pin = "U1.PA6"
+model = "digital_out"
+
+[[bind]]
+pin = "U1.PA7"
+model = "digital_out"
+
+[probes]
+nets = ["ADC_IN", "U1.PA4", "U1.PA5", "U1.PA6", "U1.PA7", "LED"]

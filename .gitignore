@@ -7,5 +7,9 @@ build/
 .cache/
 .venv/
 __pycache__/
+# bb open: its non-canonical outputs (.bb/import.json holds the host; ADR-007 D6)
+.bb/
+# kicad-cli writes it next to a .kicad_pro (ADR-007 Context 3)
+*.kicad_prl
 # Committed prebuilt firmware (ADR-008 D5): the nRF52840 Zephyr gate image.
 !engines/cpu-renode/tests/firmware/nrf52840/zephyr/prebuilt/*.elf

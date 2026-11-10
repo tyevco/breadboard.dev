@@ -1,0 +1,9 @@
+[package]
+name = "bb-kicad"
+description = "Breadboard's KiCad importer (ADR-007): an S-expression reader, the netlist model, version gates and the kicad-cli runner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]

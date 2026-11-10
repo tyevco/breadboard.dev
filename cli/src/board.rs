@@ -154,53 +154,71 @@ enum Val<'a> {
     Pkg(Param),
 }
 
-/// The parameters of one `*bb pin` line.
+/// The parameters of one pin binding.
 struct Params<'a> {
-    lineno: usize,
+    ctx: String,
     map: BTreeMap<&'a str, Val<'a>>,
+    supply: Option<SupplyFn<'a>>,
 }
 
 impl<'a> Params<'a> {
     fn take(&mut self, key: &str) -> Result<Val<'a>, String> {
-        let lineno = self.lineno;
+        let ctx = &self.ctx;
         self.map
             .remove(key)
-            .ok_or_else(|| format!("line {lineno}: missing {key}="))
+            .ok_or_else(|| format!("{ctx}: missing {key}="))
     }
     fn volts(&mut self, key: &str) -> Result<f64, String> {
-        let lineno = self.lineno;
-        match self.take(key)? {
-            Val::Text(v) => volts(lineno, key, v),
+        let v = self.take(key)?;
+        let ctx = &self.ctx;
+        match v {
+            Val::Text(v) => volts(ctx, key, v),
             Val::Pkg(Param::Quantity(q)) => Ok(to_f64(q, Dim::Voltage)),
-            Val::Pkg(Param::Supply { pin, .. }) => Err(format!(
-                "line {lineno}: {key} is the supply reference {pin}, which needs a bench to \
-                 resolve (a bb.toml project, ADR-007 D5); give {key}= a number here"
-            )),
-            Val::Pkg(Param::Name(n)) => Err(format!("line {lineno}: {key}={n}: not a number")),
+            Val::Pkg(Param::Supply { pin, factor }) => match self.supply {
+                Some(f) => {
+                    let uv = f(&pin).map_err(|e| format!("{ctx}: {key} = {pin}: {e}"))?;
+                    let d = bbpkg::value::Decimal {
+                        mant: factor
+                            .mant
+                            .checked_mul(uv)
+                            .ok_or_else(|| format!("{ctx}: {key}: out of range"))?,
+                        exp: factor.exp - 6,
+                    };
+                    Ok(d.to_f64())
+                }
+                None => Err(format!(
+                    "{ctx}: {key} is the supply reference {pin}, which needs a bench to \
+                     resolve (a bb.toml project, ADR-007 D5); give {key}= a number here"
+                )),
+            },
+            Val::Pkg(Param::Name(n)) => Err(format!("{ctx}: {key}={n}: not a number")),
         }
     }
     fn quantity(&mut self, key: &str, dim: Dim) -> Result<f64, String> {
-        let lineno = self.lineno;
-        match self.take(key)? {
-            Val::Text(v) => volts(lineno, key, v),
+        let v = self.take(key)?;
+        let ctx = &self.ctx;
+        match v {
+            Val::Text(v) => volts(ctx, key, v),
             Val::Pkg(Param::Quantity(q)) => Ok(to_f64(q, dim)),
-            Val::Pkg(_) => Err(format!("line {lineno}: {key}: expected a number")),
+            Val::Pkg(_) => Err(format!("{ctx}: {key}: expected a number")),
         }
     }
     fn time(&mut self, key: &str) -> Result<Time, String> {
-        let lineno = self.lineno;
-        match self.take(key)? {
-            Val::Text(v) => time(lineno, key, v),
+        let v = self.take(key)?;
+        let ctx = &self.ctx;
+        match v {
+            Val::Text(v) => time(ctx, key, v),
             Val::Pkg(Param::Quantity(q)) => u64::try_from(q)
                 .map(Time::from_fs)
-                .map_err(|_| format!("line {lineno}: {key} out of range")),
-            Val::Pkg(_) => Err(format!("line {lineno}: {key}: expected a time")),
+                .map_err(|_| format!("{ctx}: {key} out of range")),
+            Val::Pkg(_) => Err(format!("{ctx}: {key}: expected a time")),
         }
     }
     fn bits(&mut self, key: &str) -> Result<u32, String> {
-        let lineno = self.lineno;
-        let bad = |b: &str| format!("line {lineno}: bits={b:?}: expected 1 to 16");
-        match self.take(key)? {
+        let v = self.take(key)?;
+        let ctx = &self.ctx;
+        let bad = |b: &str| format!("{ctx}: bits={b:?}: expected 1 to 16");
+        match v {
             Val::Text(b) => b
                 .parse()
                 .ok()
@@ -246,18 +264,18 @@ fn take<'a>(
         .ok_or_else(|| format!("line {lineno}: missing {key}="))
 }
 
-fn volts(lineno: usize, key: &str, v: &str) -> Result<f64, String> {
+fn volts(ctx: &str, key: &str, v: &str) -> Result<f64, String> {
     let x: f64 = v
         .parse()
-        .map_err(|_| format!("line {lineno}: {key}={v:?} is not a number"))?;
+        .map_err(|_| format!("{ctx}: {key}={v:?} is not a number"))?;
     if !x.is_finite() {
-        return Err(format!("line {lineno}: {key}={v:?} is not finite"));
+        return Err(format!("{ctx}: {key}={v:?} is not finite"));
     }
     Ok(x)
 }
 
-fn time(lineno: usize, key: &str, v: &str) -> Result<Time, String> {
-    v.parse().map_err(|e| format!("line {lineno}: {key}: {e}"))
+fn time(ctx: &str, key: &str, v: &str) -> Result<Time, String> {
+    v.parse().map_err(|e| format!("{ctx}: {key}: {e}"))
 }
 
 fn no_extra(lineno: usize, kv: &BTreeMap<&str, &str>) -> Result<(), String> {
@@ -393,182 +411,31 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
                     .expect("checked above")
                     .clone();
                 let pkg = part_def.package.as_ref().map(|id| &packages[id]);
-                if set.is_some() && pkg.is_none() {
-                    return Err(format!(
-                        "line {lineno}: set= needs a part given by package= (a parameter set of its pins.toml)"
-                    ));
-                }
-                // The parameters: the board's own text, or (a package part)
-                // the package's set overridden by explicit keys.
-                let mut params = Params {
-                    lineno,
-                    map: BTreeMap::new(),
-                };
-                match pkg {
-                    None => {
-                        for (k, v) in std::mem::take(&mut kv) {
-                            params.map.insert(k, Val::Text(v));
-                        }
-                    }
-                    Some(pkg) => {
-                        let pin_def = pkg.pins.by_name(pin).ok_or_else(|| {
-                            format!(
-                                "line {lineno}: {name}: {} has no pin {pin} in pins.toml",
-                                pkg.part.id
-                            )
-                        })?;
-                        if !pin_def.models.iter().any(|m| m == model_kind) {
-                            return Err(format!(
-                                "line {lineno}: {name}: pin {pin} of {} does not allow model {model_kind} (it allows: {})",
-                                pkg.part.id,
-                                if pin_def.models.is_empty() {
-                                    "none".to_string()
-                                } else {
-                                    pin_def.models.join(", ")
-                                }
-                            ));
-                        }
-                        let spec = pin_model_params(model_kind).ok_or_else(|| {
-                            format!(
-                                "line {lineno}: model={model_kind} not supported (digital_out, digital_in, adc_in)"
-                            )
-                        })?;
-                        // A digital_out without net= is unconnected: no
-                        // parameters from the package either.
-                        let connected = net.is_some() || model_kind != "digital_out";
-                        let mut from_pkg = if connected {
-                            param_set(pkg, model_kind, set)
-                                .map_err(|e| format!("line {lineno}: {e}"))?
-                        } else {
-                            BTreeMap::new()
-                        };
-                        // `model` and `load` (adc_in, ADR-008 D7) are not
-                        // Phase 0 parameters: refuse what bb run cannot honour.
-                        for k in ["model", "load"] {
-                            if from_pkg.remove(k).is_some() {
-                                return Err(format!(
-                                    "line {lineno}: {name}: the package's adc_in set has {k}=, which bb run does not support yet"
-                                ));
-                            }
-                        }
-                        for (k, v) in std::mem::take(&mut kv) {
-                            let pk = spec
-                                .iter()
-                                .find(|(p, ..)| *p == k)
-                                .map(|(_, kind, _)| *kind)
-                                .ok_or_else(|| format!("line {lineno}: unknown key {k:?}"))?;
-                            if matches!(pk, ParamKind::Name) {
-                                return Err(format!("line {lineno}: {k}= is not supported here"));
-                            }
-                            let explicit = parse_param(v, pk)
-                                .map_err(|e| format!("line {lineno}: {k}: {e}"))?;
-                            if let Some(pv) = from_pkg.get(k) {
-                                if *pv != explicit {
-                                    warnings.push(format!(
-                                        "line {lineno}: {name}: {k}={v} overrides {}'s value (set {})",
-                                        pkg.part.id,
-                                        set.unwrap_or("default")
-                                    ));
-                                }
-                            }
-                            from_pkg.insert(k.to_string(), explicit);
-                        }
-                        for (k, v) in from_pkg {
-                            let key: &'static str = spec
-                                .iter()
-                                .find(|(p, ..)| *p == k)
-                                .map(|(p, ..)| *p)
-                                .expect("a known parameter");
-                            params.map.insert(key, Val::Pkg(v));
-                        }
-                    }
-                }
-                let kind = match (model_kind, net) {
-                    ("digital_out", Some(net)) => {
-                        if pins.iter().any(|p| {
-                            matches!(&p.kind, PinKind::Out { net: n, .. } if n.eq_ignore_ascii_case(&net))
-                        }) {
-                            return Err(format!(
-                                "line {lineno}: net {net} already driven by another pin"
-                            ));
-                        }
-                        let model = DigitalOut {
-                            voh: params.volts("voh")?,
-                            vol: params.volts("vol")?,
-                            rise: params.time("rise")?,
-                            fall: params.time("fall")?,
-                            zout: params.quantity("zout", Dim::Resistance)?,
-                        };
-                        if model.zout < 0.0 {
-                            return Err(format!("line {lineno}: zout must be >= 0"));
-                        }
-                        PinKind::Out { net, model }
-                    }
-                    ("digital_out", None) => {
-                        if let Some(k) = params.first_key() {
-                            return Err(format!(
-                                "line {lineno}: {k}=: a digital_out without net= is not \
-                                 connected to the circuit and takes no electrical keys"
-                            ));
-                        }
-                        PinKind::OutUnconnected
-                    }
-                    ("digital_in", Some(net)) => {
-                        let model = DigitalIn {
-                            vih: params.volts("vih")?,
-                            vil: params.volts("vil")?,
-                            cin: params.quantity("cin", Dim::Capacitance)?,
-                        };
-                        if model.vil >= model.vih {
-                            return Err(format!("line {lineno}: digital_in needs vil < vih"));
-                        }
-                        if model.cin < 0.0 {
-                            return Err(format!("line {lineno}: cin must be >= 0"));
-                        }
-                        PinKind::In { net, model }
-                    }
-                    ("digital_in", None) => {
-                        return Err(format!("line {lineno}: digital_in needs net="))
-                    }
-                    ("adc_in", Some(net)) => {
-                        let platform = &part_def.platform;
-                        let channel = match pkg {
-                            Some(pkg) if platform == "stm32f072" => package_adc_channel(pkg, pin),
-                            _ => adc_channel(platform, pin),
-                        }
-                        .ok_or_else(|| {
-                            format!(
-                                "line {lineno}: {name}: no ADC channel on this pin of \
-                                 platform={platform} (adc_in needs stm32f072: PA0-7, PB0-1, PC0-5)"
-                            )
-                        })?;
-                        let vref = params.volts("vref")?;
-                        if vref <= 0.0 {
-                            return Err(format!("line {lineno}: vref must be > 0"));
-                        }
-                        let bits = params.bits("bits")?;
-                        PinKind::Adc {
-                            net,
-                            model: AdcIn {
-                                vref,
-                                bits,
-                                key: bbcore::AdcKey::Code12,
-                            },
-                            channel,
-                        }
-                    }
-                    ("adc_in", None) => return Err(format!("line {lineno}: adc_in needs net=")),
-                    (other, _) => {
+                let explicit: Vec<(&str, &str)> = std::mem::take(&mut kv).into_iter().collect();
+                let kind = build_pin(
+                    &PinReq {
+                        ctx: &format!("line {lineno}"),
+                        name,
+                        part: &part_def,
+                        pkg,
+                        pin,
+                        model: model_kind,
+                        set,
+                        net,
+                        explicit: &explicit,
+                        supply: None,
+                    },
+                    &mut warnings,
+                )?;
+                if let PinKind::Out { net, .. } = &kind {
+                    if pins.iter().any(|p| {
+                        matches!(&p.kind, PinKind::Out { net: n, .. } if n.eq_ignore_ascii_case(net))
+                    }) {
                         return Err(format!(
-                            "line {lineno}: model={other} not supported (digital_out, digital_in, \
-                             adc_in)"
-                        ))
+                            "line {lineno}: net {net} already driven by another pin"
+                        ));
                     }
-                };
-                if let Some(k) = params.first_key() {
-                    return Err(format!("line {lineno}: unknown key {k:?}"));
                 }
-                no_extra(lineno, &kv)?;
                 pins.push(PinBinding {
                     part: part.to_string(),
                     pin: pin.to_string(),
@@ -585,6 +452,205 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         packages: packages.into_values().collect(),
         warnings,
     })
+}
+
+/// Resolves a supply pin reference (`VDD`, ADR-006 D4) to µV.
+pub type SupplyFn<'a> = &'a dyn Fn(&str) -> Result<i128, String>;
+
+/// One pin binding to build: a `*bb pin` line of a board file, or a
+/// `[[bind]]` of a project (ADR-007 D5).
+pub struct PinReq<'a> {
+    /// Message prefix (`line 12`, `bb.toml [[bind]] U1.PA4`).
+    pub ctx: &'a str,
+    /// `<part>.<pin>`, for messages.
+    pub name: &'a str,
+    pub part: &'a Part,
+    pub pkg: Option<&'a Package>,
+    pub pin: &'a str,
+    pub model: &'a str,
+    pub set: Option<&'a str>,
+    /// The circuit node (SPICE name), or `None` (an unconnected output).
+    pub net: Option<String>,
+    /// Explicit parameter keys, as text.
+    pub explicit: &'a [(&'a str, &'a str)],
+    /// Supply references resolve through this (a project's bench); `None`
+    /// refuses them (a board file has no bench).
+    pub supply: Option<SupplyFn<'a>>,
+}
+
+/// Build a pin's model from the package's parameter set `set` (or the
+/// explicit keys of a Phase 0 part), explicit keys overriding the set.
+pub fn build_pin(r: &PinReq, warnings: &mut Vec<String>) -> Result<PinKind, String> {
+    let ctx = r.ctx;
+    let name = r.name;
+    let pin = r.pin;
+    let model_kind = r.model;
+    let set = r.set;
+    let net = r.net.clone();
+    if set.is_some() && r.pkg.is_none() {
+        return Err(format!(
+            "{ctx}: set= needs a part given by package= (a parameter set of its pins.toml)"
+        ));
+    }
+    // The parameters: the board's own text, or (a package part) the
+    // package's set overridden by explicit keys.
+    let mut params = Params {
+        ctx: ctx.to_string(),
+        map: BTreeMap::new(),
+        supply: r.supply,
+    };
+    match r.pkg {
+        None => {
+            for (k, v) in r.explicit {
+                params.map.insert(k, Val::Text(v));
+            }
+        }
+        Some(pkg) => {
+            let pin_def = pkg.pins.by_name(pin).ok_or_else(|| {
+                format!(
+                    "{ctx}: {name}: {} has no pin {pin} in pins.toml",
+                    pkg.part.id
+                )
+            })?;
+            if !pin_def.models.iter().any(|m| m == model_kind) {
+                return Err(format!(
+                    "{ctx}: {name}: pin {pin} of {} does not allow model {model_kind} (it allows: {})",
+                    pkg.part.id,
+                    if pin_def.models.is_empty() {
+                        "none".to_string()
+                    } else {
+                        pin_def.models.join(", ")
+                    }
+                ));
+            }
+            let spec = pin_model_params(model_kind).ok_or_else(|| {
+                format!("{ctx}: model={model_kind} not supported (digital_out, digital_in, adc_in)")
+            })?;
+            // A digital_out without net= is unconnected: no parameters
+            // from the package either.
+            let connected = net.is_some() || model_kind != "digital_out";
+            let mut from_pkg = if connected {
+                param_set(pkg, model_kind, set).map_err(|e| format!("{ctx}: {e}"))?
+            } else {
+                BTreeMap::new()
+            };
+            // `model` and `load` (adc_in, ADR-008 D7) are not Phase 0
+            // parameters: refuse what bb run cannot honour.
+            for k in ["model", "load"] {
+                if from_pkg.remove(k).is_some() {
+                    return Err(format!(
+                        "{ctx}: {name}: the package's adc_in set has {k}=, which bb run does not support yet"
+                    ));
+                }
+            }
+            for (k, v) in r.explicit {
+                let pk = spec
+                    .iter()
+                    .find(|(p, ..)| p == k)
+                    .map(|(_, kind, _)| *kind)
+                    .ok_or_else(|| format!("{ctx}: unknown key {k:?}"))?;
+                if matches!(pk, ParamKind::Name) {
+                    return Err(format!("{ctx}: {k}= is not supported here"));
+                }
+                let explicit = parse_param(v, pk).map_err(|e| format!("{ctx}: {k}: {e}"))?;
+                if let Some(pv) = from_pkg.get(*k) {
+                    if *pv != explicit {
+                        warnings.push(format!(
+                            "{ctx}: {name}: {k}={v} overrides {}'s value (set {})",
+                            pkg.part.id,
+                            set.unwrap_or("default")
+                        ));
+                    }
+                }
+                from_pkg.insert(k.to_string(), explicit);
+            }
+            for (k, v) in from_pkg {
+                let key: &'static str = spec
+                    .iter()
+                    .find(|(p, ..)| *p == k)
+                    .map(|(p, ..)| *p)
+                    .expect("a known parameter");
+                params.map.insert(key, Val::Pkg(v));
+            }
+        }
+    }
+    let part_def = r.part;
+    let kind = match (model_kind, net) {
+        ("digital_out", Some(net)) => {
+            let model = DigitalOut {
+                voh: params.volts("voh")?,
+                vol: params.volts("vol")?,
+                rise: params.time("rise")?,
+                fall: params.time("fall")?,
+                zout: params.quantity("zout", Dim::Resistance)?,
+            };
+            if model.zout < 0.0 {
+                return Err(format!("{ctx}: zout must be >= 0"));
+            }
+            PinKind::Out { net, model }
+        }
+        ("digital_out", None) => {
+            if let Some(k) = params.first_key() {
+                return Err(format!(
+                    "{ctx}: {k}=: a digital_out without net= is not \
+                     connected to the circuit and takes no electrical keys"
+                ));
+            }
+            PinKind::OutUnconnected
+        }
+        ("digital_in", Some(net)) => {
+            let model = DigitalIn {
+                vih: params.volts("vih")?,
+                vil: params.volts("vil")?,
+                cin: params.quantity("cin", Dim::Capacitance)?,
+            };
+            if model.vil >= model.vih {
+                return Err(format!("{ctx}: digital_in needs vil < vih"));
+            }
+            if model.cin < 0.0 {
+                return Err(format!("{ctx}: cin must be >= 0"));
+            }
+            PinKind::In { net, model }
+        }
+        ("digital_in", None) => return Err(format!("{ctx}: digital_in needs net=")),
+        ("adc_in", Some(net)) => {
+            let platform = &part_def.platform;
+            let channel = match r.pkg {
+                Some(pkg) if platform == "stm32f072" => package_adc_channel(pkg, pin),
+                _ => adc_channel(platform, pin),
+            }
+            .ok_or_else(|| {
+                format!(
+                    "{ctx}: {name}: no ADC channel on this pin of \
+                     platform={platform} (adc_in needs stm32f072: PA0-7, PB0-1, PC0-5)"
+                )
+            })?;
+            let vref = params.volts("vref")?;
+            if vref <= 0.0 {
+                return Err(format!("{ctx}: vref must be > 0"));
+            }
+            let bits = params.bits("bits")?;
+            PinKind::Adc {
+                net,
+                model: AdcIn {
+                    vref,
+                    bits,
+                    key: bbcore::AdcKey::Code12,
+                },
+                channel,
+            }
+        }
+        ("adc_in", None) => return Err(format!("{ctx}: adc_in needs net=")),
+        (other, _) => {
+            return Err(format!(
+                "{ctx}: model={other} not supported (digital_out, digital_in, adc_in)"
+            ))
+        }
+    };
+    if let Some(k) = params.first_key() {
+        return Err(format!("{ctx}: unknown key {k:?}"));
+    }
+    Ok(kind)
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ version = "0.0.1"
 dependencies = [
  "bb-analog-ngspice",
  "bb-cpu-renode",
+ "bb-kicad",
  "bbcore",
  "bbpkg",
  "serde_json",
@@ -27,6 +28,10 @@ version = "0.0.1"
 dependencies = [
  "bbcore",
 ]
+
+[[package]]
+name = "bb-kicad"
+version = "0.0.1"
 
 [[package]]
 name = "bbcore"

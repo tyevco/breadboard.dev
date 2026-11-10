@@ -132,7 +132,7 @@ impl<W: Write> CsvWriter<W> {
             let mut header = String::from("t_fs");
             for n in &self.nets {
                 header.push(',');
-                header.push_str(n);
+                header.push_str(&csv_field(n));
             }
             header.push('\n');
             self.w.write_all(header.as_bytes())?;
@@ -207,9 +207,22 @@ pub enum VcdKind {
 
 struct VcdVar {
     net: String,
+    /// The `$var` reference name (the net name unless mapped).
+    reference: String,
     kind: VcdKind,
     id: String,
     last: Option<String>,
+}
+
+/// A `nets.csv` header field: RFC 4180 quoting when the name holds a
+/// comma, a double quote or a line break (ADR-007 D6); other names as they
+/// are, so every Phase 0 header is unchanged.
+pub fn csv_field(name: &str) -> String {
+    if name.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", name.replace('"', "\"\""))
+    } else {
+        name.to_string()
+    }
 }
 
 /// Value-change-dump writer (timescale 1 fs).
@@ -255,6 +268,7 @@ impl<W: Write> VcdWriter<W> {
             .enumerate()
             .map(|(i, (net, kind))| VcdVar {
                 net: (*net).to_string(),
+                reference: (*net).to_string(),
                 kind: *kind,
                 id: vcd_id(i),
                 last: None,
@@ -286,6 +300,26 @@ impl<W: Write> VcdWriter<W> {
         self.w
     }
 
+    /// Give the variables reference names other than their net names, in
+    /// `nets` order (ADR-007 D6, `spec/event-stream.md`: a project's nets
+    /// are referenced by their SPICE names, since a display name may hold
+    /// spaces). When any differs, the header carries a `$comment` block
+    /// that maps each such reference to its net name, sorted.
+    pub fn with_references(mut self, refs: &[String]) -> io::Result<Self> {
+        if refs.len() != self.vars.len() {
+            return Err(invalid("VCD references: one per variable".into()));
+        }
+        for (v, r) in self.vars.iter_mut().zip(refs) {
+            if r.is_empty() || r.chars().any(|c| !c.is_ascii_graphic()) {
+                return Err(invalid(format!(
+                    "VCD reference {r:?}: printable ASCII, no spaces"
+                )));
+            }
+            v.reference = r.clone();
+        }
+        Ok(self)
+    }
+
     /// Write `changes` (time, var index, text) in time order; stamps never
     /// go backwards.
     fn write_changes(&mut self, mut changes: Vec<(Time, usize, String)>) -> io::Result<()> {
@@ -306,13 +340,27 @@ impl<W: Write> VcdWriter<W> {
         let mut h = String::new();
         h.push_str("$version breadboard bbcore $end\n");
         h.push_str("$timescale 1 fs $end\n");
+        let mut mapped: Vec<(&str, &str)> = self
+            .vars
+            .iter()
+            .filter(|v| v.reference != v.net)
+            .map(|v| (v.reference.as_str(), v.net.as_str()))
+            .collect();
+        if !mapped.is_empty() {
+            mapped.sort();
+            h.push_str("$comment\n");
+            for (r, n) in mapped {
+                h.push_str(&format!("  {r} = {n}\n"));
+            }
+            h.push_str("$end\n");
+        }
         h.push_str("$scope module board $end\n");
         for v in &self.vars {
             let decl = match v.kind {
                 VcdKind::Wire => "wire 1",
                 VcdKind::Real => "real 64",
             };
-            h.push_str(&format!("$var {decl} {} {} $end\n", v.id, v.net));
+            h.push_str(&format!("$var {decl} {} {} $end\n", v.id, v.reference));
         }
         h.push_str("$upscope $end\n$enddefinitions $end\n");
         self.w.write_all(h.as_bytes())
@@ -449,6 +497,66 @@ mod tests {
         assert_eq!(format_volts(-0.0000004), "0.000000");
         assert_eq!(format_volts(-0.25), "-0.250000");
         assert_eq!(format_volts(3.3), "3.300000");
+    }
+
+    #[test]
+    fn csv_header_fields_quote_as_rfc4180() {
+        // ADR-007 D6: names with a comma or a quote are quoted; Phase 0
+        // names are unchanged.
+        assert_eq!(csv_field("LED_A"), "LED_A");
+        assert_eq!(csv_field("U1.PA5"), "U1.PA5");
+        assert_eq!(csv_field("/LED ring/LED_DIN"), "/LED ring/LED_DIN");
+        assert_eq!(
+            csv_field("/MCU, flash & debug/XL1"),
+            "\"/MCU, flash & debug/XL1\""
+        );
+        assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
+        let mut c = CsvWriter::new(
+            Vec::new(),
+            Time::from_us(10),
+            vec!["/MCU, flash/X".into(), "A".into()],
+        )
+        .unwrap();
+        c.on_boundary(Time::ZERO, Time::ZERO, &NetValues::new())
+            .unwrap();
+        let s = String::from_utf8(c.into_inner()).unwrap();
+        assert!(s.starts_with("t_fs,\"/MCU, flash/X\",A\n"), "{s}");
+    }
+
+    #[test]
+    fn vcd_references_and_their_mapping_comment() {
+        // Phase 0: no references given, no comment (unchanged header).
+        let mut plain = VcdWriter::new(Vec::new(), &[("A", VcdKind::Real)]);
+        plain.write_header().unwrap();
+        let p = String::from_utf8(plain.into_inner()).unwrap();
+        assert!(
+            !p.contains("$comment") && p.contains("$var real 64 ! A $end"),
+            "{p}"
+        );
+        // A project: SPICE names as references, a sorted mapping comment.
+        let mut v = VcdWriter::new(
+            Vec::new(),
+            &[
+                ("/LED ring/LED_DIN", VcdKind::Real),
+                ("U1.PA4", VcdKind::Wire),
+                ("+3V3", VcdKind::Real),
+            ],
+        )
+        .with_references(&["LED_ring_LED_DIN".into(), "U1.PA4".into(), "n3V3".into()])
+        .unwrap();
+        v.write_header().unwrap();
+        let h = String::from_utf8(v.into_inner()).unwrap();
+        assert!(
+            h.contains("$timescale 1 fs $end\n$comment\n  LED_ring_LED_DIN = /LED ring/LED_DIN\n  n3V3 = +3V3\n$end\n"),
+            "{h}"
+        );
+        assert!(
+            h.contains("$var real 64 ! LED_ring_LED_DIN $end")
+                && h.contains("$var wire 1 \" U1.PA4 $end")
+        );
+        assert!(VcdWriter::new(Vec::new(), &[("A", VcdKind::Real)])
+            .with_references(&["a b".into()])
+            .is_err());
     }
 
     #[test]

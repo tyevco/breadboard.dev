@@ -58,8 +58,10 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make dms-source` | Phase 1 M0: the vendored dial-me-spinner KiCad inputs (`examples/dial-me-spinner/kicad/`) against the sha256s in `examples/dial-me-spinner/SOURCE`, and against `git show <commit>:<path>` when `DMS_REPO` (default `../dial-me-spinner`) exists (`scripts/dms_source_check.sh`) |
 | `make dms-suite-check` | Phase 1 M0 gate: re-run the dial-me-spinner SPICE suite (`-m "not slow"`) at the reference commit `6854d25` from a `git archive` export in `~/.cache/bb-dms-suite` (`scripts/dms_suite.sh`, about 4-5 min) and require `out/dms-suite/results.json` to equal the committed `examples/dial-me-spinner/suite/results.json` byte for byte (checks, test outcomes, every deck's numeric fallback level, ngspice version). `make dms-suite-update` regenerates it. Never check out, stash or write in the dial-me-spinner repository |
 | `make dms-s1` | Phase 1 plan S1 (ADR-006 Amendment 2): the E1 deck (two LED rail on/off cycles, 120 ms, both benches) through `NgspiceEngine` at `phase0`, with the S1 fix of the TPS22917 view. The view and every deck are built in `~/.cache/bb-dms-s1` from a `git archive` export of `6854d25`; they are TI-derived, so they stay local-only and never enter the repository (`scripts/dms_s1.sh`, `scripts/dms_s1.py`, `engines/analog-ngspice/examples/deck_run.rs`). Its 18 gates: 120 ms at both benches; grants of 10 µs, 1 ms and 10 ms byte-identical; VLED at the check instants and the LSW-2 time against the suite's `suite_fallback` run; VLED at every 10 µs against the converged run; the fix's result neutrality. About 1.5 min on 8 jobs (`DMS_S1_JOBS`). `make dms-s1-cost` is the S1 cost table (plan §8; `DMS_S1_N` interleaved rounds, medians; run it on an idle host) |
-| `make packages` | ADR-006 (Phase 1 M3; in `make test`): every `part.toml`, `pins.toml`, test vector and `bb.lock` against `spec/schema/*.schema.json` (`scripts/validate_packages.py`, python3-jsonschema), `bb pkg lint` clean, `bb pkg test` (every vector through `NgspiceEngine` at one cell and 1 ms, identical, and at every recorded qualification), and every example's `bb.lock` current (`bb open --check`) |
-| `make locks` | `bb open --update-lock` on every example board: after an intended change to a package, a platform `.repl` or **any Renode plugin source** (they are in every Renode platform's content hash, ADR-006 D8); review and commit the `bb.lock` diffs |
+| `make packages` | ADR-006 (Phase 1 M3; in `make test`): every `part.toml`, `pins.toml`, test vector, `bb.lock`, project `bb.toml`, bench and `board.bbm` against `spec/schema/*.schema.json` (`scripts/validate_packages.py`, python3-jsonschema), `bb pkg lint` clean, `bb pkg test` (every vector through `NgspiceEngine` at one cell and 1 ms, identical, and at every recorded qualification; the first-party packages and `examples/adc/kicad/packages`), and every example's `bb.lock` and every example project's `board.bbm` current (`bb open --check`) |
+| `make locks` | `bb open --update-lock` on every example board and project: after an intended change to a package, a platform `.repl` or **any Renode plugin source** (they are in every Renode platform's content hash, ADR-006 D8); review and commit the `bb.lock` and `board.bbm` diffs |
+| `make adc-kicad` | Phase 1 M4 gate M4a (ADR-007 Amendment 1; in `make test`): `examples/adc/kicad`, the ADC board drawn in KiCad, imported and run as a `bb.toml` project (a copy in `~/.cache/bb-adc-kicad`, firmware recorded with `bb flash`; `scripts/adc_kicad.sh`): `board.bbm` current; equal to its one-cell reference and to `tests/golden/adc-kicad/outputs.sha256`; the `.net` and `kicad-cli` routes byte-identical (when `kicad-cli` is installed); board.cir's committed non-grant records byte for byte and `nets.csv`/`nets.vcd` within 1 mV (2 samples differ by 1 µV: C1's `470n` against `4.7e-7`, which the script checks byte for byte); `bb run` writes nothing into the project. `make adc-kicad-prepare` makes the copy that `pool-equiv` and `cost-table` run |
+| `make kicad-import` | Phase 1 M4 gates M4b-M4f on the dial-me-spinner main board at 6854d25 (`scripts/kicad_import.sh`, about 20 s; needs KiCad 10 in WSL and the Windows `kicad-cli.exe` unless `KICAD_WINDOWS=0`): 201 parts, 142 nets, 657 pin nodes; the resolution counts; one `board.bbm` from the committed netlist, fresh Linux and Windows exports and a partial KiCad 10 re-save (dc96515's KiCad 9 netlist as the secondary check); byte-identical re-imports; unchanged sources; the version refusals. Not in `make test` (no KiCad in CI); `cli/tests/kicad_import.rs` (the two-board fixture) is |
 | `make dms-values` | ADR-006 G3: `bb pkg value --kicad` on the 29 distinct passive values of the dial-me-spinner main board equals the suite's `spicelib.parse_value` (re-derived from `git show 6854d25:hardware/sim/spicelib.py` when `DMS_REPO` exists, else the committed fixture `tests/fixtures/values/dms-main.json`) |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
@@ -77,7 +79,10 @@ checks the loadable image is unchanged.
 ## Repo map
 
 ```
-bbcore/                 kernel: Time, PinSignal, Engine trait, Scheduler, EventSink, CsvWriter, VcdWriter
+bbcore/                 kernel: Time, PinSignal, Engine trait, Scheduler, EventSink, CsvWriter, VcdWriter;
+                        board.rs (board.bbm types, ADR-007 D6), cjson.rs (integer-only canonical JSON)
+importers/kicad/        bb-kicad (ADR-007 D1-D3): S-expression reader, the netlist model and its version
+                        gates, schematic gates, the kicad-cli runner (on a temporary copy, never in the project)
 bbpkg/                  component packages (ADR-006, spec/package.md): value grammar and integer units,
                         TOML reader, part.toml/pins.toml, lint, view files and deck assembly, test
                         vectors through NgspiceEngine, tree hashes and bb.lock, schema versions, SHA-256
@@ -91,8 +96,10 @@ engines/cpu-renode/     Renode engine over the External Control API; platforms/:
                         ADC model and its host port, ADR-005) and stm32f072-bb.repl (the F072
                         overlay); tests/firmware (gate firmware); console.rs, pool.rs,
                         manager.rs (the warm Renode pool, ADR-004)
-cli/                    `bb` binary (`bb run`, `bb pool`, `bb open`, `bb pkg`, board-file parser,
-                        platforms.rs: the Renode platform identities of ADR-006 D8)
+cli/                    `bb` binary (`bb run`, `bb pool`, `bb open`, `bb pkg`, `bb flash`, `bb probe`,
+                        board-file parser, platforms.rs: the Renode platform identities of ADR-006 D8;
+                        Phase 1 M4: project.rs (bb.toml, benches), names.rs, import.rs (resolution, D4),
+                        elab.rs (bindings, analog scope, the deck, run.json))
 examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings; U1 from the package
                         st/stm32f103c8 since M3, pinned in examples/*/bb.lock like every example)
 examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware and a polling variant
@@ -101,9 +108,12 @@ examples/adc/           STM32F072 ADC board (adc_in PA1 reads the divider PA4 dr
                         board-open.cir), its firmware (adc_board.elf on Breadboard's ADC model,
                         adc_board_isr.elf on the stock one, test firmware), bb_adc_test.py (the
                         ADR-005 model tests) and renode_adc_test.py (the stock model's test)
+examples/adc/kicad/     the ADC board drawn in KiCad (Phase 1 M4): build_schematic.py, the KiCad project,
+                        adc.net, bb.toml, board.bbm, bb.lock, packages/example/led-red (a local package)
 examples/dial-me-spinner/ Phase 1 reference board (dial-me-spinner 6854d25): SOURCE (commits and
                         sha256 of every vendored file), kicad/ (main and base projects; kicad9-dc96515/
-                        the secondary KiCad 9 netlists), suite/results.json (the suite re-run, M0)
+                        the secondary KiCad 9 netlists), suite/results.json (the suite re-run, M0),
+                        bb.toml with its board.bbm and bb.lock (M4)
 examples/nrf-feedback/  examples/feedback's circuit on the nRF52840 (Phase 1 M2; firmware
                         engines/cpu-renode/tests/firmware/nrf52840/nrf_feedback.c)
 engines/cpu-renode/platforms/nrf52840-bb.repl  Breadboard's nRF52840 (ADR-008 D1); its gate
@@ -115,8 +125,10 @@ tests/golden/feedback-open/ partition hashes of the one-cell reference
 tests/golden/adc/, adc-open/ hashes of the every-lattice-point one-cell ADC references (ADR-005)
 tests/golden/adc-stock/, adc-open-stock/ the same on the stock ADC model (ADR-003)
 tests/golden/nrf-feedback/ one-cell reference hashes of examples/nrf-feedback (Phase 1 M2)
-spec/                   normative protocol and schema docs (package.md and schema/*.schema.json: ADR-006);
-                        changing them needs an ADR
+tests/golden/adc-kicad/ one-cell reference hashes of the examples/adc/kicad project (Phase 1 M4)
+tests/fixtures/kicad/   the synthetic two-board system of ADR-007 gate M4b (cli/tests/kicad_import.rs)
+spec/                   normative protocol and schema docs (package.md and schema/*.schema.json: ADR-006;
+                        board-bbm.md, canonical-json.md, project.md: ADR-007); changing them needs an ADR
 docs/adr/               architecture decision records
 scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh,
                         partition.sh, perf.sh, perf_ab.sh (also make cost-table),
@@ -126,7 +138,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         dms_source_check.sh, dms_suite.sh (+ dms_suite_plugin.py,
                         dms_suite_collect.py), validate_packages.py, dms_values.py,
                         check_pins_kicad.py, setup_container_test.sh,
-                        nrf_vendor_headers.sh, nrf_zephyr_gate.sh
+                        nrf_vendor_headers.sh, nrf_zephyr_gate.sh, adc_kicad.sh,
+                        kicad_import.sh, compare_outputs.py
 ```
 
 ## The three invariants
@@ -205,6 +218,16 @@ feedback board).
   new platform adds a row to `cli/src/platforms.rs`. A package value is a
   string in the value grammar (`spec/package.md` section 6), never a SPICE
   suffix: write `Meg`, never a bare `M`.
+- **Projects (ADR-007, `spec/project.md`).** `bb open` is the only command
+  that writes into a project (`board.bbm`, `bb.lock`, `.bb/`; `bb.toml`
+  only when it creates a minimal one), `bb flash` and `bb probe` edit
+  `bb.toml` in place, and `bb run` is read-only on the project: it refuses
+  a stale `board.bbm` or `bb.lock` ("run `bb open`") and writes only under
+  `--out`. `kicad-cli` always runs on a temporary copy. `board.bbm` is
+  content-only and canonical: never put paths, hashes of sources, tool
+  strings or dates into it (they go to `.bb/import.json`, which is not
+  committed). Example projects commit `board.bbm` and `bb.lock`; a package
+  change means `make locks` and a reviewed `board.bbm` diff.
 - Git is local only: never push and never add remotes. Commit messages end with
   the co-author trailer given by the orchestrator.
 

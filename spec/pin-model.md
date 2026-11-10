@@ -7,7 +7,8 @@ glue: ADR-003 D3 (plan step 4, Amendment 4). `adc_in`: ADR-003 D6 (plan step
 9, Amendments 5 and 10), and ADR-005 D3/D5 (the code12 push key, raw
 microvolt delivery, timed inputs and the sampled-input rule). Pin models
 from packages, named parameter sets and glue rule 7: ADR-006 (D4, Phase 1
-M3).
+M3). Net naming in glue rule 3, glue rule 5 and rule 8 (unbound pins):
+ADR-007 (D5, D6; Phase 1 M4, Amendment 1).
 
 Every component pin has **exactly one** pin model, supplied by its package
 from the package's `pins.toml` (ADR-006 D4, `spec/package.md`); `board.cir`
@@ -187,18 +188,25 @@ boundary; the analog engine handles it entirely.
 3. Glue element names are a pure function of the pin and net names
    (`V_<pin>`, `R_<pin>_zout`, `C_bbin_<pin>` with every character other
    than an ASCII letter or digit replaced by `_`), so generated netlists are
-   deterministic.
+   deterministic. Pin and net names are mapped to SPICE names by the rule
+   of `spec/board-bbm.md` section 4 (net naming): the glue of a project's
+   binding connects to its net's SPICE name (`/LED ring/LED_DIN_R` →
+   `LED_ring_LED_DIN_R`, the simulated board's ground → `0`).
 4. A `digital_out` that is not connected to the circuit (a board pin without
    `net=`, e.g. `examples/feedback-open` U1.PA6) gets no glue and loads
    nothing; its digital net can still be probed.
-5. In Phase 0, `bb run` generates the glue from the board file's `*bb pin`
-   directives (the analog engine writes it into the netlist), with the
-   parameters of the part's package where the part comes from one
-   (ADR-006). The automatic generator from schematics is the KiCad importer
-   (ADR-007), which must not parse KiCad with regex.
+5. Glue is generated from the bindings of the elaborated board (ADR-007):
+   a project's `[[bind]]` entries (`spec/project.md`), or a board file's
+   `*bb pin` directives; the analog engine writes it into the netlist, with
+   the parameters of the part's package where the part comes from one
+   (ADR-006). Schematics are read through KiCad's own netlist export and an
+   S-expression parser, never with regex.
 6. A net driven by an analog engine and loaded by an `adc_in` gets no glue;
    its value crosses the boundary as the pushed `Analog` trace above
    (ADR-003 D6).
 7. An analog view's subckt ports and internal nodes never include `gnd`
    (in any case): ngspice treats a node named `gnd` as global ground even
    inside a subcircuit (ADR-006 Context 4; `bb pkg lint` refuses it).
+8. An unbound connected MCU pin (a project pin with no `[[bind]]`) gets no
+   glue and loads nothing (high-Z), like an unconfigured nRF pin; its net
+   is probe-only on the MCU side (ADR-007 D5).

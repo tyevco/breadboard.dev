@@ -49,10 +49,16 @@
 //! lints and tests packages.
 
 mod board;
+mod elab;
+mod flash;
+mod import;
+mod names;
 mod open;
 mod pkg;
 mod platforms;
 mod pool;
+mod probe_cmd;
+mod project;
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -77,17 +83,37 @@ use board::PinKind;
 const USAGE: &str = "\
 usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
+       bb run [--project <dir>] --for <time> [--bench <bench.toml>] [--fidelity fast]
+              [--probe net:<name|alias|pin> ...] --out <dir> [--allow-unqualified <pkg:view>]
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
               [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
               [--renode-pool env|off]
        bb pool run|start|stop|status ...   (bb pool --help)
-       bb open <board.cir> [--check] [--update-lock]   (bb open --help)
+       bb open [<dir>|<.kicad_pro>|<.net>|<board.cir>] [--check] [--update-lock]   (bb open --help)
+       bb flash --target <instance> <file.elf> [--kind elf] [--project <dir>]
+       bb probe [--list] [net:<name> ...] [--project <dir>]
        bb pkg lint|test|migrate|tree|value ...         (bb pkg --help)
 
   --netlist    board file: SPICE body plus *bb directives (examples/spike/board.cir).
                  Parts given by package= need a current bb.lock next to it
                  (bb open <board.cir>, ADR-006 D8)
+  --project    a bb.toml project (ADR-007; the default when --netlist is not
+                 given: the current directory). Reads board.bbm, which must be
+                 current (`bb open`), the firmware from [targets] (`bb flash`),
+                 [[bind]] pins and [probes]; writes run.json too. Never writes
+                 into the project
+  --bench      bench file (supplies, loads, temperature, analog scope, option
+                 set; ADR-007 D5). Default: no sources, every net in scope,
+                 option set phase0
+  --fidelity   the analog fidelity rung (Phase 1: fast)
+  --elaborate-only
+                 a project: elaborate (checks, deck, probes) and write
+                 <out>/deck.cir and run.json, then stop without starting any
+                 engine
+  --allow-unqualified
+                 run a view that is not lattice-qualified for (lattice, option
+                 set) (ADR-006 D6; recorded in run.json). Repeatable
   --firmware     ELF loaded into the target MCU
   --target       part reference the firmware runs on (e.g. U1)
   --for          simulated duration, e.g. 500ms
@@ -150,9 +176,16 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  the outputs";
 
 struct RunArgs {
-    netlist: PathBuf,
-    firmware: PathBuf,
-    target: String,
+    /// `--netlist`: a Phase 0 board file; `None`: a project.
+    netlist: Option<PathBuf>,
+    firmware: Option<PathBuf>,
+    target: Option<String>,
+    project: Option<PathBuf>,
+    bench: Option<PathBuf>,
+    fidelity: String,
+    allow_unqualified: Vec<String>,
+    /// `--elaborate-only`: write deck.cir and run.json, run nothing.
+    elaborate_only: bool,
     duration: Time,
     probes: Vec<String>,
     out: PathBuf,
@@ -279,6 +312,11 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut netlist = None;
     let mut firmware = None;
     let mut target = None;
+    let mut project = None;
+    let mut bench = None;
+    let mut fidelity = "fast".to_string();
+    let mut allow_unqualified = Vec::new();
+    let mut elaborate_only = false;
     let mut duration = None;
     let mut probes = Vec::new();
     let mut out = None;
@@ -305,6 +343,11 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--netlist" => netlist = Some(PathBuf::from(val(a)?)),
             "--firmware" => firmware = Some(PathBuf::from(val(a)?)),
             "--target" => target = Some(val(a)?),
+            "--project" => project = Some(PathBuf::from(val(a)?)),
+            "--bench" => bench = Some(PathBuf::from(val(a)?)),
+            "--fidelity" => fidelity = val(a)?,
+            "--allow-unqualified" => allow_unqualified.push(val(a)?),
+            "--elaborate-only" => elaborate_only = true,
             "--for" => duration = Some(val(a)?.parse::<Time>().map_err(|e| format!("--for: {e}"))?),
             "--probe" => {
                 let v = val(a)?;
@@ -387,16 +430,40 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--for {duration} must be a multiple of --renode-quantum {renode_quantum}"
         ));
     }
-    if probes.is_empty() {
-        return Err("at least one --probe is required".into());
+    if netlist.is_some() {
+        if probes.is_empty() {
+            return Err("at least one --probe is required".into());
+        }
+        if project.is_some() || bench.is_some() || !allow_unqualified.is_empty() {
+            return Err(
+                "--project, --bench and --allow-unqualified are for projects, not --netlist".into(),
+            );
+        }
+        need(firmware.as_ref(), "--firmware")?;
+        need(target.as_ref(), "--target")?;
+    } else if firmware.is_some() || target.is_some() {
+        return Err(
+            "a project takes its firmware and target from bb.toml [targets] (`bb flash`, ADR-007 D7);              --firmware and --target are for --netlist"
+                .into(),
+        );
+    }
+    if fidelity != "fast" {
+        return Err(format!(
+            "--fidelity {fidelity}: Phase 1 runs fast only (ADR-006 D3)"
+        ));
     }
     if lookahead == Some(true) && plugin == PluginMode::Never {
         return Err("--lookahead on needs the lookahead plugin (--lookahead-plugin never)".into());
     }
     Ok(RunArgs {
-        netlist: need(netlist, "--netlist")?,
-        firmware: need(firmware, "--firmware")?,
-        target: need(target, "--target")?,
+        netlist,
+        firmware,
+        target,
+        project,
+        bench,
+        fidelity,
+        allow_unqualified,
+        elaborate_only,
         duration,
         probes,
         out: need(out, "--out")?,
@@ -433,19 +500,37 @@ fn create(path: &PathBuf) -> Result<BufWriter<File>, String> {
 fn run(a: RunArgs) -> Result<(), String> {
     // Parts may come from packages (ADR-006): resolved on the search path,
     // and checked against the board's bb.lock, which bb run never writes.
-    let board = open::parse_board(&a.netlist, true)?;
-    for w in &board.warnings {
-        eprintln!("bb run: warning: {}: {w}", a.netlist.display());
+    // Two front ends, one run plan (ADR-007 D9): a Phase 0 board file, or a
+    // project's board.bbm elaborated with its bench and bindings.
+    let fe = front_end(&a)?;
+    if a.elaborate_only {
+        let rj = fe
+            .run_json
+            .clone()
+            .ok_or("--elaborate-only is for projects (not --netlist)")?;
+        fs::create_dir_all(&a.out).map_err(|e| format!("create {}: {e}", a.out.display()))?;
+        fs::write(a.out.join("deck.cir"), &fe.board.spice)
+            .map_err(|e| format!("write deck.cir: {e}"))?;
+        fs::write(
+            a.out.join("run.json"),
+            bbcore::cjson::Json::Obj(rj).to_canonical(),
+        )
+        .map_err(|e| format!("write run.json: {e}"))?;
+        println!(
+            "bb run: elaborated (no engine started): {} probes; deck.cir and run.json in {}",
+            fe.probes.len(),
+            a.out.display()
+        );
+        return Ok(());
     }
-    open::check_lock(&a.netlist, &board)?;
-    if !a.firmware.is_file() {
-        return Err(format!("firmware {} not found", a.firmware.display()));
-    }
+    let board = fe.board;
+    let firmware = fe.firmware;
+    let probes = fe.probes;
     let part = board
         .parts
         .iter()
-        .find(|p| p.reference == a.target)
-        .ok_or_else(|| format!("--target {}: no such part in the board file", a.target))?;
+        .find(|p| p.reference == fe.target)
+        .ok_or_else(|| format!("--target {}: no such part in the board file", fe.target))?;
     if board.parts.len() != 1 {
         return Err("Phase 0 supports exactly one MCU part per board".into());
     }
@@ -475,7 +560,7 @@ fn run(a: RunArgs) -> Result<(), String> {
         Some(p) => p.clone(),
         None => find_renode().ok_or("renode not found (run `make setup` or pass --renode)")?,
     };
-    let mut rcfg = RenodeConfig::stm32f103(renode, a.firmware.clone());
+    let mut rcfg = RenodeConfig::stm32f103(renode, firmware.clone());
     rcfg.name = part.reference.clone();
     rcfg.quantum = a.renode_quantum;
     rcfg.seed = a.seed;
@@ -614,19 +699,26 @@ fn run(a: RunArgs) -> Result<(), String> {
         }
     }
     ncfg.adc_push = a.adc_push;
-    let analog_probes: Vec<&String> = a
-        .probes
+    // An analog probe: its name in the outputs (a Phase 0 node name, or a
+    // project net's display name) and its ngspice node (ADR-007 D6).
+    let analog_probes: Vec<(&String, String)> = probes
         .iter()
-        .filter(|n| !digital_nets.contains(n) && !adc_nets.contains(n))
+        .filter(|p| !digital_nets.contains(&p.name) && !adc_nets.contains(&p.name))
+        .map(|p| (&p.name, p.node.clone().unwrap_or_else(|| p.name.clone())))
         .collect();
-    for n in &analog_probes {
+    for (n, node) in &analog_probes {
         ncfg.outputs.push(OutputBinding {
             pin: (*n).clone(),
-            node: (*n).clone(),
+            node: node.clone(),
         });
     }
 
     fs::create_dir_all(&a.out).map_err(|e| format!("create {}: {e}", a.out.display()))?;
+    if fe.run_json.is_some() {
+        // A project's elaborated deck, for review (its sha256 is in run.json).
+        fs::write(a.out.join("deck.cir"), &board.spice)
+            .map_err(|e| format!("write deck.cir: {e}"))?;
+    }
     let wall = Instant::now();
     let cpu = RenodeEngine::start(&rcfg).map_err(|e| format!("start Renode: {e}"))?;
     let pin_cnf = cpu.pin_cnf_findings();
@@ -685,7 +777,7 @@ fn run(a: RunArgs) -> Result<(), String> {
             }
         }
     }
-    for n in &analog_probes {
+    for (n, _) in &analog_probes {
         bind(&mut sched, an_id, n, n, Direction::Output)?;
     }
 
@@ -697,24 +789,30 @@ fn run(a: RunArgs) -> Result<(), String> {
     let mut csv = CsvWriter::sampled(
         create(&a.out.join("nets.csv"))?,
         a.sample_period,
-        a.probes.clone(),
+        probes.iter().map(|p| p.name.clone()).collect(),
     )
     .map_err(|e| e.to_string())?;
     let mut vcd_vars: Vec<(&str, VcdKind)> = Vec::new();
-    for n in &a.probes {
-        let kind = if digital_nets.contains(n) {
+    let mut vcd_refs: Vec<String> = Vec::new();
+    for p in &probes {
+        let kind = if digital_nets.contains(&p.name) {
             VcdKind::Wire
         } else {
             VcdKind::Real
         };
-        vcd_vars.push((n.as_str(), kind));
+        vcd_vars.push((p.name.as_str(), kind));
+        // A project's analog nets are referenced by their SPICE names
+        // (spec/event-stream.md); Phase 0 names are their own.
+        vcd_refs.push(p.node.clone().unwrap_or_else(|| p.name.clone()));
     }
     for n in &digital_nets {
-        if !a.probes.contains(n) {
+        if !probes.iter().any(|p| &p.name == n) {
             vcd_vars.push((n.as_str(), VcdKind::Wire));
+            vcd_refs.push(n.clone());
         }
     }
     let mut vcd = VcdWriter::sampled(create(&a.out.join("nets.vcd"))?, &vcd_vars, a.sample_period)
+        .and_then(|v| v.with_references(&vcd_refs))
         .map_err(|e| e.to_string())?;
 
     let t_run = Instant::now();
@@ -784,7 +882,92 @@ fn run(a: RunArgs) -> Result<(), String> {
     drop(sched); // stops Renode and releases ngspice
     let total_s = wall.elapsed().as_secs_f64();
 
+    if let Some(mut rj) = fe.run_json {
+        rj.push((
+            "options".into(),
+            bbcore::cjson::Json::obj([
+                (
+                    "for_fs",
+                    bbcore::cjson::Json::Int(a.duration.as_fs() as i128),
+                ),
+                (
+                    "max_quantum_fs",
+                    bbcore::cjson::Json::Int(a.max_quantum.as_fs() as i128),
+                ),
+                (
+                    "renode_quantum_fs",
+                    bbcore::cjson::Json::Int(a.renode_quantum.as_fs() as i128),
+                ),
+                (
+                    "sample_period_fs",
+                    bbcore::cjson::Json::Int(a.sample_period.as_fs() as i128),
+                ),
+                ("seed", bbcore::cjson::Json::Int(a.seed as i128)),
+                ("fidelity", bbcore::cjson::Json::str(&a.fidelity)),
+                ("lookahead", bbcore::cjson::Json::Bool(lookahead)),
+                ("lookahead_plugin", bbcore::cjson::Json::Bool(plugin)),
+                (
+                    "adc_push",
+                    bbcore::cjson::Json::str(match a.adc_push {
+                        AdcPush::OnChange => "change",
+                        AdcPush::EveryLattice => "every",
+                    }),
+                ),
+                (
+                    "adc_model",
+                    bbcore::cjson::Json::str(if a.adc_bb { "bb" } else { "stock" }),
+                ),
+                (
+                    "verify",
+                    bbcore::cjson::Json::str(format!("{:?}", a.verify).to_lowercase()),
+                ),
+                (
+                    "engine_order",
+                    bbcore::cjson::Json::str(match a.engine_order {
+                        EngineOrder::McuFirst => "mcu-first",
+                        EngineOrder::AnalogFirst => "analog-first",
+                    }),
+                ),
+                (
+                    "allow_unqualified",
+                    bbcore::cjson::Json::Arr(
+                        a.allow_unqualified
+                            .iter()
+                            .map(bbcore::cjson::Json::str)
+                            .collect(),
+                    ),
+                ),
+                (
+                    "probes",
+                    bbcore::cjson::Json::Arr(
+                        probes
+                            .iter()
+                            .map(|p| bbcore::cjson::Json::str(&p.name))
+                            .collect(),
+                    ),
+                ),
+            ]),
+        ));
+        rj.push((
+            "versions".into(),
+            bbcore::cjson::Json::obj([
+                ("bb", bbcore::cjson::Json::str(env!("CARGO_PKG_VERSION"))),
+                (
+                    "renode",
+                    bbcore::cjson::Json::str(platforms::RENODE_VERSION),
+                ),
+            ]),
+        ));
+        let text = bbcore::cjson::Json::Obj(rj).to_canonical();
+        fs::write(a.out.join("run.json"), text).map_err(|e| format!("write run.json: {e}"))?;
+    }
     let mut so = std::io::stdout().lock();
+    for f in &fe.flagged {
+        let _ = writeln!(
+            so,
+            "bb run: note: view {f}: not checked against a datasheet or a measurement (see run.json)"
+        );
+    }
     let _ = writeln!(
         so,
         "bb run: simulated {} in {} grants (max quantum {}, renode quantum {}, plan {plan}, \
@@ -812,6 +995,103 @@ fn run(a: RunArgs) -> Result<(), String> {
     Ok(())
 }
 
+/// What one run executes, from either front end (ADR-007 D9).
+struct FrontEnd {
+    board: board::Board,
+    target: String,
+    firmware: PathBuf,
+    probes: Vec<elab::ProbeSpec>,
+    /// A project's run.json content (none for a Phase 0 board file).
+    run_json: Option<Vec<(String, bbcore::cjson::Json)>>,
+    flagged: Vec<String>,
+}
+
+fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
+    if let Some(netlist) = &a.netlist {
+        // Parts may come from packages (ADR-006): resolved on the search
+        // path, and checked against the board's bb.lock, which bb run never
+        // writes.
+        let board = open::parse_board(netlist, true)?;
+        for w in &board.warnings {
+            eprintln!("bb run: warning: {}: {w}", netlist.display());
+        }
+        open::check_lock(netlist, &board)?;
+        let firmware = a.firmware.clone().expect("checked");
+        if !firmware.is_file() {
+            return Err(format!("firmware {} not found", firmware.display()));
+        }
+        return Ok(FrontEnd {
+            board,
+            target: a.target.clone().expect("checked"),
+            firmware,
+            probes: a
+                .probes
+                .iter()
+                .map(|n| elab::ProbeSpec {
+                    name: n.clone(),
+                    node: None,
+                })
+                .collect(),
+            run_json: None,
+            flagged: Vec::new(),
+        });
+    }
+    // A project: read-only (ADR-007 D7). board.bbm and bb.lock must be what
+    // `bb open` would write now.
+    let dir = import::project_dir(a.project.as_deref())?;
+    let p = project::Project::read(&dir)?;
+    let imp = import::import(&p, import::Mode::Run)?;
+    for w in &imp.warnings {
+        eprintln!("bb run: warning: {w}");
+    }
+    let bbm_path = dir.join(import::BOARD_FILE);
+    let on_disk = fs::read(&bbm_path)
+        .map_err(|e| format!("read {}: {e}: run `bb open`", bbm_path.display()))?;
+    if on_disk != imp.board.to_text().as_bytes() {
+        return Err(format!(
+            "{} is not current (a source, package or bb.toml changed): run `bb open` (ADR-007 D7)",
+            bbm_path.display()
+        ));
+    }
+    let lock = bbpkg::lock::Lock::read(&dir.join("bb.lock"), &bbpkg::schema::Registry::current())?;
+    let d = bbpkg::lock::drift(lock.as_ref(), &imp.locked_packages, &imp.locked_platforms);
+    if !d.is_empty() {
+        return Err(format!(
+            "{} does not match the packages and platforms (ADR-006 D8): {}; run `bb open`",
+            dir.join("bb.lock").display(),
+            d.iter()
+                .map(|x| x.describe())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    let bench = match &a.bench {
+        Some(b) => project::Bench::read(b)?,
+        None => project::Bench::empty(),
+    };
+    let plan = elab::plan(&elab::PlanArgs {
+        project: &p,
+        imp: &imp,
+        bench: &bench,
+        bench_name: a.bench.as_deref().map(elab::bench_label),
+        fidelity: &a.fidelity,
+        lattice: a.renode_quantum,
+        allow_unqualified: &a.allow_unqualified,
+        cli_probes: &a.probes,
+    })?;
+    for w in &plan.warnings {
+        eprintln!("bb run: warning: {w}");
+    }
+    Ok(FrontEnd {
+        board: plan.board,
+        target: plan.target,
+        firmware: plan.firmware,
+        probes: plan.probes,
+        run_json: Some(plan.run_json),
+        flagged: plan.flagged,
+    })
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -824,6 +1104,8 @@ fn main() -> ExitCode {
         },
         Some("pool") => pool::main(&args[1..]),
         Some("open") => open::main(&args[1..]),
+        Some("flash") => flash::main(&args[1..]),
+        Some("probe") => probe_cmd::main(&args[1..]),
         Some("pkg") => pkg::main(&args[1..]),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
@@ -862,6 +1144,7 @@ mod tests {
         let a = parse_args(&v).unwrap();
         assert_eq!(a.duration, Time::from_ms(500));
         assert_eq!(a.probes, vec!["LED_A", "PA5"]);
+        assert_eq!(a.netlist.as_deref(), Some(std::path::Path::new("b.cir")));
         assert_eq!(a.max_quantum, Time::from_ms(10));
         assert_eq!(a.renode_quantum, Time::from_us(10));
         let mut q = v.clone();

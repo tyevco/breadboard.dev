@@ -1,0 +1,14 @@
+# A synthetic package that lists only the base part number RT9080 (ADR-007
+# gate M4f): the board's RT9080-33GJ5 must not bind to it, because the
+# resolver never strips an ordering code (-33 is the 3.3 V output).
+schema = "bb-part/0"
+
+[part]
+id = "test/rt9080"
+version = "0.1.0"
+kind = "power"
+mpn = ["RT9080"]
+license = "Apache-2.0"
+
+[pins]
+file = "pins.toml"
