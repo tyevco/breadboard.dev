@@ -314,10 +314,39 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         .as_ref()
         .ok_or_else(|| format!("target {tb}:{tref} has no package ({})", tinst.status))?;
     let tpkg = &a.imp.packages[&tpkg_ref.id];
-    let beh = tpkg.part.behavioral.as_ref().ok_or_else(|| {
+    // A module target (spec/package.md section 4, ADR-006 Amendment 3): the
+    // behavioural layer and the pin models are its chip's, and a pad reaches
+    // its chip pin through the module's pinmap (Phase 1 M6).
+    let (chip, pad_to_chip): (&Package, Option<BTreeMap<String, String>>) = match &tpkg.part.module
+    {
+        Some(m) => {
+            let chip = a.imp.packages.get(&m.chip).ok_or_else(|| {
+                format!(
+                    "target {tb}:{tref}: the module's chip package {} is not resolved",
+                    m.chip
+                )
+            })?;
+            let map = bbpkg::package::module_pinmap(tpkg)?.into_iter().collect();
+            (chip, Some(map))
+        }
+        None => (tpkg, None),
+    };
+    // The chip pin name of a target instance pin (number, name as imported).
+    let chip_pin = |number: &str, name: &str| -> Result<String, String> {
+        match &pad_to_chip {
+            Some(m) => m.get(number).cloned().ok_or_else(|| {
+                format!(
+                    "target {tb}:{tref}: pad {number} ({name}) is not in {}'s pinmap",
+                    tpkg.part.id
+                )
+            }),
+            None => Ok(name.to_string()),
+        }
+    };
+    let beh = chip.part.behavioral.as_ref().ok_or_else(|| {
         format!(
             "target {tb}:{tref}: package {} has no behavioural layer",
-            tpkg.part.id
+            chip.part.id
         )
     })?;
     if beh.engine != "renode" {
@@ -337,9 +366,13 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     let firmware = p.dir.join(&elfs[0].file);
     let fw_bytes =
         std::fs::read(&firmware).map_err(|e| format!("firmware {}: {e}", firmware.display()))?;
-    if sha(&fw_bytes) != elfs[0].hash {
+    // The image hash (ADR-008 D5): the loadable content, not the file.
+    let fw_hash = crate::image::elf_image_hash(&fw_bytes)
+        .map_err(|e| format!("firmware {}: {e}", elfs[0].file))?;
+    if fw_hash != elfs[0].hash {
         return Err(format!(
-            "firmware {} changed since `bb flash` (hash {} in bb.toml): run `bb flash` again",
+            "firmware {} changed since `bb flash` (image hash {} in bb.toml, {fw_hash} now): \
+             run `bb flash` again",
             elfs[0].file, elfs[0].hash
         ));
     }
@@ -347,7 +380,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         reference: tref.clone(),
         engine: "renode".into(),
         platform: pdef.board_name.to_string(),
-        package: Some(tpkg.part.id.clone()),
+        package: Some(chip.part.id.clone()),
     };
 
     // --- Bench names.
@@ -368,7 +401,10 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
 
     // --- Bindings.
     let mut pins: Vec<PinBinding> = Vec::new();
-    let mut bound: BTreeMap<String, String> = BTreeMap::new(); // pin name -> kernel net
+    // Pin name -> kernel net; chip pin name -> the drive its binding's set
+    // names (the PIN_CNF audit).
+    let mut bound: BTreeMap<String, String> = BTreeMap::new();
+    let mut drives: BTreeMap<String, Option<String>> = BTreeMap::new();
     for b in &p.binds {
         let ctx = format!("bb.toml [[bind]] {}", b.pin);
         let (bb, r, pin) = insts
@@ -402,13 +438,28 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             }
             _ => None,
         };
+        // A supply pin of the chip, on the net of the target's pins that
+        // carry it (a module: every pad its pinmap maps to that chip pin).
         let supply = |sp: &str| -> Result<i128, String> {
-            let sn = tinst
+            let nets: BTreeSet<String> = tinst
                 .pins
                 .iter()
-                .find(|x| x.name == sp)
-                .and_then(|x| x.net.clone())
-                .ok_or_else(|| format!("supply pin {sp} is on no net"))?;
+                .filter(|x| match &pad_to_chip {
+                    Some(m) => m.get(&x.number).map(String::as_str) == Some(sp),
+                    None => x.name == sp,
+                })
+                .filter_map(|x| x.net.clone())
+                .collect();
+            let sn = match nets.len() {
+                1 => nets.into_iter().next().expect("one"),
+                0 => return Err(format!("supply pin {sp} is on no net")),
+                _ => {
+                    return Err(format!(
+                        "supply pin {sp} is on several nets: {}",
+                        nets.into_iter().collect::<Vec<_>>().join(", ")
+                    ))
+                }
+            };
             supply_on
                 .get(&sn)
                 .or_else(|| nominal.get(&sn))
@@ -425,13 +476,14 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
+        let cpin = chip_pin(&ip.number, &pin).map_err(|e| format!("{ctx}: {e}"))?;
         let kind = build_pin(
             &PinReq {
                 ctx: &ctx,
                 name: &b.pin,
                 part: &part,
-                pkg: Some(tpkg),
-                pin: &pin,
+                pkg: Some(chip),
+                pin: &cpin,
                 model: &b.model,
                 set: b.set.as_deref(),
                 net: node,
@@ -447,9 +499,18 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 return Err(format!("{ctx}: net {net} is already driven by another pin"));
             }
         }
+        if drives
+            .insert(
+                cpin.clone(),
+                board::nrf_set_drive(b.set.as_deref()).filter(|_| b.model == "digital_out"),
+            )
+            .is_some()
+        {
+            return Err(format!("{ctx}: chip pin {cpin} is bound twice"));
+        }
         let pb = PinBinding {
             part: tref.clone(),
-            pin: pin.clone(),
+            pin: cpin,
             kind,
         };
         bound.insert(pin.clone(), pb.kernel_net());
@@ -472,6 +533,35 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         }
     };
     let scoped = |d: &str| in_scope.as_ref().is_none_or(|s| s.contains(d));
+
+    // --- The PIN_CNF audit list (ADR-008 D4): every bound pin, and every
+    // unbound GPIO (a chip pin of role `io`) whose net is in the analog scope.
+    let mut audit: Vec<(String, board::AuditExpect)> = Vec::new();
+    for pb in &pins {
+        let e = match &pb.kind {
+            PinKind::Out { .. } => board::AuditExpect::Out(drives.get(&pb.pin).cloned().flatten()),
+            PinKind::In { .. } => board::AuditExpect::In,
+            PinKind::OutUnconnected | PinKind::Adc { .. } => continue,
+        };
+        audit.push((pb.pin.clone(), e));
+    }
+    let mut unbound: BTreeSet<String> = BTreeSet::new();
+    for x in &tinst.pins {
+        let Some(n) = x.net.as_deref() else { continue };
+        if board.net(n).expect("net").unconnected || !scoped(n) {
+            continue;
+        }
+        let cp = chip_pin(&x.number, &x.name)?;
+        let io = chip.pins.by_name(&cp).is_some_and(|d| d.role == "io");
+        if io && !drives.contains_key(&cp) {
+            unbound.insert(cp);
+        }
+    }
+    audit.extend(
+        unbound
+            .into_iter()
+            .map(|cp| (cp, board::AuditExpect::Unbound)),
+    );
     let mut excluded: BTreeSet<(String, String)> = BTreeSet::new();
     for e in &a.bench.exclude {
         excluded.insert(
@@ -679,29 +769,34 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             return Err(format!("bench [[supply]] on the ground net {d}"));
         }
         let f = element_fragment(&n);
-        let src = if s.rs_uohm > 0 {
-            format!("bb_bench_{f}")
-        } else {
-            n.clone()
-        };
         let v = spice_number(to_decimal(s.volts_uv, Dim::Voltage));
-        match &s.track {
-            None => bench_lines.push(format!("V_bench_{f} {src} 0 DC {v}")),
+        // The source voltage: fixed, or tracking another net.
+        let target = match &s.track {
+            None => v.clone(),
             Some((tn, drop)) => {
                 let td = net_by(tn, "[[supply]] track")?;
                 let tnode = node_of(&td);
                 nodes_used.insert(tnode.clone());
-                bench_lines.push(format!(
-                    "B_bench_{f} {src} 0 V = min({v}, V({tnode}) - {})",
+                format!(
+                    "min({v}, V({tnode}) - {})",
                     spice_number(to_decimal(*drop, Dim::Voltage))
-                ));
+                )
             }
-        }
+        };
         if s.rs_uohm > 0 {
+            // With a series resistance the supply is its Norton equivalent,
+            // one B conductance into the net: no branch-current unknown, so
+            // a milliohm rs in front of a rail's capacitors does not ask
+            // ngspice for node voltages below double resolution at phase0
+            // (ADR-007 Amendment 3; AGENTS.md, ADR-006 Amendment 2).
             bench_lines.push(format!(
-                "R_bench_{f} {src} {n} {}",
+                "B_bench_{f} 0 {n} I = ({target} - V({n})) / {}",
                 spice_number(to_decimal(s.rs_uohm, Dim::Resistance))
             ));
+        } else if s.track.is_some() {
+            bench_lines.push(format!("B_bench_{f} {n} 0 V = {target}"));
+        } else {
+            bench_lines.push(format!("V_bench_{f} {n} 0 DC {target}"));
         }
         nodes_used.insert(n);
     }
@@ -935,8 +1030,9 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             parts: vec![part],
             pins,
             spice: deck,
-            packages: vec![tpkg.clone()],
+            packages: vec![chip.clone()],
             warnings: Vec::new(),
+            audit: Some(audit),
         },
         target: tref,
         firmware,

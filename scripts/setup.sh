@@ -5,6 +5,10 @@
 #   bash scripts/setup.sh            # full (developer): everything `make test` needs
 #   bash scripts/setup.sh demo       # demo (Phase 1 plan M3, R7): no ARM toolchain, no uv
 #   SETUP=demo bash scripts/setup.sh # the same; `make setup SETUP=demo` passes it
+#   bash scripts/setup.sh zephyr     # optional (Phase 1 M6, ADR-008 D5): full, plus the Zephyr
+#                                    # host tools and the pinned Zephyr SDK, to rebuild the E1
+#                                    # firmware (make fw-rebuild, make dms-firmware). Neither
+#                                    # make test nor the demo needs it: the images are prebuilt.
 #
 # Both modes install `bb` into ~/.local/bin (a release build of this
 # checkout). Run as root (a container), it uses apt-get directly; otherwise
@@ -13,8 +17,8 @@ set -euo pipefail
 
 MODE="${1:-${SETUP:-full}}"
 case "${MODE}" in
-  full|demo) ;;
-  *) echo "setup.sh: unknown mode ${MODE:?} (expected full or demo)" >&2; exit 2 ;;
+  full|demo|zephyr) ;;
+  *) echo "setup.sh: unknown mode ${MODE:?} (expected full, demo or zephyr)" >&2; exit 2 ;;
 esac
 
 # ---- Pinned versions -------------------------------------------------------
@@ -24,6 +28,12 @@ RENODE_VERSION="1.17.0"
 RENODE_TARBALL="renode-${RENODE_VERSION}.linux-portable.tar.gz"
 RENODE_URL="https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/${RENODE_TARBALL}"
 RENODE_SHA256="4ba7c68b59e2447f188ef4b4b112fcccd2802582c460beedceb63b84e5605a5f"
+# Optional (SETUP=zephyr; Phase 1 M6, ADR-008 D5): the E1 firmware's toolchain. The versions and
+# the SDK tarballs' sha256s are pinned in scripts/dms_zephyr.sh (Zephyr v4.5.0 = 41d10b59, SDK
+# 1.0.1 minimal + arm-zephyr-eabi, west 1.5.0, Python packages in
+# examples/dial-me-spinner/firmware/requirements.lock); the workspace manifest is
+# examples/dial-me-spinner/firmware/west.yml.
+ZEPHYR_SDK_VERSION="1.0.1"
 
 # What `bb run` and the demo need: a C toolchain for the Rust build (cc, the
 # linker), Python for the check scripts, ngspice 42 and its shared library,
@@ -36,8 +46,12 @@ APT_PACKAGES=(
 # Developer additions: the ARM toolchain for the firmware and the gate
 # firmware, cmake, and python3-jsonschema for the package schema validation
 # (`make packages`, ADR-006 G1).
-if [ "${MODE}" = full ]; then
+if [ "${MODE}" != demo ]; then
   APT_PACKAGES+=(cmake gcc-arm-none-eabi libnewlib-arm-none-eabi binutils-arm-none-eabi python3-jsonschema)
+fi
+# The Zephyr host tools a west build of the E1 firmware uses (ninja, gperf, a venv for west).
+if [ "${MODE}" = zephyr ]; then
+  APT_PACKAGES+=(ninja-build gperf python3-venv xz-utils file)
 fi
 
 PREFIX_OPT="${HOME}/.local/opt"
@@ -86,7 +100,7 @@ if ! rustup default >/dev/null 2>&1; then
 fi
 
 # ---- uv (developer only: the dial-me-spinner suite tooling) ----------------
-if [ "${MODE}" = full ]; then
+if [ "${MODE}" != demo ]; then
   if ! command -v uv >/dev/null 2>&1 || [ "$(uv --version | awk '{print $2}')" != "${UV_VERSION}" ]; then
     log "uv: installing ${UV_VERSION}"
     curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="${PREFIX_BIN}" sh
@@ -130,5 +144,11 @@ case ":${PATH}:" in
   *":${PREFIX_BIN}:"*) ;;
   *) log "NOTE: add ${PREFIX_BIN} to PATH (Ubuntu's ~/.profile does this for login shells once the dir exists): export PATH=\"${PREFIX_BIN}:\$PATH\"";;
 esac
+
+# ---- Zephyr SDK (optional, SETUP=zephyr) -----------------------------------------
+if [ "${MODE}" = zephyr ]; then
+  log "zephyr: SDK ${ZEPHYR_SDK_VERSION} (scripts/dms_zephyr.sh sdk; the workspace is made by make fw-rebuild / dms-firmware)"
+  bash "${REPO}/scripts/dms_zephyr.sh" sdk
+fi
 
 log "setup (${MODE}) complete; run 'make doctor$([ "${MODE}" = demo ] && echo ' SETUP=demo')'"

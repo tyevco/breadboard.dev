@@ -5,7 +5,9 @@
   Written before implementation because D7
   changes the `adc_in` pin model (`spec/pin-model.md`) and D6 fixes a
   lookahead bug in the Renode engine. D6 implemented (M1, 2026-11-09,
-  Amendment 1). D1-D4 implemented (M2, 2026-11-09, Amendment 2).
+  Amendment 1). D1-D4 implemented (M2, 2026-11-09, Amendment 2). D5's
+  example firmware, the image hash and D4 for projects implemented (M6,
+  2026-11-09, Amendment 3).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -657,12 +659,12 @@ a `la_*` gate. Each bumps the platform major (D1).
 | `make nrf-gates` | M2 | D3, including `nrf-busywait` (D1), and D6's TIMER-compare-then-long-sleep firmware (Amendment 1); as implemented also `nrf-ppi`, the D4 `PIN_CNF` audit and the board-level `make nrf-feedback` (Amendment 2) |
 | Promise-clamp unit test | M1 | D6 |
 | `make pool-equiv` with nRF configurations | M2 | AGENTS.md rule |
-| `make dms-rail` | M6 | E1: one-cell equivalence, determinism, goldens. The PIN_CNF audit (D4) is clean for the correct firmware |
+| `make dms-rail` | M6 | E1: one-cell equivalence, determinism, goldens. The PIN_CNF audit (D4) is clean for the correct firmware; as implemented also both engine orders, the board-level convergence gate and two negative controls of the audit (Amendment 3) |
 | `make nrf-saadc-model` | M8 | Register map; TACQ × RESOLUTION × OVERSAMPLE × BURST acquisition and DONE instants; an 8× burst gives 8 `smp` toggles and 8 charge transfers at **both** engine orders; EasyDMA PTR/MAXCNT/AMOUNT; LIMIT events; the VDD reference; host-port timed inputs; the TACQ < 2·L refusal and its message |
 | `la_saadc` in `lookahead.rs` | M8 | A sampled input that never wakes the CPU before `q`, with a burst |
 | `make dms-vsense` | M8 | E2: analog-side and firmware-visible checks (plan §2), equivalence to the every-lattice-point reference, `--engine-order` independence, no `stop:ngspice` |
 | GDB equivalence | M9 | D10 |
-| `fw-rebuild` (CI job where a Zephyr workspace can be created) | M6 | Image hashes of ELFs rebuilt in a fresh workspace equal `SHA256SUMS` |
+| `fw-rebuild` (CI job where a Zephyr workspace can be created) | M6 | Image hashes of ELFs rebuilt in a fresh workspace equal `SHA256SUMS` (`make fw-rebuild`, Amendment 3) |
 | `make cost-table` row for `dms-rail` | M6 | The ADR-003 protocol |
 | `make cost-table` row for `dms-vsense` | M8 | The ADR-003 protocol |
 
@@ -945,3 +947,118 @@ identity. Not adopted as proposed:
   `POOL=0`, `make lookahead-equiv` PASS on the pool and with `POOL=0`,
   `make pool-equiv` PASS (above). The same gates had passed on M2 alone
   (on `f517d43`) before the rebase.
+
+### Amendment 3: D5's example firmware, the image hash and D4 for projects (M6, 2026-11-09)
+
+- **The pin (approver answer 3).** Zephyr **v4.5.0**, the latest release
+  tag on 2026-11-09 (`git ls-remote`: commit
+  `41d10b59730406bbab4ca9f1fbbe9e96aafb4966`, tag object `d6e5dc6a`), with
+  its matching SDK **1.0.1** (v4.5.0's `SDK_VERSION`;
+  `arm-zephyr-eabi-gcc` 14.3.0). The west manifest
+  `examples/dial-me-spinner/firmware/west.yml` pins Zephyr and the three
+  modules an nRF52840 build needs by exact SHA, the ones v4.5.0's own
+  `west.yml` pins: `hal_nordic` `c708b9fe` (the commit M2 vendored the MDK
+  headers from), `cmsis` `512cc7e8`, `cmsis_6` `1c1840af`. west 1.5.0 and
+  the build's Python packages are pinned too (`firmware/requirements.lock`,
+  a `pip -c` constraints file). `scripts/dms_zephyr.sh` installs the SDK
+  (the minimal bundle plus the `arm-zephyr-eabi` toolchain, each tarball
+  checked against a sha256 in the script) into
+  `~/.local/opt/zephyr-sdk-1.0.1`, makes workspaces from the manifest
+  (`west init -l` on a copy in `<ws>/manifest`, `west update --narrow`),
+  builds, and never touches a developer's workspace. `make setup
+  SETUP=zephyr` (optional) installs the host tools and the SDK.
+- **The board** `dial_me_spinner/nrf52840`
+  (`firmware/boards/dial/dial_me_spinner`, hardware model v2,
+  `SOC_NRF52840_QIAA`) is the subset of dial-me-spinner `docs/firmware.md`
+  section 3.1 at `6854d25` that E1 uses: the `regulator-fixed` VLED on
+  `&gpio1 4` (LED_PWR_EN) with `startup-delay-us = 10000` and
+  `off-on-delay-us = 30000`, and `board-signals` (`dial,board-signals`, its
+  binding in `firmware/dts/bindings`) with `led-din-gpios` on `&gpio0 6`.
+  One addition: `led-din-gpios` carries `NRF_GPIO_DRIVE_H0H1`. The product
+  drives P0.06 from the I2S with its pinctrl state's H0H1 drive
+  (firmware.md 1.3: "H0H1 drive, required"); here the GPIO stands in for
+  the I2S's first data edge, so it gets the same drive. LED_PWR_EN keeps
+  `PIN_CNF`'s reset drive, S0S1, as firmware.md 1.3 says ("Output").
+- **The application** `firmware/led_rail` writes firmware.md 6.4 with the
+  APIs it names. On: `regulator_enable(vled)`, then P0.06 high (standing in
+  for the first frame; Renode's I2S drives no pin). Off:
+  `gpio_pin_configure_dt(&led_din, GPIO_OUTPUT_LOW)`, then
+  `regulator_disable(vled)`, then `k_msleep(35)`. 5 ms of "frames" between;
+  the cycle repeats forever. Every wait is a `k_sleep` on the RTC system
+  timer (D1). `CONFIG_LED_RAIL_WRONG_ORDER` (`wrong_order.conf`, the one
+  switch) swaps the off order: LED_PWR_EN low first, P0.06 low 10 ms later
+  (`LED_RAIL_WRONG_DIN_MS`), so DIN is high while U2's quick output
+  discharge pulls VLED down. `BUILD_VERSION` is fixed (`bb-dms-led-rail-1`)
+  and the boot banner, console, UART, printk and logging are off. 18 408 B
+  of flash and 4 608 B of RAM.
+- **A finding about Zephyr v4.5.0's regulator framework**
+  (`drivers/regulator/regulator_common.c` and `regulator_fixed.c`, read for
+  this amendment). `regulator_enable()` sleeps for **`off-on-delay-us`**
+  after it enables the regulator; `startup-delay-us` is applied only to a
+  regulator enabled at boot (`regulator-boot-on`). firmware.md 6.4 expects
+  `regulator_enable` to hold P0.06 low for the 10 ms of `startup-delay-us`,
+  and `off-on-delay-us` to give the QOD its 30 ms before the next turn-on.
+  With this DTS the enable waits 30 ms (P0.06 rises 30.06 ms after
+  LED_PWR_EN in every run), so LED-DATA-V4 still holds, with margin; but
+  nothing in the regulator enforces the off time before a turn-on: that is
+  the firmware's own `k_msleep`. Recorded here for the firmware's authors;
+  dial-me-spinner is not modified (it is read-only for this work).
+- **Image identity (D5).** The image hash is implemented as specified
+  (`cli/src/image.rs`; the byte stream is in `spec/project.md` section 1):
+  SHA-256 over a fixed prefix, each `PT_LOAD` segment with file content
+  (`p_paddr`, `p_filesz`, its bytes) in load-address order, and the entry
+  point. `bb flash` records it (at M4 it recorded the whole file's sha256),
+  `bb run` checks it and copies it into `run.json`, and `bb flash
+  --hash-only` prints it. The prebuilt ELFs in `firmware/prebuilt/` are
+  stripped of debug information (it carries the build path) and listed in
+  `SHA256SUMS` by image hash: `led_rail.elf` `5b02dd56...`,
+  `led_rail_wrong_order.elf` `382756c5...`. `PROVENANCE` gives the commits,
+  the SDK and compiler, west, and a sha256 over the firmware sources.
+- **`fw-rebuild`** (`make fw-rebuild`, `scripts/dms_zephyr.sh check`, and a
+  CI job): a second `west init` into a new temporary directory, `west
+  update`, both builds; the image hashes of the rebuilt ELFs, of
+  `SHA256SUMS` and of the committed ELFs must all be equal. **PASS**
+  (2026-11-09): both images identical from the fresh workspace.
+- **D4 for projects.** For a project, `bb run` now gives the Renode engine
+  the full audit list (`cli/src/elab.rs`): every bound pin with the drive
+  its parameter set names, and every unbound GPIO of the target whose net
+  is in the bench's analog scope. The drive of a set is read from its name
+  (`spec/package.md` section 4: `H0H1_max` is H0H1, `default` is S0S1); a
+  package schema key was not needed for one platform. On E1 the audit is
+  clean for both firmwares at both benches (P1.04 bound S0S1, P0.06 bound
+  H0H1_max, the unbound GPIO P0.02 on VSYS_SENSE never an output). Its two
+  negative controls in `make dms-rail` fire: P0.06 bound with `set =
+  "S0S1"` gives `PIN_CNF write: U10.P0.06 is bound with drive S0S1 but the
+  firmware configured PIN_CNF[6] = 0x00000303 (output, drive H0H1)`, and
+  P0.06 left unbound gives `PIN_CNF write: U10.P0.06 is not bound, but the
+  firmware configured it as an output and its net is in the analog scope
+  (it gets no glue, so nothing drives it): ...`.
+- **D2 on a module.** U10 is the Raytac module: a binding names the module
+  pad (`main:U10.P0.06`), and the module's pinmap gives the chip pin, its
+  pin model and the Renode pin (ADR-007 Amendment 3).
+- **E1 results** (`make dms-rail`). The edges: LED_PWR_EN up at 0.130 ms
+  (after boot), P0.06 up at 30.190 ms, P0.06 down at 35.221 ms,
+  LED_PWR_EN down at 35.230 ms, the second cycle from 70.256 ms. The checks
+  of `scripts/check_dms_rail.py`, with the suite's limits:
+
+  | Run | LED-DATA-V4 (>= 2.67 V) | LSW-3 (<= 0.7 V) | LSW-2 (<= 30 ms) |
+  | --- | --- | --- | --- |
+  | correct order, nominal | 3.684020 V at both P0.06 rises | 0.000 V | 24.420 ms |
+  | correct order, cold | 2.971510 / 2.971511 V (the suite at bat3.0 -10 C: 2.971511 V) | 0.320 V | 24.420 ms (the suite: 24.059 ms) |
+  | wrong order, nominal | 3.684020 V | **0.728 V, FAIL** at 45.26 ms, DIN clamp current 3.64 mA | 26.017 ms |
+  | wrong order, cold | 2.971510 V | **0.793 V, FAIL** at 45.26 ms, DIN clamp current 4.08 mA | 27.114 ms |
+
+  The second LED_PWR_EN fall of each run (105.35 ms; 115.39 ms in the
+  wrong order) has less than 30 ms of run after it and is reported as not
+  evaluable, not as passed. The cold correct-order LSW-3 value (0.320 V,
+  against the suite's -5.5e-10 V) comes from the pin model's fixed `voh =
+  "VDD"`: 3.3 V, the bench's +3V3 ceiling, while the suite's pad follows
+  its VDD node (+3V3 is 2.93 V at the cold bench). Rail-tracking pin
+  outputs are Phase 2 (plan section 3, Out). The difference is pessimistic
+  for LSW-3 and does not move VLED (the cross-check, ADR-007 Amendment 3).
+- **Deviations.** (1) The 10 ms wait of firmware.md 6.4 is 30 ms in the
+  image, for the regulator-framework reason above. (2) P0.06 is driven by
+  GPIO with H0H1 drive in place of the I2S (above). (3) The firmware
+  repeats its cycle, so a 120 ms run holds one complete off sequence, and
+  LSW-2 is evaluated on that one. (4) `fw-rebuild` is a make target and a
+  CI job; it ran here, but CI is not run (the repository has no remote).

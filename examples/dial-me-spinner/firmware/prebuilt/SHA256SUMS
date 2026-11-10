@@ -1,0 +1,4 @@
+# ELF image hashes (ADR-008 D5: sha256 over the PT_LOAD segments and the entry point,
+# `bb flash --hash-only`), not sha256sum of the files.
+5b02dd56447b14534702aea8be288577569f21a41c029d74b179fe6f450bbc10  led_rail.elf
+382756c5f3dc57af6bb7f0006f580636f85fb370b9bd101016de38417cd9c9a7  led_rail_wrong_order.elf

@@ -1,0 +1,3 @@
+# dial-me-spinner rev A: U10 is a Raytac MDBT50Q-U1MV2 module (nRF52840-QIAA).
+config BOARD_DIAL_ME_SPINNER
+	select SOC_NRF52840_QIAA

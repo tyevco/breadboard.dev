@@ -1,7 +1,8 @@
 # Projects (`bb.toml`), benches, names and the CLI verbs
 
 Status: normative. Decided by ADR-007 D5 and D7 (accepted 2026-11-09;
-implemented in Phase 1 M4, ADR-007 Amendment 1). Implementation:
+implemented in Phase 1 M4, ADR-007 Amendment 1; module targets, the image
+hash of ADR-008 D5 and Norton bench supplies in M6, ADR-007 Amendment 3). Implementation:
 `cli/src/project.rs`, `names.rs`, `import.rs`, `elab.rs`, `open.rs`,
 `flash.rs`, `probe_cmd.rs`. JSON Schemas: `spec/schema/project.schema.json`
 (`bb-project/0`) and `spec/schema/bench.schema.json` (`bb-bench/0`); the TOML
@@ -67,9 +68,25 @@ b = "base:J3"
   net is a `digital_out` that drives nothing (probe-only, glue rule 4).
   A connected MCU pin **without** a binding is unbound: no glue, no load
   (high-Z), its net probe-only on the MCU side.
+- **A module target** (`spec/package.md` section 4; Phase 1 M6, ADR-007
+  Amendment 3): a binding names the module pad as the board's symbol does
+  (`main:U10.P1.04`); the pad's chip pin (the module's pinmap) gives the
+  pin model, its parameter sets and the CPU engine's pin; a supply
+  reference names a chip pin and resolves to the net of the module pads
+  that map to it; the behavioural layer is the chip's.
+- **The `PIN_CNF` audit** (nRF52840, ADR-008 D4): every bound pin, with the
+  drive its `set` names (`spec/package.md` section 4), and every unbound
+  GPIO of the target whose net is in the bench's analog scope.
 - **Targets** are a list of typed images; Phase 1 implements exactly one
   image of `kind = "elf"` on one MCU of the simulated board. `bin`, `hex`,
-  `uf2` and `flash` are reserved.
+  `uf2` and `flash` are reserved. An `elf` image's `hash` is its **image
+  hash** (ADR-008 D5): `sha256:` and the SHA-256 of the 15 bytes
+  `bb-elf-image/0\n`, then for each `PT_LOAD` program header with
+  `p_filesz > 0`, sorted by `p_paddr` (then `p_offset`), `p_paddr` and
+  `p_filesz` as u64 little-endian and the segment's `p_filesz` file bytes,
+  then `e_entry` as u64 little-endian. Debug information and section
+  headers are not part of it, so two builds that load the same bytes have
+  one hash.
 
 ## 2. Names (ADR-007 D7)
 
@@ -147,7 +164,13 @@ packages; it contains no file paths:
    `params` come first; a generic passive's `value` is its parsed KiCad
    value. Every number is a plain SPICE number (`4.7e-7`), never a letter
    suffix;
-4. the bench's sources, loads and PWL sources, then `.temp`;
+4. the bench's sources, loads and PWL sources, then `.temp`. A
+   `[[supply]]` without `rs` is a voltage source (`V_bench_<net> <net> 0
+   DC <volts>`, or for a tracking supply `B_bench_<net> <net> 0 V =
+   min(<volts>, V(<track>) - <drop>)`); with `rs` it is its Norton
+   equivalent, one B conductance with no branch-current unknown
+   (`B_bench_<net> 0 <net> I = (<volts or min(...)> - V(<net>)) / <rs>`;
+   ADR-007 Amendment 3);
 5. the option set's `.options` card.
 
 The pin-model glue (`spec/pin-model.md`) is added by the analog engine, as
@@ -173,10 +196,12 @@ its sha256 is in `run.json`.
   `PATH`; the Windows build from WSL through `wslpath` and the Windows
   temporary directory, `$BB_KICAD_WINTMP`).
 - **`bb flash --target <instance> <file> [--kind elf] [--project <dir>]`.**
-  Checks that the instance's package has a behavioural layer whose engine
-  takes the image kind (Phase 1: `renode`, `elf`), computes the image's
-  sha256, and writes `[targets."<board>:<ref>"]` with a format-preserving
-  edit (every other line and comment kept). No device is touched.
+  Checks that the instance's package (a module's chip package) has a
+  behavioural layer whose engine takes the image kind (Phase 1: `renode`,
+  `elf`), computes the image hash (section 1), and writes
+  `[targets."<board>:<ref>"]` with a format-preserving edit (every other
+  line and comment kept). No device is touched. `bb flash --hash-only
+  <file>` prints the image hash (hex) and touches nothing.
 - **`bb run [--project <dir>] --for <t> [--bench <file>] [--fidelity fast]
   [--probe net:<name>]… --out <dir> [--allow-unqualified <pkg:view>]…`**
   (with every Phase 0 option except `--netlist`, `--firmware` and

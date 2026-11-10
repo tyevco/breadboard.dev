@@ -1,0 +1,55 @@
+# examples/dial-me-spinner/bench/cold.toml: the E1 cold bench (Phase 1 plan section 2 E1, ADR-007 D5).
+#
+# The main board alone: this bench stands in for the base board's BQ25180 power path with the
+# dial-me-spinner suite's own constants (hardware/sim/tests/test_load_switches.py at 6854d25,
+# corner bat3.0, the vsys_network idiom), as scripts/dms_s1.py's E1 deck does:
+#   VSYS: an ideal 3.0V source behind 0.5692 Ohm (RPACK(-10 C) 0.50 + BAT-FET 0.055 + harness 0.0142),
+#         loaded by the 50 mA the suite draws for +3V3 (I3V3);
+#   +3V3: the suite's ideal LDO, min(3.3 V, V(VSYS) - 44.167 mV) (I3V3 x LDO_RDO = 44.1667 mV to the uV; plan
+#         section 2 rounds it to 44.2 mV), driving every +3V3 pin. U1 (the RT9080 LDO) is
+#         unmodelled, so it is not in the deck and does not drive +3V3 too.
+# Not reproduced (plan section 2): the BQ25180 power-path dynamics, the base-board VSYS
+# capacitance, tolerances, DC bias and Monte Carlo corners.
+#
+# The analog scope (ADR-007 D5): a part enters the deck only if every connected pin is on one of
+# these nets. That keeps U2 (TPS22917) with C7 (CT) and R4 (QOD), the VLED capacitance (C8, C9,
+# C101-C148), the 48 WS2812C supply loads with the data chain R40/R41/R43 into D101's input clamp
+# and the LED_D1..LED_D48 chain nets (D102-D148's inputs), R3 on LED_PWR_EN, the VSYS
+# capacitors and the VSYS_SENSE divider (R1, R2, C5), and the +3V3 decoupling capacitors.
+schema = "bb-bench/0"
+temp_c = "-10"
+
+[[supply]]
+net = "VSYS"
+volts = "3.0V"
+rs = "0.5692"
+
+# rs: 10 mOhm in front of the +3V3 decoupling capacitors (C3, C4, C10, ...), which makes the
+# elaborated supply a Norton source (a B conductance). An ideal tracking voltage source across
+# them is a branch-current unknown in front of 17 capacitors, and it stalls ngspice at phase0
+# once VSYS moves (found by the M6 board-level convergence gate, ADR-007 Amendment 3). 10 mOhm is
+# within an LDO's output resistance and moves +3V3 by under 1 uV (it carries no DC load here).
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "10m"
+track = { net = "VSYS", drop = "44.167mV" }
+
+[[load]]
+net = "VSYS"
+amps = "50mA"
+
+[analog]
+nets = [
+  "GND", "VSYS", "+3V3", "VSYS_SENSE", "VLED", "LED_PWR_EN", "LSW_CT", "LSW_QOD",
+  "LED_DIN_MCU", "LED_DIN_R", "LED_DIN",
+  "LED_D1", "LED_D2", "LED_D3", "LED_D4", "LED_D5", "LED_D6", "LED_D7", "LED_D8",
+  "LED_D9", "LED_D10", "LED_D11", "LED_D12", "LED_D13", "LED_D14", "LED_D15", "LED_D16",
+  "LED_D17", "LED_D18", "LED_D19", "LED_D20", "LED_D21", "LED_D22", "LED_D23", "LED_D24",
+  "LED_D25", "LED_D26", "LED_D27", "LED_D28", "LED_D29", "LED_D30", "LED_D31", "LED_D32",
+  "LED_D33", "LED_D34", "LED_D35", "LED_D36", "LED_D37", "LED_D38", "LED_D39", "LED_D40",
+  "LED_D41", "LED_D42", "LED_D43", "LED_D44", "LED_D45", "LED_D46", "LED_D47", "LED_D48",
+]
+
+[options]
+set = "phase0"

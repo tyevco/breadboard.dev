@@ -222,6 +222,8 @@ fresh runs.
 | `examples/nrf-feedback`, defaults (`make nrf-feedback`: lookahead on) | 500 ms | 120 | **0.52 s** (27×) | 1.39 s | **0.05 s** | 1.95 s | 0.42 s |
 | `examples/adc/kicad --lookahead off` (Phase 1 M4: the ADC board drawn in KiCad, run as a `bb.toml` project; one-cell grants) | 300 ms | 30 000 | 12.66 s | 1.49 s | | 14.17 s | |
 | `examples/adc/kicad`, defaults (`make adc-kicad`: lookahead on) | 300 ms | 1 209 | **1.13 s** (11.2×) | 1.58 s | | 2.64 s | |
+| `examples/dial-me-spinner` E1, `--max-quantum 10us` (Phase 1 M6: the imported main board, Zephyr on the nRF52840, cold bench, 132 instances in the deck; one-cell grants) | 120 ms | 12 000 | 9.21 s | 1.99 s | 0.06 s | 11.24 s | 6.84 s |
+| `examples/dial-me-spinner` E1, defaults (`make dms-rail`: 10 ms grants, acyclic) | 120 ms | 12 | **1.87 s** (4.9×) | 1.36 s | **0.07 s** | 3.24 s | 1.93 s |
 
 The two `examples/nrf-feedback` rows (ADR-008 Amendment 2) were measured
 later, with the same protocol (`make cost-table`'s nRF row, N = 5,
@@ -229,6 +231,16 @@ interleaved, medians): fresh at load 2.4–4.0 and on a one-slot pool at
 load 1.6–2.0, every pooled run leased, every B run identical to A except
 grant records. They are not comparable with the rows above, which ran at a
 higher load.
+
+The two `examples/dial-me-spinner` rows (Phase 1 M6, ADR-007 Amendment 3)
+were measured with `make cost-table-dms-rail` (N = 5, interleaved, medians;
+the correct-order firmware at the cold bench): fresh at load 3.9–11.6 from
+other agents' work, so upper bounds, and on a one-slot pool at load
+1.9–3.3, all 10 pooled runs leased, every B run identical to A except grant
+records. The analog deck dominates here (the same deck through
+`NgspiceEngine` alone takes about 1.9 s for 120 ms, `deck_run`), so long
+grants gain less than on the Phase 0 boards; the pooled one-cell run's
+lower simulation time (6.73 s) is the lower load.
 
 The two `examples/adc/kicad` rows (ADR-007 Amendment 1) were measured
 fresh only, with `make cost-table-adc-kicad` (N = 5, interleaved, medians,

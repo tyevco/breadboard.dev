@@ -1,0 +1,34 @@
+# West manifest of the E1 firmware workspace (ADR-008 D5, plan M6).
+#
+# Zephyr v4.5.0, the latest release tag at M6 (approver decision A3 of
+# ADR-008), and the three modules an nRF52840 build needs, each at the exact
+# commit Zephyr v4.5.0's own west.yml pins. The matching SDK is 1.0.1
+# (Zephyr v4.5.0's SDK_VERSION). scripts/dms_zephyr.sh copies this file into
+# a workspace's manifest/ directory and runs `west init -l` on it; it never
+# uses a developer's workspace.
+manifest:
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+
+  projects:
+    - name: zephyr
+      remote: zephyrproject-rtos
+      revision: 41d10b59730406bbab4ca9f1fbbe9e96aafb4966   # v4.5.0
+      west-commands: scripts/west-commands.yml
+    - name: cmsis
+      remote: zephyrproject-rtos
+      revision: 512cc7e895e8491696b61f7ba8066b4a182569b8
+      path: modules/hal/cmsis
+    - name: cmsis_6
+      remote: zephyrproject-rtos
+      repo-path: CMSIS_6
+      revision: 1c1840af7a7e757d6e2fec3ddb0e5ce0dfcc93c8
+      path: modules/hal/cmsis_6
+    - name: hal_nordic
+      remote: zephyrproject-rtos
+      revision: c708b9fe1b7a36090c468374811a6e934b97e54a
+      path: modules/hal/nordic
+
+  self:
+    path: manifest

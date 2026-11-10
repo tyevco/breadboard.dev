@@ -92,7 +92,7 @@ else
 WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
-                  nrf-gates nrf-feedback
+                  nrf-gates nrf-feedback dms-rail dms-rail-test
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -138,6 +138,7 @@ pooled-test:
 	$(MAKE) adc-stock
 	$(MAKE) adc-model
 	$(MAKE) adc-kicad
+	$(MAKE) dms-rail-test
 	$(MAKE) ec-reconnect
 	$(MAKE) packages
 
@@ -253,6 +254,7 @@ golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-ope
 	cd $(NRF_FEEDBACK_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(NRF_FEEDBACK_HASHES) \
 	    && rm non-grant-records
+	$(MAKE) --no-print-directory dms-rail-update
 
 # ADR-003 step 4: examples/feedback, a board with a feedback loop (U1.PA5 ->
 # RC -> U1.PB0 digital_in; the EXTI0 ISR copies PB0 to PA6 -> LED). The loop
@@ -379,6 +381,17 @@ cost-table-runs:
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc-kicad $(PERF_N) "--lookahead off" "" - - - -- $(ADC_KICAD_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/nrf-feedback $(PERF_N) "--lookahead off" "" - - - \
 	    -- $(NRF_FEEDBACK_ARGS)
+	$(MAKE) --no-print-directory dms-rail-prepare
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-rail $(PERF_N) "--max-quantum 10us" "" - - - \
+	    -- $(DMS_RAIL_ARGS)
+
+# The Phase 1 M6 row alone (E1, examples/dial-me-spinner, ok-cold): one-cell vs bb's defaults, fresh
+# and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
+cost-table-dms-rail: firmware bb dms-rail-prepare
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-rail $(PERF_N) "--max-quantum 10us" "" \
+	    - - - -- $(DMS_RAIL_ARGS)
+	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-rail $(PERF_N) \
+	    "--max-quantum 10us" "" - - - -- $(DMS_RAIL_ARGS)
 
 # The Phase 1 M4 rows alone: examples/adc on board.cir and as the KiCad
 # project, each with lookahead off vs on (the same protocol). Run it on an
@@ -445,8 +458,11 @@ startup-perf: firmware bb
 # it uses the pool.
 POOL_EQUIV_OUT    ?= out/pool-equiv
 POOL_EQUIV_ROUNDS ?= 2
-pool-equiv: firmware bb adc-kicad-prepare
+pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare
 	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
+	    "dms-rail;$(DMS_RAIL_GOLD)/ok-cold/outputs.sha256;nongrant;$(DMS_RAIL_ARGS)" \
+	    "dms-rail-ref;$(DMS_RAIL_GOLD)/ok-cold/outputs.sha256;all;$(DMS_RAIL_ARGS) --max-quantum 10us" \
+	    "dms-rail-wrong;$(DMS_RAIL_GOLD)/wrong-nominal/outputs.sha256;nongrant;$(DMS_RAIL_WRONG_ARGS)" \
 	    "spike;$(SPIKE_HASHES);all;$(SPIKE_ARGS)" \
 	    "spike-1ms;$(PARTITION_HASHES);all;$(SPIKE_ARGS) --max-quantum 1ms" \
 	    "spike-500ms;$(PARTITION_HASHES);all;$(SPIKE_ARGS) --max-quantum 500ms" \
@@ -779,6 +795,58 @@ dms-local-packages: bb
 # within 10 mV), both benches, through NgspiceEngine at phase0. About 30 s.
 dms-m5b: dms-local-packages
 	DMS_REPO=$(DMS_REPO) bash scripts/dms_packages.sh m5b $(BB)
+
+# --- Phase 1 M6: E1, LED rail sequencing on dial-me-spinner rev A ----------
+# examples/dial-me-spinner: the imported main board, the Zephyr E1 firmware
+# (firmware/prebuilt/led_rail.elf and led_rail_wrong_order.elf, ADR-008 D5)
+# on U10's nRF52840, bench/nominal.toml and bench/cold.toml. Runs use copies
+# of the project off /mnt/c (scripts/dms_rail.sh; $(DMS_RAIL_WORK)).
+.PHONY: dms-rail dms-rail-test pooled-dms-rail pooled-dms-rail-test dms-rail-ref dms-rail-update \
+        dms-rail-prepare dms-crosscheck fw-rebuild dms-firmware cost-table-dms-rail
+DMS_RAIL_OUT   ?= out/dms-rail
+DMS_RAIL_WORK  ?= $(HOME)/.cache/bb-dms-rail
+export DMS_RAIL_WORK
+DMS_RAIL_GOLD  := tests/golden/dms-rail
+DMS_RAIL_ARGS   = --project $(DMS_RAIL_WORK)/proj-ok --bench $(DMS_RAIL_WORK)/proj-ok/bench/cold.toml --for 120ms
+DMS_RAIL_WRONG_ARGS = --project $(DMS_RAIL_WORK)/proj-wrong --bench $(DMS_RAIL_WORK)/proj-wrong/bench/nominal.toml \
+                 --for 120ms
+
+# In `make test`: both firmwares at both benches at bb's defaults: check_dms_rail.py (the correct
+# order passes LED-DATA-V4, LSW-3 and LSW-2; the wrong order fails exactly LSW-3), the committed
+# one-cell hashes, the VLED snapshots, a clean PIN_CNF audit, and analog-first byte-identical.
+pooled-dms-rail-test: bb
+	bash scripts/dms_rail.sh test $(BB) $(DMS_RAIL_OUT)-test
+
+# The plan's M6 gate: the above, plus every case's one-cell reference (--max-quantum 10us; equal
+# to the default run except grants and to the committed hashes), analog-first on every case, the
+# board-level convergence gate (120 ms in under 30 s at both engine orders), the PIN_CNF audit's
+# negative controls and 10-run determinism. About 3 min fresh.
+pooled-dms-rail: bb
+	bash scripts/dms_rail.sh gate $(BB) $(DMS_RAIL_OUT)
+
+# The one-cell references and, from them, tests/golden/dms-rail (golden-update runs it).
+dms-rail-ref: bb
+	bash scripts/dms_rail.sh ref $(BB) $(DMS_RAIL_OUT)-ref
+dms-rail-update: dms-rail-ref
+	bash scripts/dms_rail.sh update $(DMS_RAIL_OUT)-ref
+dms-rail-prepare: bb
+	bash scripts/dms_rail.sh prepare $(BB)
+
+# Local only (needs DMS_REPO and the LOCAL-ONLY vendor-derived TPS22917): the plan's PWL replay of
+# the run's pin_edge records into the suite's own led_rail_sequence deck with the same bench
+# supply; VLED within 5 mV of the co-simulation with the vendor-derived view (R2), both benches.
+dms-crosscheck: dms-local-packages
+	DMS_REPO=$(DMS_REPO) bash scripts/dms_crosscheck.sh $(BB)
+
+# ADR-008 D5: rebuild the committed E1 images in a FRESH west workspace (pinned manifest
+# examples/dial-me-spinner/firmware/west.yml, Zephyr SDK 1.0.1) and require the image hashes of
+# firmware/prebuilt/SHA256SUMS (CI job fw-rebuild, where a workspace can be created; downloads
+# about 400 MB the first time). dms-firmware rebuilds the prebuilt images (review the diff).
+fw-rebuild: bb
+	bash scripts/dms_zephyr.sh check
+dms-firmware: bb
+	bash scripts/dms_zephyr.sh ws
+	bash scripts/dms_zephyr.sh update
 
 # After an intended change to a package, a platform's .repl or a Renode
 # plugin source: rewrite the changed bb.lock entries (review, then commit).

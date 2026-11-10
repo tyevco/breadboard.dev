@@ -1,0 +1,54 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * dial-me-spinner rev A, the E1 subset (ADR-008 D5, Phase 1 plan M6), transcribed from
+ * dial-me-spinner docs/firmware.md section 3.1 (the board DTS draft) at 6854d25:
+ *   - the VLED regulator: regulator-fixed on LED_PWR_EN (P1.04), startup-delay-us 10000,
+ *     off-on-delay-us 30000 (firmware.md section 6.4; hardware/sim LED-DATA-V4, LSW-2);
+ *   - board-signals with led-din-gpios on P0.06 (LED_DIN_MCU).
+ * Everything else of the draft (I2S, SPIM3, PWM, the retained RAM, the sram0 carve-out, BLE,
+ * USB) is left out: E1 drives two GPIOs.
+ *
+ * One addition: led-din-gpios carries NRF_GPIO_DRIVE_H0H1. In the product firmware the I2S
+ * drives P0.06 with its pinctrl state's H0H1 drive (firmware.md section 1.3: "H0H1 drive,
+ * required"); here the GPIO stands in for the I2S's first data edge, so it gets the same drive,
+ * which the project binding (set H0H1_max) and the PIN_CNF audit (ADR-008 D4) expect.
+ */
+/dts-v1/;
+#include <nordic/nrf52840_qiaa.dtsi>
+#include <zephyr/dt-bindings/gpio/nordic-nrf-gpio.h>
+
+/ {
+	model = "dial-me-spinner rev A (Breadboard E1 subset)";
+	compatible = "dial,dial-me-spinner";
+
+	chosen {
+		zephyr,sram = &sram0;
+		zephyr,flash = &flash0;
+	};
+
+	vled: regulator-vled {
+		compatible = "regulator-fixed";
+		regulator-name = "VLED";
+		enable-gpios = <&gpio1 4 GPIO_ACTIVE_HIGH>;   /* LED_PWR_EN -> U2 TPS22917 ON (R3 100 kOhm pull-down) */
+		startup-delay-us = <10000>;   /* >= 10 ms with P0.06 low before the first frame (LED-DATA-V4) */
+		off-on-delay-us = <30000>;    /* QOD via R4 68 Ohm: VLED to 10 % in <= 26.6 ms (LSW-2) */
+	};
+
+	board_signals: board-signals {
+		compatible = "dial,board-signals";
+		led-din-gpios = <&gpio0 6 (GPIO_ACTIVE_HIGH | NRF_GPIO_DRIVE_H0H1)>;   /* LED_DIN_MCU */
+	};
+};
+
+&gpiote {
+	status = "okay";
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};

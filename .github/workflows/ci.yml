@@ -192,3 +192,45 @@ jobs:
 
       - name: Renode ADC platform test
         run: make adc-renode
+
+  # Phase 1 M6 (plan section 2 E1): the dial-me-spinner LED rail sequencing gate. Both prebuilt
+  # Zephyr firmwares at both benches, the one-cell references, both engine orders, the board-level
+  # convergence gate, the PIN_CNF audit and its negative controls, 10-run determinism.
+  dms-rail:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/bb-target
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .cache/bb-target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+
+      - name: Setup toolchain (make setup)
+        run: make setup
+
+      - name: E1 gate
+        run: make dms-rail
+
+  # ADR-008 D5: the committed E1 images rebuilt in a fresh west workspace (the pinned manifest,
+  # Zephyr v4.5.0, SDK 1.0.1) must have the image hashes of firmware/prebuilt/SHA256SUMS.
+  fw-rebuild:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/bb-target
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup toolchain and the Zephyr SDK (make setup SETUP=zephyr)
+        run: make setup SETUP=zephyr
+
+      - name: Rebuild the E1 firmware in a fresh workspace
+        run: make fw-rebuild

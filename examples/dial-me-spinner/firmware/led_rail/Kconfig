@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+config LED_RAIL_WRONG_ORDER
+	bool "Turn the LED rail off in the wrong order (the E1 negative test)"
+	help
+	  The one switch between led_rail.elf and led_rail_wrong_order.elf (ADR-008 D5).
+	  Off sequence: LED_PWR_EN low first, and P0.06 (LED_DIN_MCU) low only
+	  LED_RAIL_WRONG_DIN_MS later, so DIN stays high while U2's quick output
+	  discharge pulls VLED down: the violation of firmware.md section 6.4 that the
+	  hardware/sim LSW-3 check catches. The turn-on is unchanged.
+
+config LED_RAIL_WRONG_DIN_MS
+	int "With LED_RAIL_WRONG_ORDER: how long P0.06 stays high after LED_PWR_EN falls (ms)"
+	default 10
+	depends on LED_RAIL_WRONG_ORDER
+
+source "Kconfig.zephyr"

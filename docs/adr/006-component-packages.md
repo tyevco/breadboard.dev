@@ -4,7 +4,9 @@
   (revised 2026-11-09 after two design reviews, see Review notes).
   Implemented for plan M3 (2026-11-09), with Amendment 1; S1 (Amendment 2);
   M5 and M5b (2026-11-09: the E1 packages, the datasheet-fitted TPS22917
-  view and the local-only vendor-derived one, Amendment 3).
+  view and the local-only vendor-derived one, Amendment 3). Used by E1 in
+  plan M6 (2026-11-09: module bindings, the nRF drive-set names, the
+  board-level convergence gate; Amendment 4).
   Written before implementation because it defines the package schema
   (AGENTS.md: ADRs come before anything that touches the package schema).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestones S1, M3,
@@ -1296,3 +1298,34 @@ conflict warning (section 11) and the `nrf52840-bb@1` platform row.
    (load 6-10 from other agents). The QOD vectors dominate (5 000 one-cell
    grants each). There is no new board or run mode, so no equivalence gate
    or cost-table row of its own; M6 adds both for E1.
+
+## Amendment 4 (2026-11-09): plan M6, the packages in E1
+
+No package changes in M6; what E1 exercised:
+
+1. **Module pads bound in `bb run`** (Amendment 3 item 5c, `spec/package.md`
+   section 4, ADR-007 Amendment 3 item 1). A binding on a pad of
+   `raytac/mdbt50q-u1mv2` takes its pin model and parameter set from the
+   `nordic/nrf52840-qiaa` pin the pinmap maps it to, and a `voh = "VDD"`
+   supply reference resolves through the pinmap to the module's VDD pad
+   and its net. The module's own `pins.toml` `models` lists are not
+   consulted; the chip pin's are (they agree for every GPIO pad).
+2. **nRF52840 drive-set names** (`spec/package.md` section 4). The names
+   of Amendment 3 item 5a's sets already begin with the `PIN_CNF` DRIVE
+   they stand for (`S0S1`, `H0H1_max`, ...). M6 makes that the rule
+   `bb run`'s `PIN_CNF` audit reads (ADR-008 Amendment 3), with `default`
+   standing for S0S1. No set was renamed.
+3. **Item 5a's gate.** "Their use as E1's drive is gated in M6 (the PWL
+   replay within 5 mV)": E1 binds LED_PWR_EN with `S0S1` (200 Ohm, 13 ns)
+   and P0.06 with `H0H1_max` (28.6 Ohm, 5 ns). The replay into the suite's
+   deck, whose pads are the suite's own `LSW_NRF_GPIO` (hd_typ on
+   LED_PWR_EN, hd_max on P0.06, ESD clamps, 3 pF, VDD from +3V3), agrees
+   with the co-simulation on VLED within 0.223 mV (nominal) and 0.489 mV
+   (cold) with the vendor-derived TPS22917 view (ADR-007 Amendment 3 item
+   7). PASS.
+4. **Board-level convergence** (D6, "each example board gets a convergence
+   gate at its bench's option set"). The 132-instance E1 deck runs 120 ms
+   at `phase0`, at both engine orders, in 3.0-6.2 s. Getting there took one
+   change outside the packages: the bench's tracking +3V3 source in Norton
+   form (ADR-007 Amendment 3 item 4). Every view was already qualified at
+   (10 us, `phase0`), and `bb run` checked that.

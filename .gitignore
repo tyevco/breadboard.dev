@@ -13,6 +13,8 @@ __pycache__/
 *.kicad_prl
 # Committed prebuilt firmware (ADR-008 D5): the nRF52840 Zephyr gate image.
 !engines/cpu-renode/tests/firmware/nrf52840/zephyr/prebuilt/*.elf
+# ... and the E1 firmware of examples/dial-me-spinner (Phase 1 M6, ADR-008 D5).
+!examples/dial-me-spinner/firmware/prebuilt/*.elf
 # LOCAL-ONLY packages (LicenseRef-local-only, Phase 1 plan approver decision A3; ADR-006 D9 rule 4):
 # `make dms-local-packages` builds the vendor-derived TPS22917 here. Never commit them.
 /local-packages/

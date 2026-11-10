@@ -9,7 +9,9 @@
   `spec/event-stream.md` and `spec/pin-model.md`. **Implemented in M4
   (2026-11-09; Amendment 1):** gates M4a-M4g pass, M4a through D9's stated
   fallback, with its cause measured. Gate M4f restated for plan M5's
-  packages (Amendment 2).
+  packages (Amendment 2). D5's bench, bindings and targets gated on E1
+  (M6, 2026-11-09; Amendment 3: module targets, the image hash, Norton
+  bench supplies, the board-level convergence gate).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestone M4, M6
   for D5, and M11 for systems.
 - **Depends on:** ADR-006 (packages, views, `pins.toml`, `bb.lock`, the
@@ -999,3 +1001,114 @@ change. Nothing in the importer's rules changes.
    `renode:nrf52840-bb@1` (`spec/package.md` section 4). The committed
    `examples/dial-me-spinner/board.bbm` and `bb.lock` are regenerated
    (`make locks`). Elaborating bindings on module pads is plan M6's.
+
+## Amendment 3 (2026-11-09): plan M6, D5 on the reference board (E1)
+
+Plan M6 runs E1 on the imported main board: `examples/dial-me-spinner`
+gains its `[targets]`, two `[[bind]]`s, `[probes]` and two benches. What
+the elaboration needed, and what the gates found:
+
+1. **Module targets** (ADR-006 Amendment 3 item 5c, `spec/project.md`
+   section 1). U10 is the Raytac module. `bb flash` takes the behavioural
+   layer from the module's chip package. In `bb run` a binding names the
+   module pad as the board's symbol does (`main:U10.P1.04`); the module's
+   pinmap gives the chip pin, which supplies the pin model and its sets and
+   is the Renode pin (`P1.04`); a supply reference (`voh = "VDD"`) names a
+   chip pin and resolves to the net of the pads the pinmap maps to it
+   (+3V3). `board.bbm` is unchanged by M6.
+2. **The image hash** of ADR-008 D5 replaces M4's whole-file sha256 in
+   `[targets]` (`spec/project.md` section 1; `bb flash --hash-only` prints
+   it). No committed `bb.toml` held a target before M6.
+3. **The `PIN_CNF` audit list** for a project (ADR-008 D4, Amendment 3):
+   the bound pins with their sets' drives and the unbound GPIOs on
+   analog-scope nets.
+4. **Bench supplies with `rs` are Norton sources** (`spec/project.md`
+   section 4). This is what the board-level convergence gate (plan R9)
+   found. The +3V3 rail has 17 decoupling capacitors (C3, C4, C10, ...) in
+   scope. With the bench's ideal tracking source across them
+   (`B_bench_n3V3 n3V3 0 V = min(3.3, V(VSYS) - 0.044167)`), the E1 deck
+   did not finish 120 ms at `phase0`: the step collapsed between 58 and
+   64 ms of the QOD discharge, and a run was killed after 300 s. A 10 mOhm
+   resistor in series with the source did not help (`deck_run` with the
+   E1 edges, killed at 40 s): it is AGENTS.md's known bad idea, a
+   branch-current unknown in series with a milliohm path. Without the
+   capacitors, or with a fixed source, the same deck ran 120 ms in 1.9 s.
+   So a `[[supply]]` with `rs` is now written as one B conductance,
+   `B_bench_<net> 0 <net> I = (<target> - V(<net>)) / <rs>`, with no branch
+   unknown; without `rs` it stays a voltage source. VSYS (rs 0.5692 or
+   0.3192 Ohm) changes form too. The E1 benches give +3V3 `rs = "10m"`,
+   within an LDO's output resistance; it carries no DC load, so it moves
+   +3V3 by under 1 uV. No committed output depended on the old form (only
+   `cli/tests/kicad_import.rs`'s deck text, updated).
+5. **The E1 benches** (`bench/nominal.toml`, `bench/cold.toml`): plan
+   section 2's table with the suite's constants. VSYS 3.7 V / 3.0 V behind
+   0.3192 / 0.5692 Ohm, a 50 mA VSYS load, +3V3 = min(3.3 V, V(VSYS) -
+   44.167 mV) (the suite's I3V3 x LDO_RDO is 44.1667 mV; the grammar holds
+   whole uV), 25 / -10 C, option set `phase0`. The analog scope lists 59
+   nets: the power and LED nets, U2's CT and QOD, VSYS_SENSE and the 48
+   LED-chain nets. That puts 132 instances in the deck, the 48 WS2812C
+   pixels and U2 (the committed datasheet-fitted view) among them, plus R42
+   on LED_D48. U1 (the RT9080) is unmodelled, so it drives nothing in the
+   deck. KiCad's 0 Ohm R43 reaches ngspice as `value=0`, which ngspice
+   sets to its 1 mOhm minimum (the suite writes 1e-6).
+6. **Gates** (`make dms-rail`, `scripts/dms_rail.sh`; the cases are
+   firmware {correct, wrong order} x bench {nominal, cold}):
+   - **the E1 checks**: the correct order passes LED-DATA-V4, LSW-3 and
+     LSW-2 at both benches. The wrong order fails exactly LSW-3 at both,
+     with the excursion and the DIN clamp current in the message
+     (`check_dms_rail.py --expect-fail LSW-3`; values in ADR-008
+     Amendment 3);
+   - **board-level convergence**: every run completes 120 ms at `phase0`
+     at both engine orders in 3.0-6.2 s of wall time (1.6-3.1 s of
+     simulation) with a fresh Renode and in 1.4-1.7 s on the warm pool,
+     against the 30 s limit;
+   - **one-cell equivalence**: the default run (12 grants of 10 ms) equals
+     the one-cell reference (`--max-quantum 10us`, 12 000 grants) in
+     `nets.csv`, `nets.vcd` and every non-grant record, on all four cases.
+     The board is acyclic: the MCU drives and nothing reads back;
+   - **goldens**: `tests/golden/dms-rail/<case>/outputs.sha256` (the
+     one-cell references, grant records included) and the VLED snapshots of
+     the correct-order runs (1 mV / 1 sample);
+   - `--engine-order analog-first` is byte-identical, grant records
+     included, on all four cases;
+   - **10-run determinism** (correct order, cold);
+   - **the PIN_CNF audit** is clean, and its two negative controls fire
+     (ADR-008 Amendment 3).
+
+   `make dms-rail-test` (in `make test`) runs the four default runs with
+   the checks, the committed hashes, the snapshots, the audit and
+   analog-first on the cold correct-order case.
+7. **The local cross-check** (plan section 2, R2; `make dms-crosscheck`,
+   `scripts/dms_crosscheck.sh` and `scripts/dms_suite_deck.py`). The suite's
+   own `led_rail_sequence` deck is built by its functions from a `git
+   archive` export of `6854d25`. Its power path is replaced by the same
+   bench supply (the suite's ideal-VSYS idiom behind the bench's series R,
+   its load and its tracking +3V3), and its two PWL sources by the run's
+   `pin_edge` records. It runs standalone in ngspice 42 at `phase0` (TMAX
+   10 us), and its VLED, on the 10 us grid, is compared with the
+   co-simulation's at every sample:
+
+   | Comparison | nominal | cold |
+   | --- | --- | --- |
+   | **Gated (5 mV):** co-simulation with the LOCAL-ONLY vendor-derived view vs the suite deck with that view | **0.223 mV** | **0.489 mV** |
+   | Reported: co-simulation with the committed fitted view vs the suite deck with the fitted view | 0.850 mV | 1.039 mV |
+   | Reported: the suite's battery-network deck vs the bench deck (vendor view; what the bench leaves out) | 1.53 mV | 2.43 mV |
+
+   The vendor-derived run uses a copy of the project with
+   `local-packages/` on its search path (`bb open` rewrites that copy's
+   `board.bbm` and `bb.lock`). Nothing TI-derived enters the repository; the
+   decks stay in `~/.cache/bb-dms-crosscheck`. The cross-check also gates
+   ADR-006 Amendment 3 item 5a: the nRF52840 GPIO sets as E1's drive.
+8. **Cost** (`make cost-table-dms-rail`, the ADR-003 protocol, N = 5,
+   interleaved, medians, cold bench, correct order; README): the one-cell
+   reference takes 9.21 s of simulation for 120 ms (12 000 grants), bb's
+   defaults 1.87 s (12 grants, 4.9x). Engine startup is 1.99 / 1.36 s
+   fresh and 0.06 / 0.07 s from the pool. Total wall is 11.24 / 3.24 s
+   fresh and 6.84 / 1.93 s on the pool. The fresh round ran at load
+   3.9-11.6 from other agents' work.
+9. **Deviations.** (a) The plan's bench gives +3V3 no series resistance;
+   the E1 benches add 10 mOhm and the Norton form, for the convergence
+   reason above. (b) LED-DATA-V4 and LSW-3 use the 10 us samples of
+   `nets.csv`; LED-DATA-V4 is interpolated linearly to the edge instant.
+   (c) The second LED_PWR_EN fall of a 120 ms run is not evaluable for
+   LSW-2 and is reported as such (ADR-008 Amendment 3).

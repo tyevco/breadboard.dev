@@ -51,6 +51,7 @@
 mod board;
 mod elab;
 mod flash;
+mod image;
 mod import;
 mod names;
 mod open;
@@ -609,20 +610,40 @@ fn run(a: RunArgs) -> Result<(), String> {
     let pin_spec = if nrf { PinSpec::nrf } else { PinSpec::stm32 };
     if nrf {
         rcfg.platform = Platform::Nrf52840Bb;
-        rcfg.pin_cnf_audit = mcu_pins
-            .iter()
-            .filter_map(|p| {
-                let expect = match p.kind {
-                    PinKind::Out { .. } => PinCnfExpect::DigitalOut { drive: None },
-                    PinKind::In { .. } => PinCnfExpect::DigitalIn,
-                    PinKind::OutUnconnected | PinKind::Adc { .. } => return None,
-                };
-                Some(PinCnfAudit {
-                    pin: p.pin.clone(),
-                    expect,
+        rcfg.pin_cnf_audit = match &board.audit {
+            // A project (Phase 1 M6): each bound pin with the drive of its
+            // parameter set, and the unbound GPIOs on analog-scope nets.
+            Some(list) => list
+                .iter()
+                .map(|(pin, e)| {
+                    let expect = match e {
+                        board::AuditExpect::Out(d) => PinCnfExpect::DigitalOut {
+                            drive: d.as_deref().map(str::parse).transpose()?,
+                        },
+                        board::AuditExpect::In => PinCnfExpect::DigitalIn,
+                        board::AuditExpect::Unbound => PinCnfExpect::Unbound,
+                    };
+                    Ok(PinCnfAudit {
+                        pin: pin.clone(),
+                        expect,
+                    })
                 })
-            })
-            .collect();
+                .collect::<Result<_, String>>()?,
+            None => mcu_pins
+                .iter()
+                .filter_map(|p| {
+                    let expect = match p.kind {
+                        PinKind::Out { .. } => PinCnfExpect::DigitalOut { drive: None },
+                        PinKind::In { .. } => PinCnfExpect::DigitalIn,
+                        PinKind::OutUnconnected | PinKind::Adc { .. } => return None,
+                    };
+                    Some(PinCnfAudit {
+                        pin: p.pin.clone(),
+                        expect,
+                    })
+                })
+                .collect(),
+        };
     }
     rcfg.pins = mcu_pins
         .iter()

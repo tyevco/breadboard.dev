@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# dial-me-spinner docs/firmware.md section 3.1: the board-signals node. Only the property the
+# E1 firmware uses is declared here (ADR-008 D5).
+description: dial-me-spinner board signals (the E1 subset)
+
+compatible: "dial,board-signals"
+
+properties:
+  led-din-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      P0.06 (LED_DIN_MCU), forced low while VLED is off (firmware.md section 6.4).

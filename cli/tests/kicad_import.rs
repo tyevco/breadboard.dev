@@ -58,6 +58,27 @@ fn run(args: &[&str], dir: &Path) -> Output {
         .unwrap()
 }
 
+/// A minimal little-endian ELF32 (ARM) with one 4-byte PT_LOAD at 0.
+fn tiny_elf() -> Vec<u8> {
+    let mut f = vec![0u8; 52];
+    f[..7].copy_from_slice(b"\x7fELF\x01\x01\x01");
+    f[16] = 2; // ET_EXEC
+    f[18] = 40; // EM_ARM
+    f[20] = 1;
+    f[28] = 52; // e_phoff
+    f[40] = 52; // e_ehsize
+    f[42] = 32; // e_phentsize
+    f[44] = 1; // e_phnum
+    let mut ph = [0u8; 32];
+    ph[0] = 1; // PT_LOAD
+    ph[4] = 84; // p_offset
+    ph[16] = 4; // p_filesz
+    ph[20] = 4; // p_memsz
+    f.extend_from_slice(&ph);
+    f.extend_from_slice(b"\x00\x00\x00\x20");
+    f
+}
+
 fn text(o: &Output) -> String {
     format!(
         "{}{}",
@@ -251,7 +272,9 @@ fn a_bench_elaborates_into_the_deck() {
         &d,
     );
     let _ = std::fs::remove_dir_all(d.join(".bb"));
-    std::fs::write(d.join("fw.elf"), b"\x7fELF not really an image").unwrap();
+    // bb flash records the ELF image hash (ADR-008 D5), so the file must
+    // have a loadable segment: a minimal ELF32 with one 4-byte PT_LOAD.
+    std::fs::write(d.join("fw.elf"), tiny_elf()).unwrap();
     std::fs::create_dir_all(d.join("bench")).unwrap();
     std::fs::write(
         d.join("bench/test.toml"),
@@ -284,8 +307,8 @@ fn a_bench_elaborates_into_the_deck() {
         "XD1 LED 0 example_led_red\n",
         "XR1 DRIVE ADC_IN bb_generic_resistor value=10000\n",
         "XR2 ADC_IN 0 bb_generic_resistor value=33000\n",
-        "B_bench_LED bb_bench_LED 0 V = min(2, V(ADC_IN) - 0.1)\n",
-        "R_bench_LED bb_bench_LED LED 10\n",
+        // A supply with rs is its Norton equivalent (ADR-007 Amendment 3).
+        "B_bench_LED 0 LED I = (min(2, V(ADC_IN) - 0.1) - V(LED)) / 10\n",
         "I_bench_load0_ADC_IN ADC_IN 0 DC 0.001\n",
         ".temp -10\n",
         ".options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13\n",

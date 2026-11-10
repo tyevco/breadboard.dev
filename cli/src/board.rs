@@ -135,6 +135,39 @@ pub struct Board {
     /// Lint warnings (an explicit pin parameter that differs from the
     /// package's, ADR-007 D9).
     pub warnings: Vec<String>,
+    /// The nRF52840 `PIN_CNF` audit list of a project (ADR-008 D4, Phase 1
+    /// M6): every bound pin with the drive its parameter set names, and
+    /// every unbound GPIO on an analog-scope net, by chip pin name. `None`
+    /// for a board file, which names neither (the bound pins are audited
+    /// without a drive).
+    pub audit: Option<Vec<(String, AuditExpect)>>,
+}
+
+/// What the `PIN_CNF` audit expects of one pin (ADR-008 D4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuditExpect {
+    /// Bound as `digital_out`; the drive (`S0S1`, `H0H1`, ...) its set names.
+    Out(Option<String>),
+    /// Bound as `digital_in`.
+    In,
+    /// Connected to an analog-scope net and not bound: must not be an output.
+    Unbound,
+}
+
+/// The `PIN_CNF` drive a `digital_out` parameter set of the nRF52840 stands
+/// for (ADR-008 Amendment 3): the set name up to its first `_` (`H0H1_max`
+/// is `H0H1`), and `default` is `S0S1`, DRIVE's reset value. `None` when the
+/// name does not start with a drive.
+pub fn nrf_set_drive(set: Option<&str>) -> Option<String> {
+    let s = set.unwrap_or("default");
+    if s == "default" {
+        return Some("S0S1".into());
+    }
+    let head = s.split('_').next().unwrap_or_default();
+    const DRIVES: [&str; 8] = [
+        "S0S1", "H0S1", "S0H1", "H0H1", "D0S1", "D0H1", "S0D1", "H0D1",
+    ];
+    DRIVES.contains(&head).then(|| head.to_string())
 }
 
 impl PartialEq for Board {
@@ -451,6 +484,7 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         spice: text.to_string(),
         packages: packages.into_values().collect(),
         warnings,
+        audit: None,
     })
 }
 

@@ -181,6 +181,12 @@ zout = "25"
   `default`; neither existing is an error. Explicit parameters of a binding
   override the set's, and a value that differs from the set's is reported as
   a lint warning (ADR-007 D9).
+- **nRF52840 drive sets** (ADR-008 D4, Amendment 3). On a package whose
+  behavioural platform is Breadboard's nRF52840, a `digital_out` set's name
+  begins with the `PIN_CNF` DRIVE it stands for (`S0S1`, `H0H1`, ... ; a
+  suffix after `_` names a PS column, `H0H1_max`), and `default` stands for
+  `S0S1`, DRIVE's reset value. `bb run`'s `PIN_CNF` audit takes a bound
+  pin's expected drive from that name.
 - **Pin-attached loads.** A view of `kind = "pin_load"` is a load the pin
   model attaches to its own pad (ADR-008 D7). Its ports are typed: `{ role =
   "pad" }` (exactly one: the bound pin's net), `{ role = "ctrl", signal }`

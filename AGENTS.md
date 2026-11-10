@@ -14,11 +14,11 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 
 | Command | What it does |
 | --- | --- |
-| `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev, python3-jsonschema; then build `bb` and install it into `~/.local/bin`. `make setup SETUP=demo` skips the ARM toolchain, uv and jsonschema (what the demo needs: Rust, Renode, ngspice, `bb`). As root (a container) it runs apt without sudo (Phase 1 M3) |
+| `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev, python3-jsonschema; then build `bb` and install it into `~/.local/bin`. `make setup SETUP=demo` skips the ARM toolchain, uv and jsonschema (what the demo needs: Rust, Renode, ngspice, `bb`). As root (a container) it runs apt without sudo (Phase 1 M3). `make setup SETUP=zephyr` (optional, M6) adds the Zephyr host tools and the pinned Zephyr SDK 1.0.1 for `make fw-rebuild` |
 | `make setup-container` | Phase 1 M3 gate (R7): `make setup SETUP=demo` timed in a clean `ubuntu:24.04` container (podman, or docker), as root, from `git archive HEAD` (`SETUP_REV=`, or `SETUP_WORKTREE=1`); timing in `out/setup-container/timing.txt` (`scripts/setup_container_test.sh`) |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect`, run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -65,6 +65,10 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make locks` | `bb open --update-lock` on every example board and project: after an intended change to a package, a platform `.repl` or **any Renode plugin source** (they are in every Renode platform's content hash, ADR-006 D8); review and commit the `bb.lock` and `board.bbm` diffs |
 | `make adc-kicad` | Phase 1 M4 gate M4a (ADR-007 Amendment 1; in `make test`): `examples/adc/kicad`, the ADC board drawn in KiCad, imported and run as a `bb.toml` project (a copy in `~/.cache/bb-adc-kicad`, firmware recorded with `bb flash`; `scripts/adc_kicad.sh`): `board.bbm` current; equal to its one-cell reference and to `tests/golden/adc-kicad/outputs.sha256`; the `.net` and `kicad-cli` routes byte-identical (when `kicad-cli` is installed); board.cir's committed non-grant records byte for byte and `nets.csv`/`nets.vcd` within 1 mV (2 samples differ by 1 µV: C1's `470n` against `4.7e-7`, which the script checks byte for byte); `bb run` writes nothing into the project. `make adc-kicad-prepare` makes the copy that `pool-equiv` and `cost-table` run |
 | `make kicad-import` | Phase 1 M4 gates M4b-M4f on the dial-me-spinner main board at 6854d25 (`scripts/kicad_import.sh`, about 20 s; needs KiCad 10 in WSL and the Windows `kicad-cli.exe` unless `KICAD_WINDOWS=0`): 201 parts, 142 nets, 657 pin nodes; the resolution counts; one `board.bbm` from the committed netlist, fresh Linux and Windows exports and a partial KiCad 10 re-save (dc96515's KiCad 9 netlist as the secondary check); byte-identical re-imports; unchanged sources; the version refusals. Not in `make test` (no KiCad in CI); `cli/tests/kicad_import.rs` (the two-board fixture) is |
+| `make dms-rail` | Phase 1 M6 gate (plan section 2 E1; ADR-008 Amendment 3, ADR-007 Amendment 3): `examples/dial-me-spinner` with the prebuilt Zephyr firmware (`led_rail.elf`, `led_rail_wrong_order.elf`) at `bench/nominal.toml` and `bench/cold.toml`, each run on a copy of the project in `~/.cache/bb-dms-rail` (`scripts/dms_rail.sh gate`, about 3 min fresh): `scripts/check_dms_rail.py` (the correct order passes LED-DATA-V4, LSW-3, LSW-2; the wrong order fails exactly LSW-3), every case equal to its one-cell reference (`--max-quantum 10us`) except grants and to `tests/golden/dms-rail`, analog-first byte-identical, 120 ms in under 30 s at both engine orders (board-level convergence), the `PIN_CNF` audit clean and its two negative controls, 10-run determinism. `make dms-rail-test` (in `make test`) is the four default runs with the checks, hashes, VLED snapshots, audit and one analog-first run; `make dms-rail-update` rewrites the goldens |
+| `make dms-crosscheck` | Phase 1 M6, local only (needs `DMS_REPO` and `make dms-local-packages`): the run's `pin_edge` records replayed into the suite's own `led_rail_sequence` deck with the same bench supply (`scripts/dms_crosscheck.sh`, `scripts/dms_suite_deck.py`); VLED within 5 mV of the co-simulation with the LOCAL-ONLY vendor-derived view, both benches; the fitted view and the suite's battery-network deck reported. Decks stay in `~/.cache/bb-dms-crosscheck` |
+| `make fw-rebuild` / `make dms-firmware` | ADR-008 D5 (M6): rebuild the E1 images in a FRESH west workspace from `examples/dial-me-spinner/firmware/west.yml` (Zephyr v4.5.0, SDK 1.0.1 in `~/.local/opt`) and require the image hashes of `firmware/prebuilt/SHA256SUMS`; `dms-firmware` rebuilds the prebuilt images (`scripts/dms_zephyr.sh`; `make setup SETUP=zephyr` installs the SDK and host tools). Never uses a developer's workspace |
+| `make cost-table-dms-rail` | The M6 cost-table row alone (E1 cold, one-cell vs defaults, fresh and on a 1-slot pool); `make cost-table` includes it. Run on an idle host |
 | `make dms-values` | ADR-006 G3: `bb pkg value --kicad` on the 29 distinct passive values of the dial-me-spinner main board equals the suite's `spicelib.parse_value` (re-derived from `git show 6854d25:hardware/sim/spicelib.py` when `DMS_REPO` exists, else the committed fixture `tests/fixtures/values/dms-main.json`) |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
@@ -119,7 +123,10 @@ examples/adc/kicad/     the ADC board drawn in KiCad (Phase 1 M4): build_schemat
 examples/dial-me-spinner/ Phase 1 reference board (dial-me-spinner 6854d25): SOURCE (commits and
                         sha256 of every vendored file), kicad/ (main and base projects; kicad9-dc96515/
                         the secondary KiCad 9 netlists), suite/results.json (the suite re-run, M0),
-                        bb.toml with its board.bbm and bb.lock (M4)
+                        bb.toml with its board.bbm and bb.lock (M4); M6: the E1 [[bind]]s and
+                        target, bench/ (nominal, cold), firmware/ (west.yml, the out-of-tree
+                        Zephyr board, the led_rail app, prebuilt/ ELFs with SHA256SUMS of their
+                        image hashes and PROVENANCE)
 examples/nrf-feedback/  examples/feedback's circuit on the nRF52840 (Phase 1 M2; firmware
                         engines/cpu-renode/tests/firmware/nrf52840/nrf_feedback.c)
 engines/cpu-renode/platforms/nrf52840-bb.repl  Breadboard's nRF52840 (ADR-008 D1); its gate
@@ -132,6 +139,7 @@ tests/golden/adc/, adc-open/ hashes of the every-lattice-point one-cell ADC refe
 tests/golden/adc-stock/, adc-open-stock/ the same on the stock ADC model (ADR-003)
 tests/golden/nrf-feedback/ one-cell reference hashes of examples/nrf-feedback (Phase 1 M2)
 tests/golden/adc-kicad/ one-cell reference hashes of the examples/adc/kicad project (Phase 1 M4)
+tests/golden/dms-rail/  one-cell reference hashes of E1's four cases and VLED snapshots (Phase 1 M6)
 tests/fixtures/kicad/   the synthetic two-board system of ADR-007 gate M4b (cli/tests/kicad_import.rs)
 spec/                   normative protocol and schema docs (package.md and schema/*.schema.json: ADR-006;
                         board-bbm.md, canonical-json.md, project.md: ADR-007); changing them needs an ADR
@@ -146,7 +154,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         check_pins_kicad.py, setup_container_test.sh,
                         nrf_vendor_headers.sh, nrf_zephyr_gate.sh, adc_kicad.sh,
                         kicad_import.sh, compare_outputs.py, dms_packages.sh (+ dms_packages.py,
-                        dms_m5b.py), check_local_only.sh
+                        dms_m5b.py), check_local_only.sh, check_dms_rail.py, dms_rail.sh,
+                        dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py)
 ```
 
 ## The three invariants
@@ -305,7 +314,14 @@ feedback board).
   1e-14 V, below double resolution, and the step collapses (ADR-006
   Amendment 2: the TPS22917 view's `RVAR` and `H1` blocks). Write such an
   element as a B conductance, and compute a sensed current from node
-  voltages.
+  voltages. The same holds for a bench: an ideal (tracking) voltage
+  source across a rail's capacitors stalled the E1 deck at `phase0`, with
+  or without 10 mOhm in series; give such a `[[supply]]` an `rs`, which
+  `bb run` writes as a Norton B conductance (ADR-007 Amendment 3).
+- **Timing a firmware rule with Zephyr's `startup-delay-us`.** In Zephyr
+  v4.5.0 `regulator_enable()` sleeps `off-on-delay-us`, and
+  `startup-delay-us` applies only to a regulator enabled at boot (ADR-008
+  Amendment 3). Read the driver before relying on a devicetree delay.
 - Using float seconds for scheduling. Convert at the engine's FFI boundary only.
 - Assuming engines advance in registration order. They advance in the plan
   order the kernel builds from the bindings (producers first, ADR-003 D3);

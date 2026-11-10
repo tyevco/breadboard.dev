@@ -1,0 +1,9 @@
+# examples/dial-me-spinner/firmware/prebuilt: built by scripts/dms_zephyr.sh update (ADR-008 D5)
+board dial_me_spinner/nrf52840 (firmware/boards/dial/dial_me_spinner)
+zephyr 41d10b59730406bbab4ca9f1fbbe9e96aafb4966 (v4.5.0)
+hal_nordic c708b9fe1b7a36090c468374811a6e934b97e54a
+cmsis 512cc7e895e8491696b61f7ba8066b4a182569b8
+cmsis_6 1c1840af7a7e757d6e2fec3ddb0e5ce0dfcc93c8
+sdk zephyr-sdk 1.0.1 (arm-zephyr-eabi-gcc (Zephyr SDK 1.0.1) 14.3.0)
+west 1.5.0
+sources 16c4abeddefcb56f9907c7e0efc87c7a5d88adfab8ed9c4ac98852029f4e6ec2

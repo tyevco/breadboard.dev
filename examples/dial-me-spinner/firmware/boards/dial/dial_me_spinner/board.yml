@@ -1,0 +1,8 @@
+# dial-me-spinner rev A as an out-of-tree Zephyr board (ADR-008 D5): the subset of
+# dial-me-spinner docs/firmware.md section 3.1 (at 6854d25) that the E1 firmware uses.
+board:
+  name: dial_me_spinner
+  full_name: dial-me-spinner rev A (Breadboard E1 subset)
+  vendor: dial
+  socs:
+    - name: nrf52840

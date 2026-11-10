@@ -16,7 +16,11 @@
   cause measured; Review notes: M4). M5 and M5b done (2026-11-09: the E1
   packages, the datasheet-fitted TPS22917 view as the committed default and
   the vendor-derived one local-only, gated against each other on the E1
-  checks; ADR-006 Amendment 3; Review notes: M5 and M5b).
+  checks; ADR-006 Amendment 3; Review notes: M5 and M5b). M6 done
+  (2026-11-09: E1 on the imported board with the Zephyr v4.5.0 firmware,
+  both benches, `make dms-rail`, the local PWL cross-check within 0.5 mV,
+  the cost-table row; ADR-008 Amendment 3, ADR-007 Amendment 3, ADR-006
+  Amendment 4; Review notes: M6).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -871,3 +875,81 @@ ADR-006/007/008. Items not adopted as proposed:
 - **Cost.** `make packages` takes about 22 s (6 s of it the new vectors);
   `make dms-local-packages` about 25 s; `make dms-m5b` about 40 s on 8 jobs.
   M5 adds no board or run mode; M6 adds E1's equivalence gate and cost row.
+
+## Review notes: M6 (2026-11-09)
+
+- **What exists.** `examples/dial-me-spinner` runs E1. The new pieces:
+  - `bb.toml` gains the target U10, `[[bind]]` P1.04 (`S0S1`) and P0.06
+    (`H0H1_max`), and `[probes]`;
+  - `bench/nominal.toml` and `bench/cold.toml`;
+  - `firmware/`: a pinned west manifest (Zephyr v4.5.0, SDK 1.0.1), the
+    out-of-tree board `dial_me_spinner/nrf52840`, the `led_rail` app with
+    its one Kconfig switch, and `prebuilt/` (both stripped ELFs,
+    `SHA256SUMS` of their image hashes, `PROVENANCE`);
+  - `scripts/check_dms_rail.py`, `scripts/dms_rail.sh` (`make dms-rail`,
+    `make dms-rail-test` in `make test`), `scripts/dms_zephyr.sh` (`make
+    fw-rebuild`, `make dms-firmware`, `make setup SETUP=zephyr`),
+    `scripts/dms_suite_deck.py` and `scripts/dms_crosscheck.sh` (`make
+    dms-crosscheck`, local);
+  - `tests/golden/dms-rail/`.
+
+  In `bb`: module targets and pad bindings through the pinmap, the ELF
+  image hash (`bb flash`, `bb run`, `--hash-only`), the full `PIN_CNF`
+  audit list for projects, and Norton bench supplies. Details: ADR-008
+  Amendment 3, ADR-007 Amendment 3, ADR-006 Amendment 4.
+- **The M6 row's gate, item by item.**
+  - Both benches pass with the correct order. LED-DATA-V4: 3.684020 V
+    (nominal) and 2.971510 V (cold; the suite's 2.971511 V). LSW-3: 0.000 V
+    and 0.320 V. LSW-2: 24.420 ms at both (the suite at bat3.0: 24.059 ms).
+  - The wrong order fails exactly LSW-3 at both benches: 0.728 V (3.64 mA
+    clamp current) and 0.793 V (4.08 mA). `check_dms_rail.py
+    --expect-fail LSW-3` passes only then.
+  - Board-level convergence: every run completes 120 ms at `phase0`, at
+    both engine orders, in 3.0-6.2 s of wall time (limit 30 s). The gate
+    found a real stall first: the bench's ideal tracking +3V3 across the
+    rail's 17 capacitors. Bench supplies with `rs` are now Norton sources
+    (ADR-007 Amendment 3 item 4).
+  - One-cell equivalence: all four cases equal their `--max-quantum 10us`
+    references except grant records.
+  - 10-run determinism: byte-identical.
+  - Goldens in `tests/golden/dms-rail/`.
+  - The local PWL cross-check: VLED within 0.223 mV (nominal) and 0.489 mV
+    (cold) of the co-simulation with the vendor-derived view (gate 5 mV).
+    With the committed fitted view the figures are 0.850 / 1.039 mV, and
+    the suite's battery-network deck differs from the bench deck by 1.53 /
+    2.43 mV (both reported only).
+  - Also: analog-first byte-identical on every case, the `PIN_CNF` audit
+    clean with two negative controls that fire, `fw-rebuild` PASS from a
+    fresh workspace, and `make pool-equiv` with three E1 configurations.
+- **Gate runs** (2026-11-09, on `78a9674` plus M6, load 2-12 from other
+  agents' work):
+  - `make check` on the pool: green (7 min 53 s), now including `make
+    dms-rail-test`;
+  - `make test POOL=0`: green (8 min 40 s, every Renode fresh);
+  - `make dms-rail`: PASS on the pool (2 min 15 s) and with `POOL=0`
+    (2 min 47 s), 42 gate lines each and none failing;
+  - `make pool-equiv`: PASS, 19 configurations, 38 pooled runs from one
+    Renode process;
+  - `make fw-rebuild` and `make dms-crosscheck`: PASS.
+- **A firmware finding** (ADR-008 Amendment 3). Zephyr v4.5.0's
+  `regulator_enable()` waits `off-on-delay-us` (30 ms), not
+  `startup-delay-us` (10 ms), and nothing enforces the off time before a
+  turn-on. P0.06 therefore rises 30.06 ms after LED_PWR_EN. That still
+  meets LED-DATA-V4, but it is not what firmware.md 6.4 says.
+- **Deviations.**
+  - The 10 ms wait is 30 ms in the image (above).
+  - P0.06 is a GPIO with H0H1 drive standing in for the I2S.
+  - The firmware cycles forever, so LSW-2 is evaluated on the one complete
+    off sequence of a 120 ms run, and the second fall is reported as not
+    evaluable.
+  - The E1 benches give +3V3 10 mOhm of series resistance (the Norton
+    form).
+  - A pin's `voh` is the bench's +3V3 ceiling (3.3 V), not the cold rail
+    (2.93 V). Rail-tracking outputs are Phase 2; this is pessimistic for
+    LSW-3 and does not move VLED.
+  - `fw-rebuild` is a make target and a CI job definition; CI itself is
+    not run (no remote, approver decision B).
+- **Cost.** The README row (ADR-003 protocol, N = 5): 120 ms takes 9.21 s
+  of simulation one-cell (12 000 grants) and 1.87 s at bb's defaults (12
+  grants, 4.9x). Engine startup is 1.36 s fresh and 0.07 s pooled. The
+  host was loaded (3.9-11.6), so these are upper bounds.

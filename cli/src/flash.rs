@@ -16,10 +16,13 @@ use crate::project::{self, Image, Project, PROJECT_FILE};
 
 const USAGE: &str = "\
 usage: bb flash --target <instance> <file.elf> [--kind elf] [--project <dir>]
+       bb flash --hash-only <file.elf>
 
   Records the image as the firmware of <instance> (U10, or main:U10) in
-  bb.toml [targets], with its sha256 (ADR-007 D7). Reads board.bbm (run
-  `bb open` first). bb run checks the hash.";
+  bb.toml [targets], with its image hash (ADR-007 D7, ADR-008 D5: sha256
+  over the PT_LOAD segments and the entry point, not over the file). Reads
+  board.bbm (run `bb open` first). bb run checks the hash. --hash-only
+  prints the image hash and touches nothing.";
 
 pub fn main(args: &[String]) -> ExitCode {
     match run(args) {
@@ -36,9 +39,11 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut kind = "elf".to_string();
     let mut dir: Option<PathBuf> = None;
     let mut file: Option<PathBuf> = None;
+    let mut hash_only = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--hash-only" => hash_only = true,
             "--target" => target = Some(it.next().ok_or("--target needs a value")?.clone()),
             "--kind" => kind = it.next().ok_or("--kind needs a value")?.clone(),
             "--project" => dir = Some(PathBuf::from(it.next().ok_or("--project needs a value")?)),
@@ -53,6 +58,17 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
             }
         }
+    }
+    if hash_only {
+        let file = file.ok_or_else(|| format!("an image file is required\n{USAGE}"))?;
+        if target.is_some() || dir.is_some() || kind != "elf" {
+            return Err(format!("--hash-only takes only the image file\n{USAGE}"));
+        }
+        let bytes = std::fs::read(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
+        let h =
+            crate::image::elf_image_hash(&bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+        println!("{}", h.trim_start_matches("sha256:"));
+        return Ok(());
     }
     let target = target.ok_or_else(|| format!("--target is required\n{USAGE}"))?;
     let file = file.ok_or_else(|| format!("an image file is required\n{USAGE}"))?;
@@ -89,7 +105,12 @@ fn run(args: &[String]) -> Result<(), String> {
     })?;
     let pkgs = import::Packages::load(&p.search_path())?;
     let pkg = pkgs.get(&pr.id)?;
-    match pkg.part.behavioral.as_ref() {
+    // A module's behavioural layer is its chip's (spec/package.md section 4).
+    let beh_pkg = match &pkg.part.module {
+        Some(m) => pkgs.get(&m.chip)?,
+        None => pkg,
+    };
+    match beh_pkg.part.behavioral.as_ref() {
         Some(beh) if beh.engine == "renode" => {}
         _ => {
             return Err(format!(
@@ -102,7 +123,8 @@ fn run(args: &[String]) -> Result<(), String> {
     if !bytes.starts_with(b"\x7fELF") {
         return Err(format!("{}: not an ELF file", file.display()));
     }
-    let hash = format!("sha256:{}", bbpkg::sha256::hex_digest(&bytes));
+    let hash =
+        crate::image::elf_image_hash(&bytes).map_err(|e| format!("{}: {e}", file.display()))?;
     // The image path relative to the project (no absolute paths in bb.toml
     // when the image is inside it).
     let abs_dir = std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
