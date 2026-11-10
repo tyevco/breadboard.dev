@@ -53,6 +53,14 @@ that user, so the README's first line needs `sudo` (the README says so). In
 step 2, the source is the Windows path as WSL sees it:
 `/mnt/c/source/tyevco/breadboard.dev`.
 
+Check from the host that the Ubuntu archive is reachable first (a clean
+image has no curl):
+`curl -sI http://archive.ubuntu.com/ubuntu/dists/noble/Release` must
+answer within a few seconds. During M7 Canonical's servers were unreachable
+from the development host for over an hour, and the timed runs used
+`mirrors.kernel.org` instead (plan, "Review notes: M7"). Record which
+mirror the human run used. Use the image's default unless it is down.
+
 Before the timer starts, check the environment in its shell. Every command
 must print nothing:
 

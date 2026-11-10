@@ -20,7 +20,14 @@
   (2026-11-09: E1 on the imported board with the Zephyr v4.5.0 firmware,
   both benches, `make dms-rail`, the local PWL cross-check within 0.5 mV,
   the cost-table row; ADR-008 Amendment 3, ADR-007 Amendment 3, ADR-006
-  Amendment 4; Review notes: M6).
+  Amendment 4; Review notes: M6). M7 done (2026-11-09) and **not
+  published** (decision B). The README quickstart (`<CLONE-URL>` marked as
+  a placeholder), `make demo`, and the E1 cost-table row re-measured on an
+  idle host. The timed stranger test from a local clone took 113.9 s in a
+  clean container and 106.8 s in a fresh WSL distro, both with the apt
+  mirror overridden, because Canonical's archive was unreachable from this
+  host. The one human run is left to the user
+  (`docs/phase1-exit-checklist.md`). Review notes: M7.
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -412,7 +419,11 @@ reference demo from the README in under 15 minutes". For this board:
 
 M7 measures it: a timed script in a clean container plus one human run,
 both cloning from a local path or `file://` URL (approver decision B).
-M3 measures `make setup` first, so a miss is known early (R7).
+M3 measures `make setup` first, so a miss is known early (R7). The script
+is `scripts/stranger_test.sh` (`make stranger-test-container`, `make
+stranger-test-wsl`). It runs the README's own command block, line by line.
+The human run follows `docs/phase1-exit-checklist.md`. The results are in
+"Review notes: M7".
 
 ## 6. Risks
 
@@ -953,3 +964,120 @@ ADR-006/007/008. Items not adopted as proposed:
   of simulation one-cell (12 000 grants) and 1.87 s at bb's defaults (12
   grants, 4.9x). Engine startup is 1.36 s fresh and 0.07 s pooled. The
   host was loaded (3.9-11.6), so these are upper bounds.
+
+## Review notes: M7 (2026-11-09)
+
+- **What exists.**
+  - **The README quickstart** is at the top of `README.md`. Its command
+    block sits between `<!-- stranger-test:begin -->` and `<!--
+    stranger-test:end -->`. It is §5's sequence plus three things a clean
+    Ubuntu needs: the `apt-get install git make ca-certificates` line, the
+    `export PATH="$HOME/.local/bin:$PATH"` line (root's `.profile` in
+    `ubuntu:24.04` does not add `~/.local/bin`), and the wrong-order run
+    written out. `<CLONE-URL>` is marked as a placeholder to be filled in
+    at publication; until then, users clone from a local path or a
+    `file://` URL. The README also shows the expected PASS and FAIL output
+    and explains what each step writes.
+  - **`make demo`** (`scripts/demo.sh`, about 15 s) runs the README's
+    commands on a copy of the project, with every Renode started fresh. It
+    then checks both runs against `tests/golden/dms-rail/{ok,wrong}-cold`
+    (§5 item 2) and checks `run.json`'s list of analog views (§5 item 4:
+    132 instances, `phase0`, each with its provenance, confidence and
+    qualification).
+  - **`make stranger-test-container` and `make stranger-test-wsl`**
+    (`scripts/stranger_test.sh`) run the README block at `HEAD` line by
+    line, as root, from `$HOME`, timed, against a 900 s limit. `<CLONE-URL>`
+    becomes the local repository. Then they check the committed hashes and
+    run `make demo`.
+  - **`docs/phase1-exit-checklist.md`** gives the exact steps for the one
+    human run, and what the human does if they decide to publish.
+- **The cost-table row** (README): E1 re-measured with `make
+  cost-table-dms-rail` on an idle host (N = 5, interleaved, medians; fresh
+  at load 0.7–1.1, pool at load 1.0–1.4). One-cell: 6.34 s of simulation,
+  7.78 s in total fresh. Defaults: 1.83 s (3.5×), 3.29 s in total fresh,
+  1.95 s pooled; engine startup 1.42 s fresh, 0.08 s pooled. Every B run
+  was identical to A except for grant records. M6's figures were measured
+  at load 3.9–11.6 (9.21 s and 1.87 s of simulation).
+- **The stranger test (§5 item 1), measured.** Both runs started from a
+  clean Ubuntu 24.04: image `docker.io/library/ubuntu:24.04` `d9b8c34d61a9`
+  (24.04.5), with no git, make, Rust, Renode, ngspice, `bb`, KiCad, west,
+  ARM toolchain or python3 beforehand. Both cloned commit `1d9bd64`, ran
+  as root, on a 24-CPU host. Times in seconds:
+
+  | Step | Container | Fresh WSL distro |
+  | --- | --- | --- |
+  | `apt-get install git make ca-certificates` | 13.2 | 21.7 |
+  | `git clone` (local) | 44.6 | 24.5 |
+  | `make setup SETUP=demo` | 48.8 | 52.8 |
+  | `bb open`, `bb flash` | under 0.1 each | under 0.1 each |
+  | `bb run`, correct order | 3.6 | 3.7 |
+  | `check_dms_rail.py` | 0.1 (PASS) | 0.1 (PASS) |
+  | `bb run`, wrong order | 3.0 | 3.1 |
+  | `check_dms_rail.py`, wrong order | 0.1 (FAIL: exactly LSW-3, exit 1) | 0.1 (the same) |
+  | **README total** | **113.9 (1 min 54 s)** | **106.8 (1 min 47 s)** |
+  | `make demo` afterwards | 6.8, PASS | 6.4, PASS |
+
+  The two environments:
+  - **Container:** rootless podman 4.9.3, with the repository mounted
+    read-only and cloned from `file:///repo`.
+  - **Fresh WSL 2 distro:** the same image's root filesystem
+    (`podman export`), imported with `wsl --import` into
+    `%TEMP%\bb-stranger-wsl-<pid>` (WSL 3.0.3.0). It cloned the plain path
+    `/mnt/c/source/tyevco/breadboard.dev`, and was unregistered and its
+    folder deleted afterwards (checked: `wsl -l` lists only `Ubuntu-24.04`).
+
+  In both, the two runs' `nets.csv`, `nets.vcd` and non-grant records
+  equal the committed hashes, and no KiCad, west or ARM toolchain was
+  installed. Installed: 617 MB of Rust and 184 MB of Renode. The 15-minute
+  budget is met with about 13 minutes to spare. The clone (from `/mnt/c`,
+  1 438 loose objects) and `make setup` take most of the time.
+- **Deviation: the apt mirror.** Both timed runs used `--apt-mirror
+  http://mirrors.kernel.org/ubuntu/`. Before the timer starts, this points
+  the image's apt sources at that mirror; the README is unchanged and
+  `timing.txt` records it. The reason: Canonical's archive was
+  unreachable from this host. The earlier attempts with the image's own
+  sources (`archive.ubuntu.com`, `security.ubuntu.com`):
+  1. At `fbcfc1d`, step 1 failed after 16.6 s: `security.ubuntu.com`
+     returned 404 for perl updates that its index already listed (a
+     mirror mid-sync).
+  2. Step 1 took 508 s (apt at 87 kB/s), then `make setup` failed after
+     98 s: "File has unexpected size (2176865 != 2176869). Mirror sync in
+     progress?". `setup.sh` gave up on the first failed index, so commit
+     `1d9bd64` makes it retry each download and the whole apt command, three
+     times each, 30 s apart.
+  3. From about 21:10 to past 21:42 (PST), every IPv4 address of
+     `archive.ubuntu.com` and `security.ubuntu.com` timed out or crawled.
+     Probes every 3 min mostly got 0 B/s, and never more than 46 kB/s. Over the same period `mirrors.kernel.org`,
+     `static.rust-lang.org` (28 MB/s) and GitHub answered normally.
+
+  So the measured 107–114 s holds for a working Ubuntu mirror. A stranger
+  whose mirror is down or syncing is stopped in the README's first line,
+  before any Breadboard code runs. `setup.sh` now rides out a sync, but not
+  an outage. The unmodified run (the image's own sources) still needs to
+  be repeated once Canonical's archive is reachable: `make
+  stranger-test-container` and `make stranger-test-wsl` with no
+  `STRANGER_ARGS`.
+- **Other deviations.**
+  - The README block adds the prerequisite, `PATH` and wrong-order lines
+    to §5's sequence (above).
+  - The fresh WSL distro is built from the `ubuntu:24.04` OCI image, not
+    the Microsoft Store image. That avoids another download, and the OCI
+    image is the stricter of the two: it has no git, python3 or sudo.
+  - The container is rootless. Inside a rootful container, root does not
+    own the bind-mounted repository, so git 2.43's safe-directory check
+    refuses to clone it ("dubious ownership"). A real URL does not have
+    this problem.
+  - The "one human run" of this section is not done; it is the user's, by
+    `docs/phase1-exit-checklist.md`.
+- **The other §5 items, re-run at `1d9bd64`** (load 0.3–3.6):
+  - item 2: `make test` is green on the pool (7 min 12 s) and with
+    `POOL=0` (9 min 25 s). `make dms-rail` passes on the pool (2 min 23 s,
+    42 PASS lines, including 10-run determinism) and with `POOL=0` (2 min 33
+    s, 42 PASS lines, none failing).
+  - item 3: `make kicad-import` passes (56 s).
+  - item 4: `make demo` checks it, and `bb run` notes the
+    `agent_generated` ideal R and C.
+- **Not done (decision B).** No remote, no push, no repository. Before
+  publication the tree also needs the Apache-2.0 `LICENSE` file (decision
+  A2; packages already declare `license = "Apache-2.0"`), and `<CLONE-URL>`
+  must be filled in. Both are listed in the exit checklist's step 6.

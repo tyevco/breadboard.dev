@@ -881,9 +881,9 @@ DEMO_WORK ?= $(HOME)/.cache/bb-demo
 demo: bb
 	DEMO_OUT=$(DEMO_OUT) DEMO_WORK=$(DEMO_WORK) bash scripts/demo.sh $(BB)
 stranger-test-container:
-	bash scripts/stranger_test.sh container $(if $(STRANGER_URL),--url $(STRANGER_URL))
+	bash scripts/stranger_test.sh container $(if $(STRANGER_URL),--url $(STRANGER_URL)) $(STRANGER_ARGS)
 stranger-test-wsl:
-	bash scripts/stranger_test.sh wsl $(if $(STRANGER_URL),--url $(STRANGER_URL))
+	bash scripts/stranger_test.sh wsl $(if $(STRANGER_URL),--url $(STRANGER_URL)) $(STRANGER_ARGS)
 
 fmt:
 	$(CARGO) fmt --all

@@ -56,7 +56,13 @@ python3 ../../scripts/check_dms_rail.py out/rail-wrong           # expected to F
 
 `make setup SETUP=demo` takes most of the time. It installs the apt
 packages, Rust 1.99.1, Renode 1.17.0 and ngspice 42, then builds `bb`.
-Each run then takes a few seconds.
+Each run then takes a few seconds. Timed from a local clone, the whole
+block took 1 min 54 s in a clean `ubuntu:24.04` container and 1 min 47 s
+in a fresh WSL distro. `make setup` took about 50 s of that, the local
+clone 25–45 s, and each run under 4 s. That was on a 24-CPU host with a working Ubuntu mirror
+(Phase 1 plan, "Review notes: M7"). The 15-minute budget leaves room for a
+slower network. If `apt-get` fails with "Mirror sync in progress?", run the
+line again; `make setup` retries on its own.
 
 The correct-order firmware follows dial-me-spinner's `docs/firmware.md` 6.4.
 It raises LED_PWR_EN before it sends data, and it takes the data line low

@@ -2,8 +2,8 @@
 # Phase 1 plan M7 (section 5, the exit): the stranger test, timed, from a LOCAL clone (approver
 # decision B: nothing is published; the README's clone URL is a placeholder).
 #
-#   bash scripts/stranger_test.sh container [--url <url>] [--out <dir>] [--image <ref>] [--keep]
-#   bash scripts/stranger_test.sh wsl       [--url <url>] [--out <dir>] [--image <ref>] [--keep]
+#   bash scripts/stranger_test.sh container [--url <url>] [--out <dir>] [--image <ref>] [--apt-mirror <url>] [--keep]
+#   bash scripts/stranger_test.sh wsl       [--url <url>] [--out <dir>] [--image <ref>] [--apt-mirror <url>] [--keep]
 #
 # The steps are the README's own: the fenced block between `<!-- stranger-test:begin -->` and
 # `<!-- stranger-test:end -->` in README.md of the commit being tested, with `<CLONE-URL>` replaced
@@ -26,6 +26,10 @@
 #              run, then unregistered and its directory deleted (--keep keeps both). Run it from WSL
 #              with Windows interop. Default --url: this repository's path (/mnt/c/...), which the
 #              new distro sees at the same path.
+# --apt-mirror <url> (e.g. http://mirrors.kernel.org/ubuntu/): before the timer starts, point the
+# image's apt sources (archive.ubuntu.com, security.ubuntu.com) at another Ubuntu mirror, for when
+# Canonical's servers are unreachable from the host (they were for over an hour during M7). The
+# README is unchanged; timing.txt records the mirror.
 # Results: <out>/timing.txt (the summary), steps.tsv, step logs; default out/stranger/<mode>.
 set -euo pipefail
 
@@ -36,12 +40,14 @@ URL=
 OUT=out/stranger/$MODE
 IMAGE=docker.io/library/ubuntu:24.04
 KEEP=0
+APT_MIRROR=
 while (($#)); do
   case "$1" in
     --url) URL=$2; shift 2 ;;
     --out) OUT=$2; shift 2 ;;
     --image) IMAGE=$2; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --apt-mirror) APT_MIRROR=$2; shift 2 ;;
     *) echo "stranger_test: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -69,7 +75,7 @@ HEAD_ID=$(git -C "$REPO" rev-parse HEAD)
 cat > "$OUT/runner.sh" <<'EOF'
 #!/bin/bash
 set -uo pipefail
-STEPS=$1 R=$2
+STEPS=$1 R=$2 MIRROR=${3:-}
 export HOME=/root
 cd "$HOME"
 now() { date +%s.%N; }
@@ -82,6 +88,10 @@ now() { date +%s.%N; }
   echo "before: zephyr-sdk $(ls -d /opt/zephyr-sdk* $HOME/zephyr-sdk* $HOME/.local/opt/zephyr-sdk* 2>/dev/null | head -1 || true)"
   echo "before: dial-me-spinner $(find / -xdev -maxdepth 4 -name 'dial-me-spinner*' -not -path '/proc/*' 2>/dev/null | head -1)"
 } > "$R/env.txt"
+if [[ -n $MIRROR ]]; then # --apt-mirror: before the timer, the image's apt sources point at another mirror
+  sed -i "s|http://archive.ubuntu.com/ubuntu/|$MIRROR|; s|http://security.ubuntu.com/ubuntu/|$MIRROR|" /etc/apt/sources.list.d/ubuntu.sources
+  echo "apt mirror (harness, before the timer): $(grep -h ^URIs /etc/apt/sources.list.d/ubuntu.sources | sort -u | tr '\n' ' ')" >> "$R/env.txt"
+fi
 : > "$R/steps.tsv"
 fail=0
 n=0
@@ -150,13 +160,13 @@ set +e
 if [[ $MODE == container ]]; then
   name=bb-stranger-$$
   "$ENGINE" run --name "$name" -v "$REPO:/repo:ro" -v "$OUT:/work" "$IMAGE" \
-    bash /work/runner.sh /work/steps.sh /work 2>&1 | tee "$OUT/run.log"
+    bash /work/runner.sh /work/steps.sh /work "$APT_MIRROR" 2>&1 | tee "$OUT/run.log"
   rc=${PIPESTATUS[0]}
   [[ $KEEP == 1 ]] || "$ENGINE" rm -f "$name" > /dev/null 2>&1
   where="$ENGINE $("$ENGINE" --version | head -1), rootless=$([[ $(id -u) != 0 ]] && echo yes || echo no)"
 else
   command -v wsl.exe > /dev/null || { echo "stranger_test: wsl mode needs WSL with Windows interop" >&2; exit 1; }
-  export WSL_UTF8=1
+  export WSL_UTF8=1 WSLENV=${WSLENV:+$WSLENV:}WSL_UTF8 # wsl.exe prints UTF-8, not UTF-16
   win_tmp=$(wslpath "$(cmd.exe /c 'echo %TEMP%' 2> /dev/null | tr -d '\r')")
   dir=${STRANGER_WSL_DIR:-$win_tmp/bb-stranger-wsl-$$}
   name=bb-stranger-$$
@@ -170,7 +180,7 @@ else
   wsl.exe --import "$name" "$(wslpath -w "$dir/distro")" "$(wslpath -w "$dir/rootfs.tar")" --version 2
   rm -f "$dir/rootfs.tar"
   start=$(now) # the import is not the stranger's time; the distro starts here
-  wsl.exe -d "$name" --user root --exec bash "$dir/runner.sh" "$dir/steps.sh" "$R" 2>&1 | tee "$OUT/run.log"
+  wsl.exe -d "$name" --user root --exec bash "$dir/runner.sh" "$dir/steps.sh" "$R" "$APT_MIRROR" 2>&1 | tee "$OUT/run.log"
   rc=${PIPESTATUS[0]}
   [[ $R == "$OUT" ]] || cp -r "$R"/. "$OUT"/
   where="fresh WSL 2 distro $name ($(wsl.exe --version 2> /dev/null | tr -d '\0\r' | head -1))"
@@ -183,6 +193,7 @@ end=$(now)
   echo "mode $MODE: $where"
   echo "image $IMAGE $IMAGE_ID"
   echo "clone url $URL"
+  echo "apt mirror ${APT_MIRROR:-the image default (archive.ubuntu.com, security.ubuntu.com)}"
   echo "repository HEAD $HEAD_ID"
   echo "host $(nproc) cpus, load before $load0, after $(cut -d' ' -f1-3 /proc/loadavg)"
   cat "$OUT/env.txt" 2> /dev/null
