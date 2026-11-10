@@ -9,6 +9,9 @@
   example firmware, the image hash and D4 for projects implemented (M6,
   2026-11-09, Amendment 3). D7 and D8 implemented, M8's first half (the
   model, the loading `adc_in`, the UART lines; 2026-11-10, Amendment 4).
+  E2 on dial-me-spinner, M8's second half (the firmware, the project
+  bindings, `saadc_se` qualified, `make dms-vsense`; 2026-11-10,
+  Amendment 5).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -1268,3 +1271,201 @@ benches, `make dms-vsense` and its cost-table row).
   one-slot pool 1.15 s against 0.17 s (6.8x), every run leased. D7's
   estimate of about 40 grants per 8x burst holds (209 for 5 bursts,
   including the RTC wakes and the UART writes).
+
+### Amendment 5: E2 on dial-me-spinner, M8's second half (2026-11-10)
+
+E2 (plan section 2) runs on the imported main board: the firmware reads
+VSYS_SENSE through `BbNrf52Saadc` with the loading `adc_in`, and sheds the
+LEDs at low battery. The gate is `make dms-vsense`
+(`scripts/dms_vsense.sh`, `scripts/check_dms_vsense.py`), with its short
+part `make dms-vsense-test` in `make test`.
+
+- **The firmware** (`examples/dial-me-spinner/firmware/vsense/`; D5's
+  workspace, toolchain and image hash). It is firmware.md 12.4 with the
+  Zephyr ADC API:
+  - `adc_read_dt` on channel 0 (gain 1/6, the internal reference, TACQ
+    40 us, AIN0, 12 bits, `oversampling = 3`). nrfx's simple mode sets
+    BURST, so each reading is one SAMPLE task and 8 acquisitions 42 us apart.
+  - VBAT_est = 0.979 x code x 2.8125 mV, in exact integer arithmetic.
+    Below 3.53 V the LEDs are shed with E1's off sequence (P0.06 low, then
+    `regulator_disable`). They come back at 3.58 V (50 mV of hysteresis),
+    and not sooner than 30 ms after the shed.
+  - Each reading prints `vsense: n=<k> code=<c> vbat_est=<uV> uV
+    leds=<on|off>` on UARTE0 (TX on P1.00, 1 Mbaud), a D8 log record.
+  - The first reading is at boot; the rest are on absolute RTC deadlines
+    (`k_sleep(K_TIMEOUT_ABS_MS)`). `vsense.elf` reads every 1 s
+    (firmware.md 2.2's power_thread tick). `vsense_50ms.elf` reads every 50
+    ms, the suite's shortest burst interval. One Kconfig switch
+    (`VSENSE_PERIOD_MS`, `fast.conf`) separates the two.
+  - The SAADC channel, the `vsys-sense` divider node and UARTE0 are in the
+    application's `app.overlay`, not in the board file. So `led_rail.elf`
+    and `led_rail_wrong_order.elf` build byte-identically.
+  - Image hashes: `vsense.elf` `9a0c6a06...`, `vsense_50ms.elf`
+    `f8555d2e...` (`firmware/prebuilt/SHA256SUMS`). `make fw-rebuild` from
+    a fresh workspace gives all four committed hashes (181 s, 2026-11-10).
+  - **Deviations from firmware.md 12.4:** no production calibration
+    (`cal/vsys_gain` = 1), no rested-OCV correction (`I_est x 0.25 Ohm`),
+    and only the "< 3.53 V" row of the policy. The plan's E2 compares
+    0.979 x code x 2.8125 mV with the threshold.
+- **The project path** (Amendment 4 left it to this half):
+  - `bb.toml` binds `main:U10.P0.02` (`adc_in`, net VSYS_SENSE,
+    `trace_samples = true`, the package set's `load = "saadc_se"`) and
+    `main:U10.VDD` (the SAADC's VDD input, `vref = "3.6V"`).
+  - A project `[[bind]]` now takes `load` (a string) and `trace_samples`
+    (a TOML boolean), as a board file's `*bb pin` does.
+  - The VDD input's keys are read in the package value grammar
+    (`"3.6V"`) when the part is a package part. The board file's bare
+    `vref=3.6` still parses the same way.
+  - On a module target, the pad must list the model it is bound with
+    (`bb run` checks it; the VDD input is the one exception).
+    `raytac/mdbt50q-u1mv2` gives its eight AIN pads `adc_in` with the chip
+    pin's channel.
+  - `spec/project.md` sections 1 and 6 and `spec/schema/project.schema.json`
+    say this.
+- **`saadc_se` is lattice-qualified** (Amendment 4: "E2's project run must
+  qualify it").
+  - `bb pkg test` accepts `pin_load` views. A vector names the typed ports
+    by role: `pad`, the signals `smp` and `hold`, and the pin `VDD`
+    (`spec/package.md` section 8).
+  - `packages/nordic/nrf52840-qiaa/tests/` holds two vectors, each 8 `smp`
+    edges with `V(hold)` after every transfer against the closed-form
+    charge sharing: `charge_share` (the `nrf-saadc` pad: 1.2 V through
+    1 TOhm, 100 pF, VDD 3.0 V) and `vsense_burst` (one 8x burst on the
+    dial-me-spinner divider at VSYS 3.0 V, VDD 3.366 V).
+  - All 16 values are within 1 uV (tolerance 3 uV), and both partitions
+    are identical. The view is recorded as qualified at (10 us, `phase0`),
+    and its `confidence` is now `self_checked`.
+  - `bb run` on a project now checks the `pin_load` view of every loading
+    `adc_in` against qualification, like an instance's view. It records
+    the view in `run.json` `analog` under the bound pin, with `kind =
+    "pin_load"`, and flags its `agent_generated` provenance.
+- **The benches.**
+  - `bench/vsense.toml` is the suite's worst case for the sampling error
+    (`test_sample_interval`): VSYS an ideal 3.0 V, +3V3 3.366 V (VDD max,
+    so VPRE = VDD max), and E1's analog scope.
+  - `bench/sag.toml` ramps the battery's open-circuit voltage down 10 mV/s
+    from 3.660 V, as a `[[pwl]]` behind 0.3192 Ohm, with E1's 50 mA
+    +3V3 load and tracking +3V3.
+- **Gate `make dms-vsense`.** Seven cases, each run in a project copy:
+  - s1: `vsense.elf`, 2.1 s, three bursts;
+  - s50: `vsense_50ms.elf`, 650 ms, 13 bursts;
+  - c5: `vsense.elf` with C5 at 10 nF (the suite's fault; the netlist
+    edited in the copy), 1.1 s;
+  - the three `-none` twins of these, with `load = "none"` on the binding;
+  - sag: `vsense.elf` on the sag bench, 4.3 s.
+
+  Every case runs at bb's defaults and as its every-lattice-point
+  reference (`--lookahead off --adc-push every`; 210 000, 65 000, 110 000
+  and 430 000 one-cell grants against 377, 732, 227 and 731 at the
+  defaults). The results:
+  - **Analog side.** Per sample, V(hold) of the loaded run minus V(pad) of
+    its `-none` twin at the same instant is compared with the suite's
+    charge-sharing arithmetic (`_sample`) at the bench's nominal parts and
+    the run's own acquisition instants, with saadc_se's one simplification
+    (CS on the pad between acquisitions). Steady-state burst means:
+
+    | Case | Co-simulation | Arithmetic | Worst sample | Suite (results.json) | Arithmetic at the suite's corner |
+    | --- | --- | --- | --- | --- | --- |
+    | s1 | 272.5 uV | 272.6 uV | 0.53 uV | 356.16 uV | 356.15 uV |
+    | s50 | 726.4 uV | 726.3 uV | 0.62 uV | 761.27 uV | 761.26 uV |
+    | c5 | 2676.6 uV | 2675.0 uV | 5.51 uV | 3474.26 uV | 3475.11 uV |
+
+    **The tolerances are set from this measurement**, at about twice the
+    worst value. Per sample the limit is 1 uV + 0.25 % of the modelled
+    error; for the burst mean it is 3 uV. The arithmetic at the suite's
+    corner must match results.json within 2 uV.
+  - **Firmware-visible.**
+    - Every reading's code equals the arithmetic's prediction:
+      round_half_up of the mean of the 8 rounded sample codes.
+    - Every code is within 1 LSB of VSYS / 2.8125 mV plus the modelled
+      error. s1 reads 1067 (ideal 1066.67). s50 reads 1067, then 1068 from
+      its sixth burst: its 726 uV error (0.83 LSB) crosses a rounding
+      boundary, so at 50 ms the sample-rate effect does reach the codes.
+    - C5 / 10 reads 1070: 3 LSB above the unloaded 1067. The plan's "about
+      4 LSB" is the suite's corner.
+    - The LED shed (sag). The LEDs come on at boot (code 1296; P0.06 high
+      30.08 ms after LED_PWR_EN). The readings then go 1293, 1289 and
+      1286. Reading 4 is 1282 (VBAT_est 3 529 906 uV < 3.53 V), and
+      LED_PWR_EN falls at 4000.480 ms. That is 154.4 ms after the
+      threshold crossing (3846.1 ms), within the 1 s burst period. P0.06
+      falls with the same stamp, and no edge follows.
+  - **Equivalence.** Each default run equals its reference in `nets.csv`,
+    `nets.vcd` and every non-grant record. The references equal
+    `tests/golden/dms-vsense/<case>/outputs.sha256`. There is no `stop:`
+    grant (none at a push, so no `stop:ngspice`), and no lookahead promise
+    is broken.
+  - **Also:** `--engine-order analog-first` is byte-identical on s50. On
+    the project path, `--renode-quantum 25us` fails with "TACQ 40 us < 2 L
+    = 50 us ... --renode-quantum 20us ... load = "none"". The sag run is
+    byte-identical over 10 runs.
+- **Deviations from the plan's text** (closest correct gate; no limit
+  loosened):
+  1. **The suite's figures are at a tolerance corner a Phase 1 bench
+     cannot set.** The 356/761 uV and 3.47 mV figures need C5 at -23.5 %
+     (-10 % tolerance and -15 % X7R) and R1/R2 at +1 %. Bench parts are
+     nominal, and tolerance views are Phase 2 (plan section 2, E1). The gate
+     therefore checks two things. The co-simulation must match the
+     suite's own arithmetic at the bench's parts. That arithmetic must
+     reproduce the suite's figures at the suite's corner. One model ties
+     the two. The co-simulation is within 5.5 uV of the arithmetic on every
+     sample and within 1.7 uV on the burst means, and the arithmetic is
+     within 0.9 uV of the suite's figures. The nominal-part figures are
+     smaller (272.5 / 726.4 uV).
+  2. **The suite's worst case, not the cold bench.** The plan says "at the
+     cold bench with VPRE = VDD". The cold bench's VDD is 2.93 V (its
+     tracking +3V3), not the 3.366 V VDD max behind the suite's figures.
+     `bench/vsense.toml` takes the suite's own case instead: VSYS 3.0 V,
+     VPRE = VDD max.
+  3. **"Within one burst period after the threshold crossing"** is
+     measured from the firmware-visible crossing: the first instant at
+     which V(VSYS_SENSE) plus the modelled mean sampling error is below
+     the code boundary 1282.5 LSB. The crossing of 0.979 x V(VSYS) through
+     3.53 V (3830.5 ms) is reported. The two differ by the half-LSB
+     rounding and the sampling error.
+  4. **The off order is checked as "P0.06 falls no later than
+     LED_PWR_EN".** Here both edges carry the same stamp, as in E1's second
+     cycle (Renode stamps GPIO writes made close together in one block with
+     one time).
+- **Effect on E1.** E1's runs now carry the two SAADC bindings, so the
+  board is cyclic (U10 -> ngspice -> U10) and lookahead is on. E1's
+  firmware never starts the SAADC, so the binding adds CPAD + CS to
+  VSYS_SENSE and nothing else.
+  - Measured against the one-cell references without the bindings: VLED
+    moves by at most 1 uV and VSYS by 9 uV at the nominal bench, and
+    nothing moves at the cold bench. Non-grant records are unchanged.
+  - `nets.vcd` gains the variable `U10.P0.02#smp`, and the grant records
+    differ.
+  - `tests/golden/dms-rail` was rewritten from fresh one-cell references.
+  - `make dms-rail` (fresh) passes with the same values as before (44 PASS
+    lines; every run converges in under 3.6 s).
+  - The E1 cost-table row was measured again (README).
+- **Gate runs** (2026-11-10, on `311d2e8` plus this change, committed as
+  `ec759de`; load as `/proc/loadavg` at start and end):
+  - `make dms-vsense POOL=0`: PASS, 27 PASS lines and none failing
+    (13 min 44 s; load 1.0 at the start and 4.8 at the end, from its own
+    parallel runs).
+  - `make check POOL=0`: green (10 min 31 s, load 1.5-1.6, 207 cargo
+    tests). It now includes `make dms-vsense-test`, which took 57 s fresh.
+  - `make check` on the pool: green (8 min 53 s, load 0.6-1.6, 92 leases).
+  - `make dms-rail POOL=0`: PASS (2 min 49 s, load 1.1-2.5, 44 PASS lines).
+  - `make fw-rebuild`: PASS.
+  - `bb pkg test`: 19 vector runs, all passed.
+
+  An earlier run of the gate printed the same check output. It ran before
+  the goldens were written, and its refusal case at first stopped on the
+  views' qualification at L = 25 us. It now names them with
+  `--allow-unqualified`, and the refusal comes from the SAADC.
+- **Cost-table row** (`make cost-table-dms-vsense`, the ADR-003 protocol,
+  N = 5, interleaved, medians; README; also in `make cost-table`). The
+  case is s50: 650 ms, 13 bursts.
+  - The every-lattice-point reference takes 65 000 grants and 39.51 s of
+    simulation. bb's defaults take 732 grants and 12.85 s (3.1×). Fresh,
+    load 1.0-1.2.
+  - On a one-slot pool, the same runs take 39.78 s and 12.72 s, with
+    startup 0.07 s instead of 1.6 s. Load 1.0-1.4, every run leased.
+  - The board's analog deck (E1's scope, TMAX = L) sets the floor, so D7's
+    estimate of about 40 grants per burst becomes about 56 here. That
+    count includes the RTC wake and the UART line of each reading.
+  - E1's row was measured again (`make cost-table-dms-rail`, now cyclic):
+    one cell 12 000 grants and 6.83 s; defaults 71 grants and 1.87 s
+    (3.7×). Fresh, load 1.2-1.5; pooled 6.54 s and 1.59 s, load 0.9-1.3.

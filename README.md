@@ -123,7 +123,8 @@ What the steps do:
     confidence and qualification, plus the solver option set.
 
   `bb run` also notes the views whose provenance is `agent_generated` (the
-  ideal R and C, and the TPS22917's datasheet-fitted view).
+  ideal R and C, the TPS22917's datasheet-fitted view, and the SAADC input
+  load on VSYS_SENSE that E2 binds; E1's firmware never starts the SAADC).
 - The two runs' `nets.csv`, `nets.vcd` and non-grant records are
   byte-identical to the committed hashes in `tests/golden/dms-rail/`.
 
@@ -135,6 +136,69 @@ the checkout is never written.
 above line by line and time it. The first uses a clean `ubuntu:24.04`
 container; the second uses a freshly imported WSL distro, which it removes
 afterwards. Both clone from this repository's local path.
+
+## E2: battery reading and the low-battery LED shed
+
+The second worked example (Phase 1 plan section 2 E2, M8) runs on the same
+imported board. The firmware reads the battery the way dial-me-spinner's
+`docs/firmware.md` 12.4 does it: VSYS_SENSE (VSYS through R1 2.2 MΩ over
+R2 1 MΩ, with C5 100 nF) on AIN0 (P0.02), the SAADC at gain 1/6 against
+the 0.6 V reference, 12 bits, 8× oversampling with BURST and TACQ 40 µs,
+and VBAT_est = 0.979 × code × 2.8125 mV. When VBAT_est falls below 3.53 V,
+the firmware sheds the LEDs with E1's off sequence. Each reading is a UART
+line, and so a log record.
+
+The SAADC is Breadboard's own model (ADR-008 D7), because Renode 1.17.0 has
+none. The input **loads** VSYS_SENSE, as the silicon does. At each
+acquisition, a 2.5 pF sample capacitor pre-charged to VDD shares its charge
+with C5 and the 3 pF pad. The firmware reads the shared value. That charge
+drawn at every acquisition makes the reading depend on how often the
+firmware samples. dial-me-spinner's own SPICE suite measured that effect.
+Every sample is also a log record of the voltage the model sampled.
+
+```sh
+make dms-vsense        # the M8 gate, about 14 min; make dms-vsense-test (in make test) is the short part
+```
+
+What the gate checks (`scripts/dms_vsense.sh`, `scripts/check_dms_vsense.py`):
+
+- **The analog side.** Each loaded run is compared with the same run with
+  `load = "none"` on the binding, which reads the unloaded pad. The bench is
+  `bench/vsense.toml`, the suite's worst case: VSYS 3.0 V, with the sample
+  capacitor pre-charged to VDD max, 3.366 V. The mean error of the 8 samples
+  in a burst, in steady state, is:
+
+  | Interval | Co-simulation | The suite's arithmetic, nominal parts | The suite at its corner (C5 −23.5 %, R +1 %) |
+  | --- | --- | --- | --- |
+  | 1 s (`vsense.elf`) | 272.5 µV | 272.6 µV | 356.2 µV |
+  | 50 ms (`vsense_50ms.elf`) | 726.4 µV | 726.3 µV | 761.3 µV |
+  | C5 fitted at 10 nF, one burst | 2 676.6 µV | 2 675.0 µV | 3 474.3 µV |
+
+  The suite's figures need part tolerances that a Phase 1 bench cannot set.
+  So the check ties the co-simulation to them through the suite's own
+  charge-sharing arithmetic. At this bench's nominal parts, that arithmetic
+  must match every sample (within 1 µV plus 0.25 %) and the burst mean
+  (within 3 µV). At the suite's corner, it must reproduce the suite's
+  figures within 2 µV.
+- **Firmware-visible.** Every code is the one that arithmetic predicts. The
+  codes follow code = V / 2.8125 mV to within the rounding and the sampling
+  error: 1067 at 1 s, and 1068 from the sixth burst at 50 ms, where the
+  0.83 LSB error crosses a rounding boundary. C5 ÷ 10 reads 1070, 3 LSB
+  high.
+- **The LED shed** (`bench/sag.toml`). The battery's open-circuit voltage
+  ramps down by 10 mV/s behind 0.32 Ω. The LEDs come on at boot (code
+  1296). The readings then go 1293, 1289 and 1286. At the reading of 1282,
+  VBAT_est is 3.5299 V, and the firmware sheds the LEDs: LED_PWR_EN falls
+  154 ms after the threshold crossing, within one reading period.
+- **Equivalence and determinism.** Every case equals its every-lattice-point
+  reference (`--lookahead off --adc-push every`) in `nets.csv`, `nets.vcd`
+  and every non-grant record. The references match `tests/golden/dms-vsense/`.
+  No grant stops early at a push (`stop:`). `--engine-order analog-first` is
+  byte-identical. The sag run is identical over 10 runs.
+
+The firmware is in `examples/dial-me-spinner/firmware/vsense/`. Both images
+are prebuilt, and `make fw-rebuild` reproduces them from a fresh Zephyr
+v4.5.0 workspace. Details are in ADR-008 Amendment 5.
 
 ## Phase 0
 
@@ -223,6 +287,10 @@ The run writes these files to `out/spike/`:
    input loads its pad (one charge transfer per acquisition, counted
    against the analytic charge sharing) and whose firmware's UART lines
    become log records, against its one-cell every-lattice-point reference.
+   `make dms-vsense-test` (Phase 1 M8, E2): the battery reading on
+   dial-me-spinner at 50 ms and with C5 fitted at 10 nF, each against its
+   `load = "none"` run, with `scripts/check_dms_vsense.py` and the committed
+   hashes (below, "E2").
 8. `make packages` (ADR-006): the package files and lockfiles against
    `spec/schema`, `bb pkg lint`, `bb pkg test` (each view's test vectors
    through the ngspice engine at two grant partitions) and the examples'
@@ -360,10 +428,12 @@ fresh runs.
 | `examples/nrf-feedback`, defaults (`make nrf-feedback`: lookahead on) | 500 ms | 120 | **0.52 s** (27×) | 1.39 s | **0.05 s** | 1.95 s | 0.42 s |
 | `examples/adc/kicad --lookahead off` (Phase 1 M4: the ADC board drawn in KiCad, run as a `bb.toml` project; one-cell grants) | 300 ms | 30 000 | 12.66 s | 1.49 s | | 14.17 s | |
 | `examples/adc/kicad`, defaults (`make adc-kicad`: lookahead on) | 300 ms | 1 209 | **1.13 s** (11.2×) | 1.58 s | | 2.64 s | |
-| `examples/dial-me-spinner` E1, `--max-quantum 10us` (Phase 1 M6: the imported main board, Zephyr on the nRF52840, cold bench, 132 instances in the deck; one-cell grants) | 120 ms | 12 000 | 6.34 s | 1.38 s | 0.07 s | 7.78 s | 6.02 s |
-| `examples/dial-me-spinner` E1, defaults (`make dms-rail`, `make demo`: 10 ms grants, acyclic) | 120 ms | 12 | **1.83 s** (3.5×) | 1.42 s | **0.08 s** | 3.29 s | 1.95 s |
+| `examples/dial-me-spinner` E1, `--max-quantum 10us` (Phase 1 M6: the imported main board, Zephyr on the nRF52840, cold bench, 132 instances in the deck; one-cell grants) | 120 ms | 12 000 | 6.83 s | 1.64 s | 0.06 s | 8.53 s | 6.64 s |
+| `examples/dial-me-spinner` E1, defaults (`make dms-rail`, `make demo`: lookahead on, since M8's SAADC bindings make the board cyclic) | 120 ms | 71 | **1.87 s** (3.7×) | 1.62 s | **0.08 s** | 3.55 s | 1.71 s |
 | `examples/nrf-saadc --lookahead off` (Phase 1 M8: the loading `adc_in`, an 8× SAADC burst every 5 ms; one-cell grants) | 30 ms | 3 000 | 1.55 s | 1.68 s | 0.07 s | 3.31 s | 1.27 s |
 | `examples/nrf-saadc`, defaults (`make nrf-saadc-model`: lookahead on) | 30 ms | 209 | **0.30 s** (5.2×) | 1.59 s | **0.11 s** | 1.95 s | 0.33 s |
+| `examples/dial-me-spinner` E2 s50, `--lookahead off --adc-push every` (Phase 1 M8: `vsense_50ms.elf`, an 8× burst on the loaded VSYS_SENSE every 50 ms, `bench/vsense.toml`; the every-lattice-point reference) | 650 ms | 65 000 | 39.51 s | 1.63 s | 0.07 s | 41.18 s | 39.88 s |
+| `examples/dial-me-spinner` E2 s50, defaults (`make dms-vsense`: lookahead on) | 650 ms | 732 | **12.85 s** (3.1×) | 1.58 s | **0.07 s** | 14.48 s | 12.84 s |
 
 The two `examples/nrf-feedback` rows (ADR-008 Amendment 2) were measured
 later, with the same protocol (`make cost-table`'s nRF row, N = 5,
@@ -372,14 +442,18 @@ load 1.6–2.0, every pooled run leased, every B run identical to A except
 grant records. They are not comparable with the rows above, which ran at a
 higher load.
 
-The two `examples/dial-me-spinner` rows (Phase 1 M6, ADR-007 Amendment 3)
-were measured again at M7 with `make cost-table-dms-rail`, on an idle host
-(N = 5, interleaved, medians). The runs used the correct-order firmware at
-the cold bench, which is what `make demo` and the README quickstart run.
-Fresh runs were at load 0.7–1.1, and runs on a one-slot pool at load
-1.0–1.4, with all 10 pooled runs leased. Every B run was identical to A
-except for grant records. M6 measured these rows at load 3.9–11.6 and got
-9.21 s and 1.87 s of simulation. The analog deck dominates on this board:
+The two `examples/dial-me-spinner` E1 rows (Phase 1 M6, ADR-007 Amendment 3)
+were measured again at M8 (ADR-008 Amendment 5) with `make
+cost-table-dms-rail` (N = 5, interleaved, medians). The project now binds
+the SAADC on VSYS_SENSE for E2. That makes the board cyclic, so bb's
+defaults run lookahead (71 grants). The runs used the correct-order
+firmware at the cold bench, which is what `make demo` and the README
+quickstart run. Fresh runs were at load 1.2–1.5, and runs on a one-slot
+pool at load 0.9–1.3, with all 10 pooled runs leased. Every B run was
+identical to A except for grant records. M7 measured these rows on an idle
+host, before the bindings, and got 6.34 s (one cell) and 1.83 s (12
+acyclic grants) of simulation; M6 got 9.21 s and 1.87 s at load 3.9–11.6.
+The analog deck dominates on this board:
 the same deck through `NgspiceEngine` alone (`deck_run`) takes about 1.9 s
 for 120 ms. Long grants therefore gain less here than on the Phase 0
 boards.
@@ -390,6 +464,16 @@ fresh at load 0.7–0.9, on a one-slot pool at load 0.9–1.1, all 10 pooled
 runs leased, every B run identical to A except grant records. Each 8×
 burst holds the grants around its eight acquisitions to about one cell
 each (209 grants for 5 bursts in 30 ms, against 3 000 one-cell grants).
+
+The two E2 rows (Phase 1 M8, ADR-008 Amendment 5) were measured with
+`make cost-table-dms-vsense` (N = 5, interleaved, medians). Fresh runs were
+at load 1.0–1.2, and runs on a one-slot pool at load 1.0–1.4, with all 10
+pooled runs leased. Every B run was identical to A except for grant
+records. The 13 bursts take 732 grants, about 56 each. The analog deck
+dominates again: ngspice steps the whole E1 scope (132 instances) at
+TMAX = 10 µs through 650 ms whatever the grants are, so lookahead gains
+3.1× here, not the 5× of `examples/nrf-saadc`. The pool saves only the
+1.6 s of startup.
 
 The two `examples/adc/kicad` rows (ADR-007 Amendment 1) were measured
 fresh only, with `make cost-table-adc-kicad` (N = 5, interleaved, medians,

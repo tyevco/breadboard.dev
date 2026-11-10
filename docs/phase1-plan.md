@@ -33,8 +33,13 @@
   M7". M8's first half done (2026-11-10): Breadboard's SAADC
   (`BbNrf52Saadc`, `nrf52840-bb@2`), the loading `adc_in`, the per-sample
   records, the UART lines and the VDD input, gated by `make
-  nrf-saadc-model` (ADR-008 Amendment 4). E2 itself (`make dms-vsense`) is
-  the second half.
+  nrf-saadc-model` (ADR-008 Amendment 4). M8 done (2026-11-10): E2 on
+  dial-me-spinner, `make dms-vsense` (the battery reading at 1 s and 50 ms
+  against the `load = "none"` reference, the codes, the C5 ÷ 10 fault, the
+  LED shed on a battery-sag bench, every case equal to its
+  every-lattice-point reference), the firmware `vsense.elf` /
+  `vsense_50ms.elf` reproduced by `make fw-rebuild`, the cost-table row
+  (ADR-008 Amendment 5; Review notes: M8).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -1132,3 +1137,79 @@ Each was re-checked before anything changed. What became of each:
   row on its own and in the full re-run. Its cause was not investigated;
   the profile affects JIT timing only, never an output (ADR-004
   Amendment 6).
+
+## Review notes: M8 (2026-11-10)
+
+M8 was done in two halves. The first half (`e2a7de7`, `311d2e8`; ADR-008
+Amendment 4) is the SAADC model, the loading `adc_in`, the per-sample
+records, the UART lines and the VDD input, gated by `make
+nrf-saadc-model`. The second half is E2 itself (ADR-008 Amendment 5).
+
+- **What exists.**
+  - `examples/dial-me-spinner/firmware/vsense/`: the battery reading and
+    the LED shed of firmware.md 12.4, built as `prebuilt/vsense.elf` (one
+    reading per second) and `vsense_50ms.elf`. `make fw-rebuild` reproduces
+    all four images.
+  - `bb.toml` binds VSYS_SENSE (AIN0, the loading input, per-sample
+    records) and U10's VDD.
+  - `bench/vsense.toml` (the suite's sampling worst case) and
+    `bench/sag.toml` (a battery ramping down through the shed).
+  - `scripts/dms_vsense.sh` and `scripts/check_dms_vsense.py`, run by `make
+    dms-vsense` and, in `make test`, `make dms-vsense-test`. Goldens are in
+    `tests/golden/dms-vsense/`.
+  - The `nordic/nrf52840-qiaa` test vectors qualify `saadc_se`.
+  - In `bb`: the project `[[bind]]` takes `load` and `trace_samples`; `bb
+    pkg test` runs `pin_load` views; `bb run` checks a `pin_load` view's
+    qualification; and a module pad must offer the model it is bound with.
+- **The M8 row's gate, item by item** (numbers in ADR-008 Amendment 5).
+  - **The analog side against the `load = "none"` reference.** At 1 s the
+    co-simulation gives 272.5 uV, and the suite's arithmetic at the
+    bench's nominal parts gives 272.6 uV. At 50 ms it is 726.4 against
+    726.3 uV. With C5 / 10 it is 2676.6 against 2675.0 uV. At the suite's
+    corner, the same arithmetic gives 356.15, 761.26 and 3475.11 uV,
+    against the suite's 356.16, 761.27 and 3474.26 uV. The tolerances are
+    set from this measurement: per sample, 1 uV plus 0.25 % (worst
+    measured 5.5 uV, on c5); 3 uV for the burst mean; 2 uV against the
+    suite.
+  - **Firmware-visible.** Every code is the predicted one. 50 ms moves the
+    reading from 1067 to 1068 once C5 has settled. C5 / 10 reads 3 LSB high.
+    On the sag bench, LED_PWR_EN falls 154.4 ms after the threshold
+    crossing (the limit is one 1 s period). Every reading before the shed
+    stays at or above code 1283.
+  - **Equivalence with the every-lattice-point reference:** seven cases,
+    each equal except grant records; the references equal the committed
+    hashes. There is no `stop:` grant, so no `stop:ngspice`, and no
+    promise is broken.
+  - **Also:** analog-first is byte-identical, and the TACQ refusal works
+    on the project path.
+  - **10-run determinism (sag):** byte-identical.
+  - **Goldens:** `tests/golden/dms-vsense/` (7 cases).
+  - **Cost-table row:** in the README (`make cost-table-dms-vsense`).
+- **Deviations** (ADR-008 Amendment 5).
+  - The suite's figures are at a tolerance corner (C5 -23.5 %, R +1 %),
+    which a Phase 1 bench cannot set. So they are reached through the
+    suite's arithmetic, which must match both the co-simulation and the
+    figures.
+  - The suite's own worst case (VSYS 3.0 V, VPRE = VDD max 3.366 V)
+    replaces the plan's "cold bench" (VDD 2.93 V).
+  - The shed timing is measured from the firmware-visible crossing.
+  - The off order is checked as "not after" (equal stamps).
+  - The firmware stores no calibration and makes no rested-OCV correction.
+- **E1 changed slightly.** With the SAADC bindings in `bb.toml`, E1's
+  board is cyclic (lookahead on). VSYS_SENSE carries CPAD and CS. VLED
+  moves by at most 1 uV and VSYS by 9 uV (nominal bench), and non-grant
+  records are unchanged. `nets.vcd` gains `U10.P0.02#smp`. The dms-rail
+  hashes were rewritten from fresh references, `make dms-rail` passes, and
+  the E1 cost-table row was measured again.
+- **Gate runs** (2026-11-10, on `ec759de`; load at start and end):
+  - `make dms-vsense POOL=0`: PASS (13 min 44 s; load 1.0, then 4.8 from
+    its own parallel runs).
+  - `make check POOL=0`: green (10 min 31 s, load 1.5-1.6, 207 cargo
+    tests).
+  - `make check` on the pool: green (8 min 53 s, load 0.6-1.6).
+  - `make dms-rail POOL=0`: PASS (2 min 49 s).
+  - `make fw-rebuild`: PASS.
+- **Not run for this milestone:** `make pool-equiv` has no E2
+  configuration. Pooled against fresh is covered by `make
+  dms-vsense-test`, which passes against the same committed hashes in both
+  `make check` runs.
