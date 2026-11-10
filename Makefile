@@ -867,6 +867,24 @@ SETUP_REV ?= HEAD
 setup-container:
 	bash scripts/setup_container_test.sh $(if $(SETUP_WORKTREE),--worktree,--rev $(SETUP_REV)) --out out/setup-container
 
+# Phase 1 plan M7 (section 5, the exit). `make demo`: the README's reference demo in one command
+# (E1 on dial-me-spinner rev A: bb open, bb flash, bb run at the cold bench with the correct and
+# the wrong-order firmware, check_dms_rail.py), on a copy of the project in $(DEMO_WORK), every
+# Renode fresh, plus the committed one-cell hashes and run.json's view list (scripts/demo.sh).
+# Needs only `make setup SETUP=demo`. `make stranger-test-container` / `stranger-test-wsl`: the
+# README's quickstart block run line by line, timed, from a LOCAL clone (approver decision B) in a
+# clean ubuntu:24.04 container (rootless podman) or a fresh WSL distro imported for the run and
+# removed afterwards (scripts/stranger_test.sh; results in out/stranger/<mode>/timing.txt).
+.PHONY: demo stranger-test-container stranger-test-wsl
+DEMO_OUT  ?= out/demo
+DEMO_WORK ?= $(HOME)/.cache/bb-demo
+demo: bb
+	DEMO_OUT=$(DEMO_OUT) DEMO_WORK=$(DEMO_WORK) bash scripts/demo.sh $(BB)
+stranger-test-container:
+	bash scripts/stranger_test.sh container $(if $(STRANGER_URL),--url $(STRANGER_URL))
+stranger-test-wsl:
+	bash scripts/stranger_test.sh wsl $(if $(STRANGER_URL),--url $(STRANGER_URL))
+
 fmt:
 	$(CARGO) fmt --all
 

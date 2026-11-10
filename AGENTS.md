@@ -16,6 +16,8 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | --- | --- |
 | `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev, python3-jsonschema; then build `bb` and install it into `~/.local/bin`. `make setup SETUP=demo` skips the ARM toolchain, uv and jsonschema (what the demo needs: Rust, Renode, ngspice, `bb`). As root (a container) it runs apt without sudo (Phase 1 M3). `make setup SETUP=zephyr` (optional, M6) adds the Zephyr host tools and the pinned Zephyr SDK 1.0.1 for `make fw-rebuild` |
 | `make setup-container` | Phase 1 M3 gate (R7): `make setup SETUP=demo` timed in a clean `ubuntu:24.04` container (podman, or docker), as root, from `git archive HEAD` (`SETUP_REV=`, or `SETUP_WORKTREE=1`); timing in `out/setup-container/timing.txt` (`scripts/setup_container_test.sh`) |
+| `make demo` | Phase 1 M7 (plan section 5): the README's reference demo in one command, on a copy of `examples/dial-me-spinner` in `~/.cache/bb-demo` (`DEMO_WORK`), every Renode fresh: `bb open`, `bb flash` and `bb run` at the cold bench with the correct and the wrong-order firmware, `check_dms_rail.py` (pass; exactly LSW-3 fails), both runs against `tests/golden/dms-rail/{ok,wrong}-cold`, and `run.json`'s view list (`scripts/demo.sh`, about 15 s; outputs in `out/demo`). Needs only `make setup SETUP=demo` |
+| `make stranger-test-container` / `make stranger-test-wsl` | Phase 1 M7 exit measurement (approver decision B: from a LOCAL clone, nothing published): the README's quickstart block (between the `stranger-test` markers, `<CLONE-URL>` replaced by `STRANGER_URL`, default the local repository) run line by line and timed, as root, in a clean `ubuntu:24.04` container (rootless podman, the repository mounted read-only, cloned from `file:///repo`) or a fresh WSL distro imported from the same image and unregistered afterwards; then the committed hashes and `make demo` (`scripts/stranger_test.sh`; `out/stranger/<mode>/timing.txt`; limit 900 s). The human run: `docs/phase1-exit-checklist.md`. Keep the README block runnable as written |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
 | `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
@@ -155,7 +157,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         nrf_vendor_headers.sh, nrf_zephyr_gate.sh, adc_kicad.sh,
                         kicad_import.sh, compare_outputs.py, dms_packages.sh (+ dms_packages.py,
                         dms_m5b.py), check_local_only.sh, check_dms_rail.py, dms_rail.sh,
-                        dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py)
+                        dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py), demo.sh,
+                        stranger_test.sh
 ```
 
 ## The three invariants

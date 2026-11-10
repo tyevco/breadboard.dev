@@ -5,7 +5,118 @@ it firmware and a board, and it simulates both together. CPU engines run the
 firmware, analog engines solve the circuit, and a kernel that owns
 simulated time couples them at the pin boundary.
 
-The repo is in **Phase 0**, a spike that tests the project's top risk: is
+**Phase 1** (`docs/phase1-plan.md`) runs a real board: it imports a KiCad
+project, resolves its parts to component packages (`packages/`,
+`spec/package.md`), and runs Zephyr firmware on an nRF52840 against the
+analog part of the board. Its reference demo is below. Phase 0, the spike
+the rest of this README describes, came first.
+
+## Quickstart: the reference demo
+
+The demo is the LED rail power sequencing (E1) of a real board,
+dial-me-spinner rev A, imported from its KiCad netlist (201 parts, 142
+nets; vendored in `examples/dial-me-spinner/kicad/`). The firmware is
+prebuilt Zephyr v4.5.0 running on the nRF52840 inside the Raytac module U10,
+in Renode. It switches the TPS22917 load switch U2, which powers the
+48-LED WS2812C ring (VLED), and it drives the ring's data line. ngspice
+solves the part of the board the bench puts in scope (132 instances). The
+check script then tests three rules from the board's own SPICE suite:
+
+- **LED-DATA-V4:** VLED is at least 2.67 V whenever data starts.
+- **LSW-3:** DIN never goes more than 0.7 V above VLED.
+- **LSW-2:** VLED falls below 10 % within 30 ms of switch-off.
+
+You need a clean Ubuntu 24.04 (a container, a WSL distro or a machine) and
+network access for the toolchain downloads (about 800 MB: Rust, Renode).
+You do **not** need KiCad, the Zephyr SDK, an ARM toolchain or the
+dial-me-spinner repository. As root (for example in a container), run:
+
+<!-- stranger-test:begin -->
+```sh
+apt-get update && apt-get install -y git make ca-certificates   # as a user: sudo apt-get update && sudo apt-get install -y git make ca-certificates
+git clone <CLONE-URL> breadboard.dev && cd breadboard.dev        # <CLONE-URL> is a placeholder: see below
+make setup SETUP=demo                                            # Rust 1.99.1, Renode 1.17.0, ngspice 42; builds bb into ~/.local/bin
+export PATH="$HOME/.local/bin:$PATH"
+cd examples/dial-me-spinner
+bb open                                                          # imports the pinned netlist, resolves parts, writes board.bbm
+bb flash --target U10 firmware/prebuilt/led_rail.elf
+bb run --for 120ms --bench bench/cold.toml --probe net:VLED --probe net:LED_DIN --out out/rail
+python3 ../../scripts/check_dms_rail.py out/rail                 # PASS: LED-DATA-V4, LSW-3, LSW-2
+bb flash --target U10 firmware/prebuilt/led_rail_wrong_order.elf
+bb run --for 120ms --bench bench/cold.toml --probe net:VLED --probe net:LED_DIN --out out/rail-wrong
+python3 ../../scripts/check_dms_rail.py out/rail-wrong           # expected to FAIL: LSW-3
+```
+<!-- stranger-test:end -->
+
+> **`<CLONE-URL>` is a placeholder, to be filled in at publication.**
+> breadboard.dev is not published yet (Phase 1 approver decision B). Until it
+> is, clone from the local path or `file://` URL of the copy you were given,
+> for example `git clone /path/to/breadboard.dev breadboard.dev` or
+> `git clone file:///path/to/breadboard.dev breadboard.dev`.
+
+`make setup SETUP=demo` takes most of the time. It installs the apt
+packages, Rust 1.99.1, Renode 1.17.0 and ngspice 42, then builds `bb`.
+Each run then takes a few seconds.
+
+The correct-order firmware follows dial-me-spinner's `docs/firmware.md` 6.4.
+It raises LED_PWR_EN before it sends data, and it takes the data line low
+before it drops LED_PWR_EN. In this Zephyr image, data starts 30 ms after
+LED_PWR_EN, not the 10 ms that 6.4 gives (ADR-008 Amendment 3). All three
+checks pass:
+
+```text
+check_dms_rail: PASS: LED-DATA-V4: VLED 2.971510 V at 30.190000 ms (P0.06 rose 30.060 ms after LED_PWR_EN), ...
+check_dms_rail: PASS: LSW-3: max(V(LED_DIN) - V(VLED)) = 0.320308 V at 30.400 ms ...
+check_dms_rail: PASS: LSW-2: LED_PWR_EN fell at 35.230000 ms from VLED 2.971510 V: below 10 % after 24.420 ms; ...
+check_dms_rail: PASS: LED-DATA-V4, LSW-3, LSW-2
+```
+
+The wrong-order firmware reverses the switch-off. It drops LED_PWR_EN
+first and keeps the data line high while VLED discharges.
+LSW-3 fails, and the message gives the excursion and the clamp current it
+drives into the first LED's DIN. The script exits 1:
+
+```text
+check_dms_rail: FAIL: LSW-3: max(V(LED_DIN) - V(VLED)) = 0.792868 V at 45.260 ms (VLED 1.486643 V, LED_DIN 2.279511 V;
+    DIN clamp current 4.083 mA from the R40 drop ...) (limit <= 0.7 V)
+check_dms_rail: FAIL: LED-DATA-V4, LSW-3, LSW-2 (failed: LSW-3)
+```
+
+What the steps do:
+
+- **`bb open`** imports the netlist and writes `board.bbm`. The netlist is
+  dial-me-spinner `6854d25`, KiCad 10.0.8, with its sha256 in
+  `examples/dial-me-spinner/SOURCE`. It resolves each part to a package by
+  its MPN or as a generic R, C or L, and writes `board.bbm`. The committed
+  `board.bbm` is identical, so it reports `unchanged`. With KiCad 9 or 10
+  installed, the schematics give the same `board.bbm` (`make
+  kicad-import`).
+- **`bb flash`** records the image and its hash in `bb.toml`.
+- **`bb run`** writes the following to `out/rail/`:
+  - `nets.csv` and `nets.vcd`: VLED, LED_DIN and the nets the project
+    probes;
+  - `events.jsonl`: every pin edge;
+  - `deck.cir`: the elaborated SPICE deck;
+  - `run.json`: every analog view in the run, with its provenance,
+    confidence and qualification, plus the solver option set.
+
+  `bb run` also notes the views whose provenance is `agent_generated` (the
+  ideal R and C).
+- The two runs' `nets.csv`, `nets.vcd` and non-grant records are
+  byte-identical to the committed hashes in `tests/golden/dms-rail/`.
+
+From the repository root, **`make demo`** does all of the above in one
+command and also checks those hashes. It works on a copy of the project, so
+the checkout is never written.
+
+`make stranger-test-container` and `make stranger-test-wsl` run the block
+above line by line and time it. The first uses a clean `ubuntu:24.04`
+container; the second uses a freshly imported WSL distro, which it removes
+afterwards. Both clone from this repository's local path.
+
+## Phase 0
+
+Phase 0 was a spike that tested the project's top risk: is
 co-simulation sync too slow or unstable? Firmware runs on an STM32F103 in
 [Renode](https://renode.io) and toggles PA5. The pin drives a 330 Ω resistor
 and a red LED, and [ngspice](https://ngspice.sourceforge.io) solves that
@@ -19,7 +130,7 @@ U1 (STM32F103, Renode)        generated glue                    board.cir
   {3.3 V, 5 ns, 25 Ω}         (from the pin model)
 ```
 
-## Quickstart
+## Developer setup
 
 Run these inside WSL Ubuntu 24.04 or Linux, from the repo root:
 
@@ -222,8 +333,8 @@ fresh runs.
 | `examples/nrf-feedback`, defaults (`make nrf-feedback`: lookahead on) | 500 ms | 120 | **0.52 s** (27×) | 1.39 s | **0.05 s** | 1.95 s | 0.42 s |
 | `examples/adc/kicad --lookahead off` (Phase 1 M4: the ADC board drawn in KiCad, run as a `bb.toml` project; one-cell grants) | 300 ms | 30 000 | 12.66 s | 1.49 s | | 14.17 s | |
 | `examples/adc/kicad`, defaults (`make adc-kicad`: lookahead on) | 300 ms | 1 209 | **1.13 s** (11.2×) | 1.58 s | | 2.64 s | |
-| `examples/dial-me-spinner` E1, `--max-quantum 10us` (Phase 1 M6: the imported main board, Zephyr on the nRF52840, cold bench, 132 instances in the deck; one-cell grants) | 120 ms | 12 000 | 9.21 s | 1.99 s | 0.06 s | 11.24 s | 6.84 s |
-| `examples/dial-me-spinner` E1, defaults (`make dms-rail`: 10 ms grants, acyclic) | 120 ms | 12 | **1.87 s** (4.9×) | 1.36 s | **0.07 s** | 3.24 s | 1.93 s |
+| `examples/dial-me-spinner` E1, `--max-quantum 10us` (Phase 1 M6: the imported main board, Zephyr on the nRF52840, cold bench, 132 instances in the deck; one-cell grants) | 120 ms | 12 000 | 6.34 s | 1.38 s | 0.07 s | 7.78 s | 6.02 s |
+| `examples/dial-me-spinner` E1, defaults (`make dms-rail`, `make demo`: 10 ms grants, acyclic) | 120 ms | 12 | **1.83 s** (3.5×) | 1.42 s | **0.08 s** | 3.29 s | 1.95 s |
 
 The two `examples/nrf-feedback` rows (ADR-008 Amendment 2) were measured
 later, with the same protocol (`make cost-table`'s nRF row, N = 5,
@@ -233,14 +344,16 @@ grant records. They are not comparable with the rows above, which ran at a
 higher load.
 
 The two `examples/dial-me-spinner` rows (Phase 1 M6, ADR-007 Amendment 3)
-were measured with `make cost-table-dms-rail` (N = 5, interleaved, medians;
-the correct-order firmware at the cold bench): fresh at load 3.9–11.6 from
-other agents' work, so upper bounds, and on a one-slot pool at load
-1.9–3.3, all 10 pooled runs leased, every B run identical to A except grant
-records. The analog deck dominates here (the same deck through
-`NgspiceEngine` alone takes about 1.9 s for 120 ms, `deck_run`), so long
-grants gain less than on the Phase 0 boards; the pooled one-cell run's
-lower simulation time (6.73 s) is the lower load.
+were measured again at M7 with `make cost-table-dms-rail`, on an idle host
+(N = 5, interleaved, medians). The runs used the correct-order firmware at
+the cold bench, which is what `make demo` and the README quickstart run.
+Fresh runs were at load 0.7–1.1, and runs on a one-slot pool at load
+1.0–1.4, with all 10 pooled runs leased. Every B run was identical to A
+except for grant records. M6 measured these rows at load 3.9–11.6 and got
+9.21 s and 1.87 s of simulation. The analog deck dominates on this board:
+the same deck through `NgspiceEngine` alone (`deck_run`) takes about 1.9 s
+for 120 ms. Long grants therefore gain less here than on the Phase 0
+boards.
 
 The two `examples/adc/kicad` rows (ADR-007 Amendment 1) were measured
 fresh only, with `make cost-table-adc-kicad` (N = 5, interleaved, medians,
