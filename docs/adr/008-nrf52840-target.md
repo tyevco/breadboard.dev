@@ -1261,3 +1261,10 @@ benches, `make dms-vsense` and its cost-table row).
   golden is unchanged (spike, feedback, ADC, `nrf-feedback`, `dms-rail`,
   `adc-kicad`): the plugin assembly grew and every platform's content hash
   changed, results did not.
+- **Cost-table row** (`make cost-table-nrf-saadc`, the ADR-003 protocol,
+  N = 5, interleaved, medians; README): `examples/nrf-saadc`, 30 ms, one
+  cell (`--lookahead off`) 3 000 grants and 1.55 s of simulation against
+  bb's defaults 209 grants and 0.30 s (5.2x), fresh, load 0.7-0.9; on a
+  one-slot pool 1.15 s against 0.17 s (6.8x), every run leased. D7's
+  estimate of about 40 grants per 8x burst holds (209 for 5 bursts,
+  including the RTC wakes and the UART writes).

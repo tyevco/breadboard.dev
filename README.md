@@ -362,6 +362,8 @@ fresh runs.
 | `examples/adc/kicad`, defaults (`make adc-kicad`: lookahead on) | 300 ms | 1 209 | **1.13 s** (11.2×) | 1.58 s | | 2.64 s | |
 | `examples/dial-me-spinner` E1, `--max-quantum 10us` (Phase 1 M6: the imported main board, Zephyr on the nRF52840, cold bench, 132 instances in the deck; one-cell grants) | 120 ms | 12 000 | 6.34 s | 1.38 s | 0.07 s | 7.78 s | 6.02 s |
 | `examples/dial-me-spinner` E1, defaults (`make dms-rail`, `make demo`: 10 ms grants, acyclic) | 120 ms | 12 | **1.83 s** (3.5×) | 1.42 s | **0.08 s** | 3.29 s | 1.95 s |
+| `examples/nrf-saadc --lookahead off` (Phase 1 M8: the loading `adc_in`, an 8× SAADC burst every 5 ms; one-cell grants) | 30 ms | 3 000 | 1.55 s | 1.68 s | 0.07 s | 3.31 s | 1.27 s |
+| `examples/nrf-saadc`, defaults (`make nrf-saadc-model`: lookahead on) | 30 ms | 209 | **0.30 s** (5.2×) | 1.59 s | **0.11 s** | 1.95 s | 0.33 s |
 
 The two `examples/nrf-feedback` rows (ADR-008 Amendment 2) were measured
 later, with the same protocol (`make cost-table`'s nRF row, N = 5,
@@ -381,6 +383,13 @@ except for grant records. M6 measured these rows at load 3.9–11.6 and got
 the same deck through `NgspiceEngine` alone (`deck_run`) takes about 1.9 s
 for 120 ms. Long grants therefore gain less here than on the Phase 0
 boards.
+
+The two `examples/nrf-saadc` rows (Phase 1 M8, ADR-008 Amendment 4) were
+measured with `make cost-table-nrf-saadc` (N = 5, interleaved, medians):
+fresh at load 0.7–0.9, on a one-slot pool at load 0.9–1.1, all 10 pooled
+runs leased, every B run identical to A except grant records. Each 8×
+burst holds the grants around its eight acquisitions to about one cell
+each (209 grants for 5 bursts in 30 ms, against 3 000 one-cell grants).
 
 The two `examples/adc/kicad` rows (ADR-007 Amendment 1) were measured
 fresh only, with `make cost-table-adc-kicad` (N = 5, interleaved, medians,
