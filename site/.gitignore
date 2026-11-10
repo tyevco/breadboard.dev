@@ -1,0 +1,7 @@
+node_modules/
+.vitepress/cache/
+.vitepress/dist/
+# Copied from docs/ and spec/ by scripts/sync.mjs on every build; never edit or commit them.
+/records/adr/
+/records/spec/
+/records/plan/

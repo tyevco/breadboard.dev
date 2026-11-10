@@ -1,0 +1,62 @@
+# Builds the VitePress site in site/ and publishes it to GitHub Pages
+# (https://tyevco.github.io/breadboard.dev/). The site renders docs/ and spec/
+# through site/scripts/sync.mjs, so a change to either redeploys it.
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'docs/**'
+      - 'spec/**'
+      - 'README.md'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push does not cancel a deploy in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - uses: actions/configure-pages@v6
+
+      - name: Install
+        run: npm ci
+
+      - name: Build (sync docs/ and spec/, then vitepress build)
+        run: npm run docs:build
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

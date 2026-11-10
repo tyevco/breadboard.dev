@@ -1,5 +1,7 @@
 # Breadboard
 
+**Documentation: https://tyevco.github.io/breadboard.dev/**
+
 Breadboard is an open hardware simulator, aiming to be "QEMU for whole circuit boards". You give
 it firmware and a board, and it simulates both together. CPU engines run the
 firmware, analog engines solve the circuit, and a kernel that owns
