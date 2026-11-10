@@ -37,7 +37,7 @@ dial-me-spinner repository. As root (for example in a container), run:
 <!-- stranger-test:begin -->
 ```sh
 apt-get update && apt-get install -y git make ca-certificates   # as a user: sudo apt-get update && sudo apt-get install -y git make ca-certificates
-git clone <CLONE-URL> breadboard.dev && cd breadboard.dev        # <CLONE-URL> is a placeholder: see below
+git clone https://github.com/tyevco/breadboard.dev breadboard.dev && cd breadboard.dev
 make setup SETUP=demo                                            # Rust 1.99.1, Renode 1.17.0, ngspice 42; builds bb into ~/.local/bin
 export PATH="$HOME/.local/bin:$PATH"
 cd examples/dial-me-spinner
@@ -51,11 +51,8 @@ python3 ../../scripts/check_dms_rail.py out/rail-wrong           # expected to F
 ```
 <!-- stranger-test:end -->
 
-> **`<CLONE-URL>` is a placeholder, to be filled in at publication.**
-> breadboard.dev is not published yet (Phase 1 approver decision B). Until it
-> is, clone from the local path or `file://` URL of the copy you were given,
-> for example `git clone /path/to/breadboard.dev breadboard.dev` or
-> `git clone file:///path/to/breadboard.dev breadboard.dev`.
+> To try a local copy instead, clone from its path or `file://` URL, for
+> example `git clone /path/to/breadboard.dev breadboard.dev`.
 
 `make setup SETUP=demo` takes most of the time. It installs the apt
 packages, Rust 1.99.1, Renode 1.17.0 and ngspice 42, then builds `bb`.

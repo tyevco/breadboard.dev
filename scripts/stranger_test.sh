@@ -6,8 +6,9 @@
 #   bash scripts/stranger_test.sh wsl       [--url <url>] [--out <dir>] [--image <ref>] [--apt-mirror <url>] [--keep]
 #
 # The steps are the README's own: the fenced block between `<!-- stranger-test:begin -->` and
-# `<!-- stranger-test:end -->` in README.md of the commit being tested, with `<CLONE-URL>` replaced
-# by --url, nothing else. Each line runs in one bash shell (so `cd` and `export` carry on), as
+# `<!-- stranger-test:end -->` in README.md of the commit being tested, with the published clone
+# URL (https://github.com/tyevco/breadboard.dev) replaced by --url, nothing else; pass
+# --url https://github.com/tyevco/breadboard.dev to test the published repository itself. Each line runs in one bash shell (so `cd` and `export` carry on), as
 # root, from $HOME, with stdin closed. A line must exit 0, except a line marked `expected to FAIL`,
 # which must exit non-zero and print `FAIL: LSW-3` with LED-DATA-V4, LSW-2 and FW-6.4 passing (the
 # wrong-order firmware). The README time is the wall time from the first line to the last.
@@ -67,8 +68,9 @@ git -C "$REPO" show HEAD:README.md | awk '
   inblk { print }
   /<!-- stranger-test:begin -->/ { inblk = 1 }' > "$OUT/readme-steps.sh"
 [[ -s $OUT/readme-steps.sh ]] || { echo "stranger_test: README.md at HEAD has no stranger-test block" >&2; exit 1; }
-grep -q 'git clone <CLONE-URL> ' "$OUT/readme-steps.sh" || { echo "stranger_test: the block has no 'git clone <CLONE-URL>'" >&2; exit 1; }
-sed "s|git clone <CLONE-URL> |git clone $URL |" "$OUT/readme-steps.sh" > "$OUT/steps.sh"
+PUBLISHED_URL=https://github.com/tyevco/breadboard.dev
+grep -q "git clone $PUBLISHED_URL " "$OUT/readme-steps.sh" || { echo "stranger_test: the block has no 'git clone $PUBLISHED_URL'" >&2; exit 1; }
+sed "s|git clone $PUBLISHED_URL |git clone $URL |" "$OUT/readme-steps.sh" > "$OUT/steps.sh"
 HEAD_ID=$(git -C "$REPO" rev-parse HEAD)
 
 # The runner, inside the clean environment: runner.sh <steps> <outdir>

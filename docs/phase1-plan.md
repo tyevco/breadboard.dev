@@ -394,7 +394,7 @@ reference demo from the README in under 15 minutes". For this board:
    wall time including `make setup`**, runs:
 
    ```sh
-   git clone <CLONE-URL> breadboard.dev && cd breadboard.dev   # placeholder, filled in at publication (decision B); M7 uses a local path
+   git clone https://github.com/tyevco/breadboard.dev breadboard.dev && cd breadboard.dev   # published 2026-11-10; M7 used a local path
    make setup SETUP=demo                     # Renode, Rust, ngspice; installs bb into ~/.local/bin
    cd examples/dial-me-spinner
    bb open                                   # imports the pinned netlist, resolves parts, writes board.bbm
