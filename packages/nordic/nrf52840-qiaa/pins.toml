@@ -29,6 +29,9 @@
 # NOT modelled at the pin: the ESD clamps and the I-V beyond the 0.4 V point (the suite's tanh fit);
 # the internal pull resistors; drive-strength changes at run time (the binding's set is fixed, ADR-008 D4
 # audits PIN_CNF against it).
+# UARTE (ADR-008 D8): the UARTE PSEL.TXD/RXD pin selects are placeholders in Renode, so a UART gives no
+# pin edge on its TX or RX pin (nothing to bind); its output reaches events.jsonl only as the
+# `uart<n>: <line>` log records of D8.
 schema = "bb-pins/0"
 
 [[pin]]
@@ -587,7 +590,10 @@ cin = "3p"
 # adc_in (Phase 1 M8, ADR-008 D7): Breadboard's SAADC. vref is the clamp of the pushed value (the
 # pad cannot exceed VDD: spec/pin-model.md's vmax); bits documents the 12-bit code E2 reads (the
 # SAADC's resolution is the firmware's choice); the loading view saadc_se (part.toml) is on by
-# default, load = "none" on a binding makes the input ideal.
+# default, load = "none" on a binding makes the input ideal (run.json records it).
+# A loaded input needs TACQ >= 2 L (L = --renode-quantum, ADR-008 D7): bb run refuses an acquisition
+# with a shorter TACQ and fails the run. Zephyr's default TACQ (10 us) at L = 10 us is refused; the
+# remedies are --renode-quantum <TACQ/2> (e.g. 5us for 10 us, 1us for 3 us) or load = "none".
 [defaults.adc_in.default]
 vref = "VDD"
 bits = "12"

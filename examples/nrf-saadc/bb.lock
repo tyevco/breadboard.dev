@@ -6,9 +6,9 @@ schema = "bb-lock/0"
 id = "nordic/nrf52840-qiaa"
 version = "0.1.0"
 path = "../../packages/nordic/nrf52840-qiaa"
-tree = "sha256:ae502c45f972d45a5e717ad12604c1d5c5d87dc7dc61eb14889637e78284513c"
+tree = "sha256:4b51b601331dc8e89672b753b840253069832741e2ca7519c8a900ecfa6bf326"
 
 [[platform]]
 id = "renode:nrf52840-bb@2"
-content = "sha256:e6e904d6aeea79bb199b2c366e68e5a5dc8efaae0d1b39591aec8b7eb7beab4b"
+content = "sha256:c067580b3f44cd8db6f8976f63799d8c41cc87f130d0cd70b5f093abba64903a"
 renode = "1.17.0"

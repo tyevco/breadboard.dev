@@ -405,6 +405,9 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     // names (the PIN_CNF audit).
     let mut bound: BTreeMap<String, String> = BTreeMap::new();
     let mut drives: BTreeMap<String, Option<String>> = BTreeMap::new();
+    // Chip pins whose adc_in binding says `load = "none"` explicitly
+    // (ADR-008 D7: run.json records it).
+    let mut load_none: Vec<String> = Vec::new();
     for b in &p.binds {
         let ctx = format!("bb.toml [[bind]] {}", b.pin);
         let (bb, r, pin) = insts
@@ -516,6 +519,11 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             },
             &mut warnings,
         )?;
+        if matches!(&kind, PinKind::Adc { load: None, .. })
+            && explicit.iter().any(|(k, v)| *k == "load" && *v == "none")
+        {
+            load_none.push(cpin.clone());
+        }
         if let PinKind::Out { net, .. } = &kind {
             if pins.iter().any(
                 |x| matches!(&x.kind, PinKind::Out { net: n, .. } if n.eq_ignore_ascii_case(net)),
@@ -823,6 +831,17 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 ),
             ),
             ("qualified_for_run", Json::Bool(qualified)),
+        ]));
+    }
+    // An explicit `load = "none"` (ADR-008 D7, Amendment 6): the unloaded,
+    // ideal input, recorded under the bound pin with `view = "none"`.
+    for pin in &load_none {
+        inst_json.push(Json::obj([
+            ("ref", Json::str(format!("{sim}:{tref}.{pin}"))),
+            ("package", Json::str(&chip.part.id)),
+            ("version", Json::str(&chip.part.version)),
+            ("view", Json::str("none")),
+            ("kind", Json::str("pin_load")),
         ]));
     }
     if !unqualified.is_empty() {

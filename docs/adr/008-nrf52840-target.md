@@ -11,7 +11,7 @@
   model, the loading `adc_in`, the UART lines; 2026-11-10, Amendment 4).
   E2 on dial-me-spinner, M8's second half (the firmware, the project
   bindings, `saadc_se` qualified, `make dms-vsense`; 2026-11-10,
-  Amendment 5).
+  Amendment 5). The post-M8 review's fixes (2026-11-10, Amendment 6).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -1117,7 +1117,9 @@ benches, `make dms-vsense` and its cost-table row).
   - Not modelled (a warning once each): offset and gain errors, the
     RESP/RESN ladders, PPI event outputs (a PPI-triggered SAMPLE needs the
     Breadboard PPI of D3 first), oversampling over several channels (each
-    channel averages its own samples; the PS calls it undefined).
+    channel averages its own samples; the PS calls it undefined), and
+    (added by Amendment 6) the overlap of a scan's channels that the PS
+    states without a figure.
 - **The host port** (`Miscellaneous.BbSaadcHostPort` at `0x5FFF0100`, ID
   `BBSP`): ADR-005's layout where the meaning is shared (the batch window
   at `0x1000`, the per-input latest value at `0x100 + 4i`, the error word
@@ -1469,3 +1471,118 @@ part `make dms-vsense-test` in `make test`.
   - E1's row was measured again (`make cost-table-dms-rail`, now cyclic):
     one cell 12 000 grants and 6.83 s; defaults 71 grants and 1.87 s
     (3.7×). Fresh, load 1.2-1.5; pooled 6.54 s and 1.59 s, load 0.9-1.3.
+
+### Amendment 6: the post-M8 review (2026-11-10)
+
+A review of M8 raised nine minor findings. Each was re-checked first.
+Nothing here changes a result already recorded: every committed golden is
+unchanged, and the one new golden is the new case's.
+
+1. **Scan mode: no overlap between channels** (D7, Amendment 4). The PS
+   says "the time it takes to sample all channels is less than the sum of
+   the conversion time of all enabled channels", but gives no figure.
+   `BbNrf52Saadc` starts the next channel's acquisition at the previous
+   channel's DONE, so a scan takes exactly the sum of `TACQ + tCONV`. This
+   is now listed as a deviation in the model's header and in Amendment 4's
+   not-modelled list. A multi-channel scan's later samples are late by the
+   unknown overlap. E2 uses one channel, so E2 is not affected. Modelling
+   the overlap needs a source for its size.
+2. **VDDHDIV5 with TACQ < 10 us** now gives a warning once ("VDDHDIV5 as
+   input with TACQ <x> us: the PS requires 10 us or longer; converted as
+   is"), as `SAMPLERATE.CC < 80` already did. The PS limit is "When using
+   VDDHDIV5 as input, the acquisition time must be 10 us or longer". The
+   check covers PSELP and, in differential mode, PSELN. The conversion is
+   unchanged. `bb_saadc_test.py registers` converts VDDHDIV5 at TACQ
+   10 us (no warning) and then at 5 us, and requires exactly one warning,
+   naming 5 us.
+3. **The restore half of the LED policy is now gated.** It was untested,
+   and `check_dms_vsense.py` failed any run in which the LEDs came back.
+   The new case `rec` (`bench/sag-recover.toml`, `vsense.elf`, 2.3 s) dips
+   the battery's OCV to 3.580 V at 1 s and brings it back to 3.720 V at
+   2 s. `check_dms_vsense.py`'s `check_rec` requires:
+   - the shed at the first reading with code <= 1282 (E1's off order);
+   - `leds=off` until the first reading with VBAT_est >= 3.58 V (the
+     firmware's integer arithmetic);
+   - the restore at that reading, with LED_PWR_EN rising between its last
+     sample and its line, no sooner than 30 ms after the shed, and P0.06
+     high at least 10 ms after LED_PWR_EN (E1's on order);
+   - no further shed;
+   - LED_PWR_EN and P0.06 edges exactly `[1, 0, 1]`, and one `leds off`
+     and one `leds on` line.
+
+   Readings: 1296, 1269 (VBAT_est 3 494 112 uV, shed: LED_PWR_EN low at
+   1000.480 ms), 1314 (3 618 016 uV, restored: LED_PWR_EN high at
+   2000.480 ms, P0.06 high 30.065 ms later). The `sag` run fails
+   `check_rec` (no reading reaches 3.58 V: the negative control). `rec`
+   runs at bb's defaults and as its every-lattice-point reference
+   (230 000 one-cell grants), equal except grant records. The reference
+   is the new golden `tests/golden/dms-vsense/rec/outputs.sha256`.
+   `check_sag` is unchanged: the sag bench never recovers, so LEDs coming
+   back there is still a failure.
+4. **Grant partitions in the gate.** `make dms-vsense` now also runs s50 at
+   `--max-quantum 1ms` and at `--max-quantum 3ms --verify every`. Both
+   must equal the committed one-cell hashes except grant records, with no
+   broken promise.
+5. **The package now says what D7 promised:** `nordic/nrf52840-qiaa`
+   `pins.toml`, in the `adc_in` defaults comment. A loaded input needs
+   TACQ >= 2 L. Zephyr's default TACQ (10 us) at L = 10 us is refused. The
+   remedies are `--renode-quantum <TACQ/2>` or `load = "none"`.
+6. **D8's UARTE note in the package.** The `pins.toml` header now says
+   that UARTE pin selects are placeholders in Renode, so a UART gives no
+   TX or RX pin edge. Its output reaches `events.jsonl` only as D8's
+   `uart<n>:` log records. Items 5 and 6 change the package's tree hash
+   (`make locks`: `examples/dial-me-spinner/bb.lock` and
+   `examples/nrf-saadc/bb.lock`). Item 2 changes the plugin sources, and so
+   every platform's content hash: every `bb.lock`,
+   `examples/adc/kicad/board.bbm` and `examples/dial-me-spinner/board.bbm`.
+   No other field changed.
+7. **`run.json` records an explicit `load = "none"`** (D7: "an explicit
+   `load = "none"` on the binding, which `run.json` records"). Before, it
+   was recorded only by the absence of the `pin_load` entry. Now `analog`
+   carries `{"kind": "pin_load", "ref": "<board>:<ref>.<pin>", "package",
+   "version", "view": "none"}` for such a binding (`cli/src/elab.rs`;
+   `spec/project.md` section 6). A board file (Phase 0 path) writes no
+   `run.json`. `scripts/dms_vsense.sh` checks the record on every case, in
+   `make dms-vsense-test` too: `saadc_se` on the loaded cases, `none` on
+   the `-none` cases.
+8. **Connected against switched CS, measured** (D7: "M8 measures the
+   difference against the suite's switched model"). `check_dms_vsense.py`
+   now evaluates the suite's arithmetic both ways, at the run's
+   acquisition instants and the bench's parts, and prints the difference.
+   Connected minus switched, steady-state burst mean: +0.000 uV (s1),
+   +0.016 uV (s50), +0.000 uV (c5). Worst single sample: 0.000, 0.016 and
+   0.001 uV. D7 put the extra capacitance at 25 ppm of C5 (250 ppm for
+   C5 / 10). Its effect on the error is far smaller: between acquisitions
+   it only lengthens the pad's recovery time constant by that fraction,
+   and the pre-charge at each acquisition is the same either way. It is
+   reported, not a limit.
+9. **`make pool-equiv` has E2.** AGENTS.md requires a new board on the pool
+   to be in that list. It now runs s50 at bb's defaults (non-grant hashes)
+   and as its every-lattice-point reference (all hashes) against
+   `tests/golden/dms-vsense/s50/outputs.sha256`, with
+   `dms-vsense-prepare` as a prerequisite. That closes the gap Amendment
+   5's gate list left open ("Not run for this milestone").
+
+- **Gate runs** (2026-11-10, on `c18ba59` plus this change; load as
+  `/proc/loadavg` at start and end; run one after another):
+  - `make nrf-saadc-model`: PASS (25 s, load 0.8-2.7), with the new
+    VDDHDIV5 check in both `registers` runs.
+  - `make dms-vsense POOL=0`: PASS, 42 PASS lines and none failing
+    (15 min 56 s; load 1.1, then 4.9 from its own parallel runs). The
+    new lines: `rec` and its reference (230 000 grants against 456 at
+    the defaults), the eight run.json load records, s50 at 1 ms (1 317
+    grants) and at 3 ms with `--verify every` (888 grants).
+  - `make dms-rail POOL=0`: PASS (2 min 47 s, load 4.9-2.1, 44 PASS
+    lines, none failing).
+  - `make check POOL=0`: green (10 min 30 s, load 2.1-1.6, 207 cargo
+    tests).
+  - `make check` on the pool: green (9 min 20 s, load 1.6-1.4; 93
+    leases, 1 discarded: the `nrf-saadc` refusal run, which fails by
+    design).
+  - `make pool-equiv`: PASS (23 configurations with `dms-vsense` and
+    `dms-vsense-ref` added, 2 rounds, 46 pooled runs from one Renode
+    process, each leased and identical to its fresh run and the committed
+    hashes; 20 min 47 s, load 1.4-1.3).
+  - `make locks` changed only the hashes named in item 6. Every committed
+    golden is unchanged. `tests/golden/dms-vsense/rec` is new.
+

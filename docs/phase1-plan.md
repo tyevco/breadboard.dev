@@ -39,7 +39,10 @@
   LED shed on a battery-sag bench, every case equal to its
   every-lattice-point reference), the firmware `vsense.elf` /
   `vsense_50ms.elf` reproduced by `make fw-rebuild`, the cost-table row
-  (ADR-008 Amendment 5; Review notes: M8).
+  (ADR-008 Amendment 5; Review notes: M8). The post-M8 review's nine
+  minor findings are fixed: the LED restore gated, grant partitions and
+  `make pool-equiv` cover E2 (ADR-008 Amendment 6; "Review notes: after
+  M8").
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -1212,4 +1215,33 @@ nrf-saadc-model`. The second half is E2 itself (ADR-008 Amendment 5).
 - **Not run for this milestone:** `make pool-equiv` has no E2
   configuration. Pooled against fresh is covered by `make
   dms-vsense-test`, which passes against the same committed hashes in both
-  `make check` runs.
+  `make check` runs. (Closed after the review: `make pool-equiv` now has
+  E2; see "Review notes: after M8".)
+
+## Review notes: after M8 (2026-11-10)
+
+A review of M8 raised nine minor findings and no blocker or major one.
+Each was re-checked before anything changed (ADR-008 Amendment 6). What
+became of each:
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1 | Scan mode takes exactly the sum of TACQ + tCONV; the PS says less, and the header did not call it a deviation | **Fixed (documented).** Listed as a deviation in the model's header and in Amendment 4's not-modelled list. The PS gives no figure for the overlap, so it is not modelled. E2 uses one channel |
+| 2 | The PS's "VDDHDIV5 needs TACQ >= 10 us" was neither enforced nor warned | **Fixed.** A one-time warning, like `SAMPLERATE.CC < 80`. `bb_saadc_test.py registers` checks for no warning at 10 us and exactly one, naming 5 us, at 5 us |
+| 3 | No case reached the restore half of the LED policy, and `check_dms_vsense.py` failed any run whose LEDs came back | **Fixed.** New case `rec` (`bench/sag-recover.toml`) and `check_rec`: shed at 1269, restore at 1314 (VBAT_est 3.618 V >= 3.58 V), 1 s after the shed, P0.06 30.065 ms after LED_PWR_EN; one-cell reference equal except grants; new golden `rec`. The sag run fails `check_rec` (negative control) |
+| 4 | `make dms-vsense` did not vary the grant partition | **Fixed.** s50 at `--max-quantum 1ms` and at `3ms --verify every`, each equal to the committed hashes except grants, with no broken promise |
+| 5 | The package did not document the TACQ >= 2 L refusal (D7) | **Fixed.** `pins.toml`'s `adc_in` comment; `make locks` |
+| 6 | The package did not document that UARTE pins give no edges (D8) | **Fixed.** `pins.toml` header |
+| 7 | `run.json` recorded `load = "none"` only by leaving an entry out | **Fixed.** An `analog` entry with `kind = "pin_load"`, `view = "none"` under the bound pin (`spec/project.md` section 6, as D7 already required). `dms_vsense.sh` checks it on every case, in `make test` too |
+| 8 | D7's promised connected-vs-switched CS difference was never reported | **Fixed.** `check_dms_vsense.py` prints it: +0.000 / +0.016 / +0.000 uV on the burst mean (s1 / s50 / c5) |
+| 9 | E2 was not in `make pool-equiv`, though `make check` runs it pooled | **Fixed.** s50 at bb's defaults and as its reference are in the list, with `dms-vsense-prepare`; `make pool-equiv` passes (below) |
+
+- **Gates, after the fixes** (2026-11-10, run one after another; load
+  at start and end): `make nrf-saadc-model` PASS (25 s); `make dms-vsense
+  POOL=0` PASS (15 min 56 s, 42 PASS lines, load 1.1-4.9); `make dms-rail
+  POOL=0` PASS (2 min 47 s, 44 PASS lines); `make check POOL=0` green
+  (10 min 30 s, 207 cargo tests); `make check` on the pool green (9 min
+  20 s); `make pool-equiv` PASS (23 configurations, 46 leased runs,
+  20 min 47 s). Every committed golden is unchanged; `rec` is new. Not
+  pushed.
+

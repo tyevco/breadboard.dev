@@ -190,11 +190,19 @@ What the gate checks (`scripts/dms_vsense.sh`, `scripts/check_dms_vsense.py`):
   1296). The readings then go 1293, 1289 and 1286. At the reading of 1282,
   VBAT_est is 3.5299 V, and the firmware sheds the LEDs: LED_PWR_EN falls
   154 ms after the threshold crossing, within one reading period.
+- **The restore** (`bench/sag-recover.toml`). The battery dips to 3.58 V
+  at 1 s and comes back to 3.72 V at 2 s. The LEDs are shed at the 1 s
+  reading (VBAT_est 3.494 V) and come back at the 2 s reading (3.618 V,
+  at or above the 3.58 V restore threshold), with E1's on order: P0.06
+  goes high 30 ms after LED_PWR_EN.
 - **Equivalence and determinism.** Every case equals its every-lattice-point
   reference (`--lookahead off --adc-push every`) in `nets.csv`, `nets.vcd`
-  and every non-grant record. The references match `tests/golden/dms-vsense/`.
-  No grant stops early at a push (`stop:`). `--engine-order analog-first` is
-  byte-identical. The sag run is identical over 10 runs.
+  and every non-grant record. So do two other grant partitions of the 50 ms
+  case (`--max-quantum 1ms`, and `3ms` with `--verify every`). The
+  references match `tests/golden/dms-vsense/`. No grant stops early at a
+  push (`stop:`). `--engine-order analog-first` is byte-identical. The sag
+  run is identical over 10 runs. `run.json` records the binding's load
+  (`saadc_se`, or `none`).
 
 The firmware is in `examples/dial-me-spinner/firmware/vsense/`. Both images
 are prebuilt, and `make fw-rebuild` reproduces them from a fresh Zephyr

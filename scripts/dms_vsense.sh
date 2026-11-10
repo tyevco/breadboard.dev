@@ -14,13 +14,17 @@
 #             project's netlist edited in the copy): the suite's C5 / 10 fault
 #   c5-none   the same, load = "none"
 #   sag       vsense.elf, bench/sag.toml, 4300 ms: the battery ramps down through the LED shed
+#   rec       vsense.elf, bench/sag-recover.toml, 2300 ms: the battery dips through the shed and comes
+#             back above the restore threshold (the restore half of the policy, ADR-008 Amendment 6)
 # Every case runs with --probe net:VSYS_SENSE --sample-rate 10kHz. The board is cyclic (the loading
 # adc_in: U10 -> ngspice -> U10), so bb's defaults run lookahead; the every-lattice-point reference
 # is --lookahead off --adc-push every (one cell, V(hold) pushed at every lattice point).
 #
 #   scripts/dms_vsense.sh test <bb> <out>   the part in `make test`: s50, s50-none, c5, c5-none at bb's
-#                                           defaults, check_dms_vsense.py on them, and their committed
-#                                           one-cell hashes (non-grant records, nets.csv, nets.vcd)
+#                                           defaults, check_dms_vsense.py on them, their committed
+#                                           one-cell hashes (non-grant records, nets.csv, nets.vcd), and
+#                                           run.json's record of each binding's load (view saadc_se,
+#                                           or "none" for an explicit load = "none")
 #   scripts/dms_vsense.sh gate <bb> <out>   the M8 gate (make dms-vsense): every case at bb's defaults
 #                                           and as its one-cell reference, check_dms_vsense.py (the
 #                                           analog side against load = "none", the firmware-visible
@@ -28,6 +32,9 @@
 #                                           stop:ngspice), each default run equal to its reference
 #                                           except grant records, each reference equal to the committed
 #                                           hashes, --engine-order analog-first byte-identical (s50),
+#                                           two other grant partitions (s50 at --max-quantum 1ms, and
+#                                           at 3ms with --verify every) equal to the committed hashes
+#                                           except grants, run.json's load records,
 #                                           the TACQ refusal on the project path, and 10-run
 #                                           determinism (sag)
 #   scripts/dms_vsense.sh ref <bb> <out>    the one-cell references only (for golden-update)
@@ -43,7 +50,7 @@ WORK=${DMS_VSENSE_WORK:-$HOME/.cache/bb-dms-vsense}
 DET_RUNS=${DET_RUNS:-10}
 DET_JOBS=${DET_JOBS:-5}
 PY=${PYTHON:-python3}
-CASES=(s1 s1-none s50 s50-none c5 c5-none sag)
+CASES=(s1 s1-none s50 s50-none c5 c5-none sag rec)
 TEST_CASES=(s50 s50-none c5 c5-none)
 status=0
 pass() { echo "dms-vsense: PASS: $*"; }
@@ -51,7 +58,7 @@ fail() { echo "dms-vsense: FAIL: $*"; status=1; }
 
 proj_of() { # <case>: the project copy
   case $1 in
-    s1 | sag) echo "$WORK/proj-1s" ;;
+    s1 | sag | rec) echo "$WORK/proj-1s" ;;
     s1-none) echo "$WORK/proj-1s-none" ;;
     s50) echo "$WORK/proj-50ms" ;;
     s50-none) echo "$WORK/proj-50ms-none" ;;
@@ -68,6 +75,7 @@ args_of() { # <case>: bb run arguments
     s50 | s50-none) for=650ms ;;
     c5 | c5-none) for=1100ms ;;
     sag) for=4300ms bench=sag ;;
+    rec) for=2300ms bench=sag-recover ;;
   esac
   echo "--project $p --bench $p/bench/$bench.toml --for $for --probe net:VSYS_SENSE --sample-rate 10kHz"
 }
@@ -162,6 +170,21 @@ same() { # <a> <b> <what> <files...>
   return 0
 }
 
+loads() { # <dir> <case>: run.json records the binding's load under the bound pin (ADR-008 D7)
+  local want=saadc_se
+  [[ $2 == *-none ]] && want=none
+  if "$PY" - "$1/run.json" "$want" <<'EOF'; then
+import json, sys
+r = json.load(open(sys.argv[1]))
+v = [a["view"] for a in r["analog"] if a.get("kind") == "pin_load" and a["ref"] == "main:U10.P0.02"]
+sys.exit(0 if v == [sys.argv[2]] else f"pin_load records of main:U10.P0.02: {v}")
+EOF
+    pass "$2: run.json records the VSYS_SENSE binding's load as $want"
+  else
+    fail "$2: run.json's load record"
+  fi
+}
+
 checks() { # <out> <json> [--ref] [--cases ...]
   local out=$1 json=$2
   shift 2
@@ -179,7 +202,11 @@ do_test() { # <bb> <out>
   prepare "$bb"
   run_many "$bb" "$out" "" "" "${TEST_CASES[@]}"
   checks "$out" "$out/checks.json" --cases "$(IFS=,; echo "${TEST_CASES[*]}")"
-  for c in "${TEST_CASES[@]}"; do [[ -d $out/$c ]] && hashes "$out/$c" "$c" nongrant; done
+  for c in "${TEST_CASES[@]}"; do
+    [[ -d $out/$c ]] || continue
+    hashes "$out/$c" "$c" nongrant
+    loads "$out/$c" "$c"
+  done
 }
 
 do_ref() { # <bb> <out> <cases...>
@@ -200,6 +227,7 @@ do_gate() { # <bb> <out>
     same "$out/$c" "$out/$c-ref" "$c: bb's defaults equal the every-lattice-point reference except grants" \
       nets.csv nets.vcd non-grant-records
     hashes "$out/$c-ref" "$c" all
+    loads "$out/$c" "$c"
     grep -q '0 promises broken' "$out/$c.log" && pass "$c: 0 promises broken" \
       || fail "$c: a lookahead promise was broken"
   done
@@ -210,6 +238,16 @@ do_gate() { # <bb> <out>
   else
     fail "s50-order: bb run failed"; tail -5 "$out/s50-order.log"
   fi
+  # Two other grant partitions (s50): every non-grant record, nets.csv and nets.vcd equal the
+  # committed one-cell hashes, with no broken promise.
+  run_many "$bb" "$out" "-q1ms" "--max-quantum 1ms" s50
+  run_many "$bb" "$out" "-q3ms-verify" "--max-quantum 3ms --verify every" s50
+  for c in s50-q1ms s50-q3ms-verify; do
+    [[ -d $out/$c ]] || continue
+    hashes "$out/$c" s50 nongrant
+    grep -q '0 promises broken' "$out/$c.log" && pass "$c: 0 promises broken" \
+      || fail "$c: a lookahead promise was broken"
+  done
   # The TACQ refusal on the project path (ADR-008 D7, approver decision A4): TACQ 40 us with
   # --renode-quantum 25us (2 L = 50 us) fails the run, naming both remedies. The views are
   # qualified at L = 10 us only, so the run names them --allow-unqualified to reach the SAADC.

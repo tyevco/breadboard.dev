@@ -5,7 +5,8 @@ Breadboard's SAADC with the loading adc_in on VSYS_SENSE, and the low-battery LE
 
 Usage: check_dms_vsense.py <out-root> --suite <results.json> [--json <file>] [--cases a,b,...]
                            [--suffix -ref]
-<out-root>/<case><suffix> are the run directories (s1, s1-none, s50, s50-none, c5, c5-none, sag);
+<out-root>/<case><suffix> are the run directories (s1, s1-none, s50, s50-none, c5, c5-none, sag,
+rec);
 --cases limits the checks to those present in the list (make test runs s50, s50-none, c5, c5-none).
 
 Every run (RUN):
@@ -32,7 +33,11 @@ The analog side (ANALOG; s1 against s1-none, s50 against s50-none, c5 against c5
     results.json: 356.16 uV (1 s), 761.27 uV (50 ms), 3.4743 mV (C5 / 10, one burst), within
     TOL_SUITE_UV. So the co-simulation is tied to the suite's figures through one model that has to
     match both; the suite's corner itself needs tolerance views (Phase 2) and nominal parts give
-    smaller figures (reported).
+    smaller figures (reported);
+  - saadc_se's simplification measured (ADR-008 D7: "M8 measures the difference against the suite's
+    switched model"): the same arithmetic with CS switched off the pad between acquisitions, at the
+    run's instants and the bench's parts, against the connected one; the difference of the
+    steady-state burst means and the worst per-sample difference are reported (not a limit).
 
 Firmware-visible (FW):
   - the codes follow code = V / 2.8125 mV (VSYS) to within the rounding and the sampling error: every
@@ -44,7 +49,12 @@ Firmware-visible (FW):
     the first burst whose VBAT_est < 3.53 V (code <= 1282) sheds them (P0.06 low no later than
     LED_PWR_EN low, "leds off" logged, no later edge), every earlier burst has code >= 1283, and
     LED_PWR_EN falls within one burst period after the threshold crossing, the first instant at
-    which V(VSYS_SENSE) plus the modelled mean sampling error falls below the code boundary 1282.5 LSB.
+    which V(VSYS_SENSE) plus the modelled mean sampling error falls below the code boundary 1282.5 LSB;
+  - the restore (rec, ADR-008 Amendment 6): the LEDs come on at boot, the first reading with code <=
+    1282 sheds them (E1's off order), every reading until the first one with VBAT_est >= 3.58 V is
+    "leds=off", that reading restores them (LED_PWR_EN rises between its last sample and its line, no
+    sooner than 30 ms after the shed, P0.06 high at least 10 ms after LED_PWR_EN: E1's on order), and
+    they stay on: LED_PWR_EN and P0.06 edges exactly [1, 0, 1], one "leds off" and one "leds on" line.
 """
 import argparse
 import bisect
@@ -63,6 +73,8 @@ R1, R2, C5 = 2.2e6, 1e6, 100e-9     # the board (VSYS_SENSE)
 VSYS_BENCH, VDD_BENCH = 3.0, 3.366  # bench/vsense.toml
 TICK_FS = FS // 32768 + 1           # one RTC tick, rounded up
 SHED_CODE = 1282                    # VBAT_est < 3.53 V <=> code <= 1282 (firmware integer arithmetic)
+RESTORE_UV = 3_580_000              # VBAT_est >= 3.58 V restores the LEDs (50 mV of hysteresis)
+LED_OFF_MIN_FS = 30 * 10**12        # and not sooner than 30 ms after the shed
 # Tolerances, set from M8's measurement (ADR-008 Amendment 5; the measured worst cases are printed).
 # Measured (2026-11-10): per sample 0.53 uV (s1), 0.62 uV (s50), 5.51 uV (c5, 0.2 % of its 2.7 mV);
 # steady-state burst mean 0.13 / 0.04 / 1.65 uV; the arithmetic at the suite's corner against
@@ -75,7 +87,7 @@ SUITE_CHECKS = {  # (test, check) of results.json -> the case
     "s50": ("test_sample_interval", "info: burst every 0.05 s, |8x average error|"),
     "c5": ("test_fault_c5_decade_low_detected_at_fw_tacq", "fault C5 / 10, tACQ 40 µs: |8x average sampling error|"),
 }
-PERIOD_FS = {"s1": FS, "s1-none": FS, "c5": FS, "c5-none": FS, "sag": FS, "s50": FS // 20, "s50-none": FS // 20}
+PERIOD_FS = {"s1": FS, "s1-none": FS, "c5": FS, "c5-none": FS, "sag": FS, "rec": FS, "s50": FS // 20, "s50-none": FS // 20}
 
 
 def code_of(uv):
@@ -242,7 +254,16 @@ def check_analog(c, case, run, ref, suite):
     mmean = sum(model[-8:]) / 8 * 1e6
     c.check(abs(mean - mmean) <= TOL_MEAN_UV, case,
             f"steady-state burst mean {mean:.2f} uV, the arithmetic {mmean:.2f} uV (tol {TOL_MEAN_UV})")
+    # D7's simplification against the suite's switched CS, same instants and parts (reported).
+    sw = model_errors(acq, [t / FS for t in tl], vth_uv * 1e-6, R1 * R2 / (R1 + R2), cext, VDD_BENCH,
+                      connected=False)
+    sw_mean = sum(sw[-8:]) / 8 * 1e6
+    sw_worst = max(abs(m - x) for m, x in zip(model, sw)) * 1e6
+    c.note(case, f"connected CS (saadc_se) minus switched CS (the suite): steady-state burst mean "
+                 f"{mmean - sw_mean:+.3f} uV, worst sample {sw_worst:.3f} uV")
     out = dict(mean_uv=mean, model_uv=mmean, worst_sample_uv=worst, vth_uv=vth_uv,
+               switched_model_uv=sw_mean, connected_minus_switched_uv=mmean - sw_mean,
+               connected_vs_switched_worst_sample_uv=sw_worst,
                burst_means_uv=[sum(errs[8 * k:8 * k + 8]) / 8 for k in range(len(bl))])
     base = case.split("-")[0]
     if base in SUITE_CHECKS:
@@ -348,12 +369,57 @@ def check_sag(c, run):
                 t_analog_cross_fs=t_an, codes=[r["code"] for r in rd])
 
 
+def check_rec(c, run):
+    """The shed and the restore (bench/sag-recover.toml)."""
+    case = "rec"
+    rd = readings(run["lines"])
+    en = [r for r in run["edges"] if r["net"] == "U10.P1.04"]
+    din = [r for r in run["edges"] if r["net"] == "U10.P0.06"]
+    codes = [r["code"] for r in rd]
+    shed = next((k for k, r in enumerate(rd) if r["code"] <= SHED_CODE), None)
+    if not c.check(shed is not None and shed > 0, case, f"no shed after the first reading: {codes}"):
+        return {}
+    rest = next((k for k in range(shed + 1, len(rd)) if vbat_est_uv(rd[k]["code"]) >= RESTORE_UV), None)
+    if not c.check(rest is not None, case, f"no reading at VBAT_est >= 3.58 V after the shed: {codes}"):
+        return {}
+    c.check(all(r["code"] > SHED_CODE and r["leds"] == "on" for r in rd[:shed]), case,
+            f"a reading before the shed is low or LEDs off: {rd[:shed]}")
+    c.check(all(r["leds"] == "off" for r in rd[shed:rest]), case,
+            f"LEDs on between the shed and the restore: {rd[shed:rest]}")
+    c.check(all(r["leds"] == "on" and r["code"] > SHED_CODE for r in rd[rest:]), case,
+            f"LEDs not on (or shed again) from the restore: {rd[rest:]}")
+    c.check([r["level"] for r in en] == [1, 0, 1], case, f"LED_PWR_EN edges {[(r['t_fs'], r['level']) for r in en]}")
+    c.check([r["level"] for r in din] == [1, 0, 1], case, f"P0.06 edges {[(r['t_fs'], r['level']) for r in din]}")
+    off = [t for t, m in run["lines"] if m.startswith("vsense: leds off")]
+    on = [t for t, m in run["lines"] if m.startswith("vsense: leds on")]
+    c.check(len(off) == 1 and len(on) == 1, case, f"{len(off)} 'leds off' and {len(on)} 'leds on' lines")
+    if len(en) != 3 or len(din) != 3:
+        return {}
+    for i, what in ((0, "boot"), (2, "restore")):
+        c.check(din[i]["t_fs"] - en[i]["t_fs"] >= 10 * 10**12, case,
+                f"{what}: P0.06 high less than 10 ms after LED_PWR_EN (FW-6.4)")
+    c.check(din[1]["t_fs"] <= en[1]["t_fs"], case, "LED_PWR_EN fell before P0.06 (the off order, firmware.md 6.4)")
+    bursts = bursts_of(run, c, case)
+    c.check(bursts[shed][-1][0] < en[1]["t_fs"] < rd[shed]["t"], case,
+            "LED_PWR_EN fall not between the shed burst and its line")
+    c.check(bursts[rest][-1][0] < en[2]["t_fs"] < rd[rest]["t"], case,
+            "LED_PWR_EN rise not between the restore burst and its line")
+    c.check(en[2]["t_fs"] - en[1]["t_fs"] >= LED_OFF_MIN_FS, case, "restored sooner than 30 ms after the shed")
+    c.note(case, f"readings {codes}; shed at reading {shed} (VBAT_est {rd[shed]['est']} uV < 3.53 V, LED_PWR_EN low "
+                 f"at {en[1]['t_fs'] / 1e12:.3f} ms); restored at reading {rest} (VBAT_est {rd[rest]['est']} uV >= "
+                 f"3.58 V, LED_PWR_EN high at {en[2]['t_fs'] / 1e12:.3f} ms, "
+                 f"{(en[2]['t_fs'] - en[1]['t_fs']) / 1e12:.3f} ms after the shed; P0.06 high "
+                 f"{(din[2]['t_fs'] - en[2]['t_fs']) / 1e12:.3f} ms later)")
+    return dict(shed_reading=shed, restore_reading=rest, codes=codes, t_shed_fs=en[1]["t_fs"],
+                t_restore_fs=en[2]["t_fs"], p006_after_en_ms=(din[2]["t_fs"] - en[2]["t_fs"]) / 1e12)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
     ap.add_argument("--suite", required=True)
     ap.add_argument("--json")
-    ap.add_argument("--cases", default="s1,s1-none,s50,s50-none,c5,c5-none,sag")
+    ap.add_argument("--cases", default="s1,s1-none,s50,s50-none,c5,c5-none,sag,rec")
     ap.add_argument("--suffix", default="")
     a = ap.parse_args()
     cases = a.cases.split(",")
@@ -383,6 +449,8 @@ def main():
         res["c5"]["code_shift_lsb"] = shift
     if "sag" in runs:
         res["sag"] = check_sag(c, runs["sag"])
+    if "rec" in runs:
+        res["rec"] = check_rec(c, runs["rec"])
     for n in c.notes:
         print("check_dms_vsense: " + n)
     for f in c.fails:

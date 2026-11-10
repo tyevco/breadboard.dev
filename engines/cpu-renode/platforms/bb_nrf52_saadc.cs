@@ -19,7 +19,13 @@
 //     acquisition needs its own SAMPLE and the result follows the
 //     2^OVERSAMPLE-th;
 //   - scan mode: one SAMPLE converts every enabled channel (PSELP != NC) in
-//     channel order, back to back;
+//     channel order, back to back: the next channel's acquisition starts at
+//     the previous channel's DONE, so a scan takes exactly the sum of
+//     TACQ + tCONV of its channels. DEVIATION from the PS ("the time it
+//     takes to sample all channels is less than the sum of the conversion
+//     time of all enabled channels"): the PS gives no figure for the
+//     overlap, so none is modelled (ADR-008 Amendment 6); a multi-channel
+//     scan's later samples are late by that unknown overlap;
 //   - SAMPLERATE.MODE = Timers: after SAMPLE, a scan starts every
 //     CC / 16 MHz (a_k = a_0 + ceil(k * CC * 62.5 ns), never accumulated)
 //     until STOP.
@@ -56,7 +62,10 @@
 // (the loading view does that, in the analog engine), PPI event outputs
 // (SAMPLE through PPI needs a Breadboard PPI first, ADR-008 D3), oversampling
 // with more than one channel enabled (each channel averages its own
-// samples; the PS calls the result undefined).
+// samples; the PS calls the result undefined), the scan-mode overlap above.
+// PS limits that are warned of, not enforced (converted as is): SAMPLERATE.CC
+// below 80, and VDDHDIV5 as an input with TACQ < 10 us (the PS: "When using
+// VDDHDIV5 as input, the acquisition time must be 10 us or longer").
 using System;
 using System.Collections.Generic;
 using Antmicro.Renode.Core;
@@ -487,6 +496,11 @@ namespace Antmicro.Renode.Peripherals.Analog
             var input = InputOf(pselp[n]);
             var tacq = TacqNs(config[n]);
             Stats.Acquisitions++;
+            if(tacq < 10000 && (input == VddhDiv5
+                || ((config[n] & ConfigModeDiff) != 0 && InputOf(pseln[n]) == VddhDiv5)))
+            {
+                WarnOnceText("vddhtacq", $"VDDHDIV5 as input with TACQ {tacq / 1000} us: the PS requires 10 us or longer; converted as is");
+            }
             if(input >= 0 && input < InputCount && (LoadedMask & (1u << input)) != 0)
             {
                 Stats.RecordAcquisition(a, input, n);

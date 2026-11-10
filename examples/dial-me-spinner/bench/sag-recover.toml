@@ -1,0 +1,46 @@
+# examples/dial-me-spinner/bench/sag-recover.toml: the E2 shed-and-restore bench (Phase 1 plan
+# section 2 E2, M8; ADR-008 Amendment 6; ADR-007 D5).
+#
+# bench/sag.toml with a battery that dips through the low-battery LED shed of dial-me-spinner
+# docs/firmware.md section 12.4 and comes back above its restore threshold (VBAT_est >= 3.58 V, 50 mV
+# of hysteresis), so the gate reaches both halves of the policy:
+#   VSYS: the OCV falls linearly from 3.660 V at 0 s to 3.580 V at 1 s, then rises to 3.720 V at 2 s,
+#         behind 0.3192 Ohm and loaded by 50 mA, as bench/sag.toml;
+#   +3V3: the suite's ideal LDO, min(3.3 V, V(VSYS) - 44.167 mV), as the E1 benches (3.3 V here).
+# With vsense.elf (a reading every 1 s): the LEDs come on at boot (VBAT_est about 3.57 V), are shed at
+# the 1 s reading (about 3.49 V < 3.53 V) with E1's off sequence, and come back at the 2 s reading
+# (about 3.62 V >= 3.58 V, more than 30 ms after the shed) with E1's on sequence.
+# Not reproduced (plan section 2): the BQ25180 power path, the base-board VSYS capacitance, the
+# cell's own dynamics (a piecewise-linear OCV stands in for a load step and its recovery), tolerances.
+schema = "bb-bench/0"
+temp_c = "25"
+
+[[pwl]]
+net = "VSYS"
+points = [["0", "3.660V"], ["1s", "3.580V"], ["2s", "3.720V"]]
+rs = "0.3192"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "10m"
+track = { net = "VSYS", drop = "44.167mV" }
+
+[[load]]
+net = "VSYS"
+amps = "50mA"
+
+[analog]
+nets = [
+  "GND", "VSYS", "+3V3", "VSYS_SENSE", "VLED", "LED_PWR_EN", "LSW_CT", "LSW_QOD",
+  "LED_DIN_MCU", "LED_DIN_R", "LED_DIN",
+  "LED_D1", "LED_D2", "LED_D3", "LED_D4", "LED_D5", "LED_D6", "LED_D7", "LED_D8",
+  "LED_D9", "LED_D10", "LED_D11", "LED_D12", "LED_D13", "LED_D14", "LED_D15", "LED_D16",
+  "LED_D17", "LED_D18", "LED_D19", "LED_D20", "LED_D21", "LED_D22", "LED_D23", "LED_D24",
+  "LED_D25", "LED_D26", "LED_D27", "LED_D28", "LED_D29", "LED_D30", "LED_D31", "LED_D32",
+  "LED_D33", "LED_D34", "LED_D35", "LED_D36", "LED_D37", "LED_D38", "LED_D39", "LED_D40",
+  "LED_D41", "LED_D42", "LED_D43", "LED_D44", "LED_D45", "LED_D46", "LED_D47", "LED_D48",
+]
+
+[options]
+set = "phase0"

@@ -131,7 +131,8 @@ examples/dial-me-spinner/ Phase 1 reference board (dial-me-spinner 6854d25): SOU
                         target, bench/ (nominal, cold), firmware/ (west.yml, the out-of-tree
                         Zephyr board, the led_rail app, prebuilt/ ELFs with SHA256SUMS of their
                         image hashes and PROVENANCE); M8: the E2 [[bind]]s (VSYS_SENSE on AIN0,
-                        VDD), bench/vsense.toml and bench/sag.toml, firmware/vsense (vsense.elf,
+                        VDD), bench/vsense.toml, bench/sag.toml and bench/sag-recover.toml,
+                        firmware/vsense (vsense.elf,
                         vsense_50ms.elf)
 examples/nrf-feedback/  examples/feedback's circuit on the nRF52840 (Phase 1 M2; firmware
                         engines/cpu-renode/tests/firmware/nrf52840/nrf_feedback.c)

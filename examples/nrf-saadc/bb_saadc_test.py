@@ -22,7 +22,8 @@ Groups:
              8th); round half up per sample and of the mean; every gain, the
              internal and the VDD/4 reference (VDD a second timed input),
              single-ended saturation, differential sign extension; PSELP =
-             VDD and VDDHDIV5; sample-and-hold at a lattice point (a push at
+             VDD and VDDHDIV5 (with the PS's TACQ >= 10 us warning for
+             VDDHDIV5); sample-and-hold at a lattice point (a push at
              t is not seen by a sample at t, is at t + 1 ns); LIMITH/LIMITL at
              DONE; EasyDMA (PTR latched at START, MAXCNT, AMOUNT, END, a
              result without START dropped, STOP ends the buffer); SAMPLE while
@@ -421,15 +422,20 @@ def group_registers(env, f):
             out.append(f"diff {p_uv}-{n_uv} -> {s.result(0)}")
             s.w(ch(0, "PSELN"), 0)
         # PSELP = VDD (input 8) and VDDHDIV5 (input 9 / 5).
-        for pselp, inp, uv, conv in ((9, 8, 2_950_000, lambda u: u), (0x0D, 9, 4_200_000, lambda u: (2 * u + 5) // 10)):
+        # VDDHDIV5 at TACQ 10 us (the PS minimum for it, no warning), then at
+        # 5 us: converted as is, with the warning naming 5 us (ADR-008
+        # Amendment 6; the warning is once per model, so the order matters).
+        for pselp, inp, uv, conv, tacq in ((9, 8, 2_950_000, lambda u: u, 0),
+                                           (0x0D, 9, 4_200_000, lambda u: (2 * u + 5) // 10, 2),
+                                           (0x0D, 9, 3_700_000, lambda u: (2 * u + 5) // 10, 1)):
             s.run_to((s.now // L_NS + 1) * L_NS)
-            setup_single(s, config(tacq=0), pselp=pselp, res=2)
+            setup_single(s, config(tacq=tacq), pselp=pselp, res=2)
             s.push([(s.now, inp, uv)])
             s.w(SAMPLE, 1)
-            s.run(5 * US)
+            s.run(TACQ[tacq] + 5 * US)
             want = code(conv(uv))
-            f.check(s.result(0) == want, f"PSELP {pselp:#x}: {s.result(0)}, expected {want}")
-            out.append(f"pselp {pselp:#x} uv={uv} -> {s.result(0)}")
+            f.check(s.result(0) == want, f"PSELP {pselp:#x} TACQ {TACQ[tacq]}: {s.result(0)}, expected {want}")
+            out.append(f"pselp {pselp:#x} tacq={TACQ[tacq]} uv={uv} -> {s.result(0)}")
         print("  transfer: 8 gains x {internal, VDD/4} x 6 inputs, differential, PSELP = VDD, VDDHDIV5")
 
         # Sample-and-hold at a lattice point: push at T; a sample at T reads
@@ -578,6 +584,11 @@ def group_registers(env, f):
         f.check(s.error()[0] & 1 == 1, "a late push did not set the error word")
         s.w(PORT + 4, 0)
         print("  host port: a late push sets the error word")
+        log = s.log.read_text(errors="replace")
+        vddh = [ln.split("bb_nrf52_saadc: ", 1)[1] for ln in log.splitlines() if "VDDHDIV5 as input" in ln]
+        f.check(vddh == ["VDDHDIV5 as input with TACQ 5 us: the PS requires 10 us or longer; converted as is"],
+                f"VDDHDIV5 TACQ warning: {vddh}")
+        print("  VDDHDIV5: TACQ 10 us converts silently; TACQ 5 us converts with the PS-limit warning, once")
         out.append(f"warnings {s.tail().count('bb_nrf52_saadc')}")
     finally:
         s.close()

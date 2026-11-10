@@ -239,7 +239,9 @@ the host); `bench` (file name, text, sha256, option set and its card);
 instance: package, version, view, requested fidelity, the rung it was
 chosen at, provenance `source` and `confidence`, its qualifications and
 whether one covers the run; and per loading `adc_in`, its `pin_load` view
-under the bound pin, `kind = "pin_load"`); `out_of_scope` and `not_simulated` (with
+under the bound pin, `kind = "pin_load"`; an explicit `load = "none"` on
+an `adc_in` binding is recorded the same way, with `view = "none"` and only
+`ref`, `package`, `version` and `kind`); `out_of_scope` and `not_simulated` (with
 reasons); `packages` and `platforms` (the locked hashes); `deck_sha256`;
 `options` (every run option that can change results, the probes); and
 `versions`. `bb run` flags a view whose provenance is `estimated` or

@@ -474,7 +474,7 @@ startup-perf: firmware bb
 # it uses the pool.
 POOL_EQUIV_OUT    ?= out/pool-equiv
 POOL_EQUIV_ROUNDS ?= 2
-pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare
+pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare
 	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
 	    "dms-rail;$(DMS_RAIL_GOLD)/ok-cold/outputs.sha256;nongrant;$(DMS_RAIL_ARGS)" \
 	    "dms-rail-ref;$(DMS_RAIL_GOLD)/ok-cold/outputs.sha256;all;$(DMS_RAIL_ARGS) --max-quantum 10us" \
@@ -496,7 +496,9 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare
 	    "nrf-feedback-off;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead off" \
 	    "nrf-feedback-noplugin;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead-plugin never" \
 	    "nrf-saadc;$(NRF_SAADC_HASHES);nongrant;$(NRF_SAADC_ARGS)" \
-	    "nrf-saadc-ref;$(NRF_SAADC_HASHES);all;$(NRF_SAADC_ARGS) --lookahead off --adc-push every"
+	    "nrf-saadc-ref;$(NRF_SAADC_HASHES);all;$(NRF_SAADC_ARGS) --lookahead off --adc-push every" \
+	    "dms-vsense;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;nongrant;$(DMS_VSENSE_ARGS)" \
+	    "dms-vsense-ref;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;all;$(DMS_VSENSE_ARGS) --lookahead off --adc-push every"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -896,27 +898,31 @@ dms-firmware: bb
 # --- Phase 1 M8 (second half): E2, battery reading and LED shed on dial-me-spinner ---------
 # examples/dial-me-spinner with firmware/prebuilt/vsense.elf (a reading every 1 s) and
 # vsense_50ms.elf (every 50 ms) on U10's SAADC, the loading adc_in on VSYS_SENSE (ADR-008 D7-D8),
-# bench/vsense.toml (the suite's sample-rate worst case) and bench/sag.toml (the battery ramps
-# down through the LED shed). Runs use copies of the project off /mnt/c (scripts/dms_vsense.sh;
+# bench/vsense.toml (the suite's sample-rate worst case), bench/sag.toml (the battery ramps
+# down through the LED shed) and bench/sag-recover.toml (it dips through the shed and comes back
+# above the restore threshold). Runs use copies of the project off /mnt/c (scripts/dms_vsense.sh;
 # $(DMS_VSENSE_WORK)), one with load = "none" per loaded case and one with C5 fitted at 10 nF.
 .PHONY: pooled-dms-vsense pooled-dms-vsense-test dms-vsense-ref dms-vsense-update dms-vsense-prepare \
         cost-table-dms-vsense
 DMS_VSENSE_OUT  ?= out/dms-vsense
 DMS_VSENSE_WORK ?= $(HOME)/.cache/bb-dms-vsense
+DMS_VSENSE_GOLD := tests/golden/dms-vsense
 export DMS_VSENSE_WORK
 DMS_VSENSE_ARGS  = --project $(DMS_VSENSE_WORK)/proj-50ms --bench $(DMS_VSENSE_WORK)/proj-50ms/bench/vsense.toml \
                    --for 650ms --probe net:VSYS_SENSE --sample-rate 10kHz
 
 # In `make test`: s50, s50-none, c5 and c5-none at bb's defaults, check_dms_vsense.py on them (the
-# analog side against load = "none", the codes, the C5 / 10 fault) and their committed one-cell
-# hashes (non-grant records, nets.csv, nets.vcd).
+# analog side against load = "none", the codes, the C5 / 10 fault), their committed one-cell
+# hashes (non-grant records, nets.csv, nets.vcd) and run.json's record of each binding's load.
 pooled-dms-vsense-test: bb
 	bash scripts/dms_vsense.sh test $(BB) $(DMS_VSENSE_OUT)-test
 
-# The plan's M8 gate (E2): every case (s1, s1-none, s50, s50-none, c5, c5-none, sag) at bb's
+# The plan's M8 gate (E2): every case (s1, s1-none, s50, s50-none, c5, c5-none, sag, rec) at bb's
 # defaults and as its every-lattice-point reference (--lookahead off --adc-push every),
 # check_dms_vsense.py on both, the references equal to tests/golden/dms-vsense, the defaults equal
-# to them except grant records, analog-first byte-identical, the TACQ refusal, 10-run determinism.
+# to them except grant records, analog-first byte-identical, s50 at two other grant partitions
+# (--max-quantum 1ms; 3ms with --verify every), run.json's load records, the TACQ refusal, 10-run
+# determinism. make pool-equiv has s50 (defaults and reference).
 pooled-dms-vsense: bb
 	bash scripts/dms_vsense.sh gate $(BB) $(DMS_VSENSE_OUT)
 
