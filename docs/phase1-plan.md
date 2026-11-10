@@ -1117,6 +1117,11 @@ Each was re-checked before anything changed. What became of each:
   lines, none failing), `make dms-m5b` (20/20),
   `make dms-vectors-check`, `make dms-source` with `DMS_REPO` (20 files,
   1 package origin), `make demo`. `git status` is clean after the commit.
+  At that commit (`aba44e9`), `make stranger-test-container` with
+  `--apt-mirror http://mirrors.edge.kernel.org/ubuntu/` passed: the README
+  block in 119.4 s (limit 900 s), the wrong order failing exactly LSW-3
+  with FW-6.4 passing, both runs equal to the rewritten hashes, and `make
+  demo` inside the container.
 - **Observed once, not caused here:** in the first pooled `make check`,
   `cli/tests/jit_profile.rs` found no JIT profile after the gather run
   (Renode's profile is written on `SIGTERM`); it passed three times in a
