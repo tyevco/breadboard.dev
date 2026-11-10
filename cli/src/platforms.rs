@@ -11,7 +11,7 @@
 //!
 //! A new platform (the nRF52840 of ADR-008) adds a row here.
 
-use bb_cpu_renode::{PLUGIN_SOURCES, STM32F072_BB_REPL, STM32F103_OFFLINE_REPL};
+use bb_cpu_renode::{NRF52840_BB_REPL, PLUGIN_SOURCES, STM32F072_BB_REPL, STM32F103_OFFLINE_REPL};
 
 /// The Renode release every platform is built and pinned for.
 pub const RENODE_VERSION: &str = "1.17.0";
@@ -36,6 +36,13 @@ pub const PLATFORMS: &[PlatformDef] = &[
         id: "stm32f072-bb@1",
         board_name: "stm32f072",
         repl: ("stm32f072-bb.repl", STM32F072_BB_REPL),
+    },
+    // ADR-008 D1 (Phase 1 M2): no SVD download, 64 MIPS. M8's SAADC model
+    // makes it @2.
+    PlatformDef {
+        id: "nrf52840-bb@1",
+        board_name: "nrf52840",
+        repl: ("nrf52840-bb.repl", NRF52840_BB_REPL),
     },
 ];
 
@@ -87,5 +94,7 @@ mod tests {
         assert_ne!(c[0], c[1]);
         assert!(c.iter().all(|h| h.starts_with("sha256:") && h.len() == 71));
         assert_eq!(find("stm32f072-bb@1").unwrap().board_name, "stm32f072");
+        assert_eq!(find("nrf52840-bb@1").unwrap().board_name, "nrf52840");
+        assert!(c[2] != c[0] && c[2] != c[1]);
     }
 }

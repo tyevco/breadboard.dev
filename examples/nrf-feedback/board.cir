@@ -1,0 +1,39 @@
+* Breadboard nRF52840 feedback board (Phase 1 M2, ADR-008 D3 nrf-feedback):
+* examples/feedback's circuit on Breadboard's nRF52840 (nrf52840-bb@1).
+*
+*   U1.P0.13 -> 25 ohm (zout glue) -> R2 1k -> SENSE; C1 1 uF SENSE -> GND
+*   SENSE -> U1.P0.11 (digital_in: vih 2.0 V, vil 0.8 V, cin 5 pF)
+*   U1.P0.15 -> R3 330 ohm -> LED_B -> D2 (red LED) -> GND
+*
+* Firmware (engines/cpu-renode/tests/firmware/nrf52840/nrf_feedback.c): RTC0
+* toggles P0.13 every 1638 LFCLK ticks (49.987793 ms); GPIOTE channel 0
+* interrupts on both edges of P0.11 and its ISR copies P0.11 to P0.15. The
+* CPU sleeps in WFI.
+*
+* The circuit and the pin-model parameters are examples/feedback's, so
+* scripts/check_feedback.py --nrf checks it with the same analytic RC
+* crossings (tau = 1025 ohm * (1 uF + 5 pF)). They are not an nRF52840
+* datasheet fit; the nRF's own GPIO views come with its package (M5).
+*
+* The binding graph is U1 -> ngspice (U1.P0.13, U1.P0.15) and ngspice -> U1
+* (U1.P0.11): a feedback loop. bb run loads the lookahead plugin, and
+* lookahead is on by default; --lookahead off gives the one-cell reference
+* (tests/golden/nrf-feedback/outputs.sha256).
+*
+*bb part U1 engine=renode platform=nrf52840
+*bb pin U1.P0.13 net=DRV model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+*bb pin U1.P0.11 net=SENSE model=digital_in vih=2.0 vil=0.8 cin=5e-12
+*bb pin U1.P0.15 net=COPY model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25
+
+* Circuit body. Node 0 is GND.
+R2 DRV SENSE 1k
+C1 SENSE 0 1u
+R3 COPY LED_B 330
+D2 LED_B 0 LED_RED
+
+* Red LED: the spike's model (examples/spike/board.cir).
+.model LED_RED D(IS=1e-18 N=2 RS=2 CJO=10p)
+
+* Solver tolerances, as in the spike.
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

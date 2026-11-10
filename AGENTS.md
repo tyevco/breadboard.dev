@@ -45,6 +45,9 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make adc-renode` | The Renode-only test of the stock ADC model of ADR-003 Amendment 5 (`make -C examples/adc test`, about 15 s; CI job `adc`) |
 | `make ec-reconnect` | ADR-004 Amendment 8: the one-cell references of `examples/adc` (`--lookahead off --adc-push every`) and `examples/feedback` (`--lookahead off`), with the Renode engine replacing its External Control connection every 2 000 messages (`EC_MESSAGES`, passed as `BB_RENODE_EC_MESSAGES`), must give their committed hashes (about 40 s; in `make test`) |
 | `make ec-long` | ADR-004 Amendment 8 long one-cell gate (`scripts/ec_long.sh`, about 2.5 min): the ADC board's every-lattice-point reference over 1 500 ms (`EC_LONG_FOR`; Renode used to crash after 81 746 grants) must finish, reconnect at least once, pass `check_adc.py` and equal the lookahead run except grant records (CI job `adc`) |
+| `make nrf-gates` | Phase 1 M2 gate (ADR-008 D1-D4, D6; Amendment 2): the Renode engine tests `engines/cpu-renode/tests/nrf52840.rs` on Breadboard's nRF52840 (`Platform::Nrf52840Bb`, `nrf52840-bb@1`: no SVD download, 64 MIPS) with the bare-metal gate firmware in `engines/cpu-renode/tests/firmware/nrf52840/` (nrf-blinky edges identical at one-cell grants, 10 ms grants, plugin armed and lookahead on, self-test status exactly 0x3; nrf-ppi; nrf-busywait: a 10 ms nrfx busy-wait takes 6.66 ms of virtual time; the D6 TIMER-compare-then-long-sleep promise clamp; the PIN_CNF audit, mid-run and end-of-run) and the prebuilt Zephyr gate image (nrf-zephyr), then `make nrf-feedback` (about 2 min) |
+| `make nrf-feedback` | ADR-008 D3 board-level gate (in `make test`): `examples/nrf-feedback` (examples/feedback's circuit on the nRF52840: RTC0 drives `U1.P0.13`, GPIOTE IN on `U1.P0.11` copies to `U1.P0.15`) with lookahead on at 1 ms and 10 ms byte-identical to its one-cell `--lookahead off` reference (`tests/golden/nrf-feedback/outputs.sha256`; `make nrf-feedback-ref`), no promise broken, `check_feedback.py --nrf`, and `--engine-order analog-first` byte-identical |
+| `make nrf-costs` | ADR-008 D1: fresh startup and per-grant cost of the nRF52840 blinky at 64 MIPS against the STM32F103 blinky (interleaved, N = `BB_NRF_COST_N`, medians); reports only. Run it on an idle host |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
 | `make startup-perf` | ADR-004 G1: fresh `bb run` engine startup of the spike and the feedback board at least 12 % and 0.3 s below `BB_RENODE_STOCK_RUNTIME=1` (the stock .NET settings, no JIT profile and the 100 ms connect poll), interleaved, N = 7 (`STARTUP_N`), medians, outputs identical; `STARTUP_BASE=<bb>` compares against another binary. Run it on an idle host |
 | `make pool-equiv` | ADR-004 G4: one pool process serves the spike (default, 1 ms, 500 ms), feedback (on, off, plugin never, polling firmware), adc (on, off) and adc-open twice, in alternating order; every pooled run must be leased and byte-identical to its fresh run and to the committed hashes (`scripts/pool_equiv.sh`) |
@@ -63,7 +66,13 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
 
 `make firmware` builds the firmware ELFs (spike, feedback, ADC and the Renode
-lookahead gate firmware in `engines/cpu-renode/tests/firmware`) on their own.
+lookahead gate firmware in `engines/cpu-renode/tests/firmware`, and the
+nRF52840 gate firmware in its `nrf52840/` subdirectory, built against the
+vendored nrfx MDK and CMSIS-Core headers in `nrf52840/vendor/`) on their own.
+The nRF52840's Zephyr gate image is committed prebuilt
+(`nrf52840/zephyr/prebuilt/`, stripped of debug information);
+`scripts/nrf_zephyr_gate.sh` rebuilds it where a Zephyr workspace exists and
+checks the loadable image is unchanged.
 
 ## Repo map
 
@@ -95,11 +104,17 @@ examples/adc/           STM32F072 ADC board (adc_in PA1 reads the divider PA4 dr
 examples/dial-me-spinner/ Phase 1 reference board (dial-me-spinner 6854d25): SOURCE (commits and
                         sha256 of every vendored file), kicad/ (main and base projects; kicad9-dc96515/
                         the secondary KiCad 9 netlists), suite/results.json (the suite re-run, M0)
+examples/nrf-feedback/  examples/feedback's circuit on the nRF52840 (Phase 1 M2; firmware
+                        engines/cpu-renode/tests/firmware/nrf52840/nrf_feedback.c)
+engines/cpu-renode/platforms/nrf52840-bb.repl  Breadboard's nRF52840 (ADR-008 D1); its gate
+                        firmware, vendored headers and Zephyr gate image are in
+                        engines/cpu-renode/tests/firmware/nrf52840/, its tests in tests/nrf52840.rs
 tests/golden/spike/     led_a.csv waveform snapshot, default-run output hashes, partition hashes
 tests/golden/feedback/  SENSE / LED_B snapshots, exact pin_edge list, one-cell reference hashes
 tests/golden/feedback-open/ partition hashes of the one-cell reference
 tests/golden/adc/, adc-open/ hashes of the every-lattice-point one-cell ADC references (ADR-005)
 tests/golden/adc-stock/, adc-open-stock/ the same on the stock ADC model (ADR-003)
+tests/golden/nrf-feedback/ one-cell reference hashes of examples/nrf-feedback (Phase 1 M2)
 spec/                   normative protocol and schema docs (package.md and schema/*.schema.json: ADR-006);
                         changing them needs an ADR
 docs/adr/               architecture decision records
@@ -110,7 +125,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         with_pool.sh, pool_equiv.sh, pool_perf.sh, dms_vendor.sh,
                         dms_source_check.sh, dms_suite.sh (+ dms_suite_plugin.py,
                         dms_suite_collect.py), validate_packages.py, dms_values.py,
-                        check_pins_kicad.py, setup_container_test.sh
+                        check_pins_kicad.py, setup_container_test.sh,
+                        nrf_vendor_headers.sh, nrf_zephyr_gate.sh
 ```
 
 ## The three invariants

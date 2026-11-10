@@ -97,6 +97,15 @@
 //! not stop at a push. The cross-check reads the port's per-channel value
 //! and its error word (a timed input that came too late for a sample).
 //!
+//! On Breadboard's nRF52840 ([`Platform::Nrf52840Bb`], ADR-008 D1-D4) pins
+//! are [`PinSpec::nrf`] (`P0.13` -> `gpio0` pin 13). Renode ignores the
+//! GPIO DRIVE field and keeps direction static for the kernel, so the
+//! engine audits `PIN_CNF` of the pins in [`RenodeConfig::pin_cnf_audit`]:
+//! mid-run, through a peripheral write hook on DIR/DIRSET/DIRCLR and
+//! `PIN_CNF` whose writes become `log` records at their own virtual time
+//! ([`bbcore::Engine::drain_logs`]), and at the end of the run (a pure read,
+//! [`RenodeEngine::pin_cnf_findings`]).
+//!
 //! # Determinism
 //!
 //! Renode is deterministic for a single machine given the same ELF, platform,
@@ -204,6 +213,31 @@ pub const BB_STM32F0_ADC_CS: &str = include_str!("../platforms/bb_stm32f0_adc.cs
 /// Breadboard's STM32F072 overlay (ADR-005 D6), written next to the
 /// generated script for [`Platform::Stm32f072Bb`].
 pub const STM32F072_BB_REPL: &str = include_str!("../platforms/stm32f072-bb.repl");
+
+/// Breadboard's nRF52840, platform `nrf52840-bb@1` (ADR-008 D1): Renode's
+/// stock nRF52840 without the SVD download, at 64 MIPS. Written next to the
+/// generated script for [`Platform::Nrf52840Bb`].
+pub const NRF52840_BB_REPL: &str = include_str!("../platforms/nrf52840-bb.repl");
+
+/// Bus address of `PIN_CNF[0]` of GPIO port `port` on the nRF52840 (P0 at
+/// 0x50000700, P1 at 0x50000A00; nRF52840 PS v1.1 §6.9.2).
+pub fn nrf_pin_cnf_address(port: u32, pin: u32) -> u64 {
+    let base: u64 = if port == 0 { 0x5000_0500 } else { 0x5000_0800 };
+    base + 0x200 + 4 * u64::from(pin)
+}
+
+/// nRF52840 GPIO register offsets (PS v1.1 §6.9.2): DIR, DIRSET, DIRCLR,
+/// and the end of the PIN_CNF[0..31] array.
+const NRF_GPIO_DIR: u64 = 0x14;
+const NRF_GPIO_DIRSET: u64 = 0x18;
+const NRF_GPIO_DIRCLR: u64 = 0x1C;
+const NRF_GPIO_PIN_CNF: u64 = 0x200;
+const NRF_GPIO_PIN_CNF_END: u64 = 0x27F;
+/// `PIN_CNF` after reset: input, input buffer disconnected.
+const NRF_PIN_CNF_RESET: u32 = 0x2;
+
+/// The file in the workdir the `PIN_CNF` write hooks append to.
+const PIN_CNF_WRITES: &str = "pin_cnf_writes.log";
 
 /// Monitor name of the ADC on [`Platform::Stm32f072Bb`].
 pub const BB_ADC_NAME: &str = "bbAdc";
@@ -363,6 +397,11 @@ pub enum Platform {
     /// timers (TRGO) and ADC model (ADR-005). Loads the plugin assembly
     /// before the platform, whatever [`LookaheadCfg::plugin`] says.
     Stm32f072Bb,
+    /// [`NRF52840_BB_REPL`]: Renode's stock nRF52840 without the SVD
+    /// download, at 64 MIPS (`nrf52840-bb@1`, ADR-008 D1). No Breadboard
+    /// peripheral (Phase 1 M2), so it needs the plugin assembly only for the
+    /// lookahead block.
+    Nrf52840Bb,
     /// A path understood by Renode's `LoadPlatformDescription`, e.g. the stock
     /// `platforms/cpus/stm32f103.repl` (relative to the Renode install) or an
     /// absolute path.
@@ -427,6 +466,25 @@ impl PinSpec {
         })
     }
 
+    /// nRF52840 pin (ADR-008 D2): `nrf("P0.13", Output)` -> `gpio0` pin 13.
+    /// `P<port>.<nn>` with P0.00-P0.31 and P1.00-P1.15 (the QIAA package has
+    /// 16 P1 pins; Renode models 32, the rest are refused). The pin number
+    /// is one or two decimal digits (`P0.6` and `P0.06` are the same pin, and
+    /// the name is kept as written).
+    pub fn nrf(name: &str, direction: PinDirection) -> Result<PinSpec, EngineError> {
+        let (port, index) = nrf_pin(name).ok_or_else(|| {
+            EngineError::Other(format!(
+                "not an nRF52840 pin name: {name:?} (expected P0.00-P0.31 or P1.00-P1.15)"
+            ))
+        })?;
+        Ok(PinSpec {
+            name: name.to_string(),
+            gpio: format!("gpio{port}"),
+            index: index as i32,
+            direction,
+        })
+    }
+
     /// An ADC input: pin `name` (e.g. `PA1`) read by channel `channel` of
     /// the ADC peripheral `adc` (e.g. `adc` on `stm32f072.repl`).
     pub fn adc(name: &str, adc: &str, channel: i32) -> PinSpec {
@@ -437,6 +495,169 @@ impl PinSpec {
             direction: PinDirection::Adc,
         }
     }
+}
+
+/// `(port, pin)` of an nRF52840 pin name `P<port>.<n>` (ADR-008 D2):
+/// P0.00-P0.31, P1.00-P1.15; `None` otherwise.
+pub fn nrf_pin(name: &str) -> Option<(u32, u32)> {
+    let (port, n) = name.strip_prefix('P')?.split_once('.')?;
+    if n.is_empty() || n.len() > 2 || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: u32 = n.parse().ok()?;
+    match port {
+        "0" if n < 32 => Some((0, n)),
+        "1" if n < 16 => Some((1, n)),
+        _ => None,
+    }
+}
+
+/// nRF52840 GPIO drive configuration, `PIN_CNF.DRIVE` (bits 8-10; nRF52840
+/// PS v1.1 §6.9.2.10). Renode stores it and ignores it, so the pin model's
+/// parameter set carries the electrical behaviour and the end-of-run audit
+/// reports a mismatch (ADR-008 D4).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NrfDrive {
+    S0S1,
+    H0S1,
+    S0H1,
+    H0H1,
+    D0S1,
+    D0H1,
+    S0D1,
+    H0D1,
+}
+
+impl NrfDrive {
+    const ALL: [NrfDrive; 8] = [
+        NrfDrive::S0S1,
+        NrfDrive::H0S1,
+        NrfDrive::S0H1,
+        NrfDrive::H0H1,
+        NrfDrive::D0S1,
+        NrfDrive::D0H1,
+        NrfDrive::S0D1,
+        NrfDrive::H0D1,
+    ];
+
+    /// The drive of a `PIN_CNF` value.
+    pub fn of_pin_cnf(cnf: u32) -> NrfDrive {
+        NrfDrive::ALL[((cnf >> 8) & 7) as usize]
+    }
+
+    /// One side disconnected (`D0`/`D1`): open drain or open source.
+    pub fn is_open(self) -> bool {
+        matches!(
+            self,
+            NrfDrive::D0S1 | NrfDrive::D0H1 | NrfDrive::S0D1 | NrfDrive::H0D1
+        )
+    }
+}
+
+impl std::fmt::Display for NrfDrive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::str::FromStr for NrfDrive {
+    type Err = String;
+    fn from_str(s: &str) -> Result<NrfDrive, String> {
+        NrfDrive::ALL
+            .into_iter()
+            .find(|d| d.to_string() == s)
+            .ok_or_else(|| {
+                format!(
+                    "{s:?}: not an nRF52840 drive (S0S1, H0S1, S0H1, H0H1, D0S1, D0H1, S0D1, H0D1)"
+                )
+            })
+    }
+}
+
+/// What the board expects of one nRF52840 pin's `PIN_CNF` (ADR-008 D4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PinCnfExpect {
+    /// Bound as `digital_out`, with the drive of its parameter set if the
+    /// binding names one.
+    DigitalOut { drive: Option<NrfDrive> },
+    /// Bound as `digital_in`.
+    DigitalIn,
+    /// Not bound, but its net is in the analog scope: it must not be an
+    /// output, because its net gets no glue.
+    Unbound,
+}
+
+/// One pin of the end-of-run `PIN_CNF` audit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinCnfAudit {
+    /// nRF pin name, e.g. `P0.13`.
+    pub pin: String,
+    pub expect: PinCnfExpect,
+}
+
+/// A disagreement the `PIN_CNF` audit found, for a `log` record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinCnfFinding {
+    pub pin: String,
+    /// The `PIN_CNF` value read.
+    pub cnf: u32,
+    /// `warn`, or `error` for an open-drain or open-source output bound as
+    /// `digital_out`.
+    pub level: bbcore::event::LogLevel,
+    pub msg: String,
+}
+
+/// The audit of one pin: `None` when `cnf` agrees with `expect` (ADR-008
+/// D4: DIR against the bound model, DRIVE against the bound set, an
+/// unbound pin configured as an output; open drain against `digital_out`
+/// is an error).
+pub fn pin_cnf_check(engine: &str, a: &PinCnfAudit, cnf: u32) -> Option<PinCnfFinding> {
+    use bbcore::event::LogLevel;
+    let output = cnf & 1 != 0;
+    let drive = NrfDrive::of_pin_cnf(cnf);
+    let n = nrf_pin(&a.pin).map(|(_, n)| n).unwrap_or(0);
+    let what = format!(
+        "PIN_CNF[{n}] = {cnf:#010x} ({}, drive {drive})",
+        if output { "output" } else { "input" }
+    );
+    let pin = format!("{engine}.{}", a.pin);
+    let (level, msg) = match &a.expect {
+        PinCnfExpect::DigitalOut { .. } if !output => (
+            LogLevel::Warn,
+            format!("{pin} is bound as digital_out but the firmware left it an input: {what}"),
+        ),
+        PinCnfExpect::DigitalOut { .. } if drive.is_open() => (
+            LogLevel::Error,
+            format!(
+                "{pin} is bound as digital_out (push-pull) but the firmware configured an open \
+                 drive: {what}"
+            ),
+        ),
+        PinCnfExpect::DigitalOut { drive: Some(want) } if *want != drive => (
+            LogLevel::Warn,
+            format!("{pin} is bound with drive {want} but the firmware configured {what}"),
+        ),
+        PinCnfExpect::DigitalIn if output => (
+            LogLevel::Warn,
+            format!(
+                "{pin} is bound as digital_in but the firmware configured it as an output: {what}"
+            ),
+        ),
+        PinCnfExpect::Unbound if output => (
+            LogLevel::Warn,
+            format!(
+                "{pin} is not bound, but the firmware configured it as an output and its net is \
+                 in the analog scope (it gets no glue, so nothing drives it): {what}"
+            ),
+        ),
+        _ => return None,
+    };
+    Some(PinCnfFinding {
+        pin: a.pin.clone(),
+        cnf,
+        level,
+        msg: format!("PIN_CNF audit: {msg}"),
+    })
 }
 
 /// How often the engine cross-checks Renode's virtual time and output pin
@@ -531,6 +752,11 @@ pub struct RenodeConfig {
     /// [`EC_MESSAGES_ENV`], else [`EC_MESSAGES_DEFAULT`].
     #[doc(hidden)]
     pub ec_messages_per_connection: u64,
+    /// The nRF52840 pins the end-of-run `PIN_CNF` audit reads (ADR-008 D4;
+    /// [`Platform::Nrf52840Bb`] only). Empty: no audit. The audit reads
+    /// after the last grant, so it never changes a result; its findings are
+    /// available from [`RenodeEngine::pin_cnf_findings`].
+    pub pin_cnf_audit: Vec<PinCnfAudit>,
 }
 
 /// The default of [`RenodeConfig::ec_messages_per_connection`]: a quarter
@@ -570,6 +796,17 @@ impl RenodeConfig {
             extra_monitor: Vec::new(),
             pool: pool::from_env(),
             ec_messages_per_connection: ec_messages_from_env(),
+            pin_cnf_audit: Vec::new(),
+        }
+    }
+
+    /// Breadboard's nRF52840 (`nrf52840-bb@1`, ADR-008 D1) with P0.13 as an
+    /// output and a 10 us quantum.
+    pub fn nrf52840(renode: PathBuf, firmware: PathBuf) -> RenodeConfig {
+        RenodeConfig {
+            platform: Platform::Nrf52840Bb,
+            pins: vec![PinSpec::nrf("P0.13", PinDirection::Output).expect("valid pin")],
+            ..RenodeConfig::stm32f103(renode, firmware)
         }
     }
 }
@@ -867,6 +1104,7 @@ impl JitProfile {
         let platform = match &cfg.platform {
             Platform::Stm32f103Offline => STM32F103_OFFLINE_REPL.as_bytes().to_vec(),
             Platform::Stm32f072Bb => STM32F072_BB_REPL.as_bytes().to_vec(),
+            Platform::Nrf52840Bb => NRF52840_BB_REPL.as_bytes().to_vec(),
             // A path inside the Renode install (e.g. `platforms/cpus/...`)
             // is keyed by its name; the install is in the key already.
             Platform::Repl(p) => std::fs::read(p).unwrap_or_else(|_| p.as_bytes().to_vec()),
@@ -1045,6 +1283,20 @@ pub struct RenodeEngine {
     jit: Option<JitProfile>,
     /// What [`RenodeEngine::reconnect`] needs (ADR-004 Amendment 8).
     ec: EcConnection,
+    /// [`RenodeConfig::pin_cnf_audit`].
+    pin_cnf_audit: Vec<PinCnfAudit>,
+    /// Mid-run `PIN_CNF` audit (ADR-008 D4): the hooks' file, how much of
+    /// it has been read, and per audited pin its `PIN_CNF` as written so
+    /// far and the finding last reported for it.
+    pin_cnf_writes: PathBuf,
+    pin_cnf_read: u64,
+    pin_cnf_state: Vec<(u32, Option<String>)>,
+    /// Log records not yet drained (a write stamped after the current
+    /// grant's end waits for the next one).
+    logs: Vec<bbcore::LogRecord>,
+    /// The findings of the last end-of-run `PIN_CNF` audit (ADR-008 D4),
+    /// shared with whoever holds [`RenodeEngine::pin_cnf_findings`].
+    pin_cnf_findings: std::sync::Arc<Mutex<Option<Vec<PinCnfFinding>>>>,
 }
 
 /// The External Control connection's parameters, for reconnecting.
@@ -1168,6 +1420,11 @@ impl RenodeEngine {
                 std::fs::write(&p, STM32F072_BB_REPL)?;
                 monitor_path(&p)?
             }
+            Platform::Nrf52840Bb => {
+                let p = workdir.join("platform.repl");
+                std::fs::write(&p, NRF52840_BB_REPL)?;
+                monitor_path(&p)?
+            }
             Platform::Repl(p) => monitor_path(Path::new(p))?,
         };
         let port = free_port()?;
@@ -1176,6 +1433,17 @@ impl RenodeEngine {
             return Err(EngineError::Other(
                 "lookahead enabled without the lookahead plugin".into(),
             ));
+        }
+        if !cfg.pin_cnf_audit.is_empty() && cfg.platform != Platform::Nrf52840Bb {
+            return Err(EngineError::Other(
+                "the PIN_CNF audit is for the nRF52840 platform only".into(),
+            ));
+        }
+        if let Some(a) = cfg.pin_cnf_audit.iter().find(|a| nrf_pin(&a.pin).is_none()) {
+            return Err(EngineError::Other(format!(
+                "PIN_CNF audit: {:?} is not an nRF52840 pin name",
+                a.pin
+            )));
         }
         let plugin_err = workdir.join(PLUGIN_ERR);
         // The plugin assembly holds the lookahead block and the platform's
@@ -1229,12 +1497,38 @@ impl RenodeEngine {
             (String::new(), String::new())
         };
         let extra: String = cfg.extra_monitor.iter().map(|l| format!("{l}\n")).collect();
+        // ADR-008 D4, mid-run: a write hook on each audited GPIO port's
+        // DIR/DIRSET/DIRCLR and PIN_CNF registers appends `<t_ns> <port>
+        // <offset> <value>` to a file in the workdir; the engine reads it
+        // after every advance. The hook returns the value unchanged, so the
+        // emulation is not affected.
+        let pin_cnf_log = workdir.join(PIN_CNF_WRITES);
+        let mut ports: Vec<u32> = cfg
+            .pin_cnf_audit
+            .iter()
+            .filter_map(|a| nrf_pin(&a.pin).map(|(p, _)| p))
+            .collect();
+        ports.sort_unstable();
+        ports.dedup();
+        let log_path = monitor_path(&pin_cnf_log)?;
+        let pin_cnf_hooks: String = ports
+            .iter()
+            .map(|p| {
+                format!(
+                    "sysbus SetHookBeforePeripheralWrite sysbus.gpio{p} \"[(f.write('%d {p} %d %d' % \
+                     (machine.LocalTimeSource.ElapsedVirtualTime.Ticks, offset, value) + chr(10)), \
+                     f.close()) for f in [open('{log_path}', 'a')]]\" <{:#x}, {:#x}>\n",
+                    NRF_GPIO_DIR, NRF_GPIO_PIN_CNF_END
+                )
+            })
+            .collect();
         let script = format!(
             "{plugin_load}\
              mach create \"{machine}\"\n\
              machine LoadPlatformDescription @{platform}\n\
              {lookahead_map}\
              sysbus LoadELF @{elf}\n\
+             {pin_cnf_hooks}\
              emulation SetSeed {seed}\n\
              emulation SetGlobalQuantum \"{quantum}\"\n\
              emulation SetGlobalSerialExecution true\n\
@@ -1469,7 +1763,109 @@ impl RenodeEngine {
                 deferred: None,
                 stats: LookaheadStats::default(),
             },
+            pin_cnf_audit: cfg.pin_cnf_audit.clone(),
+            pin_cnf_writes: pin_cnf_log,
+            pin_cnf_read: 0,
+            pin_cnf_state: vec![(NRF_PIN_CNF_RESET, None); cfg.pin_cnf_audit.len()],
+            logs: Vec::new(),
+            pin_cnf_findings: Default::default(),
         })
+    }
+
+    /// Read the `PIN_CNF` write hooks' new lines (ADR-008 D4) and turn each
+    /// write that leaves an audited pin disagreeing with its binding (or
+    /// disagreeing differently) into a `warn`/`error` log record stamped
+    /// with the write's own virtual time (the lattice rule of GPIO events:
+    /// a stamp on a lattice point is reported 1 fs after it). That time does
+    /// not depend on the grant partition. Only complete lines are consumed.
+    fn poll_pin_cnf_writes(&mut self) -> Result<(), EngineError> {
+        if self.pin_cnf_audit.is_empty() {
+            return Ok(());
+        }
+        let len = match std::fs::metadata(&self.pin_cnf_writes) {
+            Ok(m) => m.len(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        if len <= self.pin_cnf_read {
+            return Ok(());
+        }
+        let mut f = std::fs::File::open(&self.pin_cnf_writes)?;
+        std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(self.pin_cnf_read))?;
+        let mut buf = String::new();
+        f.read_to_string(&mut buf)?;
+        let Some(end) = buf.rfind('\n') else {
+            return Ok(());
+        };
+        self.pin_cnf_read += end as u64 + 1;
+        for line in buf[..end].lines() {
+            let bad = || EngineError::Protocol(format!("PIN_CNF write hook: bad line {line:?}"));
+            let v: Vec<u64> = line
+                .split_whitespace()
+                .map(|x| x.parse().map_err(|_| bad()))
+                .collect::<Result<_, _>>()?;
+            let [t_ns, port, offset, value] = v[..] else {
+                return Err(bad());
+            };
+            let value = value as u32;
+            let t = lattice_edge_time(t_ns, self.quantum_ns);
+            for i in 0..self.pin_cnf_audit.len() {
+                let Some((p, n)) = nrf_pin(&self.pin_cnf_audit[i].pin) else {
+                    continue;
+                };
+                if u64::from(p) != port {
+                    continue;
+                }
+                let bit = value >> n & 1 != 0;
+                let old = self.pin_cnf_state[i].0;
+                let cnf = match offset {
+                    NRF_GPIO_DIR => (old & !1) | u32::from(bit),
+                    NRF_GPIO_DIRSET if bit => old | 1,
+                    NRF_GPIO_DIRCLR if bit => old & !1,
+                    o if o == NRF_GPIO_PIN_CNF + 4 * u64::from(n) => value,
+                    _ => continue,
+                };
+                self.pin_cnf_state[i].0 = cnf;
+                let finding = pin_cnf_check(&self.name, &self.pin_cnf_audit[i], cnf);
+                let msg = finding.as_ref().map(|f| f.msg.clone());
+                if msg == self.pin_cnf_state[i].1 {
+                    continue;
+                }
+                self.pin_cnf_state[i].1 = msg;
+                if let Some(f) = finding {
+                    self.logs.push(bbcore::LogRecord {
+                        t,
+                        level: f.level,
+                        msg: f.msg.replacen("PIN_CNF audit:", "PIN_CNF write:", 1),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The findings of the end-of-run `PIN_CNF` audit (ADR-008 D4): a
+    /// handle that stays valid after the engine is moved into a scheduler.
+    /// `None` until [`bbcore::Engine::end_of_run`] has run the audit (or
+    /// when no pin is audited); then the findings in audit order, empty when
+    /// every pin agrees.
+    pub fn pin_cnf_findings(&self) -> std::sync::Arc<Mutex<Option<Vec<PinCnfFinding>>>> {
+        self.pin_cnf_findings.clone()
+    }
+
+    /// Read `PIN_CNF` of every audited pin (a pure `SYSTEM_BUS` read: the
+    /// register has no read side effect) and check it (ADR-008 D4).
+    pub fn pin_cnf_audit(&mut self) -> Result<Vec<PinCnfFinding>, EngineError> {
+        let audit = self.pin_cnf_audit.clone();
+        let mut out = Vec::new();
+        for a in &audit {
+            let (port, n) = nrf_pin(&a.pin).ok_or_else(|| {
+                EngineError::Other(format!("PIN_CNF audit: {}: not an nRF pin", a.pin))
+            })?;
+            let cnf = self.sysbus_read_u32s(nrf_pin_cnf_address(port, n), 1)?[0];
+            out.extend(pin_cnf_check(&self.name, a, cnf));
+        }
+        Ok(out)
     }
 
     /// The lookahead block's startup snapshot (self-test result), if the
@@ -1705,6 +2101,18 @@ impl Engine for RenodeEngine {
         Some(Time::from_ns(self.quantum_ns))
     }
 
+    /// The mid-run `PIN_CNF` findings (ADR-008 D4) up to the current time;
+    /// one stamped after it (a write at the grant end, lattice rule) waits
+    /// for the next advance.
+    fn drain_logs(&mut self) -> Vec<bbcore::LogRecord> {
+        let now = self.now;
+        let (ready, later) = std::mem::take(&mut self.logs)
+            .into_iter()
+            .partition(|r| r.t <= now);
+        self.logs = later;
+        ready
+    }
+
     /// ADR-005 D3: an ADC input on Breadboard's model is sampled. The model
     /// reads it only at its sample instants, each a clock limit at or after
     /// the lookahead promise, and a push changes nothing else in Renode.
@@ -1738,6 +2146,7 @@ impl Engine for RenodeEngine {
         let from = self.now;
         self.la.cached = None;
         self.advance_inner(t).map_err(|e| self.failure(e))?;
+        self.poll_pin_cnf_writes().map_err(|e| self.failure(e))?;
         if let Some((_, until)) = promise {
             if let Err(e) = self.audit(from, until) {
                 return Err(match e {
@@ -1813,6 +2222,14 @@ impl Engine for RenodeEngine {
                  Amendment 8)",
                 self.name, self.ec.reconnects, self.ec.messages_per_connection
             );
+        }
+        // ADR-008 D4: read after the last grant, so it changes no result.
+        if !self.pin_cnf_audit.is_empty() {
+            let found = self.pin_cnf_audit().map_err(|e| self.failure(e))?;
+            *self
+                .pin_cnf_findings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(found);
         }
         if self.verify == Verify::Every {
             return Ok(());
@@ -2362,6 +2779,80 @@ mod tests {
         assert_eq!((p.gpio.as_str(), p.index), ("gpioPortC", 13));
         assert!(PinSpec::stm32("PA16", PinDirection::Output).is_err());
         assert!(PinSpec::stm32("A5", PinDirection::Output).is_err());
+    }
+
+    /// ADR-008 D2: P0.00-P0.31 and P1.00-P1.15 map to gpio0/gpio1; P1.16
+    /// and above are refused although Renode models 32 P1 pins.
+    #[test]
+    fn nrf_pin_names() {
+        let p = PinSpec::nrf("P0.13", PinDirection::Output).unwrap();
+        assert_eq!(
+            (p.gpio.as_str(), p.index, p.name.as_str()),
+            ("gpio0", 13, "P0.13")
+        );
+        let p = PinSpec::nrf("P0.06", PinDirection::Input).unwrap();
+        assert_eq!((p.gpio.as_str(), p.index), ("gpio0", 6));
+        let p = PinSpec::nrf("P1.15", PinDirection::Input).unwrap();
+        assert_eq!((p.gpio.as_str(), p.index), ("gpio1", 15));
+        assert_eq!(nrf_pin("P0.00"), Some((0, 0)));
+        assert_eq!(nrf_pin("P0.31"), Some((0, 31)));
+        for bad in [
+            "P0.32", "P1.16", "P1.31", "P2.00", "P0.", "P0.123", "P0.1a", "PA5", "P013", "p0.13",
+        ] {
+            assert!(PinSpec::nrf(bad, PinDirection::Output).is_err(), "{bad}");
+        }
+        assert_eq!(nrf_pin_cnf_address(0, 0), 0x5000_0700);
+        assert_eq!(nrf_pin_cnf_address(0, 13), 0x5000_0734);
+        assert_eq!(nrf_pin_cnf_address(1, 15), 0x5000_0A3C);
+    }
+
+    /// ADR-008 D4: the PIN_CNF checks, one case per rule.
+    #[test]
+    fn pin_cnf_checks() {
+        use bbcore::LogLevel;
+        let out = |drive| PinCnfAudit {
+            pin: "P0.13".into(),
+            expect: PinCnfExpect::DigitalOut { drive },
+        };
+        let input = PinCnfAudit {
+            pin: "P0.11".into(),
+            expect: PinCnfExpect::DigitalIn,
+        };
+        let unbound = PinCnfAudit {
+            pin: "P0.20".into(),
+            expect: PinCnfExpect::Unbound,
+        };
+        let cnf = |output: bool, drive: u32| u32::from(output) | (drive << 8);
+        let level = |a: &PinCnfAudit, c| pin_cnf_check("U1", a, c).map(|f| f.level);
+        // Agreement.
+        assert_eq!(level(&out(None), cnf(true, 3)), None);
+        assert_eq!(level(&out(Some(NrfDrive::S0S1)), cnf(true, 0)), None);
+        assert_eq!(level(&input, cnf(false, 0)), None);
+        assert_eq!(level(&input, cnf(false, 3)), None);
+        assert_eq!(level(&unbound, cnf(false, 0)), None);
+        // DIR against the model.
+        assert_eq!(level(&out(None), cnf(false, 0)), Some(LogLevel::Warn));
+        assert_eq!(level(&input, cnf(true, 0)), Some(LogLevel::Warn));
+        // DRIVE against the set; open drain against digital_out.
+        let f = pin_cnf_check("U1", &out(Some(NrfDrive::S0S1)), cnf(true, 3)).unwrap();
+        assert_eq!(f.level, LogLevel::Warn);
+        assert_eq!(
+            f.msg,
+            "PIN_CNF audit: U1.P0.13 is bound with drive S0S1 but the firmware configured \
+             PIN_CNF[13] = 0x00000301 (output, drive H0H1)"
+        );
+        for open in [4, 5, 6, 7] {
+            assert_eq!(level(&out(None), cnf(true, open)), Some(LogLevel::Error));
+            assert_eq!(
+                level(&out(Some(NrfDrive::S0S1)), cnf(true, open)),
+                Some(LogLevel::Error)
+            );
+        }
+        // An unbound output on an analog-scope net.
+        assert_eq!(level(&unbound, cnf(true, 0)), Some(LogLevel::Warn));
+        assert_eq!("H0H1".parse::<NrfDrive>(), Ok(NrfDrive::H0H1));
+        assert!("H1H1".parse::<NrfDrive>().is_err());
+        assert_eq!(NrfDrive::of_pin_cnf(0x0000_0603), NrfDrive::S0D1);
     }
 
     #[test]

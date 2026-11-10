@@ -18,7 +18,8 @@
 # non-grant-records, `make golden-update`) and pass check_feedback.py; both
 # `on` runs must match it byte for byte in nets.csv, nets.vcd and every
 # non-grant record. For the first firmware (the WFI board) the on-10ms run
-# must take at most <max-grants> grants.
+# must take at most <max-grants> grants. CHECK_FEEDBACK_ARGS (e.g. --nrf,
+# examples/nrf-feedback) is passed to check_feedback.py.
 set -euo pipefail
 
 bb=$1 out=$2 max_grants=$3
@@ -78,7 +79,9 @@ for c in "${cases[@]}"; do
         echo "lookahead-equiv: FAIL: $name one-cell reference differs from $hashes"
         status=1
     fi
-    python3 "$here/check_feedback.py" "$ref" | sed "s/^/lookahead-equiv: $name off: /" || status=1
+    # shellcheck disable=SC2086
+    python3 "$here/check_feedback.py" "$ref" ${CHECK_FEEDBACK_ARGS:-} \
+        | sed "s/^/lookahead-equiv: $name off: /" || status=1
     for m in on-1ms on-10ms; do
         d=$out/$name/$m
         grep -q '^bb run: lookahead: .* 0 promises broken$' "$d.log" \

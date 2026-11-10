@@ -1,0 +1,9 @@
+# nrf-zephyr gate image, built by scripts/nrf_zephyr_gate.sh --update
+board nrf52840dk/nrf52840
+zephyr 76280bce2a050376d57e14240687b5c283dea0e7 (76280bce2)
+hal_nordic c708b9fe1b7a36090c468374811a6e934b97e54a
+cmsis 512cc7e895e8491696b61f7ba8066b4a182569b8
+cmsis_6 1c1840af7a7e757d6e2fec3ddb0e5ce0dfcc93c8
+sdk zephyr-sdk-1.0.1 1.0.1
+app 9c5652d1a12dcbf6849530664d11745a03505e3e6d71391005ddc46ad1714665
+image ed1becf2673e5d35c56c1444655791804e1b3c3ed5bc4d2718102b871a1ba951

@@ -52,8 +52,13 @@ use bbpkg::value::{to_f64, Dim};
 
 use crate::platforms;
 
-/// The platforms `bb run` supports.
-pub const PLATFORMS: [&str; 2] = ["stm32f103", "stm32f072"];
+/// The platforms `bb run` supports. `nrf52840` (Phase 1 M2, ADR-008 D1/D2)
+/// is Breadboard's nRF52840 (`nrf52840-bb@1`: Renode's stock nRF52840
+/// without the SVD download, at 64 MIPS). Its pins are written
+/// `<ref>.P<port>.<nn>` (`U1.P0.13`; the reference ends at the first `.`);
+/// P0.00-P0.31 and P1.00-P1.15. It has no ADC model yet (the SAADC is M8),
+/// so `adc_in` is refused there.
+pub const PLATFORMS: [&str; 3] = ["stm32f103", "stm32f072", "nrf52840"];
 
 /// A part simulated by a CPU engine.
 #[derive(Clone, Debug, PartialEq)]
@@ -854,6 +859,28 @@ mod tests {
         assert_eq!(adc_channel("stm32f072", "PC6"), None);
         assert_eq!(adc_channel("stm32f103", "PA1"), None);
         assert!(parse("*bb part U1 engine=renode platform=stm32f4\n").is_err());
+    }
+
+    /// Phase 1 M2 (ADR-008 D2): nRF52840 pins `<ref>.P<port>.<nn>` split at
+    /// the first `.`; no `adc_in` until the SAADC model (M8).
+    #[test]
+    fn nrf52840_pins() {
+        let part = "*bb part U1 engine=renode platform=nrf52840\n";
+        let b = parse(&format!(
+            "{part}*bb pin U1.P0.13 net=OUT model=digital_out voh=3.3 vol=0 rise=5ns fall=5ns zout=25\n\
+             *bb pin U1.P0.11 net=SENSE model=digital_in vih=2.0 vil=0.8 cin=5e-12\n"
+        ))
+        .unwrap();
+        assert_eq!(b.parts[0].platform, "nrf52840");
+        assert_eq!(
+            (b.pins[0].part.as_str(), b.pins[0].pin.as_str()),
+            ("U1", "P0.13")
+        );
+        assert_eq!(b.pins[1].kernel_net(), "U1.P0.11");
+        assert!(parse(&format!(
+            "{part}*bb pin U1.P0.02 net=X model=adc_in vref=3.6 bits=12\n"
+        ))
+        .is_err());
     }
 
     #[test]

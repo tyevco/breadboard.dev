@@ -90,7 +90,8 @@ WITH_POOL = env -u BB_RENODE_POOL
 else
 WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
-POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism
+POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
+                  nrf-gates nrf-feedback
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -111,6 +112,7 @@ firmware:
 	$(MAKE) -C examples/feedback/firmware
 	$(MAKE) -C engines/cpu-renode/tests/firmware
 	$(MAKE) -C examples/adc/firmware
+	$(MAKE) -C engines/cpu-renode/tests/firmware/nrf52840
 
 build:
 	$(CARGO) build --workspace --all-targets
@@ -129,6 +131,7 @@ pooled-test:
 	$(MAKE) golden
 	$(MAKE) feedback
 	$(MAKE) feedback-order
+	$(MAKE) nrf-feedback
 	$(MAKE) adc
 	$(MAKE) adc-order
 	$(MAKE) adc-stock
@@ -212,7 +215,7 @@ golden:
 # partition hashes (from its one-cell reference); and the hashes of the ADC
 # boards' every-lattice-point references.
 golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-open-ref \
-               adc-stock-ref adc-open-stock-ref
+               adc-stock-ref adc-open-stock-ref nrf-feedback-ref
 	mkdir -p $(dir $(GOLDEN))
 	$(PYTHON) scripts/golden.py write $(SPIKE_OUT)/nets.csv $(GOLDEN)
 	cd $(SPIKE_OUT) && sha256sum nets.csv events.jsonl nets.vcd > $(CURDIR)/$(SPIKE_HASHES)
@@ -240,6 +243,10 @@ golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-ope
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_OPEN_STOCK_HASHES)
 	cd $(ADC_OUT)-open-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_OPEN_HASHES) \
+	    && rm non-grant-records
+	mkdir -p $(dir $(NRF_FEEDBACK_HASHES))
+	cd $(NRF_FEEDBACK_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
+	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(NRF_FEEDBACK_HASHES) \
 	    && rm non-grant-records
 
 # ADR-003 step 4: examples/feedback, a board with a feedback loop (U1.PA5 ->
@@ -363,6 +370,8 @@ cost-table-runs:
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
 	PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc-stock $(PERF_N) "$(ADC_STOCK_FLAGS)" "" \
 	    - - - -- $(ADC_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/nrf-feedback $(PERF_N) "--lookahead off" "" - - - \
+	    -- $(NRF_FEEDBACK_ARGS)
 
 # ADR-005 step 6 speed gates (scripts/perf_ab.sh, interleaved, N = PERF_N,
 # medians): examples/adc on Breadboard's ADC model (bb defaults) against the
@@ -435,7 +444,10 @@ pool-equiv: firmware bb
 	    "adc-off;$(ADC_HASHES);nongrant;$(ADC_ARGS) --lookahead off" \
 	    "adc-open;$(ADC_OPEN_HASHES);nongrant;$(ADC_OPEN_ARGS)" \
 	    "adc-stock;$(ADC_STOCK_HASHES);nongrant;$(ADC_STOCK_ARGS)" \
-	    "adc-open-stock;$(ADC_OPEN_STOCK_HASHES);nongrant;$(ADC_OPEN_STOCK_ARGS)"
+	    "adc-open-stock;$(ADC_OPEN_STOCK_HASHES);nongrant;$(ADC_OPEN_STOCK_ARGS)" \
+	    "nrf-feedback;$(NRF_FEEDBACK_HASHES);nongrant;$(NRF_FEEDBACK_ARGS)" \
+	    "nrf-feedback-off;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead off" \
+	    "nrf-feedback-noplugin;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead-plugin never"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -447,6 +459,67 @@ POOL_PERF_N   ?= 7
 pool-perf: firmware bb
 	$(BB) pool run --slots 1 -- bash scripts/pool_perf.sh $(BB) $(POOL_PERF_OUT) $(POOL_PERF_N) \
 	    0.5 0.30 1.2 -- "spike;$(SPIKE_ARGS)" "feedback;$(FEEDBACK_ARGS)" "adc;$(ADC_ARGS)"
+
+# --- Phase 1 M2: the nRF52840 platform (ADR-008 D1-D4) ----------------------
+# nrf52840-bb@1 (engines/cpu-renode/platforms/nrf52840-bb.repl), the
+# bare-metal gate firmware in $(NRF_FW) and the prebuilt Zephyr gate image
+# in $(NRF_FW)/zephyr/prebuilt. examples/nrf-feedback is examples/feedback's
+# circuit on the nRF52840 (RTC0 drives U1.P0.13; GPIOTE IN on U1.P0.11 copies
+# to U1.P0.15).
+.PHONY: nrf-gates nrf-feedback nrf-feedback-ref nrf-costs pooled-nrf-gates pooled-nrf-feedback
+NRF_FW            := engines/cpu-renode/tests/firmware/nrf52840
+NRF_FEEDBACK_ELF  := $(NRF_FW)/build/nrf_feedback.elf
+NRF_FEEDBACK_FOR  ?= 500ms
+NRF_FEEDBACK_OUT  ?= out/nrf-feedback
+NRF_FEEDBACK_BOARD_ARGS = --netlist examples/nrf-feedback/board.cir --target U1 \
+                 --for $(NRF_FEEDBACK_FOR) --probe net:SENSE --probe net:LED_B \
+                 --probe net:U1.P0.13 --probe net:U1.P0.11 --probe net:U1.P0.15
+NRF_FEEDBACK_ARGS  = --firmware $(NRF_FEEDBACK_ELF) $(NRF_FEEDBACK_BOARD_ARGS)
+NRF_FEEDBACK_HASHES := tests/golden/nrf-feedback/outputs.sha256
+NRF_MAX_GRANTS    ?= 200
+
+# The board-level nrf-feedback gate (ADR-008 D3; in make test): with
+# lookahead on at max_quantum 1 ms and 10 ms, nets.csv, nets.vcd and every
+# non-grant record are byte-identical to the one-cell --lookahead off
+# reference (the committed $(NRF_FEEDBACK_HASHES)), with no broken promise
+# and at most NRF_MAX_GRANTS grants per 500 ms at 10 ms; the reference passes
+# check_feedback.py --nrf (the analytic RC crossings); and the run with the
+# engines registered in the other order is byte-identical, grant records
+# included.
+pooled-nrf-feedback: firmware bb
+	CHECK_FEEDBACK_ARGS=--nrf bash scripts/lookahead_equiv.sh $(BB) $(NRF_FEEDBACK_OUT) \
+	    $(NRF_MAX_GRANTS) nrf-feedback=$(NRF_FEEDBACK_ELF):$(NRF_FEEDBACK_HASHES) \
+	    -- $(NRF_FEEDBACK_BOARD_ARGS)
+	$(BB) run $(NRF_FEEDBACK_ARGS) --engine-order analog-first --out $(NRF_FEEDBACK_OUT)/order
+	set -e; for f in nets.csv events.jsonl nets.vcd; do \
+	    cmp $(NRF_FEEDBACK_OUT)/nrf-feedback/on-10ms/$$f $(NRF_FEEDBACK_OUT)/order/$$f; done
+	@echo "nrf-feedback: --engine-order analog-first byte-identical to mcu-first"
+
+# Phase 1 M2 gate (ADR-008 D3, the plan's M2 row): the Renode engine tests
+# of engines/cpu-renode/tests/nrf52840.rs (nrf-blinky identical at one-cell
+# grants, 10 ms grants, plugin armed and lookahead on, self-test status 0x3;
+# nrf-ppi; nrf-busywait; the D6 TIMER-compare-then-long-sleep promise
+# clamp; the PIN_CNF audit; nrf-zephyr) and the board-level nrf-feedback.
+# `make pool-equiv` covers the nRF configurations.
+pooled-nrf-gates: firmware bb
+	mkdir -p out
+	BB_REQUIRE_RENODE=1 $(CARGO) test -p bb-cpu-renode --test nrf52840 -- --nocapture 2>&1 \
+	    | tee out/nrf-gates.log | grep -E '^(nrf-|cost:|test |test result)'; \
+	    test $${PIPESTATUS[0]} -eq 0
+	$(MAKE) --no-print-directory pooled-nrf-feedback
+	@echo "nrf-gates: PASS"
+
+# The nrf-feedback one-cell reference, for golden-update.
+nrf-feedback-ref: firmware bb
+	$(BB) run $(NRF_FEEDBACK_ARGS) --lookahead off --out $(NRF_FEEDBACK_OUT)-ref
+	$(PYTHON) scripts/check_feedback.py $(NRF_FEEDBACK_OUT)-ref --nrf
+
+# ADR-008 D1: fresh startup and per-grant cost of the nRF52840 blinky at 64
+# MIPS against the STM32F103 blinky (interleaved, N = BB_NRF_COST_N, default
+# 5, medians). Reports only. Run it on an otherwise idle host.
+nrf-costs: firmware
+	BB_REQUIRE_RENODE=1 $(CARGO) test --release -p bb-cpu-renode --test nrf52840 -- \
+	    --ignored --nocapture --exact nrf_startup_and_grant_costs
 
 # The feedback-open one-cell reference (max_quantum = the lattice), for
 # golden-update.

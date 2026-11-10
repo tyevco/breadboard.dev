@@ -1,0 +1,14 @@
+# Headers for the nRF52840 bare-metal gate firmware (ADR-008 D5), copied
+# unmodified by scripts/nrf_vendor_headers.sh. <sha256>  <path> per file.
+# nrfx: https://github.com/zephyrproject-rtos/hal_nordic c708b9fe1b7a36090c468374811a6e934b97e54a nrfx/bsp/stable/mdk/nrf52/nrf52840 (BSD-3-Clause)
+# cmsis: https://github.com/zephyrproject-rtos/CMSIS_6 1c1840af7a7e757d6e2fec3ddb0e5ce0dfcc93c8 CMSIS/Core/Include (Apache-2.0)
+b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1  cmsis/LICENSE
+be85246cba0b7ebe038b1f0f502646b08c4fe8188addd8450f9b3478928052fe  cmsis/cmsis_compiler.h
+d8910101d0fe12d702bc88b9b9fd06ed0b969a0a52d8a7650cc8d36e628346aa  cmsis/cmsis_gcc.h
+4a4c26d4fe8a7e1843faa25bd21484838b78f72d86debf8aa3e137b4faab405b  cmsis/cmsis_version.h
+5d6f71c32258821ebf371045a5670fe74a1cab49318f8df75344adfe4813de04  cmsis/core_cm4.h
+44294dc3e331deb8daae269793e579cc10920a9b88d133bbaf3a7af65d29f9e4  cmsis/m-profile/armv7m_mpu.h
+56241ce5b4798048f84429e28c1949d30bb907155f0b8351cb36aaaa9cbbeabb  cmsis/m-profile/cmsis_gcc_m.h
+98a5831f4fb7d4bfe74a6c27bacc8bd9533678848ffc24f57a7b95e3424297c9  nrfx/nrf52840.h
+da5cb59f4e5dfb875a90b9abd719de75ab8e6ed3db21086db55788409fb14d51  nrfx/nrf52840_bitfields.h
+0aa0cd173932e4c2ddb7725b0bd9a05b8765b3ef3ec02e610ac7532b4049ab10  nrfx/system_nrf52840.h

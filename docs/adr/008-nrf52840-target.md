@@ -5,7 +5,7 @@
   Written before implementation because D7
   changes the `adc_in` pin model (`spec/pin-model.md`) and D6 fixes a
   lookahead bug in the Renode engine. D6 implemented (M1, 2026-11-09,
-  Amendment 1).
+  Amendment 1). D1-D4 implemented (M2, 2026-11-09, Amendment 2).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -654,7 +654,7 @@ a `la_*` gate. Each bumps the platform major (D1).
 
 | Gate | Milestone | Content |
 | --- | --- | --- |
-| `make nrf-gates` | M2 | D3, including `nrf-busywait` (D1), and D6's TIMER-compare-then-long-sleep firmware (Amendment 1) |
+| `make nrf-gates` | M2 | D3, including `nrf-busywait` (D1), and D6's TIMER-compare-then-long-sleep firmware (Amendment 1); as implemented also `nrf-ppi`, the D4 `PIN_CNF` audit and the board-level `make nrf-feedback` (Amendment 2) |
 | Promise-clamp unit test | M1 | D6 |
 | `make pool-equiv` with nRF configurations | M2 | AGENTS.md rule |
 | `make dms-rail` | M6 | E1: one-cell equivalence, determinism, goldens. The PIN_CNF audit (D4) is clean for the correct firmware |
@@ -796,3 +796,152 @@ identity. Not adopted as proposed:
   1 ms). The run fails either way; only the `at` in the message is not
   the earliest violation. Left as is, since M1 changes nothing outside
   the clamp.
+
+### Amendment 2: D1-D4 as implemented (M2, 2026-11-09)
+
+- **D1, the platform.** `engines/cpu-renode/platforms/nrf52840-bb.repl`
+  (`NRF52840_BB_REPL`, `Platform::Nrf52840Bb`, `RenodeConfig::nrf52840`):
+  `using "platforms/cpus/nrf52840.repl"`, `cpu: PerformanceInMips: 64`, and
+  a replacement `sysbus: init:` block with the four stock `Tag`s and no
+  `ApplySVD`. It names no Breadboard type, so `needs_plugins()` stays false
+  and the plugin assembly (and its cache key) is unchanged; the lookahead
+  block is mapped at 0x5FFF0000 as on the STM32s. The JIT startup profile
+  is keyed by the overlay's text like the other platforms. `bb run` takes
+  `*bb part U1 engine=renode platform=nrf52840`.
+- **D2, pins.** `PinSpec::nrf("P0.13", dir)` -> `gpio0` pin 13, and
+  `bb_cpu_renode::nrf_pin`: P0.00-P0.31 and P1.00-P1.15, one or two digits
+  after the dot (`P0.6` = `P0.06`, the name kept as written); P1.16-P1.31,
+  P2.x and malformed names are refused (unit test `nrf_pin_names`). The
+  board-file pin `U1.P0.13` splits at the first `.` (`board.rs` test
+  `nrf52840_pins`); the generated ngspice source is `V_bb_U1_P0_13`. The
+  package's AIN table belongs to `nordic/nrf52840-qiaa` (M5); until the
+  SAADC model (M8) `bb run` refuses `adc_in` on this platform.
+- **D3, the gates.** Bare-metal gate firmware in
+  `engines/cpu-renode/tests/firmware/nrf52840/` (`nrf_blinky`,
+  `nrf_feedback`, `nrf_ppi`, `nrf_busywait`, `nrf_timer_sleep`,
+  `nrf_pincnf`; 448-580 bytes each), built by `make firmware` with the
+  pinned arm-none-eabi-gcc 13.2.1 against headers vendored unmodified by
+  `scripts/nrf_vendor_headers.sh` into `vendor/` with their sha256s and
+  upstream commits in `vendor/SOURCE`: the nrfx MDK's `nrf52840.h`,
+  `nrf52840_bitfields.h` and `system_nrf52840.h` (hal_nordic `c708b9fe`,
+  BSD-3-Clause) and CMSIS-Core's `core_cm4.h` and the five headers it
+  includes (CMSIS_6 `1c1840af`, Apache-2.0, with its `LICENSE`).
+  `engines/cpu-renode/tests/nrf52840.rs` drives the real engine with the
+  D5 grant rule, as `lookahead.rs` does. `make nrf-gates` runs it and then
+  the board-level `make nrf-feedback`. Results (2026-11-09; identical on
+  the warm pool and with `POOL=0`):
+  - **nrf-blinky:** 6 edges in 300 ms, each within one cell of `k · 1638 /
+    32768 s`, identical at one-cell grants (30 000), 10 ms grants (30),
+    plugin armed (30 000) and lookahead on (45 grants, 37 promises, all
+    honest). The lookahead self-test status is exactly 0x3 (armed, passed)
+    on this CPU.
+  - **nrf-feedback** (`examples/nrf-feedback`, examples/feedback's
+    circuit and pin models on the nRF52840): lookahead on at 1 ms (565
+    grants) and 10 ms (120 grants; at most 200 required) gives `nets.csv`,
+    `nets.vcd` and the non-grant records of the one-cell `--lookahead off`
+    reference (50 000 grants, the committed
+    `tests/golden/nrf-feedback/outputs.sha256`), 0 promises broken; the
+    reference passes `check_feedback.py --nrf` (9 P0.11 transitions within
+    8.8 ns of the analytic RC crossings, every P0.15 edge 1 fs after
+    `ceil_L`); `--engine-order analog-first` is byte-identical, grant
+    records included. In `make test`.
+  - **nrf-ppi:** TIMER1 COMPARE0 -> PPI -> GPIOTE OUT toggles P0.14 at
+    `k` ms + 1 fs: with the compare on a lattice point, stock PPI's
+    deferred task lands in the same cell (lattice rule 3), and the ISR's
+    P0.16 follows 125 ns later. Identical in all four modes; with
+    lookahead 60 grants against 2 000. The one-cell latency of an
+    off-lattice compare (Context 2) is not exercised by a 1 MHz timer on
+    the 10 µs lattice and stays a D9 item.
+  - **nrf-busywait (D1):** the nrfx busy-wait (the `SUBS r0,#3; BHI` loop
+    of `nrfx_coredep.h`, `time_us · 64` assumed cycles) for 10 000 µs
+    takes **6.660 ms** of virtual time (0.666 of the request, against the
+    predicted 2·64/(3·64) = 0.667); a 328-tick RTC sleep 10.010 ms
+    (328/32768 s = 10.0098 ms, within one tick). Zephyr (below):
+    `k_busy_wait(10000)` 6.670 ms, `k_msleep(10)` 10.050 ms. The
+    `nordic/nrf52840-qiaa` package (M5) must document both figures.
+  - **D6's TIMER-compare-then-long-sleep (moved from M1):** after TIMER0's
+    compare at 1 ms the next limit is about 2^64 timer ticks away; 12 of
+    13 promises in 120 ms are the clamped `MAX_PROMISE_NS`, every grant is
+    at most 10 ms (17 grants), and the edges equal the reference's.
+  - **nrf-zephyr:** a Zephyr image (GPIO only; no console, UART, logging
+    or boot banner; `BUILD_VERSION` fixed) runs unmodified with identical
+    edges at one-cell grants, 10 ms grants, plugin armed and lookahead on
+    (742 grants against 30 000).
+- **D4, the `PIN_CNF` audit.** `RenodeConfig::pin_cnf_audit` lists the
+  audited pins with what their binding expects (`PinCnfExpect`:
+  `DigitalOut { drive }`, `DigitalIn`, `Unbound`), and
+  `pin_cnf_check` applies D4's rules (DIR against the model; DRIVE against
+  the set; an open drive (`D0`/`D1`) against `digital_out` is `error`; an
+  unbound output on an analog-scope net is `warn`).
+  - **End of run:** `end_of_run` reads `PIN_CNF[n]` of every audited pin
+    (a pure `SYSTEM_BUS` read after the last grant) and publishes the
+    findings through `RenodeEngine::pin_cnf_findings()`; `bb run` writes
+    each as a `log` record at `t_end` (source the part, level `warn` or
+    `error`) and on stderr.
+  - **Mid-run (D4's condition checked: Renode 1.17.0's hooks do observe
+    the writes).** `sysbus SetHookBeforePeripheralWrite` on each audited
+    port, restricted to DIR/DIRSET/DIRCLR and `PIN_CNF` (offsets
+    0x14-0x27F, so OUT/OUTSET/OUTCLR writes never run Python), appends
+    `<t> <port> <offset> <value>` to a file in the engine's workdir and
+    returns the value unchanged. `t` is the time source's elapsed virtual
+    time, the same clock and lattice rule as GPIO events, measured
+    identical for one 25 ms `RunFor` and for 25 of 1 ms. After each
+    advance the engine reads the new lines, tracks each audited pin's
+    configuration, and logs a `PIN_CNF write:` record (through
+    `drain_logs`, at the write's own time) whenever a pin starts to
+    disagree with its binding or disagrees differently; it is silent when
+    a pin returns to agreement. Gate `nrf_pin_cnf_audit_findings`: the
+    five boot-time and ISR-time disagreements of `nrf_pincnf.c` are
+    logged at the same times (1 fs, and 10.010125 ms for a DIRSET in an
+    RTC ISR that the next ISR reverts) at one-cell grants, 10 ms grants
+    and lookahead on; the end-of-run findings are the four that remain;
+    edges are identical with and without the audit. The committed
+    `nrf-feedback` hashes were made before the hooks existed and still
+    match with them.
+  - **What a board file can express.** A Phase 0 board file names no
+    drive set and no unbound pins, so `bb run` audits the bound pins only,
+    with `drive: None` (only open drain is checked against `digital_out`).
+    The drive set comes with package bindings (`set=`, M5) and the unbound
+    analog-scope pins with the importer's netlist (M4/M6); the engine API
+    already takes both.
+- **The pool (D1, AGENTS.md rule).** `make pool-equiv` gains
+  `nrf-feedback` (lookahead on), `nrf-feedback-off` and
+  `nrf-feedback-noplugin` (no lookahead block). PASS: 15 configurations,
+  2 rounds in alternating order, all 30 pooled runs leased from one Renode
+  process and byte-identical to their fresh runs and to the committed
+  hashes. The no-plugin run's `events.jsonl` equals the reference's, grant
+  records included, so that configuration is checked on every file
+  (`all`). Run twice: on M2 alone, and on the committed tree (6 min).
+- **Platform identity (ADR-006 D8).** `nrf52840-bb@1` is a row of M3's
+  `cli/src/platforms.rs` (board name `nrf52840`, its content hash over the
+  overlay and every plugin source); no package names it until M5's
+  `nordic/nrf52840-qiaa`.
+- **Not done here, and why.**
+  - **The Zephyr gate image's identity** is the sha256 of its loadable
+    bytes (`objcopy -O binary` of the committed, debug-stripped ELF) in
+    `zephyr/prebuilt/PROVENANCE`, built from the developer workspace
+    (Zephyr `76280bce`, v4.5.0-rc3, SDK 1.0.1) because the release pin is
+    M6's decision (approver answer 3). `scripts/nrf_zephyr_gate.sh`
+    rebuilds it in a scratch directory and requires the same image (two
+    builds in different directories gave a byte-identical stripped ELF).
+    D5's PT_LOAD image hash comes with `bb flash` (M6).
+- **Costs at 64 MIPS** (Context 3 re-measured, `make nrf-costs`: fresh
+  Renode, interleaved with the STM32F103 blinky, N = 5, medians, load
+  3.4-10): the nRF52840 blinky starts in 1.36 s (STM32F103 1.36 s), a
+  one-cell grant costs 0.287 ms (0.297 ms) and a 10 ms grant 4.91 ms
+  (4.65 ms). Lower than Context 3's figures (taken at a noisier load), and
+  no worse than the STM32F103: the lower MIPS costs nothing measurable.
+  The `make cost-table` row (`examples/nrf-feedback`, README): one-cell
+  reference 13.93 s of simulation for 500 ms (50 000 grants), lookahead on
+  0.52 s (120 grants, 27x); engine startup 1.41 s fresh, 0.05 s from the
+  pool.
+- **`make test` cost.** `make nrf-feedback` (its one-cell reference runs
+  15-40 s depending on load) and the `nrf52840.rs` engine tests inside
+  `cargo-test` (about 50 s, in parallel with the other engine tests).
+- **Gate results on the committed tree** (M2 on top of S1 and M3,
+  `fe80368`, in a separate worktree with its own target directory): `make
+  check` on the pool 4 min 12 s, `make test POOL=0` 4 min 58 s (every
+  Renode fresh), `make nrf-gates` 51 s on the pool and 1 min 1 s with
+  `POOL=0`, `make lookahead-equiv` PASS on the pool and with `POOL=0`,
+  `make pool-equiv` PASS (above). The same gates had passed on M2 alone
+  (on `f517d43`) before the rebase.

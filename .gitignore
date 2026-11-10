@@ -7,3 +7,5 @@ build/
 .cache/
 .venv/
 __pycache__/
+# Committed prebuilt firmware (ADR-008 D5): the nRF52840 Zephyr gate image.
+!engines/cpu-renode/tests/firmware/nrf52840/zephyr/prebuilt/*.elf

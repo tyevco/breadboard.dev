@@ -2,7 +2,11 @@
 """ADR-003 plan step 4 checks on a `bb run` of examples/feedback or
 examples/feedback-open.
 
-Usage: python3 scripts/check_feedback.py <out_dir> [--open] [--lattice-us 10]
+Usage: python3 scripts/check_feedback.py <out_dir> [--open | --nrf] [--lattice-us 10]
+
+--nrf checks examples/nrf-feedback (Phase 1 M2), the same circuit on the
+nRF52840: U1.P0.13, U1.P0.11 and U1.P0.15 in place of U1.PA5, U1.PB0 and
+U1.PA6, and a drive period of 1638/32768 s (RTC0) in place of 50 ms.
 
 The drive edges are the U1.PA5 pin_edge records (examples/feedback) or,
 with --open, the board's V_DRV pulse (rising at 50 + 100 k ms, falling at
@@ -44,6 +48,9 @@ PA5_SPACING_TOL_FS = 1 * FS_PER_US
 SETTLE_FS = 100 * FS_PER_US
 LED_HIGH = (1.7, 2.2)
 LED_LOW_MAX = 0.1
+# The board's nets and drive period (--nrf changes them).
+DRV, IN, COPY = "U1.PA5", "U1.PB0", "U1.PA6"
+PERIOD_FS = 50 * FS_PER_MS
 
 
 def fail(msg):
@@ -80,7 +87,15 @@ def main():
     p.add_argument("out")
     p.add_argument("--open", action="store_true", help="examples/feedback-open (pulse drive)")
     p.add_argument("--lattice-us", type=int, default=10)
+    p.add_argument("--nrf", action="store_true",
+                   help="examples/nrf-feedback (Phase 1 M2): the same circuit on the nRF52840, "
+                        "U1.P0.13 drives, U1.P0.11 reads, U1.P0.15 copies; RTC0 toggles the "
+                        "drive every 1638/32768 s")
     a = p.parse_args()
+    global DRV, IN, COPY, PERIOD_FS
+    if a.nrf:
+        DRV, IN, COPY = "U1.P0.13", "U1.P0.11", "U1.P0.15"
+        PERIOD_FS = 1638 * 10**15 // 32768
     out = Path(a.out)
     l_fs = a.lattice_us * FS_PER_US
     ev = edges(out / "events.jsonl")
@@ -97,17 +112,17 @@ def main():
         if "U1.PA5" in ev:
             fail("feedback-open must not bind U1.PA5")
     else:
-        drive = ev.get("U1.PA5", [])
+        drive = ev.get(DRV, [])
         if len(drive) < 2:
-            fail(f"expected U1.PA5 edges, got {drive}")
+            fail(f"expected {DRV} edges, got {drive}")
         # Spaced 50 ms apart within PA5_SPACING_TOL_FS (SysTick reload
         # timing in Renode drifts by tens of ns per period after 250 ms, as
-        # in the spike), alternating from High.
+        # in the spike), alternating from High. (--nrf: the RTC period.)
         for i, (ti, lv) in enumerate(drive):
             prev = drive[i - 1][0] if i else 0
-            if abs(ti - prev - 50 * FS_PER_MS) > PA5_SPACING_TOL_FS or lv != (i + 1) % 2:
-                fail(f"U1.PA5 edge {i} at {ti} fs level {lv}: expected 50 ms after {prev} fs, "
-                     f"level {(i + 1) % 2}")
+            if abs(ti - prev - PERIOD_FS) > PA5_SPACING_TOL_FS or lv != (i + 1) % 2:
+                fail(f"{DRV} edge {i} at {ti} fs level {lv}: expected {PERIOD_FS} fs after "
+                     f"{prev} fs, level {(i + 1) % 2}")
 
     # Analytic crossings.
     want = []
@@ -126,49 +141,49 @@ def main():
         if tx < t_end:
             want.append((tx, lv))
         t_prev = ti
-    pb0 = ev.get("U1.PB0", [])
+    pb0 = ev.get(IN, [])
     if len(pb0) != len(want):
-        fail(f"{len(pb0)} U1.PB0 transitions, expected {len(want)} (one per drive edge): {pb0}")
+        fail(f"{len(pb0)} {IN} transitions, expected {len(want)} (one per drive edge): {pb0}")
     worst = 0
     for (got, lv), (w, wl) in zip(pb0, want):
         if lv != wl:
-            fail(f"U1.PB0 at {got} fs has level {lv}, expected {wl}")
+            fail(f"{IN} at {got} fs has level {lv}, expected {wl}")
         worst = max(worst, abs(got - w))
         if abs(got - w) > TOL_FS:
-            fail(f"U1.PB0 -> {lv} at {got} fs, analytic {w} fs (diff {(got - w) / 1e6:.1f} ns)")
+            fail(f"{IN} -> {lv} at {got} fs, analytic {w} fs (diff {(got - w) / 1e6:.1f} ns)")
         if ceil_l(got, l_fs) != ceil_l(w, l_fs):
-            fail(f"U1.PB0 -> {lv} at {got} fs not in the analytic cell ending {ceil_l(w, l_fs)} fs")
+            fail(f"{IN} -> {lv} at {got} fs not in the analytic cell ending {ceil_l(w, l_fs)} fs")
     cells = ", ".join(
         f"{(ceil_l(g, l_fs) - l_fs) / FS_PER_MS:.2f}-{ceil_l(g, l_fs) / FS_PER_MS:.2f} ms" for g, _ in pb0
     )
-    print(f"check_feedback: {len(pb0)} U1.PB0 transitions in the analytic cells ({cells}); "
+    print(f"check_feedback: {len(pb0)} {IN} transitions in the analytic cells ({cells}); "
           f"max |t - analytic| {worst / 1e6:.1f} ns")
 
     # PA6 follows each PB0 transition in (ceil_L(t_x), ceil_L(t_x) + L].
-    pa6 = ev.get("U1.PA6", [])
+    pa6 = ev.get(COPY, [])
     if len(pa6) != len(pb0):
-        fail(f"{len(pa6)} U1.PA6 edges for {len(pb0)} U1.PB0 transitions: {pa6}")
+        fail(f"{len(pa6)} {COPY} edges for {len(pb0)} {IN} transitions: {pa6}")
     lags = []
     for (te, lv), (tx, xl) in zip(pa6, pb0):
         c = ceil_l(tx, l_fs)
         if lv != xl:
-            fail(f"U1.PA6 at {te} fs level {lv} after PB0 -> {xl}")
+            fail(f"{COPY} at {te} fs level {lv} after {IN} -> {xl}")
         if not c < te <= c + l_fs:
-            fail(f"U1.PA6 edge at {te} fs outside (ceil_L(t_x), ceil_L(t_x) + L] = ({c}, {c + l_fs}] fs")
+            fail(f"{COPY} edge at {te} fs outside (ceil_L(t_x), ceil_L(t_x) + L] = ({c}, {c + l_fs}] fs")
         lags.append(te - c)
-    print(f"check_feedback: every U1.PA6 edge in (ceil_L(t_x), ceil_L(t_x) + L]; lag after "
+    print(f"check_feedback: every {COPY} edge in (ceil_L(t_x), ceil_L(t_x) + L]; lag after "
           f"ceil_L(t_x): {sorted(set(lags))} fs")
 
     # nets.csv agrees with the PB0 edges.
-    if "U1.PB0" in cols:
+    if IN in cols:
         level = 0
         k = 0
-        for ti, v in zip(t, cols["U1.PB0"]):
+        for ti, v in zip(t, cols[IN]):
             while k < len(pb0) and pb0[k][0] <= ti:
                 level = pb0[k][1]
                 k += 1
             if int(v) != level:
-                fail(f"nets.csv U1.PB0 = {v} at {ti} fs, pin_edge records say {level}")
+                fail(f"nets.csv {IN} = {v} at {ti} fs, pin_edge records say {level}")
 
     if not a.open:
         if "LED_B" not in cols:
@@ -185,9 +200,9 @@ def main():
             if ti - last_edge < SETTLE_FS:
                 continue
             if level and not LED_HIGH[0] <= v <= LED_HIGH[1]:
-                fail(f"LED_B {v} V at {ti} fs while PA6 high")
+                fail(f"LED_B {v} V at {ti} fs while {COPY} high")
             if not level and v > LED_LOW_MAX:
-                fail(f"LED_B {v} V at {ti} fs while PA6 low")
+                fail(f"LED_B {v} V at {ti} fs while {COPY} low")
             n_hi += level
             n_lo += 1 - level
         print(f"check_feedback: LED_B plateaus ok ({n_hi} high, {n_lo} low settled samples)")

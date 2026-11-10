@@ -215,6 +215,15 @@ fresh runs.
 | `examples/adc --lookahead off` (one-cell grants; Breadboard's ADC model) | 300 ms | 30 000 | 11.50 s | 1.46 s | 0.09 s | 13.00 s | 11.26 s |
 | `examples/adc`, defaults (`make adc`: lookahead on, Breadboard's ADC model) | 300 ms | 1 209 | **1.11 s** (10.4×) | 1.43 s | **0.09 s** | 2.61 s | 0.97 s |
 | `examples/adc --adc-model stock` (the ADR-003 default: Renode's ADC, lookahead on) | 300 ms | 6 344 | 5.08 s | 1.38 s | | 6.53 s | |
+| `examples/nrf-feedback --lookahead off` (Phase 1 M2: the feedback circuit on Breadboard's nRF52840, one-cell grants) | 500 ms | 50 000 | 13.93 s | 1.41 s | 0.05 s | 15.36 s | 14.23 s |
+| `examples/nrf-feedback`, defaults (`make nrf-feedback`: lookahead on) | 500 ms | 120 | **0.52 s** (27×) | 1.39 s | **0.05 s** | 1.95 s | 0.42 s |
+
+The two `examples/nrf-feedback` rows (ADR-008 Amendment 2) were measured
+later, with the same protocol (`make cost-table`'s nRF row, N = 5,
+interleaved, medians): fresh at load 2.4–4.0 and on a one-slot pool at
+load 1.6–2.0, every pooled run leased, every B run identical to A except
+grant records. They are not comparable with the rows above, which ran at a
+higher load.
 
 Measured on 2026-11-09 (ADR-004 Amendment 7), load average 2.3–6.6
 while another agent's job ran on the host, so the figures are noisy. The

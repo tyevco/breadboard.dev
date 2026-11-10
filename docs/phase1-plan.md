@@ -9,6 +9,8 @@
   (ADR-006 Amendment 2; Review notes: S1). M3 done (2026-11-09: package format v0
   (ADR-006 Amendment 1), the Phase 0 examples through packages with their
   committed hashes, setup timed in a clean container; Review notes: M3).
+  M2 done (2026-11-09: the nRF52840 platform and its gates, ADR-008
+  Amendment 2; Review notes: M2).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -707,3 +709,35 @@ ADR-006/007/008. Items not adopted as proposed:
   run` now resolves packages and checks the lock before it starts any
   engine; measured at 22-174 ms (5 runs, load 23) up to the firmware check
   for the spike, from `/mnt/c`.
+
+## Review notes: M2 (2026-11-09)
+
+- **What exists.** Breadboard's nRF52840, `nrf52840-bb@1`
+  (`engines/cpu-renode/platforms/nrf52840-bb.repl`: no SVD download, 64
+  MIPS), `PinSpec::nrf`, `bb run` boards with `platform=nrf52840`, six
+  bare-metal gate firmwares and a prebuilt Zephyr gate image in
+  `engines/cpu-renode/tests/firmware/nrf52840/`, `examples/nrf-feedback`,
+  and the D4 `PIN_CNF` audit (end of run, and mid-run through Renode's
+  peripheral write hooks). Details and numbers: ADR-008 Amendment 2.
+- **The M2 row's gate.** `make nrf-gates` passes on the warm pool and with
+  `POOL=0`: the blinky edge list is identical at one-cell grants, 10 ms
+  grants, plugin armed and lookahead on; the feedback board equals its
+  `--lookahead off` reference with no broken promise; the lookahead
+  self-test status is exactly 0x3; `nrf-busywait` records 6.660 ms for a
+  10 ms nrfx busy-wait (expected about 6.67 ms). `make pool-equiv` with
+  three nRF configurations passes. The four firmwares the row names
+  (blinky, feedback, ppi, busy-wait) are there, plus D6's
+  TIMER-compare-then-long-sleep firmware moved from M1, the `PIN_CNF`
+  firmware and ADR-008 D3's `nrf-zephyr`.
+- **Cost.** `make test` grows by `make nrf-feedback` (its one-cell
+  reference is 500 ms of 10 µs grants, about 40 s on this host) and by the
+  `nrf52840.rs` engine tests inside `cargo-test` (about 50 s, in parallel
+  with the other engine tests): more than §8's "about 20 s", mostly one-cell
+  reference runs. The cost-table row: ADR-008 Amendment 2.
+- **Deviations** (ADR-008 Amendment 2): the feedback gate is a board run
+  through `bb run` (as the plan's row says) as well as engine tests; the
+  Zephyr gate image is built from the developer workspace (v4.5.0-rc3)
+  until M6 pins a release; `bb run` audits bound pins only, with no drive
+  set, until packages (M5) and the importer (M4/M6) supply the set and the
+  unbound pins. The platform identity `nrf52840-bb@1` is a row of M3's
+  `cli/src/platforms.rs`; no package names it until M5.

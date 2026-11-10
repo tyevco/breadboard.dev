@@ -65,7 +65,8 @@ use bb_analog_ngspice::{
     NgspiceEngine, OutputBinding,
 };
 use bb_cpu_renode::{
-    find_renode, LookaheadCfg, PinDirection, PinSpec, Platform, RenodeConfig, RenodeEngine, Verify,
+    find_renode, LookaheadCfg, PinCnfAudit, PinCnfExpect, PinDirection, PinSpec, Platform,
+    RenodeConfig, RenodeEngine, Verify,
 };
 use bbcore::{
     AdcIn, AdcKey, CsvWriter, Direction, Engine, EventSink, Level, Probe, Scheduler,
@@ -515,13 +516,34 @@ fn run(a: RunArgs) -> Result<(), String> {
             }
         }
     }
+    // Breadboard's nRF52840 (Phase 1 M2, ADR-008 D1/D2): pins P<port>.<nn>,
+    // and the end-of-run PIN_CNF audit (D4) of every pin bound to a circuit
+    // net. A board file names no drive set, so DRIVE is checked only for
+    // open drain against digital_out until package bindings name one.
+    let nrf = part.platform == "nrf52840";
+    let pin_spec = if nrf { PinSpec::nrf } else { PinSpec::stm32 };
+    if nrf {
+        rcfg.platform = Platform::Nrf52840Bb;
+        rcfg.pin_cnf_audit = mcu_pins
+            .iter()
+            .filter_map(|p| {
+                let expect = match p.kind {
+                    PinKind::Out { .. } => PinCnfExpect::DigitalOut { drive: None },
+                    PinKind::In { .. } => PinCnfExpect::DigitalIn,
+                    PinKind::OutUnconnected | PinKind::Adc { .. } => return None,
+                };
+                Some(PinCnfAudit {
+                    pin: p.pin.clone(),
+                    expect,
+                })
+            })
+            .collect();
+    }
     rcfg.pins = mcu_pins
         .iter()
         .map(|p| match p.kind {
-            PinKind::In { .. } => PinSpec::stm32(&p.pin, PinDirection::Input),
-            PinKind::Out { .. } | PinKind::OutUnconnected => {
-                PinSpec::stm32(&p.pin, PinDirection::Output)
-            }
+            PinKind::In { .. } => pin_spec(&p.pin, PinDirection::Input),
+            PinKind::Out { .. } | PinKind::OutUnconnected => pin_spec(&p.pin, PinDirection::Output),
             PinKind::Adc { channel, .. } => Ok(PinSpec::adc(&p.pin, adc_name, channel)),
         })
         .collect::<Result<_, _>>()
@@ -563,7 +585,8 @@ fn run(a: RunArgs) -> Result<(), String> {
             // An MCU output into the circuit: EXTERNAL source + zout glue.
             PinKind::Out { net, model } => ncfg.inputs.push(InputBinding {
                 pin: p.kernel_net(),
-                source: format!("V_bb_{}_{}", p.part, p.pin),
+                // nRF pin names carry a '.' (P0.13): V_bb_U1_P0_13.
+                source: format!("V_bb_{}_{}", p.part, p.pin.replace('.', "_")),
                 drive: Drive::Digital {
                     model: *model,
                     initial: Level::Low,
@@ -606,6 +629,7 @@ fn run(a: RunArgs) -> Result<(), String> {
     fs::create_dir_all(&a.out).map_err(|e| format!("create {}: {e}", a.out.display()))?;
     let wall = Instant::now();
     let cpu = RenodeEngine::start(&rcfg).map_err(|e| format!("start Renode: {e}"))?;
+    let pin_cnf = cpu.pin_cnf_findings();
     let renode_how = if cpu.leased() {
         format!("leased from the pool (pid {})", cpu.renode_pid())
     } else {
@@ -705,6 +729,23 @@ fn run(a: RunArgs) -> Result<(), String> {
         sink.flush().map_err(|e| format!("write events: {e}"))?;
         r.map_err(|e| format!("simulation failed: {e}"))?
     };
+    // ADR-008 D4: the end-of-run PIN_CNF audit (nRF52840), read after the
+    // last grant; each disagreement is a `log` record at t_end.
+    let findings = pin_cnf
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .unwrap_or_default();
+    for f in &findings {
+        eprintln!("bb run: {}: {:?}: {}", part.reference, f.level, f.msg);
+        sink.emit(&bbcore::Event::Log {
+            t_fs: summary.now,
+            source: part.reference.clone(),
+            level: f.level,
+            msg: f.msg.clone(),
+        })
+        .map_err(|e| format!("write events: {e}"))?;
+    }
     sink.flush().map_err(|e| format!("write events: {e}"))?;
     let run_s = t_run.elapsed().as_secs_f64();
     if let Some(p) = sched.plan() {
