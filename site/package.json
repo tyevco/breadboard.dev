@@ -1,0 +1,16 @@
+{
+  "name": "breadboard-docs",
+  "private": true,
+  "type": "module",
+  "description": "The Breadboard documentation site (VitePress).",
+  "license": "Apache-2.0",
+  "scripts": {
+    "sync": "node scripts/sync.mjs",
+    "docs:dev": "node scripts/sync.mjs && vitepress dev",
+    "docs:build": "node scripts/sync.mjs && vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  }
+}
