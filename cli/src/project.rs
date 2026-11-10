@@ -238,14 +238,22 @@ impl Project {
             let net = b.str_opt("net")?;
             let mut params = Vec::new();
             for k in [
-                "voh", "vol", "rise", "fall", "zout", "vih", "vil", "cin", "vref", "bits",
+                "voh", "vol", "rise", "fall", "zout", "vih", "vil", "cin", "vref", "bits", "load",
             ] {
                 if let Some(v) = b.str_opt(k)? {
                     params.push((k.to_string(), v));
                 }
             }
+            // ADR-008 D7: the SAADC's per-sample records, a binding option
+            // (board files: `trace_samples=true`); build_pin checks the model.
+            if let Some(t) = b.bool_opt("trace_samples")? {
+                params.push(("trace_samples".to_string(), t.to_string()));
+            }
             b.done().map_err(|e| {
-                format!("{e} (a [[bind]] takes pin, model, set, net and pin-model parameters)")
+                format!(
+                    "{e} (a [[bind]] takes pin, model, set, net, pin-model parameters and \
+                     trace_samples)"
+                )
             })?;
             if binds.iter().any(|x: &Bind| x.pin == pin) {
                 return Err(format!("{path}: pin {pin} is bound twice"));
@@ -656,6 +664,24 @@ b = "base:J3"
                 .len(),
             2
         );
+        // The SAADC's binding keys (ADR-008 D7): load is a parameter,
+        // trace_samples a boolean binding option.
+        let adc = P.replace(
+            "model = \"digital_out\"\nzout = \"50\"",
+            "model = \"adc_in\"\nload = \"none\"\ntrace_samples = true",
+        );
+        assert_eq!(
+            Project::parse(&adc, Path::new(".")).unwrap().binds[0].params,
+            vec![
+                ("load".to_string(), "none".to_string()),
+                ("trace_samples".to_string(), "true".to_string())
+            ]
+        );
+        assert!(Project::parse(
+            &adc.replace("trace_samples = true", "trace_samples = \"true\""),
+            Path::new(".")
+        )
+        .is_err());
         // Errors: unknown keys, package none without a reason, two sources.
         assert!(Project::parse(&P.replace("zout", "colour"), Path::new(".")).is_err());
         assert!(Project::parse(&P.replace("reason = \"NFC coil\"\n", ""), Path::new(".")).is_err());

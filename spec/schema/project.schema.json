@@ -97,7 +97,9 @@
           "zout": { "type": "string" },
           "vih": { "type": "string" }, "vil": { "type": "string" },
           "cin": { "type": "string" },
-          "vref": { "type": "string" }, "bits": { "type": "string" }
+          "vref": { "type": "string" }, "bits": { "type": "string" },
+          "load": { "type": "string" },
+          "trace_samples": { "type": "boolean" }
         }
       }
     },

@@ -92,7 +92,7 @@ else
 WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
-                  nrf-gates nrf-feedback dms-rail dms-rail-test
+                  nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -140,6 +140,7 @@ pooled-test:
 	$(MAKE) nrf-saadc-model
 	$(MAKE) adc-kicad
 	$(MAKE) dms-rail-test
+	$(MAKE) dms-vsense-test
 	$(MAKE) ec-reconnect
 	$(MAKE) packages
 
@@ -256,6 +257,7 @@ golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-ope
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(NRF_FEEDBACK_HASHES) \
 	    && rm non-grant-records
 	$(MAKE) --no-print-directory dms-rail-update
+	$(MAKE) --no-print-directory dms-vsense-update
 
 # ADR-003 step 4: examples/feedback, a board with a feedback loop (U1.PA5 ->
 # RC -> U1.PB0 digital_in; the EXTI0 ISR copies PB0 to PA6 -> LED). The loop
@@ -387,6 +389,9 @@ cost-table-runs:
 	    -- $(DMS_RAIL_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/nrf-saadc $(PERF_N) "--lookahead off" "" - - - \
 	    -- $(NRF_SAADC_ARGS)
+	$(MAKE) --no-print-directory dms-vsense-prepare
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-vsense $(PERF_N) "--lookahead off --adc-push every" "" \
+	    - - - -- $(DMS_VSENSE_ARGS)
 
 # The Phase 1 M8 row alone (examples/nrf-saadc, the loading adc_in): lookahead off (one cell) vs
 # bb's defaults, fresh and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
@@ -878,7 +883,7 @@ dms-rail-prepare: bb
 dms-crosscheck: dms-local-packages
 	DMS_REPO=$(DMS_REPO) bash scripts/dms_crosscheck.sh $(BB)
 
-# ADR-008 D5: rebuild the committed E1 images in a FRESH west workspace (pinned manifest
+# ADR-008 D5: rebuild the committed E1 and E2 images in a FRESH west workspace (pinned manifest
 # examples/dial-me-spinner/firmware/west.yml, Zephyr SDK 1.0.1) and require the image hashes of
 # firmware/prebuilt/SHA256SUMS (CI job fw-rebuild, where a workspace can be created; downloads
 # about 400 MB the first time). dms-firmware rebuilds the prebuilt images (review the diff).
@@ -887,6 +892,49 @@ fw-rebuild: bb
 dms-firmware: bb
 	bash scripts/dms_zephyr.sh ws
 	bash scripts/dms_zephyr.sh update
+
+# --- Phase 1 M8 (second half): E2, battery reading and LED shed on dial-me-spinner ---------
+# examples/dial-me-spinner with firmware/prebuilt/vsense.elf (a reading every 1 s) and
+# vsense_50ms.elf (every 50 ms) on U10's SAADC, the loading adc_in on VSYS_SENSE (ADR-008 D7-D8),
+# bench/vsense.toml (the suite's sample-rate worst case) and bench/sag.toml (the battery ramps
+# down through the LED shed). Runs use copies of the project off /mnt/c (scripts/dms_vsense.sh;
+# $(DMS_VSENSE_WORK)), one with load = "none" per loaded case and one with C5 fitted at 10 nF.
+.PHONY: pooled-dms-vsense pooled-dms-vsense-test dms-vsense-ref dms-vsense-update dms-vsense-prepare \
+        cost-table-dms-vsense
+DMS_VSENSE_OUT  ?= out/dms-vsense
+DMS_VSENSE_WORK ?= $(HOME)/.cache/bb-dms-vsense
+export DMS_VSENSE_WORK
+DMS_VSENSE_ARGS  = --project $(DMS_VSENSE_WORK)/proj-50ms --bench $(DMS_VSENSE_WORK)/proj-50ms/bench/vsense.toml \
+                   --for 650ms --probe net:VSYS_SENSE --sample-rate 10kHz
+
+# In `make test`: s50, s50-none, c5 and c5-none at bb's defaults, check_dms_vsense.py on them (the
+# analog side against load = "none", the codes, the C5 / 10 fault) and their committed one-cell
+# hashes (non-grant records, nets.csv, nets.vcd).
+pooled-dms-vsense-test: bb
+	bash scripts/dms_vsense.sh test $(BB) $(DMS_VSENSE_OUT)-test
+
+# The plan's M8 gate (E2): every case (s1, s1-none, s50, s50-none, c5, c5-none, sag) at bb's
+# defaults and as its every-lattice-point reference (--lookahead off --adc-push every),
+# check_dms_vsense.py on both, the references equal to tests/golden/dms-vsense, the defaults equal
+# to them except grant records, analog-first byte-identical, the TACQ refusal, 10-run determinism.
+pooled-dms-vsense: bb
+	bash scripts/dms_vsense.sh gate $(BB) $(DMS_VSENSE_OUT)
+
+dms-vsense-ref: bb
+	bash scripts/dms_vsense.sh ref $(BB) $(DMS_VSENSE_OUT)-ref
+dms-vsense-update: dms-vsense-ref
+	bash scripts/dms_vsense.sh update $(DMS_VSENSE_OUT)-ref
+dms-vsense-prepare: bb
+	bash scripts/dms_vsense.sh prepare $(BB)
+
+# The Phase 1 M8 E2 row alone (s50: vsense_50ms.elf, 650 ms, the loading adc_in on the imported
+# board): the every-lattice-point reference vs bb's defaults, fresh and on a 1-slot pool, with the
+# protocol. Run it on an otherwise idle host.
+cost-table-dms-vsense: firmware bb dms-vsense-prepare
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-vsense $(PERF_N) \
+	    "--lookahead off --adc-push every" "" - - - -- $(DMS_VSENSE_ARGS)
+	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-vsense $(PERF_N) \
+	    "--lookahead off --adc-push every" "" - - - -- $(DMS_VSENSE_ARGS)
 
 # After an intended change to a package, a platform's .repl or a Renode
 # plugin source: rewrite the changed bb.lock entries (review, then commit).

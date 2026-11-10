@@ -286,23 +286,22 @@ pub fn load_vectors(pkg: &Package, dir: &Path, reg: &Registry) -> Result<Vec<Vec
             .iter()
             .find(|x| x.name == v.view)
             .ok_or_else(|| format!("{name}: view {:?} is not in part.toml", v.view))?;
-        if view.kind != "circuit" {
+        if view.kind != "circuit" && view.kind != "pin_load" {
             return Err(format!(
-                "{name}: view {} is a {} view; Phase 1 vectors test circuit views",
+                "{name}: view {} is a {} view; vectors test circuit and pin_load views",
                 view.name, view.kind
             ));
         }
-        for p in &view.ports {
-            if let Port::Pin(n) = p {
-                if !v.ports.contains_key(n) {
-                    return Err(format!(
-                        "{name}: ports.{n}: the view's port {n} is not mapped to a node"
-                    ));
-                }
+        let keys: Vec<&str> = view.ports.iter().map(port_key).collect();
+        for n in &keys {
+            if !v.ports.contains_key(*n) {
+                return Err(format!(
+                    "{name}: ports.{n}: the view's port {n} is not mapped to a node"
+                ));
             }
         }
         for k in v.ports.keys() {
-            if !view.ports.contains(&Port::Pin(k.clone())) {
+            if !keys.contains(&k.as_str()) {
                 return Err(format!(
                     "{name}: ports.{k}: not a port of view {}",
                     view.name
@@ -315,6 +314,18 @@ pub fn load_vectors(pkg: &Package, dir: &Path, reg: &Registry) -> Result<Vec<Vec
         out.push(v);
     }
     Ok(out)
+}
+
+/// A port's key in a vector's `[ports]`: a circuit view's pin name; a
+/// `pin_load` view's typed port by its role (`pad`), its signal (`smp`,
+/// `hold`) or the pin it names (`VDD`) (ADR-006 D4, ADR-008 Amendment 5).
+fn port_key(p: &Port) -> &str {
+    match p {
+        Port::Pin(n) => n,
+        Port::Pad => "pad",
+        Port::Ctrl { signal } | Port::Observe { signal } => signal,
+        Port::OtherPin { pin } => pin,
+    }
 }
 
 /// The deck body for a vector: the view's definitions, `X1`, the test
@@ -330,10 +341,13 @@ pub fn deck(pkg: &Package, view: &View, v: &Vector, options: &str) -> Result<Str
     }
     let mut x1 = String::from("X1");
     for p in &view.ports {
-        if let Port::Pin(n) = p {
-            x1.push(' ');
-            x1.push_str(&v.ports[n]);
-        }
+        let n = port_key(p);
+        x1.push(' ');
+        x1.push_str(
+            v.ports
+                .get(n)
+                .ok_or_else(|| format!("ports.{n}: the view's port {n} is not mapped to a node"))?,
+        );
     }
     x1.push(' ');
     x1.push_str(&view.subckt);

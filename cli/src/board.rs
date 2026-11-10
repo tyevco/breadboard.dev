@@ -612,6 +612,25 @@ pub fn build_pin(r: &PinReq, warnings: &mut Vec<String>) -> Result<PinKind, Stri
         supply: r.supply,
     };
     match pkg {
+        // The VDD input of a package part (a board file's `package=` part or a
+        // project's target): its keys are in the package value grammar
+        // (spec/package.md section 6: "3.6V"), as every other binding of a
+        // package part.
+        None if vdd_sense && r.pkg.is_some() => {
+            let spec = pin_model_params(model_kind).expect("adc_in parameters");
+            for (k, v) in explicit.iter().copied() {
+                let (key, pk) = spec
+                    .iter()
+                    .find(|(p, ..)| *p == k)
+                    .map(|(p, kind, _)| (*p, *kind))
+                    .ok_or_else(|| format!("{ctx}: unknown key {k:?}"))?;
+                if matches!(pk, ParamKind::Name) && !matches!(k, "load" | "model") {
+                    return Err(format!("{ctx}: {k}= is not supported here"));
+                }
+                let pv = parse_param(v, pk).map_err(|e| format!("{ctx}: {k}: {e}"))?;
+                params.map.insert(key, Val::Pkg(pv));
+            }
+        }
         None => {
             for (k, v) in explicit.iter().copied() {
                 params.map.insert(k, Val::Text(v));

@@ -1,0 +1,69 @@
+# nordic/nrf52840-qiaa saadc_se (pin_load, ADR-008 D7): the charge sharing, counted (the nrf-saadc board's pad: 1.2 V through 1 TOhm, 100 pF)
+# One #smp edge per acquisition (alternating levels, as the CPU engine's toggle), 0 V / 1 V with 1 ns
+# edges like glue rule 9's source. Expected: one charge transfer per edge, V' = (Cp V + CS VPRE) / (Cp + CS)
+# with Cp = C1 100 pF + CPAD 3 pF and CS 2.5 pF, and between edges the pad (with CS through RSW) relaxing to
+# 1.2 V with tau = 105.5 s; computed in closed form (ADR-008 Amendment 5).
+schema = "bb-pkgtest/0"
+view = "saadc_se"
+circuit = "charge_share.cir"
+stop = "420us"
+
+[ports]
+pad = "pad"
+smp = "smp"
+hold = "hold"
+VDD = "vdd"
+
+[[edge]]
+net = "smp"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = [["15us", "high"], ["65us", "low"], ["115us", "high"], ["165us", "low"], ["215us", "high"], ["265us", "low"], ["315us", "high"], ["365us", "low"]]
+
+[[expect]]
+meas = { node = "hold", at = "60us" }
+value = "1.242654V"
+tol = "3uV"
+source = "closed form, CS 2.5 pF, CPAD 3 pF, C1 100 pF, VPRE = VDD = 3.0 V after 1 transfer"
+
+[[expect]]
+meas = { node = "hold", at = "110us" }
+value = "1.284297V"
+tol = "3uV"
+source = "closed form, CS 2.5 pF, CPAD 3 pF, C1 100 pF, VPRE = VDD = 3.0 V after 2 transfers"
+
+[[expect]]
+meas = { node = "hold", at = "160us" }
+value = "1.324954V"
+tol = "3uV"
+source = "closed form, CS 2.5 pF, CPAD 3 pF, C1 100 pF, VPRE = VDD = 3.0 V after 3 transfers"
+
+[[expect]]
+meas = { node = "hold", at = "210us" }
+value = "1.364647V"
+tol = "3uV"
+source = "closed form, CS 2.5 pF, CPAD 3 pF, C1 100 pF, VPRE = VDD = 3.0 V after 4 transfers"
+
+[[expect]]
+meas = { node = "hold", at = "260us" }
+value = "1.403399V"
+tol = "3uV"
+source = "closed form, CS 2.5 pF, CPAD 3 pF, C1 100 pF, VPRE = VDD = 3.0 V after 5 transfers"
+
+[[expect]]
+meas = { node = "hold", at = "310us" }
+value = "1.441233V"
+tol = "3uV"
+source = "closed form, CS 2.5 pF, CPAD 3 pF, C1 100 pF, VPRE = VDD = 3.0 V after 6 transfers"
+
+[[expect]]
+meas = { node = "hold", at = "360us" }
+value = "1.478170V"
+tol = "3uV"
+source = "closed form, CS 2.5 pF, CPAD 3 pF, C1 100 pF, VPRE = VDD = 3.0 V after 7 transfers"
+
+[[expect]]
+meas = { node = "hold", at = "410us" }
+value = "1.514233V"
+tol = "3uV"
+source = "closed form, CS 2.5 pF, CPAD 3 pF, C1 100 pF, VPRE = VDD = 3.0 V after 8 transfers"

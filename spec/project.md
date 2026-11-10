@@ -50,6 +50,13 @@ set = "S0S1"                         # the pins.toml parameter set (default: def
 net = "LED_PWR_EN"                   # optional: checked against the netlist
 # voh = "3.3V" ...                   # explicit parameters override the set
 
+[[bind]]                             # the nRF52840's SAADC (ADR-008 D7)
+pin = "main:U10.P0.02"
+model = "adc_in"
+net = "VSYS_SENSE"
+# load = "none"                      # the pin_load view (the set's default), or none: an ideal input
+trace_samples = true                 # a boolean: every sample becomes a log record
+
 [probes]
 nets = ["VLED", "LED_DIN"]
 
@@ -68,6 +75,12 @@ b = "base:J3"
   net is a `digital_out` that drives nothing (probe-only, glue rule 4).
   A connected MCU pin **without** a binding is unbound: no glue, no load
   (high-Z), its net probe-only on the MCU side.
+- **The nRF52840's SAADC** (ADR-008 D7, Amendments 4 and 5): an `adc_in`
+  takes `load` (the package's `pin_load` view, or `"none"`) as a parameter
+  and `trace_samples` (a boolean) as a binding option, as a board file's
+  `*bb pin` does; an `adc_in` on the chip's supply pin `VDD` is the SAADC's
+  VDD input. On a module target the pad must list the model it is bound
+  with (its `models`), except that VDD input.
 - **A module target** (`spec/package.md` section 4; Phase 1 M6, ADR-007
   Amendment 3): a binding names the module pad as the board's symbol does
   (`main:U10.P1.04`); the pad's chip pin (the module's pinmap) gives the
@@ -225,7 +238,8 @@ the host); `bench` (file name, text, sha256, option set and its card);
 `targets` (instance and image kinds and hashes); `analog` (per in-scope
 instance: package, version, view, requested fidelity, the rung it was
 chosen at, provenance `source` and `confidence`, its qualifications and
-whether one covers the run); `out_of_scope` and `not_simulated` (with
+whether one covers the run; and per loading `adc_in`, its `pin_load` view
+under the bound pin, `kind = "pin_load"`); `out_of_scope` and `not_simulated` (with
 reasons); `packages` and `platforms` (the locked hashes); `deck_sha256`;
 `options` (every run option that can change results, the probes); and
 `versions`. `bb run` flags a view whose provenance is `estimated` or

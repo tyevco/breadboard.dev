@@ -1,0 +1,46 @@
+# examples/dial-me-spinner/bench/vsense.toml: the E2 sample-rate bench (Phase 1 plan section 2 E2, M8;
+# ADR-007 D5, ADR-008 D7 and Amendment 5).
+#
+# The dial-me-spinner suite's worst case for the SAADC's sampling error (hardware/sim/tests/
+# test_vsys_sense.py at 6854d25, test_sample_interval and test_fault_c5_decade_low_detected_at_fw_tacq):
+#   VSYS: an ideal 3.0 V source on the divider, as the suite's _sample() deck (VSYS 3.0 V, the lowest
+#         battery corner: the largest VPRE - V(pad));
+#   +3V3: 3.366 V (VDD max = 3.3 V + 2 %, the suite's VDD_MAX), so the sample cap is pre-charged to
+#         VPRE = VDD max before every acquisition (saadc_se's vpre_vdd = 1, ADR-008 approver decision A6).
+#         Not the tracking supply of the E1 benches: the suite takes VDD max and VSYS 3.0 V as independent
+#         corners, and so does this bench. rs 10 mOhm as the E1 benches (a Norton source in front of
+#         the +3V3 capacitors); it carries no DC load.
+# What the suite's corner has and a Phase 1 bench cannot: C5 at its minimum (-10 % tolerance and -15 %
+# X7R, 76.5 nF) and R1/R2 at +1 % (nominal parts only; tolerance views are Phase 2, plan section 2 E1).
+# scripts/check_dms_vsense.py therefore checks the co-simulation against the suite's own charge-sharing
+# arithmetic at this bench's nominal parts, and that arithmetic against the suite's figures (356 uV at
+# 1 s, 761 uV at 50 ms, 3.47 mV for C5 / 10) at the suite's corner.
+#
+# The analog scope is E1's (bench/cold.toml), so the project's probes resolve; with VSYS 3.0 V the
+# firmware's VBAT_est (2.94 V) is below 3.53 V and the LEDs stay off.
+schema = "bb-bench/0"
+temp_c = "25"
+
+[[supply]]
+net = "VSYS"
+volts = "3.0V"
+
+[[supply]]
+net = "+3V3"
+volts = "3.366V"
+rs = "10m"
+
+[analog]
+nets = [
+  "GND", "VSYS", "+3V3", "VSYS_SENSE", "VLED", "LED_PWR_EN", "LSW_CT", "LSW_QOD",
+  "LED_DIN_MCU", "LED_DIN_R", "LED_DIN",
+  "LED_D1", "LED_D2", "LED_D3", "LED_D4", "LED_D5", "LED_D6", "LED_D7", "LED_D8",
+  "LED_D9", "LED_D10", "LED_D11", "LED_D12", "LED_D13", "LED_D14", "LED_D15", "LED_D16",
+  "LED_D17", "LED_D18", "LED_D19", "LED_D20", "LED_D21", "LED_D22", "LED_D23", "LED_D24",
+  "LED_D25", "LED_D26", "LED_D27", "LED_D28", "LED_D29", "LED_D30", "LED_D31", "LED_D32",
+  "LED_D33", "LED_D34", "LED_D35", "LED_D36", "LED_D37", "LED_D38", "LED_D39", "LED_D40",
+  "LED_D41", "LED_D42", "LED_D43", "LED_D44", "LED_D45", "LED_D46", "LED_D47", "LED_D48",
+]
+
+[options]
+set = "phase0"

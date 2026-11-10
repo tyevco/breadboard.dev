@@ -24,13 +24,13 @@ tree = "sha256:f2dfbfccbbffbdae5524b6fe1c7cc0c01b066f7385799d289640cac8e47eb39a"
 id = "nordic/nrf52840-qiaa"
 version = "0.1.0"
 path = "../../packages/nordic/nrf52840-qiaa"
-tree = "sha256:ea0efcab5ba5dcf44b346e2cba8b56854ed7b562783927c9278bbeb685c65cf6"
+tree = "sha256:ae502c45f972d45a5e717ad12604c1d5c5d87dc7dc61eb14889637e78284513c"
 
 [[package]]
 id = "raytac/mdbt50q-u1mv2"
 version = "0.1.0"
 path = "../../packages/raytac/mdbt50q-u1mv2"
-tree = "sha256:1c0dd5c1aed3569e2033ba4c8cfa476beeb35e8c493c17348dd15fae30634dad"
+tree = "sha256:9fabf076bb869df7dc3240ecccdf3c13ce26d489fa87052b620474f2095979ed"
 
 [[package]]
 id = "ti/tps22917"

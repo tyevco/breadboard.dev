@@ -60,4 +60,11 @@ deviations = [
 ]
 not_modelled = ["the input resistor ladders RESP/RESN", "differential mode (PSELN)", "gain and offset errors", "the input's leakage"]
 generated_by = "Claude (Phase 1 M8)"
-confidence = "unchecked"
+confidence = "self_checked"   # tests/: the charge sharing against its closed form (ADR-008 Amendment 5)
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

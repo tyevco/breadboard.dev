@@ -477,6 +477,30 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         let cpin = chip_pin(&ip.number, &pin).map_err(|e| format!("{ctx}: {e}"))?;
+        // A module's pads list the models they offer (a subset of the chip
+        // pin's, `bb pkg lint`); the one exception is the nRF52840's VDD
+        // input, an adc_in on a supply pad (ADR-008 D7), which build_pin
+        // checks.
+        if pad_to_chip.is_some() {
+            let pad = tpkg.pins.pins.iter().find(|x| x.number == ip.number);
+            let vdd_input = cpin == "VDD" && b.model == "adc_in";
+            if let Some(pad) = pad.filter(|_| !vdd_input) {
+                if !pad.models.contains(&b.model) {
+                    return Err(format!(
+                        "{ctx}: pad {} ({}) of {} does not offer model {} (it offers: {})",
+                        pad.number,
+                        pad.name,
+                        tpkg.part.id,
+                        b.model,
+                        if pad.models.is_empty() {
+                            "none".to_string()
+                        } else {
+                            pad.models.join(", ")
+                        }
+                    ));
+                }
+            }
+        }
         let kind = build_pin(
             &PinReq {
                 ctx: &ctx,
@@ -720,6 +744,69 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             ("view", Json::str(&view.name)),
             ("fidelity", Json::str(a.fidelity)),
             ("rung", Json::str(&rung)),
+            ("provenance", prov_json(prov)),
+            (
+                "qualified",
+                Json::Arr(
+                    view.qualified
+                        .iter()
+                        .map(|qq| {
+                            Json::obj([
+                                ("lattice", Json::str(&qq.lattice)),
+                                ("options", Json::str(&qq.options)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+            ("qualified_for_run", Json::Bool(qualified)),
+        ]));
+    }
+    // The pin_load view of every loading adc_in (ADR-008 D7, glue rule 9) is
+    // in the deck too: the same qualification rule (ADR-006 D6), recorded in
+    // `analog` under the bound pin (ADR-008 Amendment 5).
+    for pb in &pins {
+        let PinKind::Adc {
+            load: Some(vname), ..
+        } = &pb.kind
+        else {
+            continue;
+        };
+        let view = chip
+            .part
+            .analog
+            .iter()
+            .find(|v| v.name == *vname && v.kind == "pin_load")
+            .ok_or_else(|| format!("{}: no pin_load view {vname}", chip.part.id))?;
+        let label = format!("{}:{}", chip.part.id, view.name);
+        let prov = view.provenance.as_ref().or(chip.part.provenance.as_ref());
+        if let Some(pv) = prov {
+            if pv.source == "estimated" || pv.source == "agent_generated" {
+                let f = format!("{label} ({})", pv.source);
+                if !flagged.contains(&f) {
+                    flagged.push(f);
+                }
+            }
+        }
+        let qualified = view
+            .qualified
+            .iter()
+            .any(|qq| lat_text(&qq.lattice) == Some(a.lattice) && qq.options == a.bench.options);
+        if !qualified
+            && !a
+                .allow_unqualified
+                .iter()
+                .any(|x| *x == label || *x == view.name)
+            && !unqualified.contains(&label)
+        {
+            unqualified.push(label.clone());
+        }
+        inst_json.push(Json::obj([
+            ("ref", Json::str(format!("{sim}:{tref}.{}", pb.pin))),
+            ("package", Json::str(&chip.part.id)),
+            ("version", Json::str(&chip.part.version)),
+            ("view", Json::str(&view.name)),
+            ("kind", Json::str("pin_load")),
             ("provenance", prov_json(prov)),
             (
                 "qualified",

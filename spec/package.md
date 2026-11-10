@@ -320,6 +320,9 @@ params = { value = "1k" }      # optional: the instance's view parameters
 [ports]                        # every view port -> a circuit node
 1 = "in"
 2 = "out"
+# A pin_load view's typed ports (section 4) are named by role: pad = "...",
+# a ctrl or observe port by its signal (smp = "...", hold = "..."), a pin
+# port by its pin (VDD = "..."); ADR-008 Amendment 5.
 
 [[edge]]                       # a control input, delivered as digital_out glue
 net = "in"
@@ -371,7 +374,8 @@ A content change invalidates records through the tree hash (section 9).
 - **`bb run` checks a run against qualification** (ADR-007, M4): the
   bench's options must be a named set, and every in-scope view qualified for
   (`L`, that set), unless `--allow-unqualified <view>`, which `run.json`
-  records.
+  records. The `pin_load` view of a loading `adc_in` binding is in the deck
+  too and is checked the same way (ADR-008 D7, Amendment 5).
 - **Board-level convergence is separate:** qualification in a test circuit
   says nothing about a whole board's deck (plan M6).
 

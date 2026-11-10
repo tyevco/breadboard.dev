@@ -51,5 +51,24 @@ model = "digital_out"
 set = "H0H1_max"
 net = "LED_DIN_MCU"
 
+# E2 (Phase 1 plan section 2 E2, M8; ADR-008 D7): VSYS_SENSE (R1 2.2 MOhm over R2 1 MOhm, C5 100 nF)
+# on AIN0 = P0.02, read by firmware/prebuilt/vsense.elf through Breadboard's SAADC. The package's
+# adc_in set (nordic/nrf52840-qiaa): the loading input, pin_load view saadc_se (CPAD 3 pF, CS 2.5 pF
+# pre-charged to VPRE = VDD at every acquisition, one charge transfer per acquisition). Every sample
+# is a debug log record (the analog-side observable of E2). The E1 firmware never starts the SAADC,
+# so these two bindings load VSYS_SENSE (CPAD + CS) and nothing else in E1.
+[[bind]]
+pin = "main:U10.P0.02"
+model = "adc_in"
+net = "VSYS_SENSE"
+trace_samples = true
+
+# The SAADC's VDD input (PSELP = VDD, REFSEL = VDD1_4) and saadc_se's VPRE: +3V3 on U10's VDD pad.
+# vref is the clamp of the pushed value.
+[[bind]]
+pin = "main:U10.VDD"
+model = "adc_in"
+vref = "3.6V"
+
 [probes]
 nets = ["VLED", "LED_DIN", "LED_DIN_MCU", "LED_DIN_R", "VSYS"]

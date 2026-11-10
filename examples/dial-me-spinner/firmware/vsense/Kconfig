@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+config VSENSE_PERIOD_MS
+	int "Battery reading period (ms)"
+	default 1000
+	help
+	  The one switch between vsense.elf (1000 ms: firmware.md section 2.2's
+	  power_thread tick, "sample at most about 1 Hz" of section 12.4) and
+	  vsense_50ms.elf (50 ms: the shortest burst interval of the
+	  dial-me-spinner suite's test_sample_interval), the two sample rates of
+	  the Phase 1 plan's E2 sample-rate check.
+
+source "Kconfig.zephyr"

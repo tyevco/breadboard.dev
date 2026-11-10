@@ -1,0 +1,5 @@
+* saadc_se charge_share: a pad that keeps its charge (examples/nrf-saadc/board.cir), VDD 3.0 V.
+VSRC src 0 1.2
+RLEAK src pad 1e12
+C1 pad 0 100p
+VVDD vdd 0 3.0

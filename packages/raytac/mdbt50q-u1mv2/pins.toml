@@ -7,7 +7,8 @@
 # parameters from the chip pin that module-pinmap.csv maps the pad to (nordic/nrf52840-qiaa's pins.toml),
 # and a supply reference (voh = "VDD") names a chip pin, which the pinmap leads back to a module pad and
 # its net (spec/package.md section 4, ADR-006 Amendment 3). The models a pad offers are listed here so
-# a binding is checked against the module's own pins.
+# a binding is checked against the module's own pins (bb run refuses a model the pad does not list). The
+# eight AIN pads offer adc_in, the chip's SAADC, with the chip pin's channel (ADR-008 D7, Phase 1 M8).
 schema = "bb-pins/0"
 
 [[pin]]
@@ -67,42 +68,48 @@ number = "9"
 name = "P0.03"
 role = "io"
 supply = "VDD"
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN1" }
 
 [[pin]]
 number = "10"
 name = "P0.29"
 role = "io"
 supply = "VDD"
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN5" }
 
 [[pin]]
 number = "11"
 name = "P0.02"
 role = "io"
 supply = "VDD"
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN0" }
 
 [[pin]]
 number = "12"
 name = "P0.31"
 role = "io"
 supply = "VDD"
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN7" }
 
 [[pin]]
 number = "13"
 name = "P0.28"
 role = "io"
 supply = "VDD"
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN4" }
 
 [[pin]]
 number = "14"
 name = "P0.30"
 role = "io"
 supply = "VDD"
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN6" }
 
 [[pin]]
 number = "15"
@@ -142,14 +149,16 @@ number = "20"
 name = "P0.04"
 role = "io"
 supply = "VDD"
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN2" }
 
 [[pin]]
 number = "21"
 name = "P0.05"
 role = "io"
 supply = "VDD"
-models = ["digital_out", "digital_in"]
+models = ["digital_out", "digital_in", "adc_in"]
+adc = { channel = "AIN3" }
 
 [[pin]]
 number = "22"

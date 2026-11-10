@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Phase 1 M6 (ADR-008 D5): the E1 Zephyr firmware of examples/dial-me-spinner,
+# Phase 1 M6 and M8 (ADR-008 D5): the E1 and E2 Zephyr firmware of examples/dial-me-spinner,
 # built from a pinned west workspace with a pinned Zephyr SDK.
 #
 #   scripts/dms_zephyr.sh sdk                 install the pinned SDK (minimal + arm-zephyr-eabi)
 #   scripts/dms_zephyr.sh ws [<dir>]          create (or update) a workspace from firmware/west.yml
-#   scripts/dms_zephyr.sh build <ws> <out>    build both E1 images into <out> (stripped ELFs)
+#   scripts/dms_zephyr.sh build <ws> <out>    build the E1 and E2 images into <out> (stripped ELFs)
 #   scripts/dms_zephyr.sh update [<ws>]       rebuild into firmware/prebuilt (SHA256SUMS, PROVENANCE)
 #   scripts/dms_zephyr.sh check               fw-rebuild: a FRESH workspace (a second `west init`
 #                                             into a new directory), rebuild, and require the image
@@ -32,8 +32,12 @@ sdk=${ZEPHYR_SDK_INSTALL_DIR:-$HOME/.local/opt/zephyr-sdk-${ZEPHYR_SDK_VERSION}}
 default_ws=$cache/ws-${ZEPHYR_TAG}
 BB=${BB:-${CARGO_TARGET_DIR:-$HOME/.cache/bb-target}/release/bb}
 BOARD=dial_me_spinner/nrf52840
-# name -> extra Kconfig fragment (the one switch between the two builds, ADR-008 D5)
-IMAGES=(led_rail led_rail_wrong_order)
+# The images: E1 (led_rail, and led_rail_wrong_order with its one Kconfig switch) and E2 (vsense,
+# and vsense_50ms with its one Kconfig switch, the reading period). image -> application and extra
+# Kconfig fragment in app_of / conf_of (ADR-008 D5).
+IMAGES=(led_rail led_rail_wrong_order vsense vsense_50ms)
+app_of() { case $1 in led_rail*) echo led_rail ;; vsense*) echo vsense ;; esac; }
+conf_of() { case $1 in led_rail_wrong_order) echo wrong_order.conf ;; vsense_50ms) echo fast.conf ;; esac; }
 
 log() { printf '==> %s\n' "$*" >&2; }
 
@@ -104,11 +108,12 @@ cmd_build() {
   export ZEPHYR_SDK_INSTALL_DIR=$sdk ZEPHYR_BASE=$ws/zephyr ZEPHYR_TOOLCHAIN_VARIANT=zephyr
   mkdir -p "$out"
   for name in "${IMAGES[@]}"; do
-    local bdir=$out/build-$name extra=()
-    [[ $name == led_rail_wrong_order ]] && extra=(-DEXTRA_CONF_FILE=wrong_order.conf)
+    local bdir=$out/build-$name extra=() conf
+    conf=$(conf_of "$name")
+    [[ -n $conf ]] && extra=(-DEXTRA_CONF_FILE="$conf")
     rm -rf "$bdir"
     log "build: $name ($BOARD) in $bdir"
-    (cd "$ws" && west build -p always -b "$BOARD" -d "$bdir" "$fw/led_rail" -- "${extra[@]}") \
+    (cd "$ws" && west build -p always -b "$BOARD" -d "$bdir" "$fw/$(app_of "$name")" -- "${extra[@]}") \
       > "$bdir.log" 2>&1 || { tail -40 "$bdir.log"; exit 1; }
     "$sdk/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-strip" --strip-debug \
       -o "$out/$name.elf" "$bdir/zephyr/zephyr.elf"
@@ -126,7 +131,7 @@ provenance() {
   echo "cmsis_6 $(git -C "$ws/modules/hal/cmsis_6" rev-parse HEAD)"
   echo "sdk zephyr-sdk $(cat "$sdk/sdk_version") ($("$sdk/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc" --version | head -1))"
   echo "west $WEST_VERSION"
-  echo "sources $(cd "$fw" && find boards dts led_rail west.yml requirements.lock -type f | LC_ALL=C sort \
+  echo "sources $(cd "$fw" && find boards dts led_rail vsense west.yml requirements.lock -type f | LC_ALL=C sort \
     | xargs sha256sum | sha256sum | cut -d' ' -f1)"
 }
 

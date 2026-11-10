@@ -52,6 +52,18 @@ impl<'a> Obj<'a> {
         }
     }
 
+    pub fn bool_opt(&mut self, key: &str) -> Result<Option<bool>, String> {
+        match self.get(key) {
+            None => Ok(None),
+            Some(Value::Boolean(b)) => Ok(Some(*b)),
+            Some(v) => Err(format!(
+                "{}: expected a boolean, got {}",
+                self.at(key),
+                v.type_name()
+            )),
+        }
+    }
+
     pub fn str_req(&mut self, key: &str) -> Result<String, String> {
         self.str_opt(key)?
             .ok_or_else(|| format!("{}: required", self.at(key)))

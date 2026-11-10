@@ -1,0 +1,7 @@
+* saadc_se vsense_burst: dial-me-spinner's VSYS_SENSE (R1 2.2 MOhm, R2 1 MOhm, C5 100 nF) at VSYS 3.0 V,
+* VDD 3.366 V (VDD max; hardware/sim test_sample_interval's worst case, nominal parts).
+VSYS vsys 0 3.0
+R1 vsys pad 2.2meg
+R2 pad 0 1meg
+C5 pad 0 100n
+VVDD vdd 0 3.366
