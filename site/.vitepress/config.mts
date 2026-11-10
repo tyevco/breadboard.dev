@@ -50,6 +50,7 @@ export default defineConfig({
             { text: 'Introduction', link: '/guide/introduction' },
             { text: 'Quickstart', link: '/guide/quickstart' },
             { text: 'The E1 demo', link: '/guide/demo' },
+            { text: 'The E2 demo', link: '/guide/demo-e2' },
             { text: 'Installing and setup modes', link: '/guide/setup' },
             { text: 'Running the tests', link: '/guide/testing' },
             { text: 'Project layout', link: '/guide/layout' },

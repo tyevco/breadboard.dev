@@ -18,18 +18,22 @@ authority. Nothing on this page under "Planned" is implemented.
   `bb open`/`flash`/`run`/`probe` (M4); the E1 packages and the
   datasheet-fitted TPS22917 view (M5, M5b); E1 on the imported board (M6);
   the README quickstart, `make demo` and the stranger test (M7).
+- **Phase 1, M8 (E2)**: Breadboard's own nRF52840 SAADC model, a loading
+  `adc_in`, per-sample records, UART log records and the VDD channel; the
+  battery reading and low-battery LED shed on dial-me-spinner
+  ([the E2 demo](./demo-e2)).
 
-The plan records M7 as done except two measurements: the one human run
-(`docs/phase1-exit-checklist.md`) and a timed run with the image's own apt
-sources inside the 15-minute budget.
+The stranger test has also been run against the published repository with
+the image's default apt sources: the README took 68.2 s against the
+15-minute limit. The one remaining exit item is the human run
+(`docs/phase1-exit-checklist.md`).
 
-## Planned: the rest of Phase 1 (M8–M11)
+## Planned: the rest of Phase 1 (M9–M11)
 
 These are milestones in the plan, not features. Each has its own gate there.
 
 | Milestone | Plan |
 | --- | --- |
-| **M8: E2** | Battery reading, sample-rate error and low-battery LED shed (VSENSE). A `BbNrf52Saadc` model with BURST, a loading `adc_in`, a per-sample trace, UART-to-`log` records and a VDD channel. |
 | **M9: GDB passthrough** | `bb run --gdb <port>`, prototyped first (ADR-008 D10). A run with GDB attached must give the same outputs as without it, or the mode is marked debug-only. `bb run` has no `--gdb` flag today. |
 | **M10: E3 (stretch)** | Detent homing: a PWM model, TEMP and NVMC stand-ins, an averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device. |
 | **M11: Systems** | Base-board import, `[[connection]]` between boards and the harness view. Only one board is ever simulated. |
