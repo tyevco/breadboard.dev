@@ -88,7 +88,10 @@ The run writes these files to `out/spike/`:
 8. `make packages` (ADR-006): the package files and lockfiles against
    `spec/schema`, `bb pkg lint`, `bb pkg test` (each view's test vectors
    through the ngspice engine at two grant partitions) and the examples'
-   `bb.lock` files.
+   `bb.lock` files, and that nothing local-only is committed (the
+   vendor-derived TPS22917 view lives only in the git-ignored
+   `local-packages/`; the committed `ti/tps22917` is datasheet-fitted,
+   Phase 1 M5b).
 
 The example boards take their MCU and its pin models from component
 packages (`packages/`, `spec/package.md`): `*bb part U1

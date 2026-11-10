@@ -1,0 +1,35 @@
+* =====================================================================================================
+* load_switches__ws2812c.lib  --  Worldsemi WS2812C-2020-V6, supply and DIN port only (D101..D148 on VLED)
+* =====================================================================================================
+* Part      : Worldsemi WS2812C-2020-V6 (SMD2020-4P: 1 DO, 2 GND, 3 DI, 4 VDD), LCSC C55109522
+* Datasheet : https://datasheet.lcsc.com/datasheet/pdf/8c7f104c99e52e4adb687ae84e594e95.pdf
+*             (Worldsemi WS2812C-2020-V6 datasheet, Chinese, 9 pages; no revision code printed; the URL in
+*             hardware/design/sheets/leds.py LED_DS)
+* Modelled (values and where they come from):
+*   VDD static current  <= 1 uA per pixel ("静态功耗低于1μA", features, p.1; LED table "静态电流 ≦1μA" @5 V, p.3)
+*                         -> 1 uA at VDD >= 3.3 V, scaled linearly below (CMOS bias, assumption for VDD < 3.3 V).
+*   LED channel current  5 mA per channel ("每个通道工作电流5mA", p.1; IV test condition 5 mA, p.3), 3 channels,
+*                         as a constant-current load "duty" (0..1 of full white); it fades linearly to zero
+*                         between VDD = 2 V and 1 V (ASSUMPTION, only so a DC operating point exists from 0 V;
+*                         the DC load-extreme runs sit at VDD >= 3.4 V where the full current flows).
+*   DI input            : CI <= 15 pF (switching table "输入电容 CI 15 pF max", p.3) -> 15 pF to VSS;
+*                         II <= +-1 uA at VI = VDD/VSS (p.3) -> not modelled (negligible vs 100 kOhm R41);
+*                         clamp diodes DI->VDD and VSS->DI, implied by the absolute maximum VI = -0.3 V .. VDD + 0.7 V
+*                         (最大额定值, p.2).  The datasheet gives NO clamp I-V; the diode below is a generic
+*                         silicon junction ASSUMPTION (IS 1e-14 A, N 1.0, RS 10 Ohm: about 0.70 V at 5 mA,
+*                         0.64 V at 0.5 mA).  Override with params is/n/rs for a sensitivity bracket.
+*   Supply range 3.3-5.3 V (p.2) and VIH 0.55 VDD / VIL 0.7 V (p.3) are LIMITS used by the tests, not modelled.
+* NOT modelled: the data protocol / DOUT driver (DOUT left open here), PWM ripple of the LED current,
+*   power-on-reset threshold (not given), behaviour at VDD below 3.3 V other than the bias scaling above,
+*   LED forward-voltage drop-out (the "VF 恒流曲线" figure has no readable numbers), temperature.
+* =====================================================================================================
+
+* One pixel: DIN, VDD, VSS.  duty = fraction of full white (3 x 5 mA) drawn as LED current.
+.subckt LSW_WS2812C DIN VDD VSS params: duty=0 is=1e-14 n=1.0 rs=10
+B_IQ     VDD VSS I = 1u * min(1, max(0, V(VDD,VSS)/3.3))
+B_LED    VDD VSS I = {duty} * 15m * min(1, max(0, (V(VDD,VSS) - 1.0)/1.0))
+D_CLH    DIN VDD lsw_ws_esd
+D_CLL    VSS DIN lsw_ws_esd
+C_IN     DIN VSS 15p
+.model lsw_ws_esd d (is={is} n={n} rs={rs} cjo=1p)
+.ends LSW_WS2812C

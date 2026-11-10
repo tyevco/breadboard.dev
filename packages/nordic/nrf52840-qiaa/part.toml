@@ -1,0 +1,36 @@
+# nordic/nrf52840-qiaa: the Nordic nRF52840 SoC, aQFN73 (Phase 1 plan M5, ADR-006 D9, ADR-008 D1-D2).
+#
+# The behavioural layer is Breadboard's Renode platform nrf52840-bb@1 (ADR-008 D1: Renode 1.17.0's
+# nRF52840 without the SVD download, 64 MIPS). The pins carry the GPIO pin models resolved against the
+# PS (pins.toml says how). The suite's GPIO "views" (ADR-006 D9's gpio_led, gpio_lsw, ...) are pad
+# DRIVERS: in a co-simulation the pad's driver is the pin model, so a circuit view of it would put a
+# second driver on the net (the pin-boundary contract allows one). They become pins.toml's named
+# parameter sets instead, and the package has no analog view (ADR-006 Amendment 3). The SAADC's
+# pin_load view (saadc_se) arrives with plan M8.
+schema = "bb-part/0"
+
+[part]
+id = "nordic/nrf52840-qiaa"
+version = "0.1.0"
+kind = "soc"
+manufacturer = "Nordic Semiconductor"
+mpn = ["NRF52840-QIAA", "NRF52840-QIAA-R", "NRF52840-QIAA-R7"]
+datasheet = { url = "https://docs.nordicsemi.com/bundle/ps_nrf52840/page/keyfeatures_html5.html", rev = "PS v1.1 (4413_417, 2019-02-28)" }
+license = "Apache-2.0"
+description = "Bluetooth LE SoC, Arm Cortex-M4F 64 MHz, 1 MB flash, 256 kB RAM, USB, aQFN73"
+
+[footprints]
+kicad = ["Package_DFN_QFN:Nordic_AQFN-73-1EP_7x7mm_P0.5mm"]
+
+[pins]
+file = "pins.toml"
+
+[behavioral]
+engine = "renode"
+platform = "nrf52840-bb@1"
+
+[provenance]
+source = "datasheet"
+refs = ["nRF52840 PS v1.1 section 6.9.3.1 (GPIO electrical specification)", "nRF52840 PS v1.1 section 7 (pin assignments, aQFN73)"]
+not_modelled = ["the GPIO pad's ESD clamps and its I-V beyond the 0.4 V point", "internal pull resistors", "SAADC loading (plan M8)"]
+confidence = "datasheet_checked"

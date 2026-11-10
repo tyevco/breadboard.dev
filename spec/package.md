@@ -1,7 +1,8 @@
 # Component packages (`part.toml`, `pins.toml`, views, tests, `bb.lock`)
 
 Status: normative. Decided by ADR-006 (accepted 2026-11-09, approver
-decisions A-C; Amendment 1 for the KiCad value qualifiers). Implementation:
+decisions A-C; Amendment 1 for the KiCad value qualifiers; Amendment 3 for
+modules, the view conflict report and `bb pkg test --report`). Implementation:
 the `bbpkg` crate (`bbpkg/src`), `bb pkg`, `bb open` and `bb run` (`cli/src`).
 JSON Schemas: `spec/schema/part.schema.json`, `pins.schema.json`,
 `lock.schema.json`, `pkgtest.schema.json` (JSON Schema 2020-12; the TOML
@@ -186,6 +187,21 @@ zout = "25"
   (a digital control the CPU engine drives), `{ role = "observe", signal }`
   (a node the engine reads back), `{ role = "pin", pin }` (another package
   pin). Control and observe signals are internal to the binding: not pins.
+- **Modules** (`kind = "module"`, ADR-006 Amendment 3). A module package
+  lists its own pads in `pins.toml` (numbers and names as the board's
+  symbol gives them, roles, the models a pad offers, `supply`) and maps
+  them onto its chip package in the `[module] pinmap` file, a CSV with the
+  header `pad,chip_pin` and one row per pad: the module pad number, then
+  the chip package's pin name. Every pad except an `nc` one is mapped
+  exactly once. The pads carry **no parameter sets** and the module has
+  **no `[behavioral]` layer**: a binding on a module pad takes its pin
+  model's parameter sets from the chip pin the pad maps to, a supply
+  reference in such a set names a chip pin, which the pinmap leads back to
+  a module pad and its net, and the behavioural layer is the chip's. The
+  chip package is part of the resolved set wherever the module is (it is
+  in `bb.lock`, and its platform too). A pad's models must be offered by
+  its chip pin, a supply, ground or power pad maps to a chip pin of the
+  same role, and a pad's `supply` maps to the chip pin's `supply`.
 
 ## 5. The `gnd` rule
 
@@ -319,7 +335,11 @@ engine (ADR-006 Context 3). A voltage is measured at its instant
 (interpolated between solver points) and rounded to µV; a crossing time is
 linearly interpolated between the samples every `sample` and rounded to fs.
 **Each vector runs at two grant partitions, one lattice cell and 1 ms, and
-every sample and measurement must be identical.**
+every sample and measurement must be identical.** `bb pkg test --report
+<file>` also writes one JSON line per vector run (the package id, view,
+vector file name, lattice, option set, partition, every measured value in
+µV or fs, and the sha256 of every sample's `f64` bits), so two packages'
+results compare byte for byte (ADR-006 gate G8).
 
 **Qualification.** A view is lattice-qualified for (`L`, option set) when
 all its vectors pass under that pair. `bb pkg test` runs each view under
@@ -359,6 +379,7 @@ the table (`cli/src/platforms.rs`):
 | --- | --- | --- |
 | `stm32f103-offline@1` | `engines/cpu-renode/platforms/stm32f103-offline.repl` | `stm32f103` |
 | `stm32f072-bb@1` | `engines/cpu-renode/platforms/stm32f072-bb.repl` | `stm32f072` |
+| `nrf52840-bb@1` | `engines/cpu-renode/platforms/nrf52840-bb.repl` (ADR-008 D1) | `nrf52840` |
 
 A behaviour change bumps the major and changes the hash. The lock records
 Renode's version (1.17.0) with each Renode platform.
@@ -389,8 +410,10 @@ Entries are sorted by id. Written by `bb open`:
   entries that changed and keeps every other entry byte for byte;
 - `bb open --check` writes nothing and fails if the lock would change.
 
-`bb run` refuses a board whose packages or platforms differ from its lock,
-or a board with packages and no lock, and never writes the lock.
+A module's chip package (section 4) is locked with the module, and the
+chip's platform with it. `bb run` refuses a board whose packages or
+platforms differ from its lock, or a board with packages and no lock, and
+never writes the lock.
 `run.json` (ADR-007 D6) records both kinds of hash.
 
 ## 10. Schema versions and package versions
@@ -430,18 +453,28 @@ Errors:
   option set; a provenance block (the view's or the package's); `circuit`
   ports name pins, once each, and match the subckt's port count; a
   `pin_load` view has exactly one pad port;
+- a module (section 4): the pinmap file parses, every pad except `nc` is
+  mapped once and only pads are mapped, no `[defaults]`, no
+  `[behavioral]`; with the chip package found (in the module's own package
+  root, else first-party) each chip pin exists, roles, models and supplies
+  agree;
 - view files: top-level content (section 3), the subckt exists, the `gnd`
   rule (section 5), and the package's own views define no top-level name
   differently;
 - test vectors parse and name existing views and their ports.
 
 Warnings: a previous-major file (the migration hint), a parameter set for a
-model no pin takes, a view without test vectors.
+model no pin takes, a view without test vectors, a module whose chip
+package was not found, and a **conflict**: one parameter that several views
+of the package carry with different defaults (ADR-006 D9 rule 2; reported,
+never averaged, because each view is right for its own purpose).
 
 `scripts/validate_packages.py` validates the TOML of every package and lock
 against the JSON Schemas, and checks that `mpn_patterns` compile.
 `scripts/check_pins_kicad.py` compares a `pins.toml` with a KiCad symbol
-library entry.
+library entry (`--composite`: a KiCad chip symbol's multi-function name such
+as `AIN0/P0.02` matches the pin named by one component, `P0.02`, with the
+others in `alt`).
 
 ## 12. Parts from packages in a hand-written `board.cir`
 
@@ -467,7 +500,13 @@ library entry.
 
 - A complete package: `packages/generic/resistor/` (view, pins, two test
   vectors, a recorded qualification).
-- MCU packages: `packages/st/stm32f103c8/`, `packages/st/stm32f072rb/`.
+- MCU packages: `packages/st/stm32f103c8/`, `packages/st/stm32f072rb/`,
+  `packages/nordic/nrf52840-qiaa/` (named GPIO parameter sets per PIN_CNF
+  drive and PS column), and the module `packages/raytac/mdbt50q-u1mv2/`
+  (section 4).
+- Analog views with suite-derived vectors (Phase 1 M5): `packages/ti/
+  tps22917/` (a datasheet-fitted view; the vendor-derived one is
+  local-only, ADR-006 D9 rule 4) and `packages/worldsemi/ws2812c-2020/`.
 - Format examples of a load switch and a chip with an ADC pin load:
   `spec/examples/packages/ti/tps22917/` and
   `spec/examples/packages/nordic/nrf52840-qiaa/`. They illustrate the

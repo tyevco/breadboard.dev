@@ -5,7 +5,9 @@
 //! between views). Lint never changes a file.
 
 use crate::optsets;
-use crate::package::{param_set, pin_model_params, Package, Param, Port, LOCAL_ONLY};
+use crate::package::{
+    module_pinmap, param_set, pin_model_params, Package, Param, Port, LOCAL_ONLY,
+};
 use crate::pkgtest;
 use crate::schema::Registry;
 use crate::spice;
@@ -34,6 +36,9 @@ pub struct Context<'a> {
     /// The package lives in breadboard.dev's first-party `packages/`
     /// (where `LicenseRef-local-only` is refused, D9).
     pub first_party: bool,
+    /// For a module: its chip package (`[module] chip`), when the caller
+    /// found it, so the pinmap's chip pin names are checked too.
+    pub chip: Option<&'a Package>,
 }
 
 struct Out(Vec<Finding>);
@@ -109,6 +114,8 @@ pub fn lint(pkg: &Package, ctx: &Context, reg: &Registry) -> Vec<Finding> {
     if let Some(m) = &p.module {
         if !pkg.dir.join(&m.pinmap).is_file() {
             o.e(format!("module.pinmap {}: file not found", m.pinmap));
+        } else {
+            lint_module(pkg, ctx, &mut o);
         }
     }
     if let Some(pm) = &p.footprint_pinmap {
@@ -128,6 +135,109 @@ pub fn lint(pkg: &Package, ctx: &Context, reg: &Registry) -> Vec<Finding> {
     lint_tests(pkg, reg, &mut o);
     o.0.sort_by(|a, b| a.level.cmp(&b.level));
     o.0
+}
+
+/// A module (`spec/package.md` section 4, ADR-006 Amendment 3): every pad
+/// maps once onto a chip pin; the pads carry no parameter sets and no
+/// behavioural layer of their own (the chip's apply); with the chip package
+/// at hand, each chip pin exists, its role matches the pad's, the pad's
+/// models are the chip pin's, and a pad's supply maps to the chip pin's.
+fn lint_module(pkg: &Package, ctx: &Context, o: &mut Out) {
+    let p = &pkg.part;
+    let m = p.module.as_ref().expect("module");
+    if p.behavioral.is_some() {
+        o.e("a module has no [behavioral] layer of its own: its chip package's applies");
+    }
+    if !pkg.pins.defaults.is_empty() {
+        o.e("pins.toml: a module's pads carry no parameter sets ([defaults]); bindings take the chip pin's");
+    }
+    let rows = match module_pinmap(pkg) {
+        Ok(r) => r,
+        Err(e) => {
+            o.e(format!("module.pinmap: {e}"));
+            return;
+        }
+    };
+    let mut seen: BTreeMap<&str, &str> = BTreeMap::new();
+    for (pad, chip_pin) in &rows {
+        if pkg.pins.pins.iter().all(|x| x.number != *pad) {
+            o.e(format!(
+                "module.pinmap: pad {pad} is not a pin number in pins.toml"
+            ));
+        }
+        if seen.insert(pad, chip_pin).is_some() {
+            o.e(format!("module.pinmap: pad {pad} mapped twice"));
+        }
+    }
+    for pin in &pkg.pins.pins {
+        if pin.role != "nc" && !seen.contains_key(pin.number.as_str()) {
+            o.e(format!(
+                "module.pinmap: pad {} ({}) is not mapped to a chip pin",
+                pin.number, pin.name
+            ));
+        }
+    }
+    let Some(chip) = ctx.chip else {
+        o.w(format!(
+            "module.chip {}: package not found, so the pinmap's chip pin names are not checked",
+            m.chip
+        ));
+        return;
+    };
+    if chip.part.id != m.chip {
+        o.e(format!(
+            "module.chip {}: the chip package given is {}",
+            m.chip, chip.part.id
+        ));
+        return;
+    }
+    if chip.part.behavioral.is_none() {
+        o.w(format!(
+            "module.chip {}: the chip has no behavioural layer",
+            m.chip
+        ));
+    }
+    let power = |r: &str| matches!(r, "power_in" | "power_out" | "ground");
+    for pin in &pkg.pins.pins {
+        let Some(cn) = seen.get(pin.number.as_str()) else {
+            continue;
+        };
+        let Some(cp) = chip.pins.by_name(cn) else {
+            o.e(format!(
+                "module.pinmap: pad {} -> {cn}: no such pin in {}",
+                pin.number, m.chip
+            ));
+            continue;
+        };
+        if (power(&pin.role) || power(&cp.role)) && pin.role != cp.role {
+            o.e(format!(
+                "module.pinmap: pad {} ({}, {}) -> {cn} ({}): the roles differ",
+                pin.number, pin.name, pin.role, cp.role
+            ));
+        }
+        for model in &pin.models {
+            if !cp.models.contains(model) {
+                o.e(format!(
+                    "module.pinmap: pad {} ({}) offers {model}, which {} pin {cn} does not",
+                    pin.number, pin.name, m.chip
+                ));
+            }
+        }
+        if let Some(s) = &pin.supply {
+            let mapped = pkg
+                .pins
+                .pins
+                .iter()
+                .find(|x| x.name == *s)
+                .and_then(|x| seen.get(x.number.as_str()).copied());
+            if cp.supply.as_deref() != mapped {
+                o.e(format!(
+                    "module.pinmap: pad {} ({}): its supply {s} maps to {:?}, the chip pin's supply is {:?}",
+                    pin.number, pin.name, mapped, cp.supply
+                ));
+            }
+        }
+    }
 }
 
 fn lint_pins(pkg: &Package, o: &mut Out) {
@@ -383,6 +493,33 @@ fn lint_views(pkg: &Package, o: &mut Out) {
     // D3: the package's own views must not define one name differently.
     if let Err(e) = spice::collect(&texts) {
         o.e(e);
+    }
+    // D9 rule 2: a parameter that several views carry with different
+    // defaults is a conflict to report, never to average (a warning: each
+    // view is right for its own purpose).
+    let mut by_param: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
+    for v in &p.analog {
+        for (k, val) in &v.params {
+            by_param
+                .entry(k.as_str())
+                .or_default()
+                .push((v.name.as_str(), val.as_str()));
+        }
+    }
+    for (k, vs) in by_param {
+        let distinct: BTreeSet<Option<u64>> = vs
+            .iter()
+            .map(|(_, val)| parse_number(val).ok().map(|d| d.to_f64().to_bits()))
+            .collect();
+        if vs.len() > 1 && distinct.len() > 1 {
+            o.w(format!(
+                "conflict (D9 rule 2): parameter {k} differs between views: {}",
+                vs.iter()
+                    .map(|(n, val)| format!("{n} {k}={val}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
     }
 }
 

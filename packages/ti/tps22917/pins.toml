@@ -1,0 +1,35 @@
+# ti/tps22917 pins (SOT-23-6, DBV): numbers and names as SLVSDW8B section 6 (Pin Configuration and
+# Functions) and KiCad 10.0.8's Power_Management:TPS22917DBV give them (checked with
+# scripts/check_pins_kicad.py). No pin is bound to a co-simulation engine, so no pin offers a pin model:
+# the part is an analog view only.
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "VIN"
+role = "power_in"
+
+[[pin]]
+number = "2"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "3"
+name = "ON"
+role = "input"
+
+[[pin]]
+number = "4"
+name = "CT"
+role = "analog"
+
+[[pin]]
+number = "5"
+name = "QOD"
+role = "analog"
+
+[[pin]]
+number = "6"
+name = "VOUT"
+role = "power_out"

@@ -752,7 +752,33 @@ packages: bb
 	$(BB) pkg lint packages $(PKG_LOCAL)
 	$(BB) pkg test packages $(PKG_LOCAL)
 	set -e; for b in $(PKG_BOARDS); do $(BB) open --check $$b; done
+	bash scripts/check_local_only.sh
 	@echo "packages: PASS"
+
+# --- Phase 1 M5/M5b: the E1 packages (ADR-006 D9, Amendment 3) ------------
+# The committed vectors of packages/ti/tps22917 and packages/worldsemi/
+# ws2812c-2020 are generated from the dial-me-spinner suite at 6854d25 (its
+# own deck builders, git archive export; scripts/dms_packages.sh).
+# dms-vectors rewrites them; dms-vectors-check requires the committed ones
+# byte for byte (needs DMS_REPO and the suite's Python, like dms-s1).
+.PHONY: dms-vectors dms-vectors-check dms-local-packages dms-m5b
+dms-vectors: bb
+	DMS_REPO=$(DMS_REPO) bash scripts/dms_packages.sh vectors $(BB)
+dms-vectors-check: bb
+	DMS_REPO=$(DMS_REPO) bash scripts/dms_packages.sh check $(BB)
+# The LOCAL-ONLY vendor-derived ti/tps22917 (approver decision A3): built in
+# the git-ignored local-packages/ (DMS_LOCAL_PACKAGES) from git archive with
+# the S1 fix and the GND -> GNDP rename, qualified by `bb pkg test --record`
+# (its vectors reproduce results.json), and gate G8 (the rename gives
+# byte-identical vector results). Never commit local-packages/.
+dms-local-packages: bb
+	DMS_REPO=$(DMS_REPO) bash scripts/dms_packages.sh local $(BB)
+# Plan M5b's gate: the committed datasheet-fitted TPS22917 view against the
+# local vendor-derived one on the E1 checks (VLED at each P0.06 rise and the
+# LSW-3 maximum within 10 mV, LSW-2 within 1 ms, the wrong-order excursion
+# within 10 mV), both benches, through NgspiceEngine at phase0. About 30 s.
+dms-m5b: dms-local-packages
+	DMS_REPO=$(DMS_REPO) bash scripts/dms_packages.sh m5b $(BB)
 
 # After an intended change to a package, a platform's .repl or a Renode
 # plugin source: rewrite the changed bb.lock entries (review, then commit).

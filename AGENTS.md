@@ -58,7 +58,10 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make dms-source` | Phase 1 M0: the vendored dial-me-spinner KiCad inputs (`examples/dial-me-spinner/kicad/`) against the sha256s in `examples/dial-me-spinner/SOURCE`, and against `git show <commit>:<path>` when `DMS_REPO` (default `../dial-me-spinner`) exists (`scripts/dms_source_check.sh`) |
 | `make dms-suite-check` | Phase 1 M0 gate: re-run the dial-me-spinner SPICE suite (`-m "not slow"`) at the reference commit `6854d25` from a `git archive` export in `~/.cache/bb-dms-suite` (`scripts/dms_suite.sh`, about 4-5 min) and require `out/dms-suite/results.json` to equal the committed `examples/dial-me-spinner/suite/results.json` byte for byte (checks, test outcomes, every deck's numeric fallback level, ngspice version). `make dms-suite-update` regenerates it. Never check out, stash or write in the dial-me-spinner repository |
 | `make dms-s1` | Phase 1 plan S1 (ADR-006 Amendment 2): the E1 deck (two LED rail on/off cycles, 120 ms, both benches) through `NgspiceEngine` at `phase0`, with the S1 fix of the TPS22917 view. The view and every deck are built in `~/.cache/bb-dms-s1` from a `git archive` export of `6854d25`; they are TI-derived, so they stay local-only and never enter the repository (`scripts/dms_s1.sh`, `scripts/dms_s1.py`, `engines/analog-ngspice/examples/deck_run.rs`). Its 18 gates: 120 ms at both benches; grants of 10 µs, 1 ms and 10 ms byte-identical; VLED at the check instants and the LSW-2 time against the suite's `suite_fallback` run; VLED at every 10 µs against the converged run; the fix's result neutrality. About 1.5 min on 8 jobs (`DMS_S1_JOBS`). `make dms-s1-cost` is the S1 cost table (plan §8; `DMS_S1_N` interleaved rounds, medians; run it on an idle host) |
-| `make packages` | ADR-006 (Phase 1 M3; in `make test`): every `part.toml`, `pins.toml`, test vector, `bb.lock`, project `bb.toml`, bench and `board.bbm` against `spec/schema/*.schema.json` (`scripts/validate_packages.py`, python3-jsonschema), `bb pkg lint` clean, `bb pkg test` (every vector through `NgspiceEngine` at one cell and 1 ms, identical, and at every recorded qualification; the first-party packages and `examples/adc/kicad/packages`), and every example's `bb.lock` and every example project's `board.bbm` current (`bb open --check`) |
+| `make packages` | ADR-006 (Phase 1 M3; in `make test`): every `part.toml`, `pins.toml`, test vector, `bb.lock`, project `bb.toml`, bench and `board.bbm` against `spec/schema/*.schema.json` (`scripts/validate_packages.py`, python3-jsonschema), `bb pkg lint` clean, `bb pkg test` (every vector through `NgspiceEngine` at one cell and 1 ms, identical, and at every recorded qualification; the first-party packages and `examples/adc/kicad/packages`), and every example's `bb.lock` and every example project's `board.bbm` current (`bb open --check`); `scripts/check_local_only.sh` (no `LicenseRef-local-only` package, nothing under `local-packages/` and no TI-derived model file is tracked) |
+| `make dms-vectors` / `make dms-vectors-check` | Phase 1 M5 (ADR-006 Amendment 3): regenerate the test vectors of `packages/ti/tps22917` and `packages/worldsemi/ws2812c-2020` from the dial-me-spinner suite's own deck builders at `6854d25` (`scripts/dms_packages.sh`, `scripts/dms_packages.py`; `git archive` export, suite venv), or require the committed ones byte for byte and `nordic/nrf52840-qiaa`'s GPIO sets to equal the suite's resistances (needs `DMS_REPO`) |
+| `make dms-local-packages` | Phase 1 M5: build the LOCAL-ONLY vendor-derived `ti/tps22917` (`LicenseRef-local-only`: the suite's TI-derived view with the S1 fix and the `GND` -> `GNDP` rename) in the git-ignored `local-packages/` (`DMS_LOCAL_PACKAGES`), qualify it with `bb pkg test --record`, and run gate G8 (the rename gives byte-identical `bb pkg test --report` lines). Never commit `local-packages/` |
+| `make dms-m5b` | Phase 1 M5b gate (after `dms-local-packages`): the committed datasheet-fitted TPS22917 view against the local vendor-derived one on the E1 checks through `NgspiceEngine` at `phase0`, both benches (VLED at each P0.06 rise and the LSW-3 maximum within 10 mV, LSW-2 within 1 ms, the wrong-order excursion within 10 mV; `scripts/dms_m5b.py`, `out/dms-m5b/summary.json`, about 40 s) |
 | `make locks` | `bb open --update-lock` on every example board and project: after an intended change to a package, a platform `.repl` or **any Renode plugin source** (they are in every Renode platform's content hash, ADR-006 D8); review and commit the `bb.lock` and `board.bbm` diffs |
 | `make adc-kicad` | Phase 1 M4 gate M4a (ADR-007 Amendment 1; in `make test`): `examples/adc/kicad`, the ADC board drawn in KiCad, imported and run as a `bb.toml` project (a copy in `~/.cache/bb-adc-kicad`, firmware recorded with `bb flash`; `scripts/adc_kicad.sh`): `board.bbm` current; equal to its one-cell reference and to `tests/golden/adc-kicad/outputs.sha256`; the `.net` and `kicad-cli` routes byte-identical (when `kicad-cli` is installed); board.cir's committed non-grant records byte for byte and `nets.csv`/`nets.vcd` within 1 mV (2 samples differ by 1 µV: C1's `470n` against `4.7e-7`, which the script checks byte for byte); `bb run` writes nothing into the project. `make adc-kicad-prepare` makes the copy that `pool-equiv` and `cost-table` run |
 | `make kicad-import` | Phase 1 M4 gates M4b-M4f on the dial-me-spinner main board at 6854d25 (`scripts/kicad_import.sh`, about 20 s; needs KiCad 10 in WSL and the Windows `kicad-cli.exe` unless `KICAD_WINDOWS=0`): 201 parts, 142 nets, 657 pin nodes; the resolution counts; one `board.bbm` from the committed netlist, fresh Linux and Windows exports and a partial KiCad 10 re-save (dc96515's KiCad 9 netlist as the secondary check); byte-identical re-imports; unchanged sources; the version refusals. Not in `make test` (no KiCad in CI); `cli/tests/kicad_import.rs` (the two-board fixture) is |
@@ -87,7 +90,10 @@ bbpkg/                  component packages (ADR-006, spec/package.md): value gra
                         TOML reader, part.toml/pins.toml, lint, view files and deck assembly, test
                         vectors through NgspiceEngine, tree hashes and bb.lock, schema versions, SHA-256
 packages/               first-party packages: generic/{resistor,capacitor,inductor}, st/stm32f103c8,
-                        st/stm32f072rb
+                        st/stm32f072rb; Phase 1 M5: ti/tps22917 (datasheet-fitted view), worldsemi/
+                        ws2812c-2020, nordic/nrf52840-qiaa, raytac/mdbt50q-u1mv2 (a module)
+local-packages/         git-ignored, LOCAL-ONLY packages (make dms-local-packages: the vendor-derived
+                        ti/tps22917); never committed
 engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
                         examples/deck_run.rs: a SPICE body through NgspiceEngine with digital-glue edges (S1)
 engines/cpu-renode/     Renode engine over the External Control API; platforms/: the plugin
@@ -139,7 +145,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         dms_suite_collect.py), validate_packages.py, dms_values.py,
                         check_pins_kicad.py, setup_container_test.sh,
                         nrf_vendor_headers.sh, nrf_zephyr_gate.sh, adc_kicad.sh,
-                        kicad_import.sh, compare_outputs.py
+                        kicad_import.sh, compare_outputs.py, dms_packages.sh (+ dms_packages.py,
+                        dms_m5b.py), check_local_only.sh
 ```
 
 ## The three invariants
@@ -218,6 +225,13 @@ feedback board).
   new platform adds a row to `cli/src/platforms.rs`. A package value is a
   string in the value grammar (`spec/package.md` section 6), never a SPICE
   suffix: write `Meg`, never a bare `M`.
+- **Local-only models stay local** (Phase 1 approver decision A3, ADR-006
+  D9 rule 4). A view derived from a vendor model whose redistribution terms
+  were not checked (the TI-derived TPS22917) lives only in a
+  `LicenseRef-local-only` package under the git-ignored `local-packages/`
+  (or outside the repository), built from a `git archive` export. Never
+  `git add` it, never copy its text into a committed file; `make packages`
+  fails if one is tracked. The committed default is a datasheet-fitted view.
 - **Projects (ADR-007, `spec/project.md`).** `bb open` is the only command
   that writes into a project (`board.bbm`, `bb.lock`, `.bb/`; `bb.toml`
   only when it creates a minimal one), `bb flash` and `bb probe` edit

@@ -1,0 +1,50 @@
+# worldsemi/ws2812c-2020: Worldsemi WS2812C-2020-V6 addressable RGB LED (Phase 1 plan M5, ADR-006 D9).
+#
+# One view, migrated from the dial-me-spinner suite (D9 rule 3: only what E1 uses): `pixel`, the
+# supply and DIN port of one pixel (load_switches__ws2812c.lib, copied unchanged). The suite's other
+# WS2812C files (led_data__ws2812c_din.lib, power_integrity__ws2812c.lib) migrate when a scenario uses
+# them.
+schema = "bb-part/0"
+
+[part]
+id = "worldsemi/ws2812c-2020"
+version = "0.1.0"
+kind = "discrete"
+manufacturer = "Worldsemi"
+mpn = ["WS2812C-2020-V6"]
+lcsc = ["C55109522"]
+datasheet = { url = "https://datasheet.lcsc.com/datasheet/pdf/8c7f104c99e52e4adb687ae84e594e95.pdf", rev = "WS2812C-2020-V6 (no revision code printed)" }
+license = "Apache-2.0"
+description = "Addressable RGB LED, 2.0 x 2.0 mm, 3.3-5.3 V"
+
+[footprints]
+kicad = ["LED_SMD:LED_WS2812B-2020_PLCC4_2.0x2.0mm"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "pixel"
+purpose = "one pixel as a load: VDD quiescent and LED current, the DIN input capacitance and its clamp diodes to VDD and VSS (LED rail sequencing, phantom powering through DIN)"
+fidelity = ["fast"]
+default_for = ["fast"]
+file = "analog/load_switches__ws2812c.lib"
+subckt = "LSW_WS2812C"
+ports = ["DIN", "VDD", "VSS"]
+params = { duty = "0", is = "1e-14", n = "1", rs = "10" }
+
+[analog.provenance]
+source = "datasheet"
+base = "the dial-me-spinner suite's pixel model (load_switches__ws2812c.lib), fitted to the WS2812C-2020-V6 datasheet"
+refs = ["WS2812C-2020-V6 DS p.1 (static current, 5 mA per channel)", "WS2812C-2020-V6 DS p.2 (absolute maximum VI = -0.3 V .. VDD + 0.7 V)", "WS2812C-2020-V6 DS p.3 (CI <= 15 pF, II <= 1 uA)"]
+deviations = []
+not_modelled = ["the data protocol and DOUT driver (DOUT is left open)", "PWM ripple of the LED current", "power-on reset threshold", "behaviour below VDD 3.3 V other than the bias scaling", "LED forward-voltage drop-out", "temperature", "the clamp I-V (a generic silicon junction: an ASSUMPTION; params is, n, rs bracket it)"]
+origin = "dial-me-spinner@6854d25:hardware/sim/models/load_switches__ws2812c.lib"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

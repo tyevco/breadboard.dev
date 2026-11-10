@@ -6,9 +6,11 @@
 #       netlist: 201 parts, 142 nets, 657 pin nodes. (The synthetic
 #       two-board fixture is cli/tests/kicad_import.rs, in make test.)
 #  M4f  the resolution counts: 118 generic passives (89 C, 28 R, 1 L), 12
-#       that need no model, 70 MPN parts unresolved, J11 by its override;
-#       without the override J11 is the only unresolved part with no MPN
-#       and no LCSC (the one "prompt").
+#       that need no model, J11 by its override; since plan M5 51 parts by
+#       MPN (ti/tps22917 x2: U2 and U21; worldsemi/ws2812c-2020 x48; the
+#       raytac/mdbt50q-u1mv2 module U10) and 19 MPN parts unresolved (70 at
+#       M4, before the E1 packages); without the override J11 is the only
+#       unresolved part with no MPN and no LCSC (the one "prompt").
 #  M4c  one board.bbm from: the committed KiCad 10.0.8 netlist; a fresh
 #       Linux kicad-cli export (as a .net, and through `kicad =`); a
 #       Windows kicad-cli export (as a .net, and through `kicad =`); the
@@ -71,7 +73,11 @@ assert (len(inst), len(nets), nodes) == (201, 142, 657), "M4b counts"
 st = collections.Counter(i["resolution"]["stage"] for i in inst)
 gen = collections.Counter(i["package"]["id"] for i in inst if i["resolution"]["stage"] == "generic")
 print(f"kicad-import: M4f: stages {dict(sorted(st.items()))}; generic {dict(sorted(gen.items()))}")
-assert st == {"generic": 118, "no_model": 12, "unresolved": 70, "override": 1}, "M4f stages"
+assert st == {"generic": 118, "no_model": 12, "mpn": 51, "unresolved": 19, "override": 1}, "M4f stages"
+mpn = collections.Counter(i["package"]["id"] for i in inst if i["resolution"]["stage"] == "mpn")
+print(f"kicad-import: M4f: by MPN {dict(sorted(mpn.items()))}")
+assert mpn == {"ti/tps22917": 2, "worldsemi/ws2812c-2020": 48, "raytac/mdbt50q-u1mv2": 1}, "M4f mpn (plan M5)"
+assert sorted(b["platforms"], key=lambda x: x["id"])[0]["id"] == "renode:nrf52840-bb@1", "the module's chip platform"
 assert gen == {"generic/capacitor": 89, "generic/resistor": 28, "generic/inductor": 1}, "M4f generic"
 nm = sorted(i["footprint"].split(":")[0] for i in inst if i["resolution"]["stage"] == "no_model")
 assert collections.Counter(nm) == {"MountingHole": 3, "TestPoint": 9}, nm
@@ -79,7 +85,7 @@ assert [i["ref"] for i in inst if i["resolution"]["stage"] == "override"] == ["J
 unres = [i for i in inst if i["resolution"]["stage"] == "unresolved"]
 assert all("MPN" in i.get("fields", {}) for i in unres), "every unresolved part has an MPN"
 assert r["stages"] == dict(st)
-print("kicad-import: M4f: J11 resolved by its override; the 70 unresolved all carry an MPN")
+print("kicad-import: M4f: J11 resolved by its override; the 19 unresolved all carry an MPN")
 EOF
 # M4f without the override: J11 is the only part with no key.
 NOOV=$W/no-override

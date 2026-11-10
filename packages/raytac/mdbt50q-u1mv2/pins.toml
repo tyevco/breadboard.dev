@@ -1,0 +1,412 @@
+# raytac/mdbt50q-u1mv2 pads: numbers and names as the dial-me-spinner project library gives them
+# (dial_spinner:MDBT50Q-U1MV2_byport, vendored at examples/dial-me-spinner/kicad/main/lib/, the symbol a
+# netlist of the reference board carries; checked with scripts/check_pins_kicad.py). Raytac's own pad
+# table was not checked offline: the board's footprint dial_spinner:Raytac_MDBT50Q_UFL decides the pads.
+#
+# A module's pads carry no parameter sets of their own: a binding on a module pad takes its pin model's
+# parameters from the chip pin that module-pinmap.csv maps the pad to (nordic/nrf52840-qiaa's pins.toml),
+# and a supply reference (voh = "VDD") names a chip pin, which the pinmap leads back to a module pad and
+# its net (spec/package.md section 4, ADR-006 Amendment 3). The models a pad offers are listed here so
+# a binding is checked against the module's own pins.
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "2"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "3"
+name = "P1.10"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "4"
+name = "P1.11"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "5"
+name = "P1.12"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "6"
+name = "P1.13"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "7"
+name = "P1.14"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "8"
+name = "P1.15"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "9"
+name = "P0.03"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "10"
+name = "P0.29"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "11"
+name = "P0.02"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "12"
+name = "P0.31"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "13"
+name = "P0.28"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "14"
+name = "P0.30"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "15"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "16"
+name = "P0.27"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "17"
+name = "P0.00"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "18"
+name = "P0.01"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "19"
+name = "P0.26"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "20"
+name = "P0.04"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "21"
+name = "P0.05"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "22"
+name = "P0.06"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "23"
+name = "P0.07"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "24"
+name = "P0.08"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "25"
+name = "P1.08"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "26"
+name = "P1.09"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "27"
+name = "P0.11"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "28"
+name = "VDD"
+role = "power_in"
+
+[[pin]]
+number = "29"
+name = "P0.12"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "30"
+name = "VDDH"
+role = "power_in"
+
+[[pin]]
+number = "31"
+name = "DCCH"
+role = "power_out"
+
+[[pin]]
+number = "32"
+name = "VBUS"
+role = "power_in"
+
+[[pin]]
+number = "33"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "34"
+name = "D-"
+role = "io"
+
+[[pin]]
+number = "35"
+name = "D+"
+role = "io"
+
+[[pin]]
+number = "36"
+name = "P0.14"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "37"
+name = "P0.13"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "38"
+name = "P0.16"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "39"
+name = "P0.15"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "40"
+name = "P0.18"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "41"
+name = "P0.17"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "42"
+name = "P0.19"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "43"
+name = "P0.21"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "44"
+name = "P0.20"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "45"
+name = "P0.23"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "46"
+name = "P0.22"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "47"
+name = "P1.00"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "48"
+name = "P0.24"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "49"
+name = "P0.25"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "50"
+name = "P1.02"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "51"
+name = "SWDIO"
+role = "io"
+
+[[pin]]
+number = "52"
+name = "P0.09"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "53"
+name = "SWDCLK"
+role = "input"
+
+[[pin]]
+number = "54"
+name = "P0.10"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "55"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "56"
+name = "P1.04"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "57"
+name = "P1.06"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "58"
+name = "P1.07"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "59"
+name = "P1.05"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "60"
+name = "P1.03"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "61"
+name = "P1.01"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]

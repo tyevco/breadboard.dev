@@ -8,7 +8,8 @@
   normative schemas to `spec/` and changes output naming rules in
   `spec/event-stream.md` and `spec/pin-model.md`. **Implemented in M4
   (2026-11-09; Amendment 1):** gates M4a-M4g pass, M4a through D9's stated
-  fallback, with its cause measured.
+  fallback, with its cause measured. Gate M4f restated for plan M5's
+  packages (Amendment 2).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestone M4, M6
   for D5, and M11 for systems.
 - **Depends on:** ADR-006 (packages, views, `pins.toml`, `bb.lock`, the
@@ -976,3 +977,25 @@ text, it is recorded here.
     the common subset with Python's `re`, which `validate_packages.py`
     compiles them with.
 17. **D8 (PCB cross-check)** is deferred, as approver decision A7 allows.
+
+## Amendment 2 (2026-11-09): plan M5's packages in the reference board's resolution
+
+Plan M5 adds the E1 packages (ADR-006 Amendment 3), so the reference board
+resolves more parts and gate M4f's counts, which depend on the package set,
+change. Nothing in the importer's rules changes.
+
+1. **M4f restated** (`scripts/kicad_import.sh`): 118 generic passives (89 C,
+   28 R, 1 L), 12 that need no model, J11 by its override, **51 parts by
+   exact MPN** (`ti/tps22917` for U2 and U21, `worldsemi/ws2812c-2020` for
+   D101-D148, the module `raytac/mdbt50q-u1mv2` for U10) and **19 MPN parts
+   unresolved** (70 before). Statuses: ok 167, no_model 12, unmodelled 18,
+   excluded 4 (U43, still unresolved, is DNP). Without the override J11 is
+   still the only part with neither an MPN nor an LCSC. M4b-M4e are
+   unchanged and pass (`make kicad-import`), including the secondary
+   `dc96515` netlist giving the identical `board.bbm`.
+2. **A module's chip is resolved with it.** U10 resolves to a module
+   package; its chip package `nordic/nrf52840-qiaa` joins the resolved set,
+   so `bb.lock` pins it and `board.bbm`'s `platforms` lists
+   `renode:nrf52840-bb@1` (`spec/package.md` section 4). The committed
+   `examples/dial-me-spinner/board.bbm` and `bb.lock` are regenerated
+   (`make locks`). Elaborating bindings on module pads is plan M6's.

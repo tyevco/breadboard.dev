@@ -1,0 +1,32 @@
+# raytac/mdbt50q-u1mv2: Raytac MDBT50Q-U1MV2, an nRF52840 module with a u.FL antenna connector (Phase 1
+# plan M5, ADR-006 D1 and D9). A module package maps its pads onto its chip package
+# (module-pinmap.csv: pad -> nordic/nrf52840-qiaa pin name); the chip supplies the behavioural layer
+# (Renode platform nrf52840-bb@1) and the pin models (ADR-006 Amendment 3).
+schema = "bb-part/0"
+
+[part]
+id = "raytac/mdbt50q-u1mv2"
+version = "0.1.0"
+kind = "module"
+manufacturer = "Raytac"
+mpn = ["MDBT50Q-U1MV2"]
+lcsc = ["C2688382"]
+datasheet = { url = "https://www.raytac.com/download/index.php?index_id=43", rev = "MDBT50Q (not checked offline)" }
+license = "Apache-2.0"
+description = "nRF52840 module, u.FL antenna connector, 32 MHz and 32.768 kHz crystals, DC/DC inductors"
+
+[footprints]
+kicad = ["RF_Module:Raytac_MDBT50Q", "dial_spinner:Raytac_MDBT50Q_UFL"]
+
+[pins]
+file = "pins.toml"
+
+[module]
+chip = "nordic/nrf52840-qiaa"
+pinmap = "module-pinmap.csv"
+
+[provenance]
+source = "datasheet"
+base = "the dial-me-spinner project symbol MDBT50Q-U1MV2_byport (pads) and nRF52840 PS v1.1 (the chip's pin names)"
+not_modelled = ["the module's crystals, DC/DC inductors and antenna (the chip package's behavioural platform runs from its own clocks)"]
+confidence = "self_checked"

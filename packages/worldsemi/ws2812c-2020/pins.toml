@@ -1,0 +1,26 @@
+# worldsemi/ws2812c-2020 pins (SMD2020-4P): numbers and names as the WS2812C-2020-V6 datasheet (p.1:
+# 1 DO, 2 GND, 3 DI, 4 VDD) and KiCad 10.0.8's LED:WS2812B-2020 (DOUT, VSS, DIN, VDD) give them (checked
+# with scripts/check_pins_kicad.py; KiCad's names are the ones a netlist carries, ADR-007 D3). No pin is
+# bound to a co-simulation engine: the part is an analog view only.
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "DOUT"
+role = "output"
+
+[[pin]]
+number = "2"
+name = "VSS"
+role = "ground"
+
+[[pin]]
+number = "3"
+name = "DIN"
+role = "input"
+supply = "VDD"
+
+[[pin]]
+number = "4"
+name = "VDD"
+role = "power_in"

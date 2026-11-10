@@ -798,6 +798,45 @@ pub fn load(dir: &Path, reg: &Registry) -> Result<Package, String> {
     })
 }
 
+/// A module's pad -> chip pin map (`[module] pinmap`, `spec/package.md`
+/// section 4): a CSV file with the header `pad,chip_pin` and one row per
+/// module pad (the module's pin number, then the chip package's pin name).
+/// Returns the rows in file order; the cross-checks against the module's
+/// and the chip's pins are lint's ([`crate::lint`]).
+pub fn module_pinmap(pkg: &Package) -> Result<Vec<(String, String)>, String> {
+    let m = pkg
+        .part
+        .module
+        .as_ref()
+        .ok_or_else(|| format!("{}: not a module", pkg.part.id))?;
+    let path = pkg.dir.join(&m.pinmap);
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let mut lines = text.lines();
+    if lines.next().map(str::trim) != Some("pad,chip_pin") {
+        return Err(format!(
+            "{}: the first line must be the header pad,chip_pin",
+            m.pinmap
+        ));
+    }
+    let mut out = Vec::new();
+    for (i, l) in lines.enumerate() {
+        if l.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = l.split(',').map(str::trim).collect();
+        if f.len() != 2 || f[0].is_empty() || f[1].is_empty() {
+            return Err(format!(
+                "{} line {}: expected <pad>,<chip pin>",
+                m.pinmap,
+                i + 2
+            ));
+        }
+        out.push((f[0].to_string(), f[1].to_string()));
+    }
+    Ok(out)
+}
+
 /// Every package directory (one with a `part.toml`) under `root`, sorted.
 /// A package directory is not searched further (its `tests/` are not
 /// packages).

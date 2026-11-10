@@ -2,10 +2,13 @@
 //!
 //! - `bb pkg lint [<dir>...]`: load and lint every package under the
 //!   directories (default: the first-party `packages/`).
-//! - `bb pkg test [<dir>...] [--record]`: run every test vector through
-//!   `NgspiceEngine` at two grant partitions (one cell, 1 ms), at the
-//!   vector's (lattice, option set) and at every recorded qualification
-//!   (D6); `--record` writes the passing pairs as `[[analog.qualified]]`.
+//! - `bb pkg test [<dir>...] [--record] [--report <file>]`: run every test
+//!   vector through `NgspiceEngine` at two grant partitions (one cell,
+//!   1 ms), at the vector's (lattice, option set) and at every recorded
+//!   qualification (D6); `--record` writes the passing pairs as
+//!   `[[analog.qualified]]`; `--report` writes one JSON line per vector run
+//!   (every measured value and a sha256 of every sample's bits), so two
+//!   packages' results can be compared byte for byte (ADR-006 G8).
 //! - `bb pkg migrate [<dir>...]`: rewrite packages to the current schema
 //!   majors (D11).
 //! - `bb pkg tree <dir>`: a package's tree hash (D8).
@@ -26,7 +29,8 @@ use crate::platforms;
 
 const USAGE: &str = "\
 usage: bb pkg lint [<dir>...]                 lint packages (default: first-party packages/)
-       bb pkg test [<dir>...] [--record]      run test vectors through NgspiceEngine (ADR-006 D6)
+       bb pkg test [<dir>...] [--record] [--report <file>]
+                                              run test vectors through NgspiceEngine (ADR-006 D6)
        bb pkg migrate [<dir>...]              rewrite packages to the current schema majors
        bb pkg tree <package dir>              print a package's tree hash
        bb pkg value [--kicad R|C|L] [--dim voltage|time|resistance|capacitance|inductance|current|temperature|count|percent] <text>...";
@@ -55,11 +59,15 @@ pub fn main(args: &[String]) -> ExitCode {
 }
 
 fn dirs(args: &[String]) -> Vec<PathBuf> {
-    let d: Vec<PathBuf> = args
-        .iter()
-        .filter(|a| !a.starts_with('-'))
-        .map(PathBuf::from)
-        .collect();
+    let mut d: Vec<PathBuf> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--report" {
+            it.next();
+        } else if !a.starts_with('-') {
+            d.push(PathBuf::from(a));
+        }
+    }
     if d.is_empty() {
         vec![bbpkg::first_party_dir()]
     } else {
@@ -106,10 +114,25 @@ fn lint_cmd(args: &[String]) -> Result<bool, String> {
                 continue;
             }
         };
+        // A module's chip package: in the module's own package root
+        // (<root>/<namespace>/<name>), else the first-party one.
+        let chip = match &pkg.part.module {
+            Some(m) => [
+                dir.parent().and_then(Path::parent).map(Path::to_path_buf),
+                Some(bbpkg::first_party_dir()),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|r| r.join(&m.chip))
+            .find(|d| d.join("part.toml").is_file())
+            .and_then(|d| package::load(&d, &reg).ok()),
+            None => None,
+        };
         let ctx = lint::Context {
             platforms: &pl,
             devices: &[],
             first_party: is_first_party(&dir),
+            chip: chip.as_ref(),
         };
         let f = lint::lint(&pkg, &ctx, &reg);
         for x in &f {
@@ -147,9 +170,19 @@ struct Pair {
 
 fn test_cmd(args: &[String]) -> Result<bool, String> {
     let record = args.iter().any(|a| a == "--record");
-    if let Some(bad) = args.iter().find(|a| a.starts_with('-') && *a != "--record") {
+    if let Some(bad) = args
+        .iter()
+        .find(|a| a.starts_with('-') && !matches!(a.as_str(), "--record" | "--report"))
+    {
         return Err(format!("unknown option {bad}"));
     }
+    let mut report: Option<std::fs::File> = match args.iter().position(|a| a == "--report") {
+        Some(i) => {
+            let f = args.get(i + 1).ok_or("--report needs a file")?;
+            Some(std::fs::File::create(f).map_err(|e| format!("--report {f}: {e}"))?)
+        }
+        None => None,
+    };
     let reg = Registry::current();
     let mut ok_all = true;
     let mut nvec = 0;
@@ -200,7 +233,7 @@ fn test_cmd(args: &[String]) -> Result<bool, String> {
                 let mut pair_ok = true;
                 for v in &vs {
                     nvec += 1;
-                    let ok = run_vector(&pkg, view, v, pair)?;
+                    let ok = run_vector(&pkg, view, v, pair, report.as_mut())?;
                     pair_ok &= ok;
                 }
                 // D6: a set other than phase0 is admissible only if every
@@ -286,6 +319,7 @@ fn run_vector(
     view: &package::View,
     v: &Vector,
     pair: &Pair,
+    report: Option<&mut std::fs::File>,
 ) -> Result<bool, String> {
     let name = v
         .file
@@ -334,7 +368,56 @@ fn run_vector(
         long.grants,
         one.samples == long.samples
     );
+    if let Some(f) = report {
+        use std::io::Write;
+        for (part, r) in [("one_cell", &one), ("1ms", &long)] {
+            writeln!(f, "{}", report_line(pkg, view, &name, pair, part, r))
+                .map_err(|e| format!("--report: {e}"))?;
+        }
+    }
     Ok(ok)
+}
+
+/// One `--report` line: the vector's identity (no directory, so two copies
+/// of a package compare equal), every measured value (µV or fs, or null)
+/// and the sha256 of every sample's `f64` bits.
+fn report_line(
+    pkg: &Package,
+    view: &package::View,
+    name: &str,
+    pair: &Pair,
+    partition: &str,
+    r: &pkgtest::RunResult,
+) -> String {
+    let mut h = bbpkg::sha256::Sha256::new();
+    for (net, s) in &r.samples {
+        h.update(net.as_bytes());
+        h.update(&[0]);
+        for (t, bits) in s {
+            h.update(&t.to_le_bytes());
+            h.update(&bits.to_le_bytes());
+        }
+    }
+    let measured: Vec<String> = r
+        .measured
+        .iter()
+        .map(|m| {
+            m.value
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".into())
+        })
+        .collect();
+    format!(
+        "{{\"lattice_fs\":{},\"measured\":[{}],\"options\":{},\"package\":{},\"partition\":{},\"samples_sha256\":{},\"vector\":{},\"view\":{}}}",
+        pair.lattice.as_fs(),
+        measured.join(","),
+        json_str(&pair.options),
+        json_str(&pkg.part.id),
+        json_str(partition),
+        json_str(&bbpkg::sha256::hex(&h.finish())),
+        json_str(name),
+        json_str(&view.name)
+    )
 }
 
 /// Rewrite the `[[analog.qualified]]` entries of the given views in

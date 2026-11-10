@@ -1,0 +1,577 @@
+# nordic/nrf52840-qiaa pins (aQFN73, QIAA): ball numbers as KiCad 10.0.8's MCU_Nordic:nRF52840 gives
+# them (73 balls and the exposed pad EP), checked with `scripts/check_pins_kicad.py --composite`.
+# A GPIO is named by its port name (P0.02), the name a binding uses (ADR-008 D2); KiCad's composite
+# names ("AIN0/P0.02", "P0.18/~{RESET}") keep their other functions in `alt` (ADR-006 Amendment 3).
+#
+# Pin models (Phase 1 M5; ADR-006 D9 rule 2: the suite's conflicting GPIO numbers resolved against the
+# PS). Every GPIO offers digital_out and digital_in; adc_in arrives with the SAADC model (plan M8,
+# ADR-008 D7). The output stage is the Thevenin form of spec/pin-model.md: a pad drives VDD or 0 V
+# through zout = 0.4 V / I, where I is nRF52840 PS v1.1 section 6.9.3.1's current at a 0.4 V drop
+# (IOH/IOL; the source side is used for both edges, as the dial-me-spinner suite does). The named sets
+# are the PIN_CNF DRIVE values the firmware may use and the PS's min/typ/max columns:
+#
+#   set         DRIVE   PS column                         zout       suite file that uses it
+#   S0S1        S0S1    IOH,SD typ 2 mA                   200 Ohm    load_switches__nrf52840_gpio.lib default
+#   S0S1_min    S0S1    IOH,SD min 1 mA (weakest pad)     400 Ohm    load_switches (ROUT sd_min)
+#   S0S1_max    S0S1    IOH,SD max 4 mA (strongest pad)   100 Ohm    load_switches (ROUT sd_max)
+#   S0S1_bound  S0S1    VOH,SD >= VDD - 0.4 V at 0.5 mA   800 Ohm    motor_drive__ and sleep_current__ (the
+#                                                                    guaranteed bound for uA-level loads)
+#   H0H1        H0H1    IOH,HDH typ 9 mA                  44.4444    load_switches (ROUT hd_typ; LED_PWR_EN)
+#   H0H1_min    H0H1    IOH,HDH min 6 mA                  66.6667    load_switches (ROUT hd_min)
+#   H0H1_max    H0H1    IOH,HDH max 14 mA (strongest)     28.5714    load_switches (ROUT hd_max; P0.06 in E1)
+#   default     S0S1    = S0S1 (the PIN_CNF reset value of DRIVE)
+#
+# zout values are the suite's own numbers (0.4 V / I to 6 significant digits). rise/fall: the PS
+# dynamic table's typical 10-90 % times at 25 pF (tRF 13 ns standard, tHRF 5 ns high drive; "based on
+# simulations"). The 200 Ohm against 800 Ohm "conflict" of ADR-006 Context 1 is two PS figures for two
+# purposes (a current at 0.4 V drop, and the VOH guarantee at 0.5 mA), so both are kept, by name.
+# digital_in: VIH 0.7 VDD, VIL 0.3 VDD (PS 6.9.3.1), CIN = CPAD 3 pF (PS pad capacitance).
+# NOT modelled at the pin: the ESD clamps and the I-V beyond the 0.4 V point (the suite's tanh fit);
+# the internal pull resistors; drive-strength changes at run time (the binding's set is fixed, ADR-008 D4
+# audits PIN_CNF against it).
+schema = "bb-pins/0"
+
+[[pin]]
+number = "A8"
+name = "P0.31"
+role = "io"
+supply = "VDD"
+alt = ["AIN7"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "A10"
+name = "P0.29"
+role = "io"
+supply = "VDD"
+alt = ["AIN5"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "A12"
+name = "P0.02"
+role = "io"
+supply = "VDD"
+alt = ["AIN0"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "A14"
+name = "P1.15"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "A16"
+name = "P1.13"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "A18"
+name = "DEC2"
+role = "power_out"
+
+[[pin]]
+number = "A20"
+name = "P1.10"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "A22"
+name = "VDD"
+role = "power_in"
+
+[[pin]]
+number = "A23"
+name = "XC2"
+role = "analog"
+
+[[pin]]
+number = "B1"
+name = "VDD"
+role = "power_in"
+
+[[pin]]
+number = "B3"
+name = "DCC"
+role = "power_out"
+
+[[pin]]
+number = "B5"
+name = "DEC4"
+role = "power_out"
+
+[[pin]]
+number = "B7"
+name = "VSS"
+role = "ground"
+
+[[pin]]
+number = "B9"
+name = "P0.30"
+role = "io"
+supply = "VDD"
+alt = ["AIN6"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "B11"
+name = "P0.28"
+role = "io"
+supply = "VDD"
+alt = ["AIN4"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "B13"
+name = "P0.03"
+role = "io"
+supply = "VDD"
+alt = ["AIN1"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "B15"
+name = "P1.14"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "B17"
+name = "P1.12"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "B19"
+name = "P1.11"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "B24"
+name = "XC1"
+role = "analog"
+
+[[pin]]
+number = "C1"
+name = "DEC1"
+role = "power_out"
+
+[[pin]]
+number = "D2"
+name = "P0.00"
+role = "io"
+supply = "VDD"
+alt = ["XL1"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "D23"
+name = "DEC3"
+role = "power_out"
+
+[[pin]]
+number = "E24"
+name = "DEC6"
+role = "power_out"
+
+[[pin]]
+number = "F2"
+name = "P0.01"
+role = "io"
+supply = "VDD"
+alt = ["XL2"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "F23"
+name = "VSS_PA"
+role = "ground"
+
+[[pin]]
+number = "G1"
+name = "P0.26"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "H2"
+name = "P0.27"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "H23"
+name = "ANT"
+role = "analog"
+
+[[pin]]
+number = "J1"
+name = "P0.04"
+role = "io"
+supply = "VDD"
+alt = ["AIN2"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "J24"
+name = "P0.10"
+role = "io"
+supply = "VDD"
+alt = ["NFC2"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "K2"
+name = "P0.05"
+role = "io"
+supply = "VDD"
+alt = ["AIN3"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "L1"
+name = "P0.06"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "L24"
+name = "P0.09"
+role = "io"
+supply = "VDD"
+alt = ["NFC1"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "M2"
+name = "P0.07"
+role = "io"
+supply = "VDD"
+alt = ["TRACECLK"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "N1"
+name = "P0.08"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "N24"
+name = "DEC5"
+role = "power_out"
+
+[[pin]]
+number = "P2"
+name = "P1.08"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "P23"
+name = "P1.07"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "R1"
+name = "P1.09"
+role = "io"
+supply = "VDD"
+alt = ["TRACEDATA3"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "R24"
+name = "P1.06"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "T2"
+name = "P0.11"
+role = "io"
+supply = "VDD"
+alt = ["TRACEDATA2"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "T23"
+name = "P1.05"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "U1"
+name = "P0.12"
+role = "io"
+supply = "VDD"
+alt = ["TRACEDATA1"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "U24"
+name = "P1.04"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "V23"
+name = "P1.03"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "W1"
+name = "VDD"
+role = "power_in"
+
+[[pin]]
+number = "W24"
+name = "P1.02"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "Y2"
+name = "VDDH"
+role = "power_in"
+
+[[pin]]
+number = "Y23"
+name = "P1.01"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AA24"
+name = "SWDCLK"
+role = "input"
+
+[[pin]]
+number = "AB2"
+name = "DCCH"
+role = "power_out"
+
+[[pin]]
+number = "AC5"
+name = "DECUSB"
+role = "power_out"
+
+[[pin]]
+number = "AC9"
+name = "P0.14"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AC11"
+name = "P0.16"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AC13"
+name = "P0.18"
+role = "io"
+supply = "VDD"
+alt = ["RESET"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AC15"
+name = "P0.19"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AC17"
+name = "P0.21"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AC19"
+name = "P0.23"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AC21"
+name = "P0.25"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AC24"
+name = "SWDIO"
+role = "io"
+
+[[pin]]
+number = "AD2"
+name = "VBUS"
+role = "power_in"
+
+[[pin]]
+number = "AD4"
+name = "D-"
+role = "io"
+
+[[pin]]
+number = "AD6"
+name = "D+"
+role = "io"
+
+[[pin]]
+number = "AD8"
+name = "P0.13"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AD10"
+name = "P0.15"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AD12"
+name = "P0.17"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AD14"
+name = "VDD"
+role = "power_in"
+
+[[pin]]
+number = "AD16"
+name = "P0.20"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AD18"
+name = "P0.22"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AD20"
+name = "P0.24"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AD22"
+name = "P1.00"
+role = "io"
+supply = "VDD"
+alt = ["TRACEDATA0"]
+models = ["digital_out", "digital_in"]
+
+[[pin]]
+number = "AD23"
+name = "VDD"
+role = "power_in"
+
+[[pin]]
+number = "EP"
+name = "VSS"
+role = "ground"
+
+[defaults.digital_out.default]
+voh = "VDD"
+vol = "0V"
+rise = "13ns"
+fall = "13ns"
+zout = "200"
+
+[defaults.digital_out.S0S1]
+voh = "VDD"
+vol = "0V"
+rise = "13ns"
+fall = "13ns"
+zout = "200"
+
+[defaults.digital_out.S0S1_min]
+voh = "VDD"
+vol = "0V"
+rise = "13ns"
+fall = "13ns"
+zout = "400"
+
+[defaults.digital_out.S0S1_max]
+voh = "VDD"
+vol = "0V"
+rise = "13ns"
+fall = "13ns"
+zout = "100"
+
+[defaults.digital_out.S0S1_bound]
+voh = "VDD"
+vol = "0V"
+rise = "13ns"
+fall = "13ns"
+zout = "800"
+
+[defaults.digital_out.H0H1]
+voh = "VDD"
+vol = "0V"
+rise = "5ns"
+fall = "5ns"
+zout = "44.4444"
+
+[defaults.digital_out.H0H1_min]
+voh = "VDD"
+vol = "0V"
+rise = "5ns"
+fall = "5ns"
+zout = "66.6667"
+
+[defaults.digital_out.H0H1_max]
+voh = "VDD"
+vol = "0V"
+rise = "5ns"
+fall = "5ns"
+zout = "28.5714"
+
+[defaults.digital_in.default]
+vih = "0.7*VDD"
+vil = "0.3*VDD"
+cin = "3p"

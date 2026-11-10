@@ -13,7 +13,10 @@
   Amendment 2; Review notes: M2). M4 done (2026-11-09: the KiCad importer,
   `board.bbm`, projects and `bb open`/`flash`/`run`/`probe`, ADR-007
   Amendment 1; gate (a) through ADR-007 D9's stated fallback, with its
-  cause measured; Review notes: M4).
+  cause measured; Review notes: M4). M5 and M5b done (2026-11-09: the E1
+  packages, the datasheet-fitted TPS22917 view as the committed default and
+  the vendor-derived one local-only, gated against each other on the E1
+  checks; ADR-006 Amendment 3; Review notes: M5 and M5b).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -813,3 +816,58 @@ ADR-006/007/008. Items not adopted as proposed:
   2.62 s in total, defaults, fresh, load 1.6-2.2). The front end (import,
   lock and currency check, elaboration) takes under 20 ms with the packages
   off `/mnt/c`, 0.2-1.2 s with the first-party packages on `/mnt/c`.
+
+## Review notes: M5 and M5b (2026-11-09)
+
+- **What exists.** Four first-party packages: `ti/tps22917` (the committed
+  default view `lsw`, **datasheet-fitted**: breadboard.dev's own behavioural
+  model from SLVSDW8B Tables 7.3, 7.5 and 7.6, M5b), `worldsemi/ws2812c-2020`
+  (the suite's pixel view, copied unchanged), `nordic/nrf52840-qiaa` (74
+  pins, the GPIO pin models as named PIN_CNF-drive and PS-column sets, the
+  Renode platform `nrf52840-bb@1`) and the module `raytac/mdbt50q-u1mv2` (61
+  pads mapped onto the chip). The vendor-derived TPS22917 view is a
+  **LOCAL-ONLY** package with the same id, view name, ports and parameters,
+  built by `make dms-local-packages` into the git-ignored `local-packages/`
+  from a `git archive` export (the S1 fix and the `GND` -> `GNDP` rename);
+  nothing TI-derived is committed, and `make packages` checks that
+  (`scripts/check_local_only.sh`). Details: ADR-006 Amendment 3.
+- **Gate M5** (`bb pkg test` per package through `NgspiceEngine`, vectors
+  reproduce `results.json` within the stated tolerance; each view qualified
+  at (10 us, `phase0`)). The vectors are the suite's own decks, cut around
+  the part under test by `scripts/dms_packages.py`, with `results.json`'s
+  values (`make dms-vectors-check` regenerates them byte for byte).
+  - Vendor-derived `lsw` (local): 9 vectors, recorded at (10 us, `phase0`):
+    Table 7.6 crossings within 0.5 ns, RON and QOD within 1 uV, QOD
+    discharge times within 10 ns of `results.json`; gate G8 (the rename)
+    byte-identical over 18 vector runs.
+  - Datasheet-fitted `lsw` (committed): the same 9 vectors, recorded at
+    (10 us, `phase0`): Table 7.6 within 0.5 % of the datasheet (tON 3.818 /
+    4.020 ms, tR 1.613 / 1.815 ms), RON 90 / 80 mOhm, QOD 150 Ohm exactly;
+    against `results.json` within the stated 0.2 ms / 3 mV / 0.5 mV / 1 ms
+    (measured 0.12-0.16 ms, 2.7 / 0.85 mV, 0.23 mV, within 0.56 ms).
+  - `pixel`: the suite's phantom operating point at bat4.2 25 C and usb5.0
+    60 C, U2 stood in as its off-state QOD resistance; VLED and DIN - VDD
+    within 5 uV of `results.json`; recorded at (10 us, `phase0`).
+  - Every vector gives identical samples at one-cell and 1 ms grants. `make
+    packages` (in `make test`) runs them all.
+- **Gate M5b** (`make dms-m5b`): the E1 deck through `NgspiceEngine` at
+  `phase0` on both benches with each view: VLED at each P0.06 rise within
+  0.001 mV, max(DIN - VLED) within 0.0001 mV, the LSW-2 time within 0.555 ms
+  (nominal) and 0.356 ms (cold), the same E1 verdicts, and in a wrong-order
+  run the LSW-3 excursion within 0.5 mV with LSW-3 failing for both. 20 of 20
+  gates; the table is in ADR-006 Amendment 3 item 4.
+- **Deviations** (ADR-006 Amendment 3 item 5): the nRF52840's GPIO "views"
+  of D9's table are pin parameter sets, not analog views (a circuit view of
+  the pad's driver would be a second driver on the net); the bare chip's
+  KiCad composite pin names (`AIN0/P0.02`) are matched by the pin checker,
+  not yet by the importer (no reference board places the bare chip); module
+  semantics are new in `spec/package.md` section 4, and binding a module pad
+  in `bb run` is M6's; the WS2812C vectors stand U2 in as its off state; the
+  QOD crossing levels are fixed from the suite's own `vled0`.
+- **M4f** changes with the package set (ADR-007 Amendment 2): 51 parts by
+  MPN, 19 unresolved (70 at M4); `make kicad-import` passes with the
+  restated counts, and the committed `board.bbm` and `bb.lock` are
+  regenerated.
+- **Cost.** `make packages` takes about 22 s (6 s of it the new vectors);
+  `make dms-local-packages` about 25 s; `make dms-m5b` about 40 s on 8 jobs.
+  M5 adds no board or run mode; M6 adds E1's equivalence gate and cost row.

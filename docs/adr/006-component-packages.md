@@ -2,7 +2,9 @@
 
 - **Status:** Accepted (2026-11-09), with the approver decisions below
   (revised 2026-11-09 after two design reviews, see Review notes).
-  Implemented for plan M3 (2026-11-09), with Amendment 1.
+  Implemented for plan M3 (2026-11-09), with Amendment 1; S1 (Amendment 2);
+  M5 and M5b (2026-11-09: the E1 packages, the datasheet-fitted TPS22917
+  view and the local-only vendor-derived one, Amendment 3).
   Written before implementation because it defines the package schema
   (AGENTS.md: ADRs come before anything that touches the package schema).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestones S1, M3,
@@ -987,6 +989,12 @@ None of it changes the kernel, the time-grant protocol or the event stream.
     `make test`). `mpn_patterns` are compiled by `validate_packages.py`
     (Python's `re`); the Rust resolver that matches them is M4. The
     conflicts report of D9 rule 2 needs migrated views (M5).
+11. **Setup (plan M3, R7).** `make setup` builds `bb` and installs it into
+    `~/.local/bin`; `make setup SETUP=demo` skips the ARM toolchain, uv and
+    `python3-jsonschema`; as root it runs apt without sudo. In a clean
+    `ubuntu:24.04` container (podman) from `git archive 590c455`, `apt
+    install make` plus `make setup SETUP=demo` took 63.6 s, and 66.0 s in a
+    second run (plan, Review notes: M3).
 
 ## Amendment 2 (2026-11-09): S1, the TPS22917 view's numerics fix
 
@@ -1116,9 +1124,175 @@ outside the repository, D9 rule 4) and runs the gates there.
      and CCCS sense sources, and V-type B or E sources. Use a B conductance
      instead, and compute a sensed current from node voltages.
 6. **Cost.** Plan §8 has the measured table (`make dms-s1-cost`).
-11. **Setup (plan M3, R7).** `make setup` builds `bb` and installs it into
-    `~/.local/bin`; `make setup SETUP=demo` skips the ARM toolchain, uv and
-    `python3-jsonschema`; as root it runs apt without sudo. In a clean
-    `ubuntu:24.04` container (podman) from `git archive 590c455`, `apt
-    install make` plus `make setup SETUP=demo` took 63.6 s, and 66.0 s in a
-    second run (plan, Review notes: M3).
+
+## Amendment 3 (2026-11-09): M5 and M5b, the E1 packages
+
+Plan M5 and M5b (required by approver decision A3) are implemented. Four
+first-party packages and one LOCAL-ONLY package exist; every E1 view is
+lattice-qualified at (10 µs, `phase0`) through `NgspiceEngine` at both
+partitions, and its vectors reproduce M0's `results.json` within the stated
+tolerance (G4). Where the implementation settled something this ADR left
+open, or differs from its text, it is recorded here. The kernel, the
+time-grant protocol and the event stream are unchanged; `spec/package.md`
+gains the module rules (section 4), `bb pkg test --report` (section 8), the
+conflict warning (section 11) and the `nrf52840-bb@1` platform row.
+
+1. **The packages.**
+   - `ti/tps22917` 0.1.0 (Apache-2.0, kind `power`): one view, `lsw`,
+     **datasheet-fitted** (M5b; `analog/lsw_fit.lib`, subckt
+     `TPS22917_LSW_FIT`). It is breadboard.dev's own behavioural model from
+     SLVSDW8B Tables 7.3, 7.5 and 7.6 and contains no text of TI's SLVMCE8
+     or of the suite's view: an ON comparator with hysteresis (0.68 V /
+     0.63 V, inside the guaranteed window) and a 2 µs enable RC; a CT sink
+     of VIN/tONk, so that the CT-to-VIN capacitance (external CT plus a
+     32 pF internal one) sweeps in exactly tON; a linear VOUT target through
+     10 % at tON - tR and 90 % at tON; a forward-only pass element that
+     follows the target (20 S) and is RON (Table 7.5 typ, linear in VIN)
+     once the target passes VIN; 150 Ohm QOD while disabled; a 750 kOhm ON
+     pull-down. Every element is a B current source or a plain R or C, so
+     the view follows Amendment 2's rule for `phase0`. It keeps the suite
+     view's port order, parameters (`ron_add`, `isd_out`) and view name, so
+     a project that puts the local package on its search path swaps views
+     with no other change. `fidelity = ["fast"]`: it is not validated for
+     `pi`. Measured in the datasheet test circuit through the engine: tON
+     3.818 / 4.020 ms and tR 1.613 / 1.815 ms at 3.6 / 5 V (Table 7.6: 3.8 /
+     4.0 and 1.6 / 1.8 ms), RON 90.0 / 80.0 mOhm, QOD 150 Ohm.
+   - `worldsemi/ws2812c-2020` 0.1.0: one view, `pixel`, the suite's
+     `load_switches__ws2812c.lib` **copied unchanged** (D9 rule 1; no port is
+     named `gnd`, so there is no deviation; sha256 `2df4a820...`, origin
+     `dial-me-spinner@6854d25:hardware/sim/models/load_switches__ws2812c.lib`).
+     The suite's `din` and `ring` files stay in dial-me-spinner (D9 rule 3:
+     E1 uses only the pixel). Pins as KiCad's `LED:WS2812B-2020` names them
+     (`DOUT`, `VSS`, `DIN`, `VDD`), the names a netlist carries.
+   - `nordic/nrf52840-qiaa` 0.1.0 (kind `soc`): `[behavioral]` Renode
+     `nrf52840-bb@1`; 74 pins (73 aQFN73 balls and the exposed pad) as KiCad
+     10.0.8's `MCU_Nordic:nRF52840` numbers them, checked with
+     `check_pins_kicad.py --composite` (0 mismatches, 18 composite names).
+     **No analog view** (item 5a).
+   - `raytac/mdbt50q-u1mv2` 0.1.0 (kind `module`): 61 pads as the
+     dial-me-spinner project symbol `MDBT50Q-U1MV2_byport` gives them (0
+     mismatches), mapped onto `nordic/nrf52840-qiaa` by `module-pinmap.csv`
+     (item 5c).
+2. **The LOCAL-ONLY vendor-derived `ti/tps22917`** (D9 rule 4, approver
+   decision A3). `make dms-local-packages` (`scripts/dms_packages.sh local`)
+   exports the reference with `git archive`, applies Amendment 2's S1 fix and
+   the `GND` -> `GNDP` port rename (D9 rule 1) to the suite's view, and
+   writes a package with the same id, view name, ports and parameters,
+   `license = "LicenseRef-local-only"`, into the git-ignored
+   `local-packages/` (`DMS_LOCAL_PACKAGES`; the script refuses a path that
+   git tracks or does not ignore). Its view's sha256 is `f754ea77...`. It is
+   linted (clean, outside the first-party `packages/`) and qualified there
+   by `bb pkg test --record`; its nine vectors (the committed package's
+   circuits, item 3) reproduce `results.json` within 2 us (Table 7.6
+   crossings; measured within 0.5 ns), 50 uV (RON), 10 uV (QOD resistance)
+   and 10 us (QOD discharge; measured within 10 ns). **G8:** the same package
+   with the port left as `GND` gives byte-identical `bb pkg test --report`
+   lines (every measured value and a sha256 of every sample; 18 vector
+   runs). `scripts/check_local_only.sh` (in `make packages`, so in `make
+   test`) fails if a tracked `part.toml` is `LicenseRef-local-only`, if git
+   tracks anything under `local-packages/` or stops ignoring it, or if a
+   tracked model file has the bytes of the suite's TPS22917 view, its
+   S1-fixed form or the local view.
+3. **The vectors (D6, D9 rule 5).** `scripts/dms_packages.py` builds every
+   circuit with the suite's own deck builders at `6854d25`
+   (`test_load_switches.py`: `test_model_turn_on_matches_table_7_6`,
+   `u2_turn_off`, `phantom_op`), cuts the part under test out (the runner
+   writes it as `X1`) and turns its PWL control sources into `[[edge]]`
+   inputs. The RON and QOD-resistance circuits are switches A and B of
+   `test_model_ron_qod_and_on_threshold`, written out. The circuits hold
+   only the suite's own, non-TI models (the BQ25180 power path, the nRF52840
+   GPIO pad, the WS2812C pixel, the board's passives), which approver
+   decision A2 lets the repository vendor. `make dms-vectors-check`
+   regenerates them and requires the committed files byte for byte (and
+   item 5a's sets). Expected values are `results.json`'s, with the source
+   named in every `[[expect]]`. Settled here:
+   - **A crossing level is fixed in the vector.** The suite measures the QOD
+     discharge time to 10 % of `vled0`, its own run's VLED at 0.99 t_off;
+     the generator takes `vled0` from the suite's own run of the same deck
+     (2.984022 / 4.18402 / 4.485772 V) and writes the levels as numbers.
+   - **The committed view states two tolerances.** Each TPS22917 vector has
+     datasheet expectations (Table 7.6 crossings within 40 us, RON within
+     0.1 mV, QOD within 10 uV) and `results.json` expectations whose
+     tolerance is the fitted view's stated distance to the vendor-derived
+     values: 0.2 ms on the Table 7.6 crossings (the vendor-derived view runs
+     3.7 % slower than Table 7.6 typ), 3 mV on RON (77 against 90 mOhm),
+     0.5 mV on QOD (145 against 150 Ohm), and 1 ms on the discharge time (the
+     M5b tolerance). Measured: Table 7.6 crossings 0.12-0.16 ms from
+     `results.json`, the discharge crossings within 0.56 ms.
+   - **The WS2812C vectors stand U2 in as its off state.** The suite's
+     phantom deck (U2 off, P0.06 driven high into D101's DIN clamp) needs
+     U2, and no TI-derived text may be committed, so U2 is its off-state
+     QOD resistance, 145.001 Ohm (the vendor-derived view's QOD,
+     `results.json` `test_model_ron_qod_and_on_threshold`, at VIN >= 3.5 V;
+     hence only the bat4.2 and usb5.0 corners), plus CT held at VIN (without
+     it the CT node has no DC path and the operating point fails). The
+     phantom VLED and DIN - VDD reproduce `results.json` within 5 uV.
+4. **Plan M5b's gate** (`make dms-m5b`, 20 gates, `out/dms-m5b/summary.json`).
+   The E1 deck of Amendment 2 (the suite's `led_rail_sequence` with each
+   plan section 2 bench, two firmware.md 6.4 cycles, 120 ms) and a
+   wrong-order variant (P0.06 high from 0.5 ms with VLED off, through each
+   turn-on and 10 ms into each QOD discharge) run through `NgspiceEngine` at
+   `phase0` (lattice 10 us, 1 ms grants, edges as digital glue) with each
+   view; the vendor-derived view comes from the local package:
+
+   | Check (limit) | nominal | cold |
+   | --- | --- | --- |
+   | 120 ms at `phase0`, both views, both orders | yes | yes |
+   | LED-DATA-V4: VLED at each P0.06 rise (10 mV) | 0.001 mV (3.684020 V) | 0.001 mV (2.971511 V) |
+   | LSW-3: max(V(LED_DIN) - V(VLED)) (10 mV) | 0.0000 mV | 0.0000 mV |
+   | LSW-2: VLED < 10 % after LED_PWR_EN falls (1 ms) | 0.555 ms (23.866 / 24.420 ms) | 0.356 ms (24.064 / 24.420 ms) |
+   | The E1 verdicts identical | yes | yes |
+   | Wrong order: maximum excursion (10 mV); LSW-3 fails with both | 0.000 mV (0.8176 V, 9.97 mA) | 0.000 mV (0.8517 V, 8.34 mA) |
+   | Wrong order: settled DIN - VLED at 10.49 ms (10 mV) | 0.416 mV | 0.227 mV |
+
+   The LSW-2 difference is the QOD resistance (Table 7.5's 150 Ohm typ
+   against the vendor-derived view's 145-147 Ohm, through R4 = 68 Ohm). The
+   wrong-order VLED before turn-on differs by 4-8 mV for the same reason
+   (0.965 against 0.973 V nominal); the excursion by under 0.5 mV.
+5. **Deviations and settlements.**
+   - a. **The nRF52840 GPIO "views" are pin parameter sets.** D9's table
+     lists `gpio_led`, `gpio_lsw` and others as analog views. Those suite
+     files are the pad's output DRIVER. In a co-simulation the pin model is
+     the driver, and a circuit view of the same pad would put a second
+     driver on the net (one driver per net, AGENTS.md). So the package has
+     no analog view, and the suite's numbers became named `digital_out` sets
+     in `pins.toml`: `S0S1` (and `default`), `S0S1_min`, `S0S1_max`,
+     `S0S1_bound`, `H0H1`, `H0H1_min`, `H0H1_max`, with zout = 0.4 V / I at
+     the PS columns. D9 rule 2's "200 Ohm against 800 Ohm" conflict is two
+     PS figures for two purposes (a current at a 0.4 V drop; the VOH
+     guarantee at 0.5 mA), so both are kept, by name, never averaged. `make
+     dms-vectors-check` requires the sets to equal the suite's `ROUT`
+     values. The pad's ESD clamps and 3 pF are not modelled at the pin (a
+     `pin_load` view could carry them; `bb run` refuses `load` until M8).
+     Their use as E1's drive is gated in M6 (the PWL replay within 5 mV).
+   - b. **The nRF52840's composite KiCad names.** A GPIO is named by its
+     port name (`P0.02`, the name ADR-008 D2 binds); KiCad's `AIN0/P0.02`
+     keeps `AIN0` in `alt`. ADR-007 D3's exact pin-name match would refuse a
+     board that places the bare chip. No reference board does (U10 is the
+     module), so matching composite names on import is deferred.
+   - c. **Modules** (`spec/package.md` section 4, new). The pinmap is a CSV
+     `pad,chip_pin`. The pads carry no parameter sets and the module no
+     `[behavioral]`: both come from the chip. Resolution adds a module's
+     chip package to the resolved set, so `bb.lock` and `board.bbm` pin it
+     and its platform (`renode:nrf52840-bb@1` on the reference board).
+     Binding a module pad in `bb run` (through the pinmap to the chip pin's
+     sets) is plan M6's work. Raytac's own pad table was not checked
+     offline; the board's symbol and footprint decide the pads.
+   - d. **The conflict report** (D9 rule 2, Amendment 1 item 10): lint warns
+     when one parameter has different defaults in two views of a package.
+     None of the M5 packages has two views.
+   - e. **`bb pkg test --report <file>`**, for G8 and for comparing two
+     packages' results byte for byte.
+   - f. The committed TPS22917's kind is `power` (the format example in
+     `spec/examples` says `analog_ic`).
+6. **Resolution of the reference board.** With these packages, `bb open`
+   resolves U2 and U21 (`TPS22917DBVR`), D101-D148 (`WS2812C-2020-V6`) and
+   U10 (`MDBT50Q-U1MV2`) by exact MPN: stages generic 118, mpn 51, no_model
+   12, override 1, unresolved 19 (70 at M4). ADR-007 Amendment 2 restates
+   gate M4f; `examples/dial-me-spinner/board.bbm` and `bb.lock` are
+   regenerated (`make locks`).
+7. **Cost.** `bb pkg test` of the four new packages (11 vectors, two
+   partitions each) takes about 6 s, and `make packages` about 22 s in all
+   (load 6-10 from other agents). The QOD vectors dominate (5 000 one-cell
+   grants each). There is no new board or run mode, so no equivalence gate
+   or cost-table row of its own; M6 adds both for E1.

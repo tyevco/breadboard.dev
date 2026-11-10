@@ -874,6 +874,19 @@ pub fn import(p: &Project, mode: Mode) -> Result<Imported, String> {
         }
     }
 
+    // A module's chip package is part of the resolved set (ADR-006
+    // Amendment 3): it supplies the module's behavioural layer and pin
+    // models, so the lock pins it (and its platform) like any other package.
+    let chips: Vec<String> = used
+        .values()
+        .filter_map(|p| p.part.module.as_ref().map(|m| m.chip.clone()))
+        .filter(|c| !used.contains_key(c))
+        .collect();
+    for chip in chips {
+        let pkg = pk.get(&chip).map_err(|e| format!("a module's chip: {e}"))?;
+        used.insert(chip, pkg.clone());
+    }
+
     // Platforms of the resolved packages.
     let mut locked_platforms: Vec<LockedPlatform> = Vec::new();
     for pkg in used.values() {

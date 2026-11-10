@@ -100,6 +100,7 @@ fn errors(dir: &Path, first_party: bool) -> Vec<String> {
         platforms: &platforms,
         devices: &[],
         first_party,
+        chip: None,
     };
     lint(&pkg, &ctx, &reg)
         .into_iter()
@@ -333,4 +334,246 @@ fn synthetic_part_1_bump_reads_a_part_0_package() {
     assert!(package::parse_part(&newer, &reg)
         .unwrap_err()
         .contains("upgrade bb"));
+}
+
+/// All findings (errors and warnings) of a package, with an optional chip.
+fn findings(dir: &Path, chip: Option<&Path>) -> Vec<(Level, String)> {
+    let reg = Registry::current();
+    let pkg = package::load(dir, &reg).unwrap();
+    let chip = chip.map(|c| package::load(c, &reg).unwrap());
+    let platforms = vec!["nrf52840-bb@1".to_string()];
+    let ctx = Context {
+        platforms: &platforms,
+        devices: &[],
+        first_party: false,
+        chip: chip.as_ref(),
+    };
+    lint(&pkg, &ctx, &reg)
+        .into_iter()
+        .map(|f| (f.level, f.msg))
+        .collect()
+}
+
+const CHIP_PART: &str = r#"schema = "bb-part/0"
+[part]
+id = "test/chip"
+version = "0.1.0"
+kind = "soc"
+license = "Apache-2.0"
+[pins]
+file = "pins.toml"
+[behavioral]
+engine = "renode"
+platform = "nrf52840-bb@1"
+[provenance]
+source = "datasheet"
+confidence = "datasheet_checked"
+"#;
+
+const CHIP_PINS: &str = r#"schema = "bb-pins/0"
+[[pin]]
+number = "A1"
+name = "P0.01"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+[[pin]]
+number = "A2"
+name = "VDD"
+role = "power_in"
+[[pin]]
+number = "A3"
+name = "VSS"
+role = "ground"
+[defaults.digital_out.default]
+voh = "VDD"
+vol = "0V"
+rise = "5ns"
+fall = "5ns"
+zout = "200"
+[defaults.digital_in.default]
+vih = "0.7*VDD"
+vil = "0.3*VDD"
+cin = "3p"
+"#;
+
+const MOD_PART: &str = r#"schema = "bb-part/0"
+[part]
+id = "test/module"
+version = "0.1.0"
+kind = "module"
+license = "Apache-2.0"
+[pins]
+file = "pins.toml"
+[module]
+chip = "test/chip"
+pinmap = "module-pinmap.csv"
+[provenance]
+source = "datasheet"
+confidence = "self_checked"
+"#;
+
+const MOD_PINS: &str = r#"schema = "bb-pins/0"
+[[pin]]
+number = "1"
+name = "GND"
+role = "ground"
+[[pin]]
+number = "2"
+name = "P0.01"
+role = "io"
+supply = "VDD"
+models = ["digital_out", "digital_in"]
+[[pin]]
+number = "3"
+name = "VDD"
+role = "power_in"
+"#;
+
+const MOD_MAP: &str = "pad,chip_pin\n1,VSS\n2,P0.01\n3,VDD\n";
+
+fn module_case(name: &str, pins: &str, map: &str) -> Vec<(Level, String)> {
+    let chip = write_pkg(
+        &format!("{name}-chip"),
+        &[("part.toml", CHIP_PART), ("pins.toml", CHIP_PINS)],
+    );
+    let m = write_pkg(
+        &format!("{name}-mod"),
+        &[
+            ("part.toml", MOD_PART),
+            ("pins.toml", pins),
+            ("module-pinmap.csv", map),
+        ],
+    );
+    findings(&m.0, Some(&chip.0))
+}
+
+#[test]
+fn module_pinmap_rules() {
+    // A clean module: every pad mapped once onto a chip pin of the same kind.
+    let f = module_case("mod-clean", MOD_PINS, MOD_MAP);
+    assert!(f.is_empty(), "{f:?}");
+    let err = |f: Vec<(Level, String)>, needle: &str| {
+        assert!(
+            f.iter()
+                .any(|(l, m)| *l == Level::Error && m.contains(needle)),
+            "expected error {needle:?} in {f:?}"
+        )
+    };
+    err(
+        module_case("mod-unmapped", MOD_PINS, "pad,chip_pin\n1,VSS\n2,P0.01\n"),
+        "pad 3 (VDD) is not mapped",
+    );
+    err(
+        module_case(
+            "mod-twice",
+            MOD_PINS,
+            "pad,chip_pin\n1,VSS\n2,P0.01\n2,P0.01\n3,VDD\n",
+        ),
+        "mapped twice",
+    );
+    err(
+        module_case(
+            "mod-nochip",
+            MOD_PINS,
+            "pad,chip_pin\n1,VSS\n2,P0.02\n3,VDD\n",
+        ),
+        "no such pin",
+    );
+    err(
+        module_case(
+            "mod-role",
+            MOD_PINS,
+            "pad,chip_pin\n1,VDD\n2,P0.01\n3,VDD\n",
+        ),
+        "the roles differ",
+    );
+    err(
+        module_case("mod-header", MOD_PINS, "1,VSS\n2,P0.01\n3,VDD\n"),
+        "header pad,chip_pin",
+    );
+    err(
+        module_case(
+            "mod-model",
+            &MOD_PINS.replace(
+                "\"digital_in\"]",
+                "\"digital_in\", \"adc_in\"]\nadc = { channel = \"AIN0\" }",
+            ),
+            MOD_MAP,
+        ),
+        "offers adc_in",
+    );
+    err(
+        module_case("mod-sets", &format!("{MOD_PINS}[defaults.digital_in.default]\nvih = \"0.7*VDD\"\nvil = \"0.3*VDD\"\ncin = \"3p\"\n"), MOD_MAP),
+        "carry no parameter sets",
+    );
+    // Without the chip package, the chip pin names are not checked: a warning.
+    let m = write_pkg(
+        "mod-alone",
+        &[
+            ("part.toml", MOD_PART),
+            ("pins.toml", MOD_PINS),
+            ("module-pinmap.csv", MOD_MAP),
+        ],
+    );
+    let f = findings(&m.0, None);
+    assert!(
+        f.iter().all(|(l, _)| *l == Level::Warning)
+            && f.iter().any(|(_, m)| m.contains("package not found")),
+        "{f:?}"
+    );
+}
+
+#[test]
+fn conflicting_view_parameters_are_reported() {
+    // D9 rule 2: one parameter with different defaults in two views is a
+    // warning naming both, never an error and never averaged.
+    let mut files = base();
+    set(
+        &mut files,
+        "part.toml",
+        "subckt = \"PART_A\"\n",
+        "subckt = \"PART_A\"\nparams = { rout = \"200\" }\n",
+    );
+    set(
+        &mut files,
+        "part.toml",
+        "subckt = \"PART_B\"\n",
+        "subckt = \"PART_B\"\nparams = { rout = \"800\" }\n",
+    );
+    set(
+        &mut files,
+        "analog/a.lib",
+        ".subckt PART_A IN OUT GNDP",
+        ".subckt PART_A IN OUT GNDP params: rout=200",
+    );
+    set(
+        &mut files,
+        "analog/b.lib",
+        ".subckt PART_B IN OUT GNDP",
+        ".subckt PART_B IN OUT GNDP params: rout=800",
+    );
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (*a, b.as_str())).collect();
+    let t = write_pkg("param-conflict", &refs);
+    let f = findings(&t.0, None);
+    assert!(
+        f.iter().any(|(l, m)| *l == Level::Warning
+            && m.contains("conflict")
+            && m.contains("a rout=200")
+            && m.contains("b rout=800")),
+        "{f:?}"
+    );
+    assert!(f.iter().all(|(l, _)| *l == Level::Warning), "{f:?}");
+    // The same value written two ways is no conflict.
+    set(
+        &mut files,
+        "part.toml",
+        "rout = \"800\"",
+        "rout = \"200.0\"",
+    );
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (*a, b.as_str())).collect();
+    let t = write_pkg("param-no-conflict", &refs);
+    assert!(findings(&t.0, None)
+        .iter()
+        .all(|(_, m)| !m.contains("conflict")));
 }

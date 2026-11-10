@@ -19,3 +19,32 @@ id = "generic/resistor"
 version = "0.1.0"
 path = "../../packages/generic/resistor"
 tree = "sha256:f2dfbfccbbffbdae5524b6fe1c7cc0c01b066f7385799d289640cac8e47eb39a"
+
+[[package]]
+id = "nordic/nrf52840-qiaa"
+version = "0.1.0"
+path = "../../packages/nordic/nrf52840-qiaa"
+tree = "sha256:4117749bb92b66ff0459d40085e56d4548e70cdc37b42ca4b3871a60aeac9367"
+
+[[package]]
+id = "raytac/mdbt50q-u1mv2"
+version = "0.1.0"
+path = "../../packages/raytac/mdbt50q-u1mv2"
+tree = "sha256:48c8b212dc1aa03db19b18e425939a0e5a16fae1703d6413cdca5630047838d8"
+
+[[package]]
+id = "ti/tps22917"
+version = "0.1.0"
+path = "../../packages/ti/tps22917"
+tree = "sha256:f98ce03d248d4f87ba9907a0b28a1b1f5e0ed03634c247848e4d035b231ea050"
+
+[[package]]
+id = "worldsemi/ws2812c-2020"
+version = "0.1.0"
+path = "../../packages/worldsemi/ws2812c-2020"
+tree = "sha256:8ea4929aa6b49665c6258fd62d12e8bb510de38d59921423276a91dd648ebc01"
+
+[[platform]]
+id = "renode:nrf52840-bb@1"
+content = "sha256:f84884a949f6f02b0d24433cd1b1d7f3264d9f98f897e3f3209d97f8078573d6"
+renode = "1.17.0"

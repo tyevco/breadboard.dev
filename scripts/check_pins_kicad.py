@@ -3,8 +3,16 @@
 lint: "every pin of the footprint is listed exactly once"; ADR-007 D3: the
 KiCad libpart pin names must match).
 
-    python3 scripts/check_pins_kicad.py <package dir> <lib.kicad_sym> <symbol>
+    python3 scripts/check_pins_kicad.py [--composite] <package dir> <lib.kicad_sym> <symbol>
     python3 scripts/check_pins_kicad.py --print <lib.kicad_sym> <symbol>
+
+--composite (Phase 1 M5, ADR-006 Amendment 3): KiCad's chip symbols name a
+multi-function pin by its functions joined with "/" (MCU_Nordic:nRF52840's
+"AIN0/P0.02", "P0.18/~{RESET}"). The package names the pin by its port name
+(P0.02, the name bindings use) and lists the other functions in `alt`. With
+--composite such a KiCad name matches when one of its components (overbar
+markup ~{...} removed) is the package's name and every other component is in
+the pin's alt list; it is reported as a composite match, not as identical.
 
 Needs KiCad's symbol libraries (e.g. /usr/share/kicad/symbols from the
 kicad package); not part of `make test`. Reads the library with a real
@@ -85,18 +93,28 @@ def main():
         for num, (nm, et) in sorted(kicad_pins(sys.argv[2], sys.argv[3]).items(), key=lambda x: int(x[0]) if x[0].isdigit() else x[0]):
             print(num, nm, et)
         return 0
-    pkg, lib, sym = sys.argv[1:4]
+    args = sys.argv[1:]
+    composite = args[:1] == ["--composite"]
+    if composite:
+        args = args[1:]
+    pkg, lib, sym = args[:3]
     part = tomllib.load(open(f"{pkg}/part.toml", "rb"))
     pins = tomllib.load(open(f"{pkg}/{part['pins']['file']}", "rb"))["pin"]
     kp = kicad_pins(lib, sym)
     ours = {p["number"]: p for p in pins}
-    bad = 0
-    for num in sorted(set(kp) | set(ours), key=lambda x: int(x) if x.isdigit() else 0):
+    bad = comp = 0
+    for num in sorted(set(kp) | set(ours), key=lambda x: (0, int(x), "") if x.isdigit() else (1, 0, x)):
         k, o = kp.get(num), ours.get(num)
+        if k is not None and o is not None and k[0] != o["name"] and composite and "/" in k[0]:
+            parts = [c.replace("~{", "").replace("}", "") for c in k[0].split("/")]
+            if o["name"] in parts and all(c in o.get("alt", []) for c in parts if c != o["name"]):
+                comp += 1
+                continue
         if k is None or o is None or k[0] != o["name"]:
             bad += 1
             print(f"MISMATCH pin {num}: kicad {k}, package {o and (o['name'], o['role'])}")
-    print(f"{part['part']['id']}: {len(ours)} pins in pins.toml, {len(kp)} in KiCad {sym}; {bad} mismatches")
+    print(f"{part['part']['id']}: {len(ours)} pins in pins.toml, {len(kp)} in KiCad {sym}; {bad} mismatches"
+          + (f", {comp} composite-name matches" if composite else ""))
     return 1 if bad else 0
 
 
