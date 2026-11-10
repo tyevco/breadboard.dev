@@ -13,7 +13,9 @@
 #                                           check_dms_rail.py (ok passes; wrong fails exactly LSW-3),
 #                                           the committed one-cell hashes (non-grant records, nets.csv,
 #                                           nets.vcd), the VLED snapshots, a clean PIN_CNF audit, and
-#                                           --engine-order analog-first byte-identical on ok-cold
+#                                           --engine-order analog-first byte-identical on ok-cold, and
+#                                           check_dms_rail.py's two FW-6.4 negative controls (ok-cold's
+#                                           pin_edge records moved; each fails exactly FW-6.4)
 #   scripts/dms_rail.sh gate <bb> <out>     the M6 gate (make dms-rail): `test`, plus every case's
 #                                           one-cell reference run (equal to the default run except
 #                                           grant records, and to the committed hashes, grant records
@@ -135,6 +137,42 @@ snapshots() { # <dir> <case>
   fi
 }
 
+fw_rule_controls() { # <out>: check_dms_rail.py's FW-6.4 negative controls (post-M7 review)
+  # ok-cold's outputs with its pin_edge records moved: (a) the first P0.06 rise 5 ms after
+  # LED_PWR_EN (VLED has settled by then, so only FW-6.4 can see it), (b) the second LED_PWR_EN
+  # rise 20 ms after the fall. Each must fail exactly FW-6.4.
+  local out=$1 k d
+  [[ -d $out/ok-cold ]] || return 0
+  for k in on-wait off-wait; do
+    d=$out/fw-rule-$k
+    rm -rf "$d" && mkdir -p "$d"
+    cp "$out/ok-cold/nets.csv" "$out/ok-cold/run.json" "$d/"
+    "$PY" - "$out/ok-cold/events.jsonl" "$d/events.jsonl" "$k" <<'EOF'
+import json, sys
+src, dst, kind = sys.argv[1:]
+recs = [json.loads(l) for l in open(src)]
+edge = lambda r, net, lv: r.get("type") == "pin_edge" and r["net"] == net and r["level"] == lv
+if kind == "on-wait":
+    en = next(r for r in recs if edge(r, "U10.P1.04", 1))
+    din = next(r for r in recs if edge(r, "U10.P0.06", 1))
+    din["t_fs"] = en["t_fs"] + 5_000_000_000_000
+else:
+    fall = next(r for r in recs if edge(r, "U10.P1.04", 0))
+    rise = [r for r in recs if edge(r, "U10.P1.04", 1)][1]
+    rise["t_fs"] = fall["t_fs"] + 20_000_000_000_000
+with open(dst, "w") as f:
+    for r in recs:
+        f.write(json.dumps(r, separators=(",", ":")) + "\n")
+EOF
+    if ! "$PY" "$ROOT/scripts/check_dms_rail.py" "$d" --project "$PROJ" --json "$d/checks.json" > "$d/checks.txt" \
+        && "$PY" -c 'import json, sys; sys.exit(json.load(open(sys.argv[1]))["failed"] != ["FW-6.4"])' "$d/checks.json"; then
+      pass "FW-6.4 negative control ($k): $(grep -o 'FAIL: FW-6.4: [^(]*' "$d/checks.txt")"
+    else
+      fail "FW-6.4 negative control ($k): expected exactly FW-6.4 to fail"; cat "$d/checks.txt"
+    fi
+  done
+}
+
 do_test() { # <bb> <out>
   local bb=$1 out=$2 c
   prepare "$bb"
@@ -146,6 +184,7 @@ do_test() { # <bb> <out>
     snapshots "$out/$c" "$c"
     converged "$out/$c" "$c (mcu-first)"
   done
+  fw_rule_controls "$out"
   if run_case "$bb" "$out/ok-cold-order" ok-cold --engine-order analog-first; then
     same "$out/ok-cold" "$out/ok-cold-order" "ok-cold: --engine-order analog-first byte-identical" \
       nets.csv events.jsonl nets.vcd

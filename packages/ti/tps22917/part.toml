@@ -10,7 +10,7 @@ schema = "bb-part/0"
 
 [part]
 id = "ti/tps22917"
-version = "0.1.0"
+version = "0.2.0"
 kind = "power"
 manufacturer = "Texas Instruments"
 mpn = ["TPS22917DBVR", "TPS22917DBVT"]
@@ -36,17 +36,25 @@ ports = ["CT", "GND", "ON", "QOD", "VIN", "VOUT"]
 params = { ron_add = "0", isd_out = "0" }
 
 [analog.provenance]
-source = "datasheet"
-base = "breadboard.dev's own behavioural model (no vendor netlist): SLVSDW8B Tables 7.3, 7.5 and 7.6"
-refs = ["SLVSDW8B Table 7.3 (VIH, VIL)", "SLVSDW8B Table 7.5 (RON typ, QOD typ, RPD)", "SLVSDW8B Table 7.6 (tON, tR, SRON, CT open)"]
+source = "agent_generated"
+base = "breadboard.dev's own behavioural model (no vendor netlist), written by an agent from SLVSDW8B Tables 7.3, 7.5 and 7.6 as the dial-me-spinner repository quotes them; SLVSDW8B itself was not opened (ADR-006 Amendment 5)"
+refs = [
+  "SLVSDW8B Table 7.3 (VIH, VIL): dial-me-spinner@6854d25:hardware/sim/tests/test_load_switches.py SW_VIH_MIN, SW_VIL_MAX",
+  "SLVSDW8B Table 7.5 (RON typ): dial-me-spinner@6854d25:hardware/sim/tests/test_power_integrity.py LSW_RON, docs/bringup.md",
+  "SLVSDW8B Table 7.5 (QOD typ): dial-me-spinner@6854d25:hardware/sim/tests/test_load_switches.py SW_QOD",
+  "SLVSDW8B Table 7.5 (RPD): dial-me-spinner@6854d25:hardware/sim/models/sleep_current__tps22917.lib, oled_boost__tps22917.lib (headers)",
+  "SLVSDW8B Table 7.6 (tON, tR at 3.6 / 5 V): dial-me-spinner@6854d25:hardware/sim/tests/test_load_switches.py SW_TON_K, SW_TR_K",
+  "SLVSDW8B Table 7.6 (tON and SRON at 1 / 1.2 / 1.8 V, CT open tON): dial-me-spinner@6854d25:hardware/sim/models/load_switches__tps22917.lib (the suite's header comments)",
+]
 deviations = [
+  "QOD has 1 GOhm to VOUT, so a floating QOD pin (quick output discharge disabled) stays defined",
   "a linear turn-on ramp through Table 7.6's tON and tR, so its slope is about 5 % below Table 7.6's SRON",
   "ON trip points 0.68 V rising / 0.63 V falling: the datasheet guarantees only VIL <= 0.35 V and VIH >= 1.0 V",
   "IQ 0.5 uA on, ISD 5 nA off: assumed values inside Figures 7-1/7-2's ranges",
 ]
 not_modelled = ["temperature (ron_add and isd_out apply Table 7.5 corners)", "RON below 3.6 V except by linear extrapolation (clamped at 0.25 Ohm)", "QOD's dependence on VIN", "reverse current blocking thresholds and timing (reverse current is never conducted)", "thermal shutdown", "ESD structures", "tolerance and part-to-part spread"]
 generated_by = "Claude (Phase 1 M5b)"
-confidence = "datasheet_checked"
+confidence = "self_checked"   # datasheet_checked once someone checks the figures against SLVSDW8B itself
 
 [[analog.qualified]]   # bb pkg test --record
 lattice = "10us"

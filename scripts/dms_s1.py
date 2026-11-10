@@ -3,7 +3,7 @@
 Subcommands (scripts/dms_s1.sh drives them):
 
   fixview  --in <load_switches__tps22917.lib> --out <lib>
-      Apply the S1 view-local fix to the suite's TPS22917 model (ADR-006 Amendment 1). The input is
+      Apply the S1 view-local fix to the suite's TPS22917 model (ADR-006 Amendment 2). The input is
       the TI-derived file from a `git archive` export of the reference commit; the output is
       LOCAL-ONLY (LicenseRef-local-only, plan approver decision A3) and is never written into the
       repository. Only the replacement element lines below are breadboard.dev's own text.
@@ -46,7 +46,7 @@ US = 1_000_000_000  # fs per us
 
 
 # --------------------------------------------------------------------------------------------- fixview
-# The fix (ADR-006 Amendment 1): Phase 0's ABSTOL = 1e-13 A is the Newton convergence tolerance of
+# The fix (ADR-006 Amendment 2): Phase 0's ABSTOL = 1e-13 A is the Newton convergence tolerance of
 # every branch-current unknown. In the suite's TPS22917 view, TI's RVAR U4 (a B voltage source R*I
 # with a 0 V ammeter and a current-copy CCCS) and TI's current sense H1 (a 0 V ammeter and a CCVS)
 # put branch unknowns in series with the pass path, where tens of milliohms separate ~3 V nodes:
@@ -57,6 +57,10 @@ US = 1_000_000_000  # fs per us
 #               which only matters below VIN = 5 mV where the table gives R < 1 uOhm);
 #   H1       -> its two terminals merged (a 0 V ammeter is a short) and its 1 Ohm transresistance
 #               output I_REVERSE computed from the same branch current (VOUT side -> VIN through RVAR).
+# The two comment lines below go into the fixed view, whose sha256 (061285e8..., and f754ea77... for
+# the local package) is recorded in ADR-006 Amendment 2/3 and scripts/check_local_only.sh. They say
+# "Amendment 1" (the fix is ADR-006 Amendment 2); they are left as they are so that the recorded
+# identity of the local-only view stays valid (ADR-006 Amendment 5).
 FIX_LINES = {
     r"^X_U1_U2_U4\s+VIN\s+U1_U2_N145001\s+U1_U2_N16813658\s+0\s+lsw17_RVAR\s+params:\s*RREF=1\s*$":
         "* S1 fix (breadboard.dev, ADR-006 Amendment 1): RVAR U4 as one B conductance, no branch unknown\n"
@@ -362,7 +366,7 @@ def cmd_gate(a):
                  f"{other}.csv vs {eng}.csv")
         # The suite's result: the suite's own (unmodified) view at its fallback option set, standalone, as
         # the suite runs it (tran 20u, TMAX 20 us); also at the engine's TMAX (10 us = the lattice).
-        # The converged reference: TMAX 1 us, both views (ADR-006 Amendment 1 explains why the
+        # The converged reference: TMAX 1 us, both views (ADR-006 Amendment 2 explains why the
         # whole-waveform comparison is against the converged run: the suite_fallback run moves by mV on
         # the turn-on ramp knee under a 1-ulp change of the edge times).
         ref10 = f"ref.{c}.unmod.suite_fallback.tmax10us"

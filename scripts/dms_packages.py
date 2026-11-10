@@ -244,6 +244,21 @@ def tps_cases(s: Suite, ck: Checks):
                           src=f"{rj}: {test} RON {ron:.9g} Ohm -> VIN RL/(RL + RON)")],
             datasheet=[dict(meas={"node": "va", "at": "2ms"}, value=fmt_v(vin * rl / (rl + ds_ron)),
                             src=f"SLVSDW8B Table 7.5 RON typ {ds_ron * 1e3:g} mOhm @{vin} V -> VIN RL/(RL + RON)")]))
+        if vin == 3.6:
+            # QOD left floating (SLVSDW8B: QOD unconnected disables quick output discharge): the RON circuit
+            # with the QOD pin on a node of its own. Not a suite case; the datasheet-fitted view only (the
+            # post-M7 review found it singular while enabled; ADR-006 Amendment 5).
+            body = (f"* RON at 200 mA with QOD left floating (the ron_{vin} circuit, QOD pin on its own node qf):\n"
+                    f"* ON high, RL = VIN / 0.2 A\nVIN vin 0 {vin}\nVONC onc 0 3.3\nRLC vc 0 {rl:g}\n")
+            cases.append(dict(
+                name=f"qod_open_{vin}", nodes=["ctc", "0", "onc", "qf", "vin", "vc"], body=body, stop="2ms",
+                test=f"{test}, switch A with QOD floating", edges=[], fit_only=True,
+                comment=(f"TPS22917 RON at 200 mA, VIN {vin} V, with the QOD pin left floating (quick output discharge\n"
+                         f"disabled); V(vc) = VIN RL/(RL + RON), as ron_{vin}. Not a suite case (ADR-006 Amendment 5)."),
+                results=[],
+                datasheet=[dict(meas={"node": "vc", "at": "2ms"}, value=fmt_v(vin * rl / (rl + ds_ron)),
+                                src=f"SLVSDW8B Table 7.5 RON typ {ds_ron * 1e3:g} mOhm @{vin} V -> VIN RL/(RL + RON), "
+                                    "QOD floating")]))
         qod = ck(test, f"QOD model @{vin} V")
         body = (f"* QOD in the off state (switch B of the suite's {test}): ON low, VOUT held at 1 V, QOD to VOUT\n"
                 f"* through 1 Ohm, so V(qb) = QOD/(QOD + 1 Ohm)\nVIN vin 0 {vin}\nVONB onb 0 0\nVF vb 0 1\nRQ qb vb 1\n")
@@ -345,6 +360,8 @@ def write_vectors(pkg_dir: str, view: str, cases, flavour: str, header: str):
                 os.remove(os.path.join(tdir, f))
     ports_of = TPS_PORTS if flavour in ("fit", "vendor") else WS_PORTS
     for c in cases:
+        if c.get("fit_only") and flavour != "fit":
+            continue
         circ = c["name"] + ".cir"
         write(os.path.join(tdir, circ),
               f"* {c['name']}: test circuit of {header}. {GEN}\n"
@@ -357,7 +374,7 @@ def write_vectors(pkg_dir: str, view: str, cases, flavour: str, header: str):
             for x in c["results"]:
                 expects.append(dict(meas=x["meas"], value=x["value"], tol=tol, source=x["src"]))
         elif flavour == "fit":
-            dtol = {"table76": "40us", "ron": "0.1mV", "qod_dc": "10uV"}
+            dtol = {"table76": "40us", "ron": "0.1mV", "qod_dc": "10uV", "qod_open": "0.1mV"}
             rtol = {"table76": "0.2ms", "ron": "3mV", "qod_dc": "0.5mV", "qod": "1ms"}
             for x in c["datasheet"]:
                 expects.append(dict(meas=x["meas"], value=x["value"], tol=dtol[kind], source=x["src"]))

@@ -20,11 +20,14 @@ prebuilt Zephyr v4.5.0 running on the nRF52840 inside the Raytac module U10,
 in Renode. It switches the TPS22917 load switch U2, which powers the
 48-LED WS2812C ring (VLED), and it drives the ring's data line. ngspice
 solves the part of the board the bench puts in scope (132 instances). The
-check script then tests three rules from the board's own SPICE suite:
+check script then tests three rules from the board's own SPICE suite, and
+the firmware rule's own timing:
 
 - **LED-DATA-V4:** VLED is at least 2.67 V whenever data starts.
 - **LSW-3:** DIN never goes more than 0.7 V above VLED.
 - **LSW-2:** VLED falls below 10 % within 30 ms of switch-off.
+- **FW-6.4:** data starts at least 10 ms after LED_PWR_EN rises, and
+  LED_PWR_EN stays low at least 30 ms before it rises again.
 
 You need a clean Ubuntu 24.04 (a container, a WSL distro or a machine) and
 network access for the toolchain downloads (about 800 MB: Rust, Renode).
@@ -41,7 +44,7 @@ cd examples/dial-me-spinner
 bb open                                                          # imports the pinned netlist, resolves parts, writes board.bbm
 bb flash --target U10 firmware/prebuilt/led_rail.elf
 bb run --for 120ms --bench bench/cold.toml --probe net:VLED --probe net:LED_DIN --out out/rail
-python3 ../../scripts/check_dms_rail.py out/rail                 # PASS: LED-DATA-V4, LSW-3, LSW-2
+python3 ../../scripts/check_dms_rail.py out/rail                 # PASS: LED-DATA-V4, LSW-3, LSW-2, FW-6.4
 bb flash --target U10 firmware/prebuilt/led_rail_wrong_order.elf
 bb run --for 120ms --bench bench/cold.toml --probe net:VLED --probe net:LED_DIN --out out/rail-wrong
 python3 ../../scripts/check_dms_rail.py out/rail-wrong           # expected to FAIL: LSW-3
@@ -61,31 +64,46 @@ block took 1 min 54 s in a clean `ubuntu:24.04` container and 1 min 47 s
 in a fresh WSL distro. `make setup` took about 50 s of that, the local
 clone 25–45 s, and each run under 4 s. That was on a 24-CPU host with a working Ubuntu mirror
 (Phase 1 plan, "Review notes: M7"). The 15-minute budget leaves room for a
-slower network. If `apt-get` fails with "Mirror sync in progress?", run the
-line again; `make setup` retries on its own.
+slower network, but it assumes a reachable Ubuntu mirror: almost all of the
+time is apt and the downloads, and Breadboard's own steps take seconds.
+
+**If `apt-get` is very slow or times out** (the review of M7 measured
+20 min for this block with `ubuntu:24.04`'s default sources while
+`archive.ubuntu.com` ran at 63 kB/s and `security.ubuntu.com` timed out,
+and 71 s with another mirror), point apt at another Ubuntu mirror and run
+the line again, for example as root:
+
+```sh
+sed -i 's#http://\(archive\|security\).ubuntu.com/ubuntu#http://mirrors.edge.kernel.org/ubuntu#' /etc/apt/sources.list.d/ubuntu.sources
+```
+
+If `apt-get` fails with "Mirror sync in progress?", run the line again;
+`make setup` retries on its own.
 
 The correct-order firmware follows dial-me-spinner's `docs/firmware.md` 6.4.
 It raises LED_PWR_EN before it sends data, and it takes the data line low
 before it drops LED_PWR_EN. In this Zephyr image, data starts 30 ms after
-LED_PWR_EN, not the 10 ms that 6.4 gives (ADR-008 Amendment 3). All three
-checks pass:
+LED_PWR_EN, not the 10 ms that 6.4 gives (ADR-008 Amendment 3); FW-6.4
+only requires at least 10 ms. All four checks pass:
 
 ```text
 check_dms_rail: PASS: LED-DATA-V4: VLED 2.971510 V at 30.190000 ms (P0.06 rose 30.060 ms after LED_PWR_EN), ...
 check_dms_rail: PASS: LSW-3: max(V(LED_DIN) - V(VLED)) = 0.320308 V at 30.400 ms ...
 check_dms_rail: PASS: LSW-2: LED_PWR_EN fell at 35.230000 ms from VLED 2.971510 V: below 10 % after 24.420 ms; ...
-check_dms_rail: PASS: LED-DATA-V4, LSW-3, LSW-2
+check_dms_rail: PASS: FW-6.4: P0.06 rose 30.060 ms after LED_PWR_EN; ...; LED_PWR_EN off for 35.026 ms before rising again ...
+check_dms_rail: PASS: LED-DATA-V4, LSW-3, LSW-2, FW-6.4
 ```
 
 The wrong-order firmware reverses the switch-off. It drops LED_PWR_EN
-first and keeps the data line high while VLED discharges.
-LSW-3 fails, and the message gives the excursion and the clamp current it
-drives into the first LED's DIN. The script exits 1:
+first and keeps the data line high while VLED discharges. Its waits are
+unchanged, so FW-6.4 passes. LSW-3 fails, and the message gives the
+excursion and the clamp current it drives into the first LED's DIN. The
+script exits 1:
 
 ```text
 check_dms_rail: FAIL: LSW-3: max(V(LED_DIN) - V(VLED)) = 0.792868 V at 45.260 ms (VLED 1.486643 V, LED_DIN 2.279511 V;
     DIN clamp current 4.083 mA from the R40 drop ...) (limit <= 0.7 V)
-check_dms_rail: FAIL: LED-DATA-V4, LSW-3, LSW-2 (failed: LSW-3)
+check_dms_rail: FAIL: LED-DATA-V4, LSW-3, LSW-2, FW-6.4 (failed: LSW-3)
 ```
 
 What the steps do:
@@ -94,9 +112,10 @@ What the steps do:
   dial-me-spinner `6854d25`, KiCad 10.0.8, with its sha256 in
   `examples/dial-me-spinner/SOURCE`. It resolves each part to a package by
   its MPN or as a generic R, C or L, and writes `board.bbm`. The committed
-  `board.bbm` is identical, so it reports `unchanged`. With KiCad 9 or 10
-  installed, the schematics give the same `board.bbm` (`make
-  kicad-import`).
+  `board.bbm` is identical, so it reports `unchanged`. With KiCad 10
+  installed, the schematics give the same `board.bbm`, and dial-me-spinner's
+  KiCad 9 netlist (`dc96515`) imports to it too (`make kicad-import`; no
+  gate runs KiCad 9's own `kicad-cli`).
 - **`bb flash`** records the image and its hash in `bb.toml`.
 - **`bb run`** writes the following to `out/rail/`:
   - `nets.csv` and `nets.vcd`: VLED, LED_DIN and the nets the project
@@ -107,7 +126,7 @@ What the steps do:
     confidence and qualification, plus the solver option set.
 
   `bb run` also notes the views whose provenance is `agent_generated` (the
-  ideal R and C).
+  ideal R and C, and the TPS22917's datasheet-fitted view).
 - The two runs' `nets.csv`, `nets.vcd` and non-grant records are
   byte-identical to the committed hashes in `tests/golden/dms-rail/`.
 

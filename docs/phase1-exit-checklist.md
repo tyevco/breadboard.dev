@@ -112,13 +112,14 @@ The observer writes down the clock time at the end of steps 2, 3, 8 and 9.
       ____ min ____ s.
 - [ ] `bb open` printed `1 board, 201 instances, 142 nets` and
       `unchanged: ./board.bbm`.
-- [ ] Step 8 printed `check_dms_rail: PASS: LED-DATA-V4, LSW-3, LSW-2` and
+- [ ] Step 8 printed `check_dms_rail: PASS: LED-DATA-V4, LSW-3, LSW-2, FW-6.4` and
       exited 0 (`echo $?`).
 - [ ] Step 9 printed `check_dms_rail: FAIL: LSW-3: max(V(LED_DIN) -
       V(VLED)) = 0.792868 V ...`, with a DIN clamp current of about
-      4.08 mA. It ended with `FAIL: LED-DATA-V4, LSW-3, LSW-2 (failed:
-      LSW-3)` and exited 1.
-- [ ] `bb run` noted the `agent_generated` views (the ideal R and C), and
+      4.08 mA. It ended with `FAIL: LED-DATA-V4, LSW-3, LSW-2, FW-6.4
+      (failed: LSW-3)` and exited 1.
+- [ ] `bb run` noted the `agent_generated` views (the ideal R and C and the
+      TPS22917 view), and
       `out/rail/run.json` lists the analog views with provenance,
       confidence and qualification (`grep -o '"provenance"'
       out/rail/run.json | wc -l` gives 132).
@@ -152,8 +153,8 @@ human decides to publish:
   placeholder likewise. Keep the stranger-test markers, because
   `scripts/stranger_test.sh --url <real URL>` then tests the published
   clone;
-- add the `LICENSE` file (Apache-2.0, approver decision A2) if it is not
-  yet in the tree;
+- check that the `LICENSE` file (Apache-2.0, approver decision A2; in the
+  tree since the post-M7 review) is still there;
 - check once more that nothing local-only is tracked
   (`bash scripts/check_local_only.sh`);
 - run the stranger test against the published URL.

@@ -1024,6 +1024,46 @@ fn logged_errors() -> Vec<String> {
         .collect()
 }
 
+/// What a failed advance reports from the log: the error lines, or when
+/// ngspice printed none (it stops a transient on a singular matrix or a
+/// collapsed step with warnings only), the last three distinct warnings,
+/// oldest first. "singular matrix: check node qf" names the cause.
+fn failure_lines(log: &[String]) -> Vec<String> {
+    let errs: Vec<String> = log
+        .iter()
+        .filter(|l| l.starts_with("stderr Error") || l.starts_with("stderr error"))
+        .cloned()
+        .collect();
+    if !errs.is_empty() {
+        return errs;
+    }
+    let mut w: Vec<String> = Vec::new();
+    for l in log.iter().rev() {
+        let warn = l.starts_with("stderr Warning")
+            || l.starts_with("stderr warning")
+            || l.contains("singular matrix")
+            || l.contains("timestep too small");
+        if warn && !w.contains(l) {
+            w.push(l.clone());
+            if w.len() == 3 {
+                break;
+            }
+        }
+    }
+    w.reverse();
+    w
+}
+
+/// [`failure_lines`] of the current log.
+fn failure_detail() -> String {
+    let lines = failure_lines(&log());
+    if lines.is_empty() {
+        "(ngspice printed no error or warning)".into()
+    } else {
+        lines.join(" | ")
+    }
+}
+
 fn other(msg: impl Into<String>) -> EngineError {
     EngineError::Other(msg.into())
 }
@@ -1435,17 +1475,14 @@ impl NgspiceEngine {
         if let Some(e) = st.error.clone() {
             drop(st);
             self.failed = true;
-            return Err(other(format!(
-                "{e}; ngspice: {}",
-                logged_errors().join(" | ")
-            )));
+            return Err(other(format!("{e}; ngspice: {}", failure_detail())));
         }
         if st.parked != Some(st.seq) {
             drop(st);
             self.failed = true;
             return Err(other(format!(
                 "ngspice stopped before reaching {t}: {}",
-                logged_errors().join(" | ")
+                failure_detail()
             )));
         }
         let reading = st.reading.take();
@@ -2023,6 +2060,41 @@ impl Drop for NgspiceEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stop_without_an_error_line_reports_the_warnings() {
+        // The post-M7 review: a singular matrix stopped the transient with an
+        // empty reason, because ngspice prints it as a warning.
+        let s = |x: &str| x.to_string();
+        let log = vec![
+            s("stderr Using SPARSE 1.3 as Direct Linear Solver"),
+            s("stderr Warning: singular matrix:  check node qf"),
+            s("stdout Background thread stopped with timeout = 1"),
+            s("stderr Warning: singular matrix:  check node qf"),
+        ];
+        assert_eq!(
+            failure_lines(&log),
+            vec![s("stderr Warning: singular matrix:  check node qf")]
+        );
+        // Error lines win over warnings.
+        let mut l2 = log.clone();
+        l2.push(s("stderr Error: no such vector x"));
+        assert_eq!(
+            failure_lines(&l2),
+            vec![s("stderr Error: no such vector x")]
+        );
+        // At most three distinct warnings, oldest first.
+        let l3: Vec<String> = (0..5).map(|i| format!("stderr Warning: w{i}")).collect();
+        assert_eq!(
+            failure_lines(&l3),
+            vec![
+                s("stderr Warning: w2"),
+                s("stderr Warning: w3"),
+                s("stderr Warning: w4")
+            ]
+        );
+        assert!(failure_lines(&[s("stdout x")]).is_empty());
+    }
 
     #[test]
     fn wave_ramps_and_replaces() {

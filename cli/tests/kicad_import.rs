@@ -259,6 +259,17 @@ fn a_minimal_bb_toml_is_written_for_a_net() {
     assert!(sub.join("board.bbm").is_file());
 }
 
+/// The deck lines of `bench/pwl.toml` in [`a_bench_elaborates_into_the_deck`].
+const PWL_DECK_LINES: &[&str] = &[
+    // An ideal PWL source drives its net directly (the net's SPICE name).
+    "V_pwl_n3V3 n3V3 0 PWL(0 0 1e-4 0 2e-4 3.3)\n",
+    // With rs, the source drives an internal node and rs connects it.
+    "V_pwl_LED bb_pwl_LED 0 PWL(0 1 0.001 2.5)\n",
+    "R_pwl_LED bb_pwl_LED LED 50\n",
+    // The rest of the scope is unchanged by the bench.
+    "XR3 ALARM LED bb_generic_resistor value=330\n",
+];
+
 #[test]
 fn a_bench_elaborates_into_the_deck() {
     // examples/adc/kicad with a bench (ADR-007 D5): the analog scope keeps
@@ -275,6 +286,12 @@ fn a_bench_elaborates_into_the_deck() {
     // bb flash records the ELF image hash (ADR-008 D5), so the file must
     // have a loadable segment: a minimal ELF32 with one 4-byte PT_LOAD.
     std::fs::write(d.join("fw.elf"), tiny_elf()).unwrap();
+    // The per-instance analog view override (ADR-006 D3 step 1; the
+    // post-M7 review found it untested): D1's only view, chosen by name.
+    let toml = d.join("bb.toml");
+    let s =
+        std::fs::read_to_string(&toml).unwrap() + "\n[instances.\"main:D1\"]\nanalog = \"diode\"\n";
+    std::fs::write(&toml, s).unwrap();
     std::fs::create_dir_all(d.join("bench")).unwrap();
     std::fs::write(
         d.join("bench/test.toml"),
@@ -282,6 +299,16 @@ fn a_bench_elaborates_into_the_deck() {
          [[supply]]\nnet = \"LED\"\nvolts = \"2V\"\nrs = \"10\"\ntrack = { net = \"ADC_IN\", drop = \"100mV\" }\n\
          [[load]]\nnet = \"ADC_IN\"\namps = \"1mA\"\n\
          [analog]\nnets = [\"DRIVE\", \"ADC_IN\", \"GND\", \"LED\"]\n[options]\nset = \"phase0\"\n",
+    )
+    .unwrap();
+    // [[pwl]] sources (plan section 3's minimal bench; the post-M7 review
+    // found their elaboration untested): an ideal one and one with rs.
+    std::fs::write(
+        d.join("bench/pwl.toml"),
+        "schema = \"bb-bench/0\"\n\
+         [[pwl]]\nnet = \"+3V3\"\npoints = [[\"0\", \"0V\"], [\"100us\", \"0V\"], [\"200us\", \"3.3V\"]]\n\
+         [[pwl]]\nnet = \"LED\"\npoints = [[\"0\", \"1V\"], [\"1ms\", \"2.5V\"]]\nrs = \"50\"\n\
+         [analog]\nnets = [\"DRIVE\", \"ADC_IN\", \"GND\", \"LED\", \"ALARM\", \"+3V3\"]\n[options]\nset = \"phase0\"\n",
     )
     .unwrap();
     assert!(run(&["open", "."], &d).status.success());
@@ -324,6 +351,30 @@ fn a_bench_elaborates_into_the_deck() {
         !rj.contains(&d.display().to_string()),
         "an absolute path in run.json"
     );
+    // The override is applied and recorded: D1 (and only D1) at rung "override".
+    assert_eq!(rj.matches("\"rung\":\"override\"").count(), 1, "{rj}");
+    let d1 = &rj[rj.find("\"ref\":\"main:D1\"").expect("main:D1 in run.json")..];
+    let d1 = &d1[..d1.find('}').unwrap()];
+    assert!(d1.contains("\"rung\":\"override\""), "{d1}");
+    // The [[pwl]] bench: an ideal PWL source on +3V3, and one behind rs on LED.
+    let o = run(
+        &[
+            "run",
+            "--for",
+            "1ms",
+            "--bench",
+            "bench/pwl.toml",
+            "--elaborate-only",
+            "--out",
+            "out-pwl",
+        ],
+        &d,
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    let deck = std::fs::read_to_string(d.join("out-pwl/deck.cir")).unwrap();
+    for line in PWL_DECK_LINES {
+        assert!(deck.contains(line), "{line:?} not in\n{deck}");
+    }
     // A probe of an unbound MCU pin is refused (only bound pins have a
     // kernel net).
     let o = run(

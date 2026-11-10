@@ -78,19 +78,29 @@ done
 # their Release file ("File has unexpected size ... Mirror sync in progress?"),
 # and apt-get update then exits 100. The Phase 1 M7 stranger test hit this, so
 # apt retries each download and the whole command, three times each.
+# Retries do not help when the archive is slow or down rather than syncing (the
+# post-M7 review measured 63 kB/s and timeouts); then the hint names the way out.
+apt_hint() {
+  log "apt: if the Ubuntu archive is slow or unreachable, point apt at another Ubuntu mirror"
+  log "apt: (README, \"If apt-get is very slow or times out\") and run make setup again"
+}
 apt_retry() {
   local i
   for i in 1 2 3; do
     "$@" && return 0
     [ "$i" = 3 ] || { log "apt: failed (attempt $i of 3; a mirror sync?), retrying in 30 s"; sleep 30; }
   done
+  apt_hint
   return 1
 }
 if ((${#missing[@]})); then
   log "apt: installing ${missing[*]}"
+  apt_t0=$(date +%s)
   apt_retry "${SUDO[@]}" apt-get -o Acquire::Retries=3 update
   apt_retry "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y \
     --no-install-recommends "${missing[@]}"
+  apt_s=$(($(date +%s) - apt_t0))
+  if [ "$apt_s" -gt 300 ]; then log "apt: took $apt_s s"; apt_hint; fi
 else
   log "apt: all packages present"
 fi

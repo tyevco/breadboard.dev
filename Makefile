@@ -769,6 +769,7 @@ packages: bb
 	$(BB) pkg test packages $(PKG_LOCAL)
 	set -e; for b in $(PKG_BOARDS); do $(BB) open --check $$b; done
 	bash scripts/check_local_only.sh
+	bash scripts/check_local_only_test.sh
 	@echo "packages: PASS"
 
 # --- Phase 1 M5/M5b: the E1 packages (ADR-006 D9, Amendment 3) ------------

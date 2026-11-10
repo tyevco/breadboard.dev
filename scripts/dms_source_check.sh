@@ -4,7 +4,8 @@
 #   - every vendored file exists and has the recorded sha256;
 #   - with a dial-me-spinner repository as $1 (or DMS_REPO), every file
 #     also equals `git show <commit>:<path>` byte for byte;
-#   - no file under kicad/ is missing from SOURCE.
+#   - no file under kicad/ is missing from SOURCE;
+#   - every package file migrated from dial-me-spinner (a part.toml `origin`) has an entry.
 # Usage: scripts/dms_source_check.sh [<dial-me-spinner repo>]
 set -euo pipefail
 
@@ -47,7 +48,20 @@ while IFS= read -r f; do
   grep -qxF "$rel" "$listed" || { echo "dms-source: $rel is not in SOURCE" >&2; fail=1; }
 done < <(find "$DIR/kicad" -type f | sort)
 
+# Every package file migrated from dial-me-spinner (part.toml `origin = "dial-me-spinner@<commit>:
+# <path>"`) is vendored with a SOURCE entry of that commit and path (ADR-006 Amendment 5).
+while IFS= read -r o; do
+  oc=${o%%:*} op=${o#*:}
+  if ! awk -v c="$oc" -v p="$op" '$1 !~ /^#/ && NF == 3 { split($3, a, ":"); if (index(a[1], c) == 1 && a[2] == p) f = 1 }
+       END { exit !f }' "$SRC"; then
+    echo "dms-source: a package's origin dial-me-spinner@$o has no SOURCE entry" >&2; fail=1
+  else
+    n_origin=$((${n_origin:-0} + 1))
+  fi
+done < <(grep -rhoE --include=part.toml 'origin = "dial-me-spinner@[0-9a-f]+:[^"]+"' "$ROOT/packages" \
+           | sed -E 's/^origin = "dial-me-spinner@([0-9a-f]+:[^"]+)"$/\1/' | sort -u)
+
 if [[ $fail -ne 0 ]]; then
   echo "dms-source: FAIL" >&2; exit 1
 fi
-echo "dms-source: OK ($n files$( [[ -n $REPO ]] && echo ', each equal to its commit:path in the repository'))"
+echo "dms-source: OK ($n files$( [[ -n $REPO ]] && echo ', each equal to its commit:path in the repository'); ${n_origin:-0} package origin(s) listed)"

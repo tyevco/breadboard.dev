@@ -11,7 +11,10 @@
   fallback, with its cause measured. Gate M4f restated for plan M5's
   packages (Amendment 2). D5's bench, bindings and targets gated on E1
   (M6, 2026-11-09; Amendment 3: module targets, the image hash, Norton
-  bench supplies, the board-level convergence gate).
+  bench supplies, the board-level convergence gate). Post-M7 review
+  (2026-11-09; Amendment 4): E1's FW-6.4 timing check, tests of D2's
+  refusals, `[[pwl]]` and the view override, and §5 item 3's KiCad 9
+  wording.
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestone M4, M6
   for D5, and M11 for systems.
 - **Depends on:** ADR-006 (packages, views, `pins.toml`, `bb.lock`, the
@@ -1112,3 +1115,47 @@ the elaboration needed, and what the gates found:
    `nets.csv`; LED-DATA-V4 is interpolated linearly to the edge instant.
    (c) The second LED_PWR_EN fall of a 120 ms run is not evaluable for
    LSW-2 and is reported as such (ADR-008 Amendment 3).
+
+## Amendment 4 (2026-11-09): the post-M7 review
+
+1. **E1 gates the firmware rule's timing (FW-6.4).** The E1 checks looked
+   only at electrical outcomes, so a firmware that raised P0.06 5 ms after
+   LED_PWR_EN broke `docs/firmware.md` 6.4 and still passed every check
+   (VLED has settled by about 4 ms; the review patched the ELF's
+   `off-on-delay` to show it). `scripts/check_dms_rail.py` adds **FW-6.4**,
+   from the run's `pin_edge` records: every P0.06 rise while LED_PWR_EN is
+   high and at least 10 ms after its rise, and every LED_PWR_EN rise at
+   least 30 ms after the preceding fall. The off order (P0.06 low before
+   LED_PWR_EN falls) is not part of FW-6.4: LSW-3 checks its electrical
+   consequence, and the wrong-order firmware still fails exactly LSW-3.
+   Both firmwares at both benches give FW-6.4 PASS (P0.06 30.06 ms after
+   LED_PWR_EN; off 35.0 ms correct order, 45.1 ms wrong order).
+   `scripts/dms_rail.sh test` (in `make test` and `make dms-rail`) adds two
+   negative controls on ok-cold's outputs with the `pin_edge` records
+   moved (the first P0.06 rise 5 ms after LED_PWR_EN; the second
+   LED_PWR_EN rise 20 ms after the fall): each must fail exactly FW-6.4.
+   They test the check, not a firmware: a third Zephyr image is not built
+   for it. The README, `make demo` and `scripts/stranger_test.sh` expect
+   the four checks.
+2. **Tests the review found missing.**
+   - D2's two refusals (variants in the root sheet, jumper pin groups in
+     any sheet): `importers/kicad` unit test
+     `variants_and_jumper_pin_groups_are_refused` on synthetic projects
+     (a sub-sheet's variants are not refused; D2 names the root).
+   - The bench's `[[pwl]]` sources (D5): `cli/tests/kicad_import.rs`
+     `a_bench_elaborates_into_the_deck` elaborates a bench with an ideal
+     PWL on `+3V3` and one behind `rs = 50` on `LED`, and requires the deck
+     lines (`V_pwl_n3V3 n3V3 0 PWL(0 0 1e-4 0 2e-4 3.3)`, `V_pwl_LED
+     bb_pwl_LED 0 PWL(0 1 0.001 2.5)`, `R_pwl_LED bb_pwl_LED LED 50`).
+   - The per-instance analog view override (ADR-006 D3 step 1, `[instances]
+     analog`): the same test sets `[instances."main:D1"] analog = "diode"`
+     and requires D1, and only D1, at rung `override` in `run.json`; a
+     `cli/src/elab.rs` unit test covers `select_view` (default, override,
+     an unknown view refused, the ladder from `si` down to `fast`, a
+     `pin_load` view never chosen).
+3. **Plan §5 item 3 and the README said "with KiCad 9 or 10 installed".**
+   Gate M4c runs KiCad 10.0.8's `kicad-cli` (Linux and Windows) and
+   imports dc96515's KiCad 9 *netlist*; no gate runs KiCad 9's own
+   `kicad-cli`, and dc96515's schematics are not vendored. Both texts now
+   say KiCad 10, with the KiCad 9 netlist importing to the same
+   `board.bbm`. M4c as written here never required KiCad 9's `kicad-cli`.

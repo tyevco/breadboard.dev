@@ -36,6 +36,9 @@ REF_FILES=(
   "kicad/base/base.kicad_sch                  hardware/kicad/base/base.kicad_sch"
   "kicad/base/sym-lib-table                   hardware/kicad/base/sym-lib-table"
   "kicad/base/lib/dial_spinner.kicad_sym      hardware/kicad/base/lib/dial_spinner.kicad_sym"
+  # Migrated suite models (approver decision A2), vendored into their package (M5; ADR-006
+  # Amendment 5): the path is relative to examples/dial-me-spinner like every other entry.
+  "../../packages/worldsemi/ws2812c-2020/analog/load_switches__ws2812c.lib  hardware/sim/models/load_switches__ws2812c.lib"
 )
 SECONDARY_FILES=(
   "kicad/kicad9-dc96515/main/dial-me-spinner-main.net  hardware/kicad/main/dial-me-spinner-main.net"
@@ -83,7 +86,10 @@ vendor "$SECONDARY" "${SECONDARY_FILES[@]}"
 #             itself carries no LICENSE file at either commit.
 # suite       hardware/sim at the reference commit is not vendored; it is
 #             re-run from a git archive export by scripts/dms_suite.sh, and
-#             its results are in suite/results.json
+#             its results are in suite/results.json. The one migrated suite
+#             model a package carries unchanged (worldsemi/ws2812c-2020's
+#             view) is listed below with a path outside this directory; the
+#             TI-derived TPS22917 view is never vendored (decision A3)
 #
 # sha256  vendored path (relative to this directory)  commit:path in dial-me-spinner
 EOF

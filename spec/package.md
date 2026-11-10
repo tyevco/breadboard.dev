@@ -80,6 +80,13 @@ number: `unchecked`; `self_checked` (passes its own vectors);
 `datasheet_checked` (the vectors are datasheet table values); `measured`
 (the vectors are bench measurements). A view whose source is `estimated`
 or `agent_generated` is flagged in `bb run`'s summary (ADR-007 D6, M4).
+`source` says how the view was made, not where its numbers come from: a
+view an agent wrote is `agent_generated` even when every number is a
+datasheet value (`base` and `refs` name those, `generated_by` the agent),
+so `bb run` flags it until a person reviews it (`reviewed_by`). A figure
+taken from a secondary source (a document quoting the datasheet) names
+that source in `refs`, and `datasheet_checked` needs the vectors checked
+against the datasheet itself (ADR-006 Amendment 5).
 
 ## 3. Layers, views and the fidelity ladder
 
@@ -511,8 +518,10 @@ others in `alt`).
   drive and PS column), and the module `packages/raytac/mdbt50q-u1mv2/`
   (section 4).
 - Analog views with suite-derived vectors (Phase 1 M5): `packages/ti/
-  tps22917/` (a datasheet-fitted view; the vendor-derived one is
-  local-only, ADR-006 D9 rule 4) and `packages/worldsemi/ws2812c-2020/`.
+  tps22917/` (a datasheet-fitted view written by an agent, so
+  `agent_generated`; the vendor-derived one is local-only, ADR-006 D9 rule
+  4) and `packages/worldsemi/ws2812c-2020/` (a migrated suite model, listed
+  with its sha256 in `examples/dial-me-spinner/SOURCE`).
 - Format examples of a load switch and a chip with an ADC pin load:
   `spec/examples/packages/ti/tps22917/` and
   `spec/examples/packages/nordic/nrf52840-qiaa/`. They illustrate the

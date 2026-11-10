@@ -1115,3 +1115,40 @@ pub fn describe_probe(board: &Board, simulated: &str, name: &str) -> Result<Stri
         ProbeTarget::Pin(b, r, p) => format!("pin {b}:{r}.{p}"),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bbpkg::schema::Registry;
+
+    fn tps22917() -> Package {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../packages/ti/tps22917");
+        bbpkg::package::load(&dir, &Registry::current()).unwrap()
+    }
+
+    #[test]
+    fn select_view_override_default_and_ladder() {
+        // ADR-006 D3 step 1 (the post-M7 review found the override untested).
+        let pkg = tps22917();
+        let (v, rung) = select_view(&pkg, "fast", None).unwrap().unwrap();
+        assert_eq!((v.name.as_str(), rung.as_str()), ("lsw", "fast"));
+        // The project override wins and is recorded as such.
+        let (v, rung) = select_view(&pkg, "fast", Some("lsw")).unwrap().unwrap();
+        assert_eq!((v.name.as_str(), rung.as_str()), ("lsw", "override"));
+        // An unknown view name is refused, naming the package.
+        let e = select_view(&pkg, "fast", Some("vendor")).unwrap_err();
+        assert!(
+            e.contains("package ti/tps22917 has no analog view \"vendor\""),
+            "{e}"
+        );
+        // The ladder: at a higher rung with no default there, the first
+        // lower rung that has one is chosen.
+        let (v, rung) = select_view(&pkg, "si", None).unwrap().unwrap();
+        assert_eq!((v.name.as_str(), rung.as_str()), ("lsw", "fast"));
+        assert!(select_view(&pkg, "spice", None).is_err());
+        // A pin_load view is never selected as the part's circuit.
+        let mut p2 = pkg.clone();
+        p2.part.analog[0].kind = "pin_load".into();
+        assert!(select_view(&p2, "fast", None).unwrap().is_none());
+    }
+}

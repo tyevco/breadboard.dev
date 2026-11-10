@@ -9,7 +9,7 @@
 #   bb open                                           board.bbm from the vendored netlist (unchanged)
 #   bb flash --target U10 firmware/prebuilt/led_rail.elf
 #   bb run --for 120ms --bench bench/cold.toml --probe net:VLED --probe net:LED_DIN --out <out>/rail
-#   check_dms_rail.py <out>/rail                     PASS: LED-DATA-V4, LSW-3, LSW-2
+#   check_dms_rail.py <out>/rail                     PASS: LED-DATA-V4, LSW-3, LSW-2, FW-6.4
 #   bb flash --target U10 firmware/prebuilt/led_rail_wrong_order.elf
 #   bb run ... --out <out>/rail-wrong
 #   check_dms_rail.py <out>/rail-wrong               FAIL: LSW-3 (and only LSW-3), as expected
@@ -63,7 +63,7 @@ run_fw() { # <elf> <outdir>
 run_fw led_rail.elf "$OUT/rail"
 step python3 scripts/check_dms_rail.py "$OUT/rail"
 if "$PY" "$ROOT/scripts/check_dms_rail.py" "$OUT/rail"; then
-  pass "the correct order passes LED-DATA-V4, LSW-3 and LSW-2"
+  pass "the correct order passes LED-DATA-V4, LSW-3, LSW-2 and FW-6.4"
 else
   fail "check_dms_rail.py on the correct-order run"
 fi

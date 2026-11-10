@@ -20,14 +20,17 @@
   (2026-11-09: E1 on the imported board with the Zephyr v4.5.0 firmware,
   both benches, `make dms-rail`, the local PWL cross-check within 0.5 mV,
   the cost-table row; ADR-008 Amendment 3, ADR-007 Amendment 3, ADR-006
-  Amendment 4; Review notes: M6). M7 done (2026-11-09) and **not
-  published** (decision B). The README quickstart (`<CLONE-URL>` marked as
-  a placeholder), `make demo`, and the E1 cost-table row re-measured on an
-  idle host. The timed stranger test from a local clone took 113.9 s in a
-  clean container and 106.8 s in a fresh WSL distro, both with the apt
-  mirror overridden, because Canonical's archive was unreachable from this
-  host. The one human run is left to the user
-  (`docs/phase1-exit-checklist.md`). Review notes: M7.
+  Amendment 4; Review notes: M6). M7 done **except two measurements**
+  (2026-11-09), and **not published** (decision B). The README quickstart
+  (`<CLONE-URL>` marked as a placeholder), `make demo`, and the E1
+  cost-table row re-measured on an idle host. The timed stranger test from
+  a local clone took 113.9 s in a clean container and 106.8 s in a fresh
+  WSL distro, both with the apt mirror overridden, because Canonical's
+  archive was unreachable from this host. Still open: the one human run
+  (`docs/phase1-exit-checklist.md`), and a timed run with the image's own
+  apt sources inside the budget (the post-M7 review's took 19 min 58 s
+  while the archive crawled). Review notes: M7, and "Review notes: after
+  M7".
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -195,6 +198,7 @@ VLED is off.
   | LED-DATA-V4: VLED at the instant P0.06 first goes high | ≥ 2.67 V (`FW_VLED_FRAME_MIN`) | nominal, cold |
   | LSW-3: max(V(LED_DIN) − V(VLED)) over the run | ≤ 0.7 V (DI abs max) | nominal, cold |
   | LSW-2: VLED below 10 % of its on value after LED_PWR_EN falls | within 30 ms (`FW_LED_OFF`) | nominal, cold |
+  | FW-6.4 (added after the M7 review): the rule's own timing from the `pin_edge` records | every P0.06 rise while LED_PWR_EN is high and ≥ 10 ms after its rise; every LED_PWR_EN rise ≥ 30 ms after the preceding fall | nominal, cold |
   | Wrong-order firmware | the LSW-3 check **fails**, and the message gives the excursion and the clamp current from the series-resistor drop | cold |
 
   The suite's measured values (VLED 2.9715 V at the P0.06 rise at the cold
@@ -396,7 +400,7 @@ reference demo from the README in under 15 minutes". For this board:
    bb open                                   # imports the pinned netlist, resolves parts, writes board.bbm
    bb flash --target U10 firmware/prebuilt/led_rail.elf
    bb run --for 120ms --bench bench/cold.toml --probe net:VLED --probe net:LED_DIN --out out/rail
-   python3 ../../scripts/check_dms_rail.py out/rail      # PASS: LED-DATA-V4, LSW-3, LSW-2
+   python3 ../../scripts/check_dms_rail.py out/rail      # PASS: LED-DATA-V4, LSW-3, LSW-2, FW-6.4
    ```
 
    `net:LED_DIN` resolves to `/LED ring/LED_DIN` as the unique leaf name
@@ -406,8 +410,10 @@ reference demo from the README in under 15 minutes". For this board:
    message.
 2. The same outputs are byte-identical across 10 runs and against the
    committed hashes, and `make test` (now including E1) is green.
-3. `bb open` on the KiCad sources (with KiCad 9 or 10 installed) gives the
-   **same** `board.bbm` as the committed netlist (gate M4c). Source paths,
+3. `bb open` on the KiCad sources (with KiCad 10 installed) gives the
+   **same** `board.bbm` as the committed netlist, and so does
+   dial-me-spinner's KiCad 9 netlist (`dc96515`) (gate M4c; no gate runs
+   KiCad 9's own `kicad-cli`, ADR-007 Amendment 4 item 3). Source paths,
    hashes and schematic versions live in `.bb/import.json`, not in
    `board.bbm`, so the identity holds by construction. A user with KiCad can
    therefore start from the schematic, and the stranger does not need
@@ -1081,3 +1087,39 @@ ADR-006/007/008. Items not adopted as proposed:
   publication the tree also needs the Apache-2.0 `LICENSE` file (decision
   A2; packages already declare `license = "Apache-2.0"`), and `<CLONE-URL>`
   must be filled in. Both are listed in the exit checklist's step 6.
+
+## Review notes: after M7 (2026-11-09)
+
+A review of the finished Phase 1 raised 15 findings (1 major, 14 minor).
+Each was re-checked before anything changed. What became of each:
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1 | (major) With `ubuntu:24.04`'s own apt sources the README block took 19 min 58 s (apt at 63 kB/s, `security.ubuntu.com` timing out); with another mirror, 71 s. The README had no way out | **Fixed (docs).** The README states that the 15 minutes assume a reachable Ubuntu mirror and gives the one-line `sed` that points apt at another mirror (checked on the image's `ubuntu.sources`). `setup.sh` prints that hint when apt fails after its retries or takes over 300 s. Re-probed at 22:14 PST: `archive.ubuntu.com` 1.09 MB/s, `security.ubuntu.com` still timing out after 20 s. The timed run with the image's own sources inside the budget is **still owed** (status line) |
+| 2 | The datasheet-fitted TPS22917 view is singular with QOD floating; `bb` stopped with an empty reason | **Fixed** (ADR-006 Amendment 5 item 1): `R_QODL QOD VOUT 1G`, vector `qod_open_3.6` (failed before, passes after), package 0.2.0, `NgspiceEngine` reports ngspice's warnings when it stops without an error. E1 moved by at most 1 µV (2 µV on VSYS); the dms-rail hashes were rewritten from fresh one-cell references, non-grant records unchanged |
+| 3 | E1 never gated the firmware rule's timing (a 5 ms wait passed) | **Fixed** (ADR-007 Amendment 4 item 1): check FW-6.4 in `check_dms_rail.py`, with two negative controls in `make dms-rail-test` |
+| 4 | The fitted view's provenance named the wrong source for several figures; SLVSDW8B was never opened | **Fixed** (Amendment 5 item 2): each figure's real source is named; `confidence` is `self_checked` until someone checks SLVSDW8B |
+| 5 | dial-me-spinner's HEAD is `claude/revb-bench` (`8663b6e`), not `kicad10-port` at `6854d25` | **Not a bug in breadboard.dev.** Its reflog shows the checkout at 12:28:55, about 2 h before the first Phase 1 commit; no breadboard script writes there, and every script reads it by commit id (`git archive`/`git show 6854d25`; no script reads its working tree). The human should confirm the checkout was theirs |
+| 6 | ADR-006's promised three complete spec example packages differ from what exists | **Fixed (amendment)**: Amendment 5 item 4 records the deliverable as built |
+| 7 | The per-instance analog view override is untested | **Fixed**: a `select_view` unit test and a project test (`[instances."main:D1"] analog`) (ADR-007 Amendment 4 item 2) |
+| 8 | ADR-007 D2's variants and jumper-pin-group refusals are untested | **Fixed**: importer unit test on synthetic projects |
+| 9 | Bench `[[pwl]]` elaboration is untested | **Fixed**: deck-text test (ideal and `rs`) |
+| 10 | `check_local_only.sh` passed vacuously outside git | **Fixed** (Amendment 5 item 6), with `scripts/check_local_only_test.sh` in `make packages` |
+| 11 | The migrated WS2812C model is not in `SOURCE` | **Fixed** (Amendment 5 item 5): listed, and `make dms-source` requires every package `origin` to be |
+| 12 | The fitted view said `source = "datasheet"` though an agent wrote it, so §5 item 4's flag never fired | **Fixed** (Amendment 5 item 3, `spec/package.md` section 2): `agent_generated`; `bb run` flags it |
+| 13 | §5 item 3 claimed KiCad 9 or 10 installed; no gate runs KiCad 9's `kicad-cli` | **Fixed (wording)**: §5 item 3 and the README say KiCad 10, and that the KiCad 9 netlist imports identically (ADR-007 Amendment 4 item 3) |
+| 14 | M7 "done" while the human run and an unmodified-mirror run are open; no `LICENSE` | **Fixed / still owed**: the status line now says M7 is done except those two measurements; `LICENSE` (the Apache-2.0 text, sha256 `cfc7749b...`, decision A2) is in the tree. The human run and the unmodified run remain the human's and the network's |
+| 15 | AGENTS.md's `pool-equiv` row is stale; `dms_s1.py` says Amendment 1 for the S1 fix | **Fixed**, except the two comment lines `dms_s1.py` writes *into* the local-only view: kept, so the recorded sha256s of that view stay valid (Amendment 5 item 7) |
+
+- **Gates, after the fixes** (load 0.1-3.7): `make check` on the pool
+  (7 min 33 s) and with `POOL=0` (8 min 59 s), `make dms-rail` on the pool
+  (2 min 36 s, 44 PASS lines) and with `POOL=0` (2 min 52 s, 44 PASS
+  lines, none failing), `make dms-m5b` (20/20),
+  `make dms-vectors-check`, `make dms-source` with `DMS_REPO` (20 files,
+  1 package origin), `make demo`. `git status` is clean after the commit.
+- **Observed once, not caused here:** in the first pooled `make check`,
+  `cli/tests/jit_profile.rs` found no JIT profile after the gather run
+  (Renode's profile is written on `SIGTERM`); it passed three times in a
+  row on its own and in the full re-run. Its cause was not investigated;
+  the profile affects JIT timing only, never an output (ADR-004
+  Amendment 6).

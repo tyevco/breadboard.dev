@@ -4,14 +4,20 @@
 * text of TI's SLVMCE8 PSpice model and no element of the dial-me-spinner suite's vendor-derived view; every
 * number below is a datasheet value (TI SLVSDW8B) or a stated assumption.
 *
-* Datasheet: TI SLVSDW8B (TPS22917, Sept 2017, revised Dec 2021), the figures quoted as the dial-me-spinner
-* suite quotes them (hardware/sim/tests/test_load_switches.py at 6854d25, SW_* constants):
+* Datasheet: TI SLVSDW8B (TPS22917, Sept 2017, revised Dec 2021).  SLVSDW8B itself was NOT opened when this
+* view was written (no network); every figure is the datasheet value as the dial-me-spinner repository at
+* 6854d25 quotes it, with the table it cites (secondary sources, ADR-006 Amendment 5):
 *   Table 7.3  ON thresholds: VIH >= 1.0 V, VIL <= 0.35 V (guaranteed window only).
-*   Table 7.5  RON typ 90 mOhm @ VIN 3.6 V, 80 mOhm @ 5 V (IOUT 200 mA, 25 C); QOD 150 Ohm typ;
-*              RPD (ON smart pull-down) 750 kOhm.
+*              [hardware/sim/tests/test_load_switches.py SW_VIH_MIN, SW_VIL_MAX]
+*   Table 7.5  RON typ 90 mOhm @ VIN 3.6 V, 80 mOhm @ 5 V (IOUT 200 mA, 25 C)
+*              [hardware/sim/tests/test_power_integrity.py LSW_RON; docs/bringup.md "VLED steady"];
+*              QOD 150 Ohm typ [test_load_switches.py SW_QOD]; RPD (ON smart pull-down) 750 kOhm
+*              [hardware/sim/models/sleep_current__tps22917.lib and oled_boost__tps22917.lib headers].
 *   Table 7.6  CT = 1000 pF: tON 3.8 / 4.0 ms and tR 1.6 / 1.8 ms at VIN 3.6 / 5 V (3.8/4.0 us and 1.6/1.8 us
-*              per pF); tON per pF 3.0 / 3.4 / 3.6 us at VIN 1 / 1.2 / 1.8 V with SRON 1100 / 1000 / 1100
-*              (mV/us) pF there; CT open: tON 120 us @ 3.6 V.  tOFF 10 us typ.
+*              per pF) [test_load_switches.py SW_TON_K, SW_TR_K]; tON per pF 3.0 / 3.4 / 3.6 us at VIN
+*              1 / 1.2 / 1.8 V with SRON 1100 / 1000 / 1100 (mV/us) pF there; CT open: tON 120 us @ 3.6 V
+*              [the header comments of hardware/sim/models/load_switches__tps22917.lib, the suite's own
+*              description of its turn-on block, quoting Table 7.6].  tOFF 10 us typ [oled_boost__tps22917.lib].
 *
 * Structure (all pass-path and pin elements are B CURRENT sources or plain R/C: no branch-current unknown in
 * series with a milliohm path, so the view runs at the phase0 option set; AGENTS.md "Known bad ideas"):
@@ -29,7 +35,9 @@
 *   pass     I(VIN -> VOUT) = en * max(0, min(GF * (Vt - VOUT), (VIN - VOUT) / RON)): VOUT follows the
 *            ramp (GF = 20 S) and the switch is RON once the ramp passes VIN.  Forward only: VOUT above
 *            VIN draws no reverse current (reverse current blocking).
-*   QOD      150 Ohm from QOD to GND while disabled (Table 7.5).
+*   QOD      150 Ohm from QOD to GND while disabled (Table 7.5).  1 GOhm from QOD to VOUT keeps the pin
+*            defined when it is left floating (the datasheet's way to disable QOD): without it the QOD
+*            node has no DC path while enabled and the matrix is singular (ADR-006 Amendment 5).
 *   ON pin   750 kOhm pull-down while the comparator reads low (Table 7.5 RPD).
 *   supply   IQ 0.5 uA while enabled, ISD 5 nA while disabled (inside Figures 7-1/7-2's ranges; ASSUMED
 *            values, they matter for nothing at the fast rung).
@@ -78,6 +86,7 @@ B_RON    lsf_ron GNDP V = min(0.25, max(0.08, 0.09 - (V(VIN,GNDP) - 3.6)*0.01/1.
 B_PASS   VIN VOUT I = V(lsf_en,GNDP) * max(0, min(20*(V(lsf_vts,GNDP) - V(VOUT,GNDP)), V(VIN,VOUT)/V(lsf_ron,GNDP)))
 * ---- quick output discharge while disabled
 B_QOD    QOD GNDP I = V(QOD,GNDP)/150 * (1 - V(lsf_en,GNDP))
+R_QODL   QOD VOUT 1G
 * ---- supply current, and the optional disabled-state leakage to VOUT
 B_IQ     VIN GNDP I = (0.5u*V(lsf_en,GNDP) + 5n*(1 - V(lsf_en,GNDP))) * min(1, max(0, V(VIN,GNDP)))
 B_ISD    VIN VOUT I = {isd_out} * (1 - V(lsf_en,GNDP))

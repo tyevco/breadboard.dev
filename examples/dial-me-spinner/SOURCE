@@ -15,7 +15,10 @@
 #             itself carries no LICENSE file at either commit.
 # suite       hardware/sim at the reference commit is not vendored; it is
 #             re-run from a git archive export by scripts/dms_suite.sh, and
-#             its results are in suite/results.json
+#             its results are in suite/results.json. The one migrated suite
+#             model a package carries unchanged (worldsemi/ws2812c-2020's
+#             view) is listed below with a path outside this directory; the
+#             TI-derived TPS22917 view is never vendored (decision A3)
 #
 # sha256  vendored path (relative to this directory)  commit:path in dial-me-spinner
 c3791275870e72c71cbf3dd5fb92e3b491414695ac2a37427006e2863dab1b54  kicad/main/dial-me-spinner-main.net  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/main/dial-me-spinner-main.net
@@ -35,5 +38,6 @@ a3705155a86a4973c96a9f6e33774186fce2817d8234d2eca283c46e6fe61066  kicad/base/dia
 c3362a53229e1afa24f9f4fb2c404510b6efa5a448bf06a488bf44bd10be2c6f  kicad/base/base.kicad_sch  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/base/base.kicad_sch
 be5c9f041c3aa67c3c596344f2cd0b9f8d2eb68f8d5b231c112bf2af8f817905  kicad/base/sym-lib-table  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/base/sym-lib-table
 2e0072faa0a6ce348a76e3c519bfdac47be0bd10053d4592fb764fa2e9902d50  kicad/base/lib/dial_spinner.kicad_sym  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/kicad/base/lib/dial_spinner.kicad_sym
+2df4a820211895bdd85e3657464aec19e7d6e85ab18a26b9247f0ec28a3403a2  ../../packages/worldsemi/ws2812c-2020/analog/load_switches__ws2812c.lib  6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a:hardware/sim/models/load_switches__ws2812c.lib
 aa3b76cd734133302eee854e351381dacea0a108e64c84acd28f4011e45d48bd  kicad/kicad9-dc96515/main/dial-me-spinner-main.net  dc96515affe3c114a7091248ae403ff3d61dc59d:hardware/kicad/main/dial-me-spinner-main.net
 c4aae7ba7ca96b39e4f77f2b434bc98035535569b32ff4d8596a80a1b3fca32a  kicad/kicad9-dc96515/base/dial-me-spinner-base.net  dc96515affe3c114a7091248ae403ff3d61dc59d:hardware/kicad/base/dial-me-spinner-base.net

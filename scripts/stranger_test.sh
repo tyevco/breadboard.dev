@@ -9,7 +9,7 @@
 # `<!-- stranger-test:end -->` in README.md of the commit being tested, with `<CLONE-URL>` replaced
 # by --url, nothing else. Each line runs in one bash shell (so `cd` and `export` carry on), as
 # root, from $HOME, with stdin closed. A line must exit 0, except a line marked `expected to FAIL`,
-# which must exit non-zero and print `FAIL: LSW-3` with LED-DATA-V4 and LSW-2 passing (the
+# which must exit non-zero and print `FAIL: LSW-3` with LED-DATA-V4, LSW-2 and FW-6.4 passing (the
 # wrong-order firmware). The README time is the wall time from the first line to the last.
 #
 # Afterwards, outside the timed steps: the runs' nets.csv, nets.vcd and non-grant records against
@@ -107,7 +107,7 @@ while IFS= read -r line; do
   tail -n 12 "$R/step$n.log" | sed 's/^/    /'
   if [[ $line == *"expected to FAIL"* ]]; then
     if [[ $rc != 0 ]] && grep -q 'FAIL: LSW-3' "$R/step$n.log" && grep -q 'PASS: LED-DATA-V4' "$R/step$n.log" \
-        && grep -q 'PASS: LSW-2' "$R/step$n.log"; then verdict="ok (failed as expected: exactly LSW-3)"
+        && grep -q 'PASS: LSW-2' "$R/step$n.log" && grep -q 'PASS: FW-6.4' "$R/step$n.log"; then verdict="ok (failed as expected: exactly LSW-3)"
     else verdict="WRONG (expected exactly LSW-3 to fail; exit $rc)"; fail=1; fi
   elif [[ $rc == 0 ]]; then verdict=ok
   else verdict="FAILED (exit $rc)"; fail=1; fi

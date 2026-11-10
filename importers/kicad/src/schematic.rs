@@ -174,4 +174,65 @@ mod tests {
             "c.kicad_sch"
         );
     }
+
+    /// A project in a fresh temporary directory: `p.kicad_pro`, the root
+    /// `p.kicad_sch` (with `root_extra` and a sheet `s.kicad_sch`) and that
+    /// sheet (with `sheet_extra`).
+    fn project(name: &str, root_extra: &str, sheet_extra: &str) -> PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("bb-kicad-schematic-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("p.kicad_pro"), "{}\n").unwrap();
+        std::fs::write(
+            d.join("p.kicad_sch"),
+            format!(
+                "(kicad_sch (version {KICAD10}) (generator \"eeschema\")\n{root_extra}\n\
+                 (sheet (at 0 0) (size 10 10) (property \"Sheetname\" \"s\") (property \"Sheetfile\" \"s.kicad_sch\")))\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("s.kicad_sch"),
+            format!("(kicad_sch (version {KICAD10}) (generator \"eeschema\")\n{sheet_extra})\n"),
+        )
+        .unwrap();
+        d
+    }
+
+    #[test]
+    fn variants_and_jumper_pin_groups_are_refused() {
+        // ADR-007 D2's two Phase 1 refusals (the post-M7 review found them
+        // untested): variants in the root sheet, jumper pin groups anywhere.
+        let ok = project("ok", "", "");
+        let p = read_project(&ok.join("p.kicad_pro")).unwrap();
+        let rels: Vec<&str> = p.sheets.iter().map(|s| s.rel.as_str()).collect();
+        assert_eq!(rels, ["p.kicad_sch", "s.kicad_sch"]);
+
+        let v = project("variants", "(variants (variant (name \"lite\")))", "");
+        let e = read_project(&v.join("p.kicad_pro")).unwrap_err();
+        assert!(
+            e.contains("p.kicad_sch: the schematic defines variants"),
+            "{e}"
+        );
+
+        // Variants are a root-sheet property: a sub-sheet's are not refused.
+        let vs = project("variants-sub", "", "(variants (variant (name \"lite\")))");
+        assert!(read_project(&vs.join("p.kicad_pro")).is_ok());
+
+        let j = project(
+            "jumper",
+            "",
+            "(lib_symbols (symbol \"Jumper:SolderJumper_3\" (jumper_pin_groups (\"1\" \"2\"))))",
+        );
+        let e = read_project(&j.join("p.kicad_pro")).unwrap_err();
+        assert!(
+            e.contains("s.kicad_sch: a symbol has jumper pin groups"),
+            "{e}"
+        );
+
+        for d in [ok, v, vs, j] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
 }

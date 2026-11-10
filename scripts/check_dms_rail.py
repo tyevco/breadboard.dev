@@ -12,6 +12,11 @@ the same corner (examples/dial-me-spinner/suite/results.json):
   LSW-3        max(V(LED_DIN) - V(VLED)) over every 10 us sample           <= 0.7 V  (WS2812C DI abs max)
   LSW-2        VLED below 10 % of its value at the LED_PWR_EN fall,       within 30 ms (FW_LED_OFF)
                for every fall followed by 30 ms of run (a later fall is reported as not evaluable)
+  FW-6.4       the rule's own timing, from the pin_edge records: every P0.06 rise while LED_PWR_EN
+               is high and at least 10 ms after its rise; every LED_PWR_EN rise at least 30 ms after
+               the preceding fall (firmware.md section 6.4). The off ORDER (P0.06 low before
+               LED_PWR_EN falls) is not part of it: LSW-3 checks its electrical consequence, and the
+               wrong-order firmware must fail exactly LSW-3 (post-M7 review)
 
 A failed LSW-3 gives the excursion, where it happened, and the DIN clamp current from the
 series-resistor drop: (V(LED_DIN_MCU) - V(LED_DIN_R)) / R40 - V(LED_DIN_R) / R41, with R40 and R41
@@ -34,7 +39,8 @@ DEFAULT_PROJECT = os.path.join(HERE, "..", "examples", "dial-me-spinner")
 
 FW_VLED_FRAME_MIN = 2.67  # V: test_load_switches.py, LED-DATA-V4 (+3V3 max 3.366 V - 0.7 V)
 DI_ABS_MAX_OVER_VDD = 0.7  # V: WS2812C-2020-V6 DS p.2, VI <= VDD + 0.7 V (LSW-3)
-FW_LED_OFF_S = 0.030  # s: firmware.md section 6.4 off-on wait (LSW-2)
+FW_LED_OFF_S = 0.030  # s: firmware.md section 6.4 off-on wait (LSW-2, FW-6.4)
+FW_LED_ON_WAIT_S = 0.010  # s: firmware.md section 6.4, LED_PWR_EN high to the first data (FW-6.4)
 
 EN, DIN = "U10.P1.04", "U10.P0.06"  # the bound pins' kernel nets (bb.toml [[bind]])
 COL_VLED, COL_DIN, COL_MCU, COL_DIN_R = "VLED", "/LED ring/LED_DIN", "LED_DIN_MCU", "/LED ring/LED_DIN_R"
@@ -204,6 +210,32 @@ def main():
         for r in rows) or "LED_PWR_EN never fell"
     msg += f" (limit {FW_LED_OFF_S * 1e3:g} ms" + (f"; suite bat3.0: {sq * 1e3:.3f} ms" if sq else "") + ")"
     report("LSW-2", ok, msg, {"limit_s": FW_LED_OFF_S, "falls": rows, "suite_s": sq})
+
+    # FW-6.4: the rule's timing from the pin_edge records (the electrical checks above cannot see a
+    # 10 ms wait shortened to anything VLED has settled by, about 4 ms).
+    on_wait, off_wait = int(round(FW_LED_ON_WAIT_S * 1e15)), int(round(FW_LED_OFF_S * 1e15))
+    bad, notes = [], []
+    for t in rises:
+        prev = [(te, lv) for te, lv in en if te <= t]
+        if not prev or prev[-1][1] != 1:
+            bad.append(f"P0.06 rose at {t / 1e12:.6f} ms while LED_PWR_EN was low")
+        elif t - prev[-1][0] < on_wait:
+            bad.append(f"P0.06 rose {(t - prev[-1][0]) / 1e12:.3f} ms after LED_PWR_EN (at {t / 1e12:.6f} ms)")
+        else:
+            notes.append(f"P0.06 rose {(t - prev[-1][0]) / 1e12:.3f} ms after LED_PWR_EN")
+    for t in en_rises:
+        before = [f for f in falls if f <= t]
+        if not before:
+            continue
+        if t - before[-1] < off_wait:
+            bad.append(f"LED_PWR_EN rose {(t - before[-1]) / 1e12:.3f} ms after it fell (at {t / 1e12:.6f} ms)")
+        else:
+            notes.append(f"LED_PWR_EN off for {(t - before[-1]) / 1e12:.3f} ms before rising again")
+    ok = bool(rises) and not bad
+    msg = "; ".join(bad or notes) or "P0.06 never went high"
+    msg += f" (limits: P0.06 >= {FW_LED_ON_WAIT_S * 1e3:g} ms after LED_PWR_EN; off >= {FW_LED_OFF_S * 1e3:g} ms)"
+    report("FW-6.4", ok, msg, {"on_wait_limit_s": FW_LED_ON_WAIT_S, "off_wait_limit_s": FW_LED_OFF_S,
+                               "violations": bad})
 
     failed = sorted(n for n, c in res["checks"].items() if not c["pass"])
     if a.expect_fail:
