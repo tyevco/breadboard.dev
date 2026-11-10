@@ -1,0 +1,14 @@
+/* Waveform plots (site/public/plots, `make docs-plots`): every figure exists as <name>.light.svg
+   and <name>.dark.svg, written in a page as two images, {.plot-light} and {.plot-dark}; the one
+   that does not match the site's theme is hidden. */
+.vp-doc img.plot-light,
+.vp-doc img.plot-dark {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 16px 0 4px;
+}
+.dark .vp-doc img.plot-light,
+html:not(.dark) .vp-doc img.plot-dark {
+  display: none;
+}

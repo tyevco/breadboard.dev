@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="748" viewBox="0 0 760 748" font-family="system-ui, -apple-system, &quot;Segoe UI&quot;, sans-serif" role="img">
+<title>E1: VLED and LED_DIN, correct-order and wrong-order firmware, cold bench</title>
+<rect x="0.5" y="0.5" width="759" height="747" rx="8" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/>
+<line x1="72.0" y1="22.0" x2="90.0" y2="22.0" stroke="#3987e5" stroke-width="2" stroke-linecap="round"/>
+<text x="96.0" y="26.0" font-size="12" fill="#c3c2b7">VLED (LED rail)</text>
+<line x1="219.0" y1="22.0" x2="237.0" y2="22.0" stroke="#d95926" stroke-width="2" stroke-linecap="round"/>
+<text x="243.0" y="26.0" font-size="12" fill="#c3c2b7">LED_DIN (first LED's data input)</text>
+<line x1="485.0" y1="22.0" x2="503.0" y2="22.0" stroke="#898781" stroke-width="1"/>
+<text x="509.0" y="26.0" font-size="12" fill="#c3c2b7">LED_PWR_EN edge (P1.04)</text>
+<clipPath id="p1"><rect x="72.0" y="70.0" width="664.0" height="150.0"/></clipPath>
+<text x="72.0" y="60.0" font-size="13" fill="#f0efec" font-weight="600">Correct order: led_rail.elf (all four checks pass)</text>
+<line x1="72.0" y1="220.0" x2="736.0" y2="220.0" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="224.0" font-size="11" fill="#898781" text-anchor="end">0</text>
+<line x1="72.0" y1="177.1" x2="736.0" y2="177.1" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="181.1" font-size="11" fill="#898781" text-anchor="end">1</text>
+<line x1="72.0" y1="134.3" x2="736.0" y2="134.3" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="138.3" font-size="11" fill="#898781" text-anchor="end">2</text>
+<line x1="72.0" y1="91.4" x2="736.0" y2="91.4" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="95.4" font-size="11" fill="#898781" text-anchor="end">3</text>
+<line x1="72.0" y1="220.0" x2="736.0" y2="220.0" stroke="#383835" stroke-width="1"/>
+<line x1="72.0" y1="220.0" x2="72.0" y2="224.0" stroke="#383835" stroke-width="1"/>
+<text x="72.0" y="237.0" font-size="11" fill="#898781" text-anchor="middle">0</text>
+<line x1="182.7" y1="220.0" x2="182.7" y2="224.0" stroke="#383835" stroke-width="1"/>
+<text x="182.7" y="237.0" font-size="11" fill="#898781" text-anchor="middle">20</text>
+<line x1="293.3" y1="220.0" x2="293.3" y2="224.0" stroke="#383835" stroke-width="1"/>
+<text x="293.3" y="237.0" font-size="11" fill="#898781" text-anchor="middle">40</text>
+<line x1="404.0" y1="220.0" x2="404.0" y2="224.0" stroke="#383835" stroke-width="1"/>
+<text x="404.0" y="237.0" font-size="11" fill="#898781" text-anchor="middle">60</text>
+<line x1="514.7" y1="220.0" x2="514.7" y2="224.0" stroke="#383835" stroke-width="1"/>
+<text x="514.7" y="237.0" font-size="11" fill="#898781" text-anchor="middle">80</text>
+<line x1="625.3" y1="220.0" x2="625.3" y2="224.0" stroke="#383835" stroke-width="1"/>
+<text x="625.3" y="237.0" font-size="11" fill="#898781" text-anchor="middle">100</text>
+<line x1="736.0" y1="220.0" x2="736.0" y2="224.0" stroke="#383835" stroke-width="1"/>
+<text x="736.0" y="237.0" font-size="11" fill="#898781" text-anchor="middle">120</text>
+<text x="26.0" y="145.0" font-size="12" fill="#c3c2b7" text-anchor="middle" transform="rotate(-90 26.0 145.0)">Voltage (V)</text>
+<line x1="72.7" y1="70.0" x2="72.7" y2="220.0" stroke="#898781" stroke-width="1"/>
+<text x="76.7" y="81.0" font-size="11" fill="#c3c2b7">EN ↑</text>
+<line x1="266.9" y1="70.0" x2="266.9" y2="220.0" stroke="#898781" stroke-width="1"/>
+<text x="270.9" y="81.0" font-size="11" fill="#c3c2b7">EN ↓</text>
+<line x1="460.7" y1="70.0" x2="460.7" y2="220.0" stroke="#898781" stroke-width="1"/>
+<text x="464.7" y="81.0" font-size="11" fill="#c3c2b7">EN ↑</text>
+<line x1="654.9" y1="70.0" x2="654.9" y2="220.0" stroke="#898781" stroke-width="1"/>
+<text x="658.9" y="81.0" font-size="11" fill="#c3c2b7">EN ↓</text>
+<path d="M72.0 220.0 L83.2 220.0 L83.7 219.7 L84.0 218.9 L94.2 95.1 L94.7 93.1 L95.2 92.8 L96.0 92.7 L266.9 92.6 L274.9 108.7 L283.1 123.3 L291.7 136.5 L300.8 148.5 L310.4 159.2 L315.4 164.2 L320.6 168.9 L325.8 173.3 L331.2 177.4 L336.9 181.3 L342.7 185.0 L348.7 188.4 L355.0 191.6 L368.0 197.3 L382.3 202.2 L397.6 206.3 L415.9 209.9 L436.3 212.9 L460.7 215.3 L472.4 215.3 L482.2 94.8 L482.5 93.6 L483.0 92.9 L485.3 92.7 L654.9 92.6 L663.3 109.6 L672.0 124.8 L681.2 138.6 L686.0 145.0 L690.9 151.0 L695.9 156.7 L701.1 162.0 L706.6 167.2 L712.0 171.9 L717.8 176.4 L723.7 180.5 L729.7 184.4 L736.0 188.0" fill="none" stroke="#3987e5" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#p1)"/>
+<path d="M72.0 220.0 L239.1 220.0 L239.1 78.9 L266.9 78.9 L266.9 220.0 L627.0 220.0 L627.1 78.9 L627.4 78.9 L654.9 78.9 L655.0 220.0 L736.0 220.0" fill="none" stroke="#d95926" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#p1)"/>
+<line x1="72.7" y1="151.4" x2="239.1" y2="151.4" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="72.7" y1="147.4" x2="72.7" y2="155.4" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="239.1" y1="147.4" x2="239.1" y2="155.4" stroke="#c3c2b7" stroke-width="1"/>
+<text x="155.9" y="145.4" font-size="11" fill="#c3c2b7" text-anchor="middle">P0.06 ↑ 30.06 ms after EN ↑</text>
+<text x="160.5" y="84.7" font-size="12" fill="#c3c2b7" text-anchor="middle">VLED</text>
+<text x="160.5" y="212.0" font-size="12" fill="#c3c2b7" text-anchor="middle">LED_DIN</text>
+<clipPath id="p2"><rect x="72.0" y="284.0" width="664.0" height="150.0"/></clipPath>
+<text x="72.0" y="274.0" font-size="13" fill="#f0efec" font-weight="600">Wrong order: led_rail_wrong_order.elf (LSW-3 fails)</text>
+<line x1="72.0" y1="434.0" x2="736.0" y2="434.0" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="438.0" font-size="11" fill="#898781" text-anchor="end">0</text>
+<line x1="72.0" y1="391.1" x2="736.0" y2="391.1" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="395.1" font-size="11" fill="#898781" text-anchor="end">1</text>
+<line x1="72.0" y1="348.3" x2="736.0" y2="348.3" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="352.3" font-size="11" fill="#898781" text-anchor="end">2</text>
+<line x1="72.0" y1="305.4" x2="736.0" y2="305.4" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="309.4" font-size="11" fill="#898781" text-anchor="end">3</text>
+<line x1="72.0" y1="434.0" x2="736.0" y2="434.0" stroke="#383835" stroke-width="1"/>
+<line x1="72.0" y1="434.0" x2="72.0" y2="438.0" stroke="#383835" stroke-width="1"/>
+<text x="72.0" y="451.0" font-size="11" fill="#898781" text-anchor="middle">0</text>
+<line x1="182.7" y1="434.0" x2="182.7" y2="438.0" stroke="#383835" stroke-width="1"/>
+<text x="182.7" y="451.0" font-size="11" fill="#898781" text-anchor="middle">20</text>
+<line x1="293.3" y1="434.0" x2="293.3" y2="438.0" stroke="#383835" stroke-width="1"/>
+<text x="293.3" y="451.0" font-size="11" fill="#898781" text-anchor="middle">40</text>
+<line x1="404.0" y1="434.0" x2="404.0" y2="438.0" stroke="#383835" stroke-width="1"/>
+<text x="404.0" y="451.0" font-size="11" fill="#898781" text-anchor="middle">60</text>
+<line x1="514.7" y1="434.0" x2="514.7" y2="438.0" stroke="#383835" stroke-width="1"/>
+<text x="514.7" y="451.0" font-size="11" fill="#898781" text-anchor="middle">80</text>
+<line x1="625.3" y1="434.0" x2="625.3" y2="438.0" stroke="#383835" stroke-width="1"/>
+<text x="625.3" y="451.0" font-size="11" fill="#898781" text-anchor="middle">100</text>
+<line x1="736.0" y1="434.0" x2="736.0" y2="438.0" stroke="#383835" stroke-width="1"/>
+<text x="736.0" y="451.0" font-size="11" fill="#898781" text-anchor="middle">120</text>
+<text x="404.0" y="468.0" font-size="12" fill="#c3c2b7" text-anchor="middle">Time (ms)</text>
+<text x="26.0" y="359.0" font-size="12" fill="#c3c2b7" text-anchor="middle" transform="rotate(-90 26.0 359.0)">Voltage (V)</text>
+<line x1="72.7" y1="284.0" x2="72.7" y2="434.0" stroke="#898781" stroke-width="1"/>
+<text x="76.7" y="295.0" font-size="11" fill="#c3c2b7">EN ↑</text>
+<line x1="266.9" y1="284.0" x2="266.9" y2="434.0" stroke="#898781" stroke-width="1"/>
+<text x="270.9" y="295.0" font-size="11" fill="#c3c2b7">EN ↓</text>
+<line x1="516.3" y1="284.0" x2="516.3" y2="434.0" stroke="#898781" stroke-width="1"/>
+<text x="520.3" y="295.0" font-size="11" fill="#c3c2b7">EN ↑</text>
+<line x1="710.5" y1="284.0" x2="710.5" y2="434.0" stroke="#898781" stroke-width="1"/>
+<text x="706.5" y="295.0" font-size="11" fill="#c3c2b7" text-anchor="end">EN ↓</text>
+<path d="M72.0 434.0 L83.2 434.0 L83.7 433.7 L84.0 432.9 L94.2 309.1 L94.6 307.3 L95.0 306.9 L95.6 306.7 L266.9 306.6 L274.5 322.1 L281.0 333.4 L284.5 338.6 L288.1 343.4 L291.8 347.9 L295.8 352.1 L301.7 357.6 L308.2 362.5 L315.1 366.7 L322.4 370.3 L331.4 379.3 L340.8 387.4 L350.8 394.7 L361.3 401.1 L373.0 407.1 L385.4 412.2 L398.8 416.7 L413.4 420.5 L429.2 423.7 L446.5 426.3 L465.9 428.5 L487.3 430.2 L516.3 431.7 L527.8 431.7 L537.8 309.1 L538.2 307.4 L538.8 306.8 L710.5 306.6 L717.4 320.8 L723.2 331.2 L729.4 340.4 L736.0 348.5" fill="none" stroke="#3987e5" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#p2)"/>
+<path d="M72.0 434.0 L239.1 434.0 L239.1 292.9 L271.6 292.9 L273.9 293.3 L276.0 295.4 L283.1 305.1 L287.9 311.1 L292.6 316.2 L297.4 320.8 L303.1 325.4 L309.2 329.5 L315.6 333.2 L322.4 336.3 L322.5 434.0 L682.6 434.0 L682.7 292.9 L715.0 292.9 L717.3 293.2 L718.2 293.8 L719.3 295.0 L728.6 307.6 L736.0 316.0" fill="none" stroke="#d95926" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#p2)"/>
+<line x1="72.7" y1="365.4" x2="239.1" y2="365.4" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="72.7" y1="361.4" x2="72.7" y2="369.4" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="239.1" y1="361.4" x2="239.1" y2="369.4" stroke="#c3c2b7" stroke-width="1"/>
+<text x="155.9" y="359.4" font-size="11" fill="#c3c2b7" text-anchor="middle">P0.06 ↑ 30.06 ms after EN ↑</text>
+<text x="160.5" y="298.7" font-size="12" fill="#c3c2b7" text-anchor="middle">VLED</text>
+<text x="160.5" y="426.0" font-size="12" fill="#c3c2b7" text-anchor="middle">LED_DIN</text>
+<circle cx="322.4" cy="336.3" r="4" fill="#d95926" stroke="#1a1a19" stroke-width="2"/>
+<circle cx="322.4" cy="370.3" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/>
+<line x1="329.1" y1="370.3" x2="329.1" y2="336.3" stroke="#f0efec" stroke-width="1"/>
+<line x1="325.1" y1="370.3" x2="333.1" y2="370.3" stroke="#f0efec" stroke-width="1"/>
+<line x1="325.1" y1="336.3" x2="333.1" y2="336.3" stroke="#f0efec" stroke-width="1"/>
+<text x="336.1" y="357.3" font-size="12" fill="#f0efec" font-weight="600">0.79 V &gt; 0.7 V at 45.26 ms</text>
+<clipPath id="p3"><rect x="72.0" y="512.0" width="664.0" height="190.0"/></clipPath>
+<text x="72.0" y="502.0" font-size="13" fill="#f0efec" font-weight="600">Wrong order, zoomed: LED_PWR_EN off while the data line is still high</text>
+<line x1="72.0" y1="702.0" x2="736.0" y2="702.0" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="706.0" font-size="11" fill="#898781" text-anchor="end">1.0</text>
+<line x1="72.0" y1="638.7" x2="736.0" y2="638.7" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="642.7" font-size="11" fill="#898781" text-anchor="end">2.0</text>
+<line x1="72.0" y1="575.3" x2="736.0" y2="575.3" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="579.3" font-size="11" fill="#898781" text-anchor="end">3.0</text>
+<line x1="72.0" y1="512.0" x2="736.0" y2="512.0" stroke="#2c2c2a" stroke-width="1"/>
+<text x="64.0" y="516.0" font-size="11" fill="#898781" text-anchor="end">4.0</text>
+<line x1="72.0" y1="702.0" x2="736.0" y2="702.0" stroke="#383835" stroke-width="1"/>
+<line x1="160.5" y1="702.0" x2="160.5" y2="706.0" stroke="#383835" stroke-width="1"/>
+<text x="160.5" y="719.0" font-size="11" fill="#898781" text-anchor="middle">35.0</text>
+<line x1="271.2" y1="702.0" x2="271.2" y2="706.0" stroke="#383835" stroke-width="1"/>
+<text x="271.2" y="719.0" font-size="11" fill="#898781" text-anchor="middle">37.5</text>
+<line x1="381.9" y1="702.0" x2="381.9" y2="706.0" stroke="#383835" stroke-width="1"/>
+<text x="381.9" y="719.0" font-size="11" fill="#898781" text-anchor="middle">40.0</text>
+<line x1="492.5" y1="702.0" x2="492.5" y2="706.0" stroke="#383835" stroke-width="1"/>
+<text x="492.5" y="719.0" font-size="11" fill="#898781" text-anchor="middle">42.5</text>
+<line x1="603.2" y1="702.0" x2="603.2" y2="706.0" stroke="#383835" stroke-width="1"/>
+<text x="603.2" y="719.0" font-size="11" fill="#898781" text-anchor="middle">45.0</text>
+<line x1="713.9" y1="702.0" x2="713.9" y2="706.0" stroke="#383835" stroke-width="1"/>
+<text x="713.9" y="719.0" font-size="11" fill="#898781" text-anchor="middle">47.5</text>
+<text x="404.0" y="736.0" font-size="12" fill="#c3c2b7" text-anchor="middle">Time (ms)</text>
+<text x="26.0" y="607.0" font-size="12" fill="#c3c2b7" text-anchor="middle" transform="rotate(-90 26.0 607.0)">Voltage (V)</text>
+<path d="M251.3 562.4 L299.1 574.6 L336.7 583.3 L377.0 591.5 L418.6 598.7 L463.3 605.3 L510.7 611.2 L560.7 616.4 L614.7 621.0 L614.7 626.8 L558.9 621.8 L507.1 616.0 L482.4 612.9 L458.4 609.5 L435.4 605.9 L412.4 602.0 L390.3 597.9 L369.0 593.6 L348.2 589.1 L327.9 584.3 L307.9 579.2 L288.9 574.0 L269.9 568.3 L251.3 562.5 Z" fill="#d03b3b" fill-opacity="0.22" clip-path="url(#p3)"/>
+<line x1="170.3" y1="512.0" x2="170.3" y2="702.0" stroke="#898781" stroke-width="1"/>
+<text x="174.3" y="523.0" font-size="11" fill="#c3c2b7">EN ↓ 35.22 ms</text>
+<line x1="614.8" y1="512.0" x2="614.8" y2="702.0" stroke="#898781" stroke-width="1"/>
+<text x="610.8" y="523.0" font-size="11" fill="#c3c2b7" text-anchor="end">P0.06 ↓ 45.26 ms</text>
+<path d="M72.0 532.8 L170.3 532.8 L199.0 543.9 L226.0 553.8 L249.5 561.9 L273.0 569.3 L297.8 576.4 L323.0 583.1 L349.1 589.3 L376.1 595.1 L402.2 600.1 L429.2 604.9 L457.6 609.3 L486.3 613.4 L516.4 617.2 L547.9 620.7 L580.6 623.9 L614.7 626.8 L644.4 632.6 L674.5 638.1 L705.5 643.4 L736.0 648.3" fill="none" stroke="#c3c2b7" stroke-width="1" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#p3)"/>
+<path d="M72.0 577.1 L170.3 577.1 L199.0 588.3 L226.0 598.2 L249.5 606.2 L273.0 613.6 L297.8 620.8 L323.0 627.4 L349.1 633.6 L376.1 639.4 L402.2 644.5 L429.2 649.2 L457.6 653.7 L486.3 657.7 L516.4 661.5 L547.9 665.0 L580.6 668.2 L614.7 671.2 L644.4 676.9 L674.5 682.4 L705.5 687.7 L736.0 692.6" fill="none" stroke="#3987e5" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#p3)"/>
+<path d="M72.0 556.9 L211.0 556.9 L220.7 557.0 L227.8 557.6 L234.9 558.7 L243.8 560.6 L299.1 574.6 L336.7 583.3 L374.3 591.0 L413.7 597.9 L459.8 604.8 L508.5 611.0 L559.8 616.3 L614.7 621.0 L615.2 765.3 L736.0 765.3" fill="none" stroke="#d95926" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#p3)"/>
+<circle cx="614.7" cy="621.0" r="4" fill="#d95926" stroke="#1a1a19" stroke-width="2"/>
+<text x="89.7" y="547.8" font-size="12" fill="#c3c2b7">VLED + 0.7 V (the LSW-3 limit)</text>
+<text x="89.7" y="574.9" font-size="12" fill="#c3c2b7">LED_DIN</text>
+<text x="89.7" y="595.1" font-size="12" fill="#c3c2b7">VLED</text>
+<text x="295.5" y="561.8" font-size="12" fill="#f0efec">LSW-3 violated (shaded): LED_DIN above VLED + 0.7 V</text>
+<line x1="608.1" y1="671.2" x2="608.1" y2="621.0" stroke="#f0efec" stroke-width="1"/>
+<line x1="604.1" y1="671.2" x2="612.1" y2="671.2" stroke="#f0efec" stroke-width="1"/>
+<line x1="604.1" y1="621.0" x2="612.1" y2="621.0" stroke="#f0efec" stroke-width="1"/>
+<text x="601.1" y="650.1" font-size="12" fill="#f0efec" text-anchor="end" font-weight="600">max 0.793 V</text>
+</svg>

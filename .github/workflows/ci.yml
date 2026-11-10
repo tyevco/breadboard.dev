@@ -219,6 +219,11 @@ jobs:
       - name: E1 gate
         run: make dms-rail
 
+      # The docs site's committed waveform plots (site/public/plots) regenerated from fresh runs
+      # (E1, E2 sag/rec/s50, the spike) must be byte-identical (about 1 min 45 s).
+      - name: Docs plots up to date
+        run: make docs-plots-check
+
   # ADR-008 D5: the committed E1 images rebuilt in a fresh west workspace (the pinned manifest,
   # Zephyr v4.5.0, SDK 1.0.1) must have the image hashes of firmware/prebuilt/SHA256SUMS.
   fw-rebuild:

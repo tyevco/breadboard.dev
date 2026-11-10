@@ -74,6 +74,15 @@ non-grant records of `events.jsonl` against the one-cell reference
 | `make adc-equiv` | The ADC board's one-cell, lookahead and open-loop runs equal the every-lattice-point references. |
 | `make pool-equiv` | Every pooled run is leased and byte-identical to its fresh run and to the committed hashes. |
 
+The figures on the [E1](./demo), [E2](./demo-e2) and
+[introduction](./introduction) pages come from real runs too. `make
+docs-plots` reruns make demo's E1 runs, the E2 cases `sag`, `rec`, `s50` and
+`s50-none` and the spike, and draws `site/public/plots/<name>.{light,dark}.svg`
+from their outputs (about 1 min 45 s). The SVGs are a pure function of the
+runs, so `make docs-plots-check` (CI job `dms-rail`) regenerates them and
+requires the committed files byte for byte; after a change to results, run
+`make docs-plots` and commit the figures.
+
 `make golden-update` regenerates the snapshots and hashes from fresh, checked
 runs. A change to an equivalence reference is a change to results and needs a
 reason (and, for the protocol, an ADR).

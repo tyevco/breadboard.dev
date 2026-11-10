@@ -40,6 +40,8 @@
 #   scripts/dms_vsense.sh ref <bb> <out>    the one-cell references only (for golden-update)
 #   scripts/dms_vsense.sh update <out>      write tests/golden/dms-vsense from <out>'s references
 #   scripts/dms_vsense.sh prepare <bb>      only make the project copies (cost-table)
+#   scripts/dms_vsense.sh run <bb> <out> <cases...>   only run the named cases at bb's defaults, no
+#                                           checks (make docs-plots draws from them)
 set -euo pipefail
 MODE=$1
 shift
@@ -292,7 +294,8 @@ case $MODE in
   test) do_test "$BB" "$OUT" ;;
   gate) do_gate "$BB" "$OUT" ;;
   ref) prepare "$BB"; do_ref "$BB" "$OUT" "${CASES[@]}" ;;
-  *) sed -n '2,40p' "$0"; exit 2 ;;
+  run) shift 2; prepare "$BB"; run_many "$BB" "$OUT" "" "" "$@" ;;
+  *) sed -n '2,44p' "$0"; exit 2 ;;
 esac
 if [[ $status == 0 ]]; then echo "dms-vsense: $MODE PASS"; else echo "dms-vsense: $MODE FAIL"; fi
 exit $status

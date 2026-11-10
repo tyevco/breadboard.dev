@@ -35,6 +35,14 @@ STM32F103 blinky driving an LED, a feedback board on which the MCU reads back
 a node it drives, and an STM32F072 that reads back a divider through its ADC.
 Those boards are still in `examples/` and still run in `make test`.
 
+![PA5 toggling between 0 and 3.20 V every 50 ms over 500 ms, and LED_A following it between 0 and 1.87 V](/plots/spike.light.svg){.plot-light}
+![PA5 toggling between 0 and 3.20 V every 50 ms over 500 ms, and LED_A following it between 0 and 1.87 V](/plots/spike.dark.svg){.plot-dark}
+
+*The spike, `make spike`: the STM32F103 blinky in Renode toggles PA5 every
+50 ms, and ngspice solves PA5 → 330 Ω → red LED (`bb run --netlist
+examples/spike/board.cir --for 500ms --probe net:LED_A --probe net:PA5`,
+`nets.csv` at 10 µs). Drawn by `make docs-plots`.*
+
 ## How a run fits together
 
 ```text

@@ -80,6 +80,17 @@ check_dms_rail: FAIL: LED-DATA-V4, LSW-3, LSW-2, FW-6.4 (failed: LSW-3)
 That is the point of the demo: a firmware ordering bug shows up as a
 violation of an analog rule on the board's own circuit.
 
+![VLED and LED_DIN over 120 ms for the correct-order and the wrong-order firmware, and a zoom on the wrong order's switch-off where LED_DIN rises 0.793 V above VLED at 45.26 ms](/plots/e1-rail.light.svg){.plot-light}
+![VLED and LED_DIN over 120 ms for the correct-order and the wrong-order firmware, and a zoom on the wrong order's switch-off where LED_DIN rises 0.793 V above VLED at 45.26 ms](/plots/e1-rail.dark.svg){.plot-dark}
+
+*The two runs of `make demo` (`scripts/demo.sh`): `bb run --for 120ms
+--bench bench/cold.toml --probe net:VLED --probe net:LED_DIN` with
+`led_rail.elf` (top) and `led_rail_wrong_order.elf` (middle; bottom, 33–48 ms).
+The traces are `nets.csv` (10 µs samples); the LED_PWR_EN edges are the runs'
+`pin_edge` records for P1.04. Shaded: LED_DIN above VLED + 0.7 V. The wrong
+order's second switch-off (115.39 ms) heads the same way until the run ends at
+120 ms. Drawn by `make docs-plots`.*
+
 ## How it is gated
 
 - `make dms-rail-test` (part of `make test`): both firmwares at both benches

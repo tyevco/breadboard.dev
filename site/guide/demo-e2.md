@@ -58,15 +58,41 @@ predicts:
   rounding boundary;
 - 1070, 3 LSB high, with C5 fitted at a tenth of its value.
 
+![Per-acquisition sampling error on VSYS_SENSE for 13 readings at 50 ms: each 8-sample burst climbs by about 60 µV per sample, the burst means settle at 726.4 µV, and from reading 5 on the firmware's code is 1068](/plots/e2-sampling.light.svg){.plot-light}
+![Per-acquisition sampling error on VSYS_SENSE for 13 readings at 50 ms: each 8-sample burst climbs by about 60 µV per sample, the burst means settle at 726.4 µV, and from reading 5 on the firmware's code is 1068](/plots/e2-sampling.dark.svg){.plot-dark}
+
+*The sampling error of every acquisition in the `s50` case
+(`vsense_50ms.elf`, `bench/vsense.toml`, 650 ms, `--probe net:VSYS_SENSE
+--sample-rate 10kHz`): each `saadc sample` log record of the loaded run minus
+the same sample of the `load = "none"` run (`s50-none`). Dot color is the
+sample's code; the numbers on top are the codes the firmware printed. Drawn by
+`make docs-plots`.*
+
 **The shed** (`bench/sag.toml`). The battery's open-circuit voltage falls
 10 mV/s behind 0.32 Ω. At the reading of code 1282 (VBAT_est 3.5299 V),
 the firmware sheds the LEDs. LED_PWR_EN falls within one reading period of
 the threshold crossing.
 
+![VSYS ramping down from 3.644 V over 4.3 s, the firmware's VBAT_est readings once a second falling to 3.5299 V at 4 s, and VLED switching off at 4000.5 ms](/plots/e2-sag.light.svg){.plot-light}
+![VSYS ramping down from 3.644 V over 4.3 s, the firmware's VBAT_est readings once a second falling to 3.5299 V at 4 s, and VLED switching off at 4000.5 ms](/plots/e2-sag.dark.svg){.plot-dark}
+
+*The `sag` case of `make dms-vsense` (`vsense.elf`, `bench/sag.toml`, 4300 ms,
+`--probe net:VSYS_SENSE --sample-rate 10kHz`). VSYS and VLED are `nets.csv`;
+VBAT_est is each `vsense: n=…` UART line, placed at its log record's time; the
+marker is the LED_PWR_EN (P1.04) `pin_edge`. VBAT_est is 0.979 × the
+measured VSYS, so it sits below the VSYS trace by design. The dip near 0 s is the
+LED rail charging (2.8 ms). Drawn by `make docs-plots`.*
+
 **The restore** (`bench/sag-recover.toml`). The battery dips to 3.58 V at
 1 s and recovers to 3.72 V at 2 s. The LEDs are shed at the 1 s reading
 and come back at the 2 s reading, in E1's on order: P0.06 goes high 30 ms
 after LED_PWR_EN.
+
+![VSYS dipping to 3.564 V at 1 s and recovering to 3.704 V at 2 s; the LEDs are shed at the 1 s reading (3.4941 V) and restored at the 2 s reading (3.6180 V)](/plots/e2-recover.light.svg){.plot-light}
+![VSYS dipping to 3.564 V at 1 s and recovering to 3.704 V at 2 s; the LEDs are shed at the 1 s reading (3.4941 V) and restored at the 2 s reading (3.6180 V)](/plots/e2-recover.dark.svg){.plot-dark}
+
+*The `rec` case of `make dms-vsense` (`vsense.elf`, `bench/sag-recover.toml`,
+2300 ms), drawn the same way. Drawn by `make docs-plots`.*
 
 **Equivalence and determinism.** Every case gives the same `nets.csv`,
 `nets.vcd` and non-grant records as its every-lattice-point reference

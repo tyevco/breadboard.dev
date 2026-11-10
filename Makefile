@@ -979,6 +979,24 @@ stranger-test-container:
 stranger-test-wsl:
 	bash scripts/stranger_test.sh wsl $(if $(STRANGER_URL),--url $(STRANGER_URL)) $(STRANGER_ARGS)
 
+# The docs site's waveform plots (site/public/plots, committed: the Pages build has no Renode).
+# `make docs-plots` runs make demo's E1 runs, the E2 cases sag, rec, s50 and s50-none of make
+# dms-vsense and the spike, every Renode fresh, then draws <name>.{light,dark}.svg from their
+# outputs with plain Python (scripts/docs_plots.sh, scripts/docs_plots.py; about 2.5 min).
+# `make docs-plots-check` does the same into $(DOCS_PLOTS_OUT)/svg and requires the committed
+# files byte for byte (CI job dms-rail).
+.PHONY: docs-plots docs-plots-check
+DOCS_PLOTS_OUT ?= out/docs-plots
+DOCS_PLOTS_DIR := site/public/plots
+docs-plots: firmware bb
+	SPIKE_ARGS="$(SPIKE_ARGS)" bash scripts/docs_plots.sh $(BB) $(DOCS_PLOTS_OUT) $(DOCS_PLOTS_DIR)
+docs-plots-check: firmware bb
+	SPIKE_ARGS="$(SPIKE_ARGS)" bash scripts/docs_plots.sh $(BB) $(DOCS_PLOTS_OUT) $(DOCS_PLOTS_OUT)/svg
+	@if diff -r $(DOCS_PLOTS_DIR) $(DOCS_PLOTS_OUT)/svg > $(DOCS_PLOTS_OUT)/svg.diff; then \
+	    echo "docs-plots-check: PASS ($(DOCS_PLOTS_DIR) identical to the regenerated figures)"; \
+	else head -40 $(DOCS_PLOTS_OUT)/svg.diff; \
+	    echo "docs-plots-check: FAIL: the committed plots differ from the runs (make docs-plots, review, commit)"; exit 1; fi
+
 fmt:
 	$(CARGO) fmt --all
 
