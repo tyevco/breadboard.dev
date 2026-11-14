@@ -13,7 +13,9 @@ the cold bench, a copy of the project made by `scripts/dms_rail.sh prepare`).
 without GDB (all four files, spike and E1); a breakpoint hit and continued
 marks the run (one `warn` record; run.json `debug: true` on E1), on both
 boards; `monitor` is refused and changes nothing; a run without --gdb has
-no debug key in run.json.
+no debug key in run.json; a client of Renode's internal stub port, first on
+it (BB_GDB_STUB_DELAY_MS) or while the proxy holds it, gets no reply and
+changes nothing (ADR-008 Amendment 8).
 
 `gate` adds: attach in the middle of a running spike, reads and detach
 (identical to the run without GDB); the scripted breakpoint session 20 times
@@ -27,7 +29,8 @@ on E1, Ctrl-C then 700 single-steps then continue, and 1 500 single-steps
 across grant boundaries and WFI, finish; monitor start/pause/halt refused;
 a second debugger refused; GDB killed during a halt lets the run finish;
 bb killed during a halt leaves no Renode; the listener is on 127.0.0.1 only;
---gdb with a Renode pool starts Renode fresh.
+--gdb with a Renode pool starts Renode fresh; the internal-port race 5 times
+without the knob.
 """
 import argparse
 import hashlib
@@ -36,6 +39,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -153,7 +157,7 @@ def alive(pid):
 class Run:
     """One `bb run`, with --gdb unless gdb is False."""
 
-    def __init__(self, a, board, out, extra=(), gdb=True, wait=True, dur=None, env=None):
+    def __init__(self, a, board, out, extra=(), gdb=True, wait=True, dur=None, env=None, wait_port=True):
         self.a, self.board, self.out = a, board, Path(out)
         if self.out.exists():
             shutil.rmtree(self.out)
@@ -171,9 +175,13 @@ class Run:
         self.err = []
         self.got_port = threading.Event()
         threading.Thread(target=self._read_err, daemon=True).start()
-        if gdb and not self.got_port.wait(120):
+        if gdb and wait_port:
+            self.wait_port()
+
+    def wait_port(self):
+        if not self.got_port.wait(120):
             self.p.kill()
-            raise RuntimeError(f"{out}: no GDB port: {self.err}")
+            raise RuntimeError(f"{self.out}: no GDB port: {self.err}")
 
     def _read_err(self):
         for line in self.p.stderr:
@@ -218,6 +226,98 @@ class Run:
     def renode_pid(self):
         m = re.search(r"started fresh \(pid (\d+)\)", self.log)
         return int(m.group(1)) if m else None
+
+
+def frame(p):
+    p = p.encode()
+    return b"$" + p + b"#%02x" % (sum(p) & 0xFF)
+
+
+class Intruder:
+    """A client of Renode's internal GDB stub port (ADR-008 Amendment 8).
+
+    It finds the port in the run's Renode workdir (session.resc), connects as
+    soon as the port listens, sends qSupported and a `monitor python` (which
+    would reach Renode's monitor if the stub served it) and records what came
+    back: a GDB packet, or EOF/reset/silence. `connected` is its local
+    endpoint, as bb reports a refused connection."""
+
+    def __init__(self, run, timeout=60):
+        self.run, self.timeout = run, timeout
+        self.port = self.connected = None
+        self.reply, self.outcome = b"", None
+        self.t = threading.Thread(target=self._go, daemon=True)
+        self.t.start()
+
+    def _stub_port(self):
+        for d in Path("/tmp").glob(f"bb-renode-{self.run.p.pid}-*"):
+            try:
+                m = re.search(r"(?:bb_gdb_stub\(monitor\.Machine, |StartGdbServer )(\d+)",
+                              (d / "session.resc").read_text())
+            except OSError:
+                continue
+            if m:
+                return int(m.group(1))
+        return None
+
+    def _go(self):
+        t0 = time.time()
+        while self.port is None and time.time() - t0 < self.timeout and self.run.p.poll() is None:
+            self.port = self._stub_port()
+            time.sleep(0.002)
+        s = None
+        while self.port and time.time() - t0 < self.timeout and self.run.p.poll() is None:
+            try:
+                s = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.002)
+        if s is None:
+            self.outcome = "no connection"
+            return
+        self.connected = "%s:%d" % s.getsockname()
+        q = "python \"print(monitor.Machine.SystemBus.GetCPUs()[0].ExecutionMode)\""
+        try:
+            s.sendall(frame("qSupported:swbreak+") + frame("qRcmd," + q.encode().hex()))
+            s.settimeout(self.timeout)
+            while b"$" not in self.reply:
+                d = s.recv(4096)
+                if not d:
+                    self.outcome = "EOF"
+                    return
+                self.reply += d
+            self.outcome = "REPLY"
+        except socket.timeout:
+            self.outcome = "silence"
+        except OSError as e:
+            self.outcome = f"reset ({e.__class__.__name__})"
+        finally:
+            s.close()
+
+    def join(self):
+        self.t.join(self.timeout + 10)
+        return self
+
+
+def intruder_runs(a, b, out, delay=None, wait=False, after_proxy=False):
+    """A --gdb run with an Intruder on the internal stub port: before the
+    proxy (`delay`: BB_GDB_STUB_DELAY_MS, so the intruder is first), or once
+    the proxy holds the stub (`after_proxy`: after bb printed its port; a
+    debugger then attaches and detaches)."""
+    env = {"BB_GDB_STUB_DELAY_MS": str(delay)} if delay else {}
+    if after_proxy:
+        r = Run(a, b, out, wait=True, env=env)
+        i = Intruder(r)
+        time.sleep(1.0)
+        r.gdb(["detach"])
+    else:
+        # The intruder aims before bb prints its port.
+        r = Run(a, b, out, wait=wait, env=env, wait_port=False)
+        i = Intruder(r)
+        r.wait_port()
+    r.finish()
+    i.join()
+    return r, i
 
 
 BP = lambda b: [f"break {b.bp}", "continue", 'printf "HIT1 pc=%#x\\n", $pc',
@@ -266,6 +366,43 @@ def test(a, bs):
     r = scripted(a, b, o / "spike-monitor", ["monitor start", "detach"])
     check(r.rc == 0 and "monitor commands are refused" in r.glog and same(r.h, golden(b.golden)),
           "spike: monitor refused with its message, the run unchanged")
+    intruders(a, b, o)
+
+
+def intruders(a, b, o, races=0, basic=True):
+    """ADR-008 Amendment 8: only bb's proxy gets Renode's stub."""
+    g = golden(b.golden)
+    if basic:
+        # First on the port (the proxy waits 1.5 s, a test knob), no debugger.
+        r, i = intruder_runs(a, b, o / "spike-intruder-first", delay=1500)
+        check(bool(i.connected) and i.outcome == "EOF" and not i.reply,
+              f"spike: a client first on Renode's internal stub port is shut down without a reply "
+              f"({i.connected}: {i.outcome})")
+        check(r.rc == 0 and all_of(r.h, g) and not marks(r.out)
+              and f"refused a connection from {i.connected}" in r.log,
+              "spike: ... the run finishes with all four committed hashes of the run without GDB, no mark, "
+              "and bb reports the refused connection")
+        # Once the proxy holds the stub: the intruder waits in the listener's
+        # backlog and is never served; Renode dies before the proxy closes.
+        r, i = intruder_runs(a, b, o / "spike-intruder-late", after_proxy=True)
+        check(bool(i.connected) and not i.reply
+              and (i.outcome or "").split(" ")[0] in ("EOF", "silence", "reset"),
+              f"spike: a client on the internal stub port while the proxy holds it gets no reply "
+              f"({i.connected}: {i.outcome})")
+        check(r.rc == 0 and all_of(r.h, g) and not marks(r.out),
+              "spike: ... the run (attach, detach) gives the committed hashes, no mark")
+    # The race of the finding, without the knob: whoever wins the accept, no
+    # reply, the run unchanged.
+    first = 0
+    for k in range(races):
+        r, i = intruder_runs(a, b, o / f"spike-intruder-race-{k}")
+        refused = bool(i.connected) and f"refused a connection from {i.connected}" in r.log
+        first += refused
+        check(not i.reply and r.rc == 0 and all_of(r.h, g) and not marks(r.out),
+              f"spike: intruder race {k}: no reply ({i.outcome}; "
+              f"{'refused before the proxy' if refused else 'not first'}), the run unchanged")
+    if races:
+        print(f"gdb: intruder races: first on the port {first} of {races}", flush=True)
 
 
 def par(n, fn, items):
@@ -305,6 +442,7 @@ def gate(a, bs):
     test(a, bs)
     o = Path(a.out)
     sp, e1 = bs["spike"], bs["e1"]
+    intruders(a, sp, o, races=5, basic=False)
     gs = golden(sp.golden)
     bp1 = scripted(a, sp, o / "spike-bp-ref", BP(sp))
 

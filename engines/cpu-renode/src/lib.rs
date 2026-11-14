@@ -1522,6 +1522,17 @@ fn monitor_path(p: &Path) -> Result<String, EngineError> {
     Ok(s.to_string())
 }
 
+/// A path inside a single-quoted Python string of a monitor command.
+fn python_path(p: &Path) -> Result<String, EngineError> {
+    let s = monitor_path(p)?;
+    if s.contains(['\'', '\\']) {
+        return Err(EngineError::Other(format!(
+            "path {s:?} contains a quote or a backslash, which a monitor Python string cannot take"
+        )));
+    }
+    Ok(s)
+}
+
 /// Exact decimal seconds for a whole number of nanoseconds, e.g. `0.000010000`.
 fn ns_to_seconds_str(ns: u64) -> String {
     format!("{}.{:09}", ns / 1_000_000_000, ns % 1_000_000_000)
@@ -1584,7 +1595,18 @@ impl RenodeEngine {
         let workdir =
             std::env::temp_dir().join(format!("bb-renode-{}-{instance}", std::process::id()));
         let _ = std::fs::remove_dir_all(&workdir);
-        std::fs::create_dir_all(&workdir)?;
+        // Private and new: Renode runs the scripts in it, and `--gdb` trusts
+        // the files Renode's hook and the proxy exchange there (ADR-008
+        // Amendment 8). A directory left by someone else is an error, not
+        // reused.
+        {
+            let mut b = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+            b.create(&workdir).map_err(|e| {
+                EngineError::Other(format!("Renode workdir {}: {e}", workdir.display()))
+            })?;
+        }
         let firmware = workdir.join("fw").join(fw_name);
         std::fs::create_dir_all(workdir.join("fw"))?;
         std::fs::write(&firmware, &fw_bytes)?;
@@ -1717,10 +1739,26 @@ impl RenodeEngine {
             (String::new(), String::new())
         };
         let extra: String = cfg.extra_monitor.iter().map(|l| format!("{l}\n")).collect();
-        // ADR-008 D10: Renode's GDB stub on an internal port; never start
-        // the emulation from it (`autostartEmulation false`, Context 8).
+        // ADR-008 D10: Renode's GDB stub on an internal port, never starting
+        // the emulation (`autostartEmulation false`, Context 8). Amendment
+        // 8: `gdb_stub.py` creates the stub only for the proxy's own
+        // connection (`gdb::GdbProxy::start`).
+        let gdb_handshake = gdb::StubHandshake {
+            proxy_file: workdir.join("gdb-proxy"),
+            log_file: workdir.join("gdb-stub.log"),
+        };
         let gdb_server = match gdb_stub_port {
-            Some(p) => format!("machine StartGdbServer {p} false\n"),
+            Some(p) => {
+                let py = workdir.join("gdb_stub.py");
+                std::fs::write(&py, gdb::GDB_STUB_PY)?;
+                let wait_ms = cfg.startup_timeout.as_millis();
+                format!(
+                    "python \"exec(open('{}').read()); bb_gdb_stub(monitor.Machine, {p}, '{}', '{}', {wait_ms})\"\n",
+                    python_path(&py)?,
+                    python_path(&gdb_handshake.proxy_file)?,
+                    python_path(&gdb_handshake.log_file)?,
+                )
+            }
             None => String::new(),
         };
         // ADR-008 D4, mid-run: a write hook on each audited GPIO port's
@@ -1958,7 +1996,12 @@ impl RenodeEngine {
                 if let Err(e) = client.set_read_timeout(None) {
                     return Err(fail(&mut host, format!("setup failed: {e}")));
                 }
-                match gdb::GdbProxy::start(p, g, Instant::now() + cfg.startup_timeout) {
+                match gdb::GdbProxy::start(
+                    p,
+                    g,
+                    &gdb_handshake,
+                    Instant::now() + cfg.startup_timeout,
+                ) {
                     Ok(px) => Some(px),
                     Err(e) => return Err(fail(&mut host, format!("GDB: {e}"))),
                 }
@@ -3320,8 +3363,15 @@ fn ceil_lattice_ns(t: Time, quantum_ns: u64) -> u64 {
 
 impl Drop for RenodeEngine {
     fn drop(&mut self) {
-        // The debugger first: it gets `W00` if it waits for a stop reply.
+        // ADR-008 Amendment 8: Renode dies before the proxy closes its stub
+        // connection, so the stub's listener never accepts a client that
+        // waited in its backlog. Then the debugger gets `W00` if it waits
+        // for a stop reply. (A --gdb run never leases from the pool.)
         if let Some(mut g) = self.gdb.take() {
+            if let Host::Child(c) = &mut self.host {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
             g.shutdown();
         }
         match &mut self.host {

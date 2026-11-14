@@ -123,7 +123,11 @@ directly, it breaks `bb`'s time control:
 
 So `bb` starts the stub on an internal port, takes its only connection
 itself, and runs a small proxy in front of it
-(`engines/cpu-renode/src/gdb.rs`):
+(`engines/cpu-renode/src/gdb.rs`). In Renode 1.17.0 that internal port
+listens on every interface while the run starts, so Renode creates the
+stub only for the proxy's own connection. Any other client of that port
+is shut down before Renode reads a byte from it, and `bb` reports it
+(ADR-008 Amendment 8). The proxy then works like this:
 
 - A continue or a step reaches Renode only when the CPU is parked inside a
   running grant, before the grant's end. A state read confirms this.

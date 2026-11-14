@@ -1017,11 +1017,12 @@ docs-plots-check: firmware bb
 # $(GDB_WORK) made by `dms_rail.sh prepare`). `make gdb-test` (in `make test`, about 1 min): attach
 # and detach without a stop give the committed hashes of the run without GDB, on both boards; a
 # breakpoint hit and continued marks the run (one warn record; run.json debug: true); monitor is
-# refused; a run without --gdb has no debug key. `make gdb` (CI job dms-rail, about 5 min) adds
+# refused; a run without --gdb has no debug key; a client of Renode's internal stub port gets no reply
+# and changes nothing (Amendment 8). `make gdb` (CI job dms-rail, about 5 min) adds
 # attach mid-run, the scripted breakpoint session 20 times (5 on E1), steps and reads at the
 # breakpoint, a 5 s hold past a 2 s External Control timeout, Ctrl-C then detach or continue,
 # 1 500 steps across grants and WFI, a second debugger, GDB or bb killed during a halt, the
-# loopback listener and the pool. GDB: gdb-multiarch (make setup), arm-none-eabi-gdb or the
+# loopback listener, the pool and the internal-port race 5 times. GDB: gdb-multiarch (make setup), arm-none-eabi-gdb or the
 # Zephyr SDK's arm-zephyr-eabi-gdb.
 .PHONY: gdb gdb-test
 GDB      ?= $(shell command -v gdb-multiarch 2>/dev/null || command -v arm-none-eabi-gdb 2>/dev/null || \

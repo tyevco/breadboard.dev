@@ -1342,6 +1342,15 @@ fn run(a: RunArgs) -> Result<(), String> {
                 g.sessions
             ),
         };
+        if !g.refused.is_empty() {
+            let _ = writeln!(
+                so,
+                "bb run: GDB: {} other connection(s) to Renode's internal stub port refused \
+                 before bb's proxy took it ({}); none reached the stub (ADR-008 Amendment 8)",
+                g.refused.len(),
+                g.refused.join(", ")
+            );
+        }
     }
     let _ = writeln!(
         so,

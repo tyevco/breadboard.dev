@@ -8,10 +8,26 @@
 //! and can leave a `RUN_FOR` open for ever; `monitor` reaches every Renode
 //! command; and its stop replies race the resume packets (a step-wait `S05`
 //! can arrive after a `c` and be taken as its reply). So the engine never
-//! hands that port to a debugger. It starts the stub on an internal port,
-//! connects to it itself right after startup (the stub's only client slot),
-//! and runs this proxy between the stub and a debugger, listening on
-//! `127.0.0.1` only.
+//! hands that port to a debugger. It runs this proxy between the stub and a
+//! debugger, listening on `127.0.0.1` only.
+//!
+//! # Who gets the stub (Amendment 8)
+//!
+//! The stub's internal port is bound on every interface too
+//! (`SocketServerProvider.Start`: `IPAddress.Any`, hard-coded in 1.17.0),
+//! and the stub serves whichever client its listener accepts first. So the
+//! session script does not start the stub. It runs `gdb_stub.py`
+//! ([`GDB_STUB_PY`]): a listener of its own on the internal port, with an
+//! accept hook attached before it listens. The hook creates the stub (the
+//! `StartGdbServer(terminal, cpus)` variant, for a terminal that already
+//! has its client) only for the connection whose remote endpoint the proxy
+//! wrote to the workdir after its connect returned; every other connection
+//! is shut down before any byte of it is read, and logged. The proxy
+//! ([`GdbProxy::start`]) waits for the hook's `stub <its endpoint>` line,
+//! then for a reply to a ping on that connection, before the first
+//! `RUN_FOR`; otherwise the run fails. While the proxy's connection is
+//! open, Renode's listener accepts nothing (it serves one client at a
+//! time), and the engine kills Renode before closing it.
 //!
 //! # What the proxy knows about Renode
 //!
@@ -78,6 +94,7 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -99,6 +116,24 @@ pub struct GdbConfig {
 /// diagnostic; never an output of the run).
 pub const GDB_TRACE_ENV: &str = "BB_GDB_TRACE";
 
+/// A test knob: milliseconds the proxy waits before it connects to Renode's
+/// internal stub port, so that a gate can connect there first (never set in
+/// normal use; it changes no output).
+pub const STUB_DELAY_ENV: &str = "BB_GDB_STUB_DELAY_MS";
+
+/// The Renode side of the stub handshake ("Who gets the stub"), written to
+/// the engine's workdir and run by the session script.
+pub const GDB_STUB_PY: &str = include_str!("gdb_stub.py");
+
+/// The handshake's files, in the engine's private workdir.
+#[derive(Clone, Debug)]
+pub struct StubHandshake {
+    /// The proxy writes its connection's local endpoint here.
+    pub proxy_file: PathBuf,
+    /// `gdb_stub.py` logs each accepted connection here.
+    pub log_file: PathBuf,
+}
+
 /// What the proxy observed, for the run summary and the debug mark.
 #[derive(Clone, Debug, Default)]
 pub struct GdbStatus {
@@ -108,6 +143,126 @@ pub struct GdbStatus {
     pub perturbations: u64,
     /// The first of them.
     pub first: Option<String>,
+    /// Connections to Renode's internal stub port other than the proxy's,
+    /// shut down before Renode read a byte of them (`addr:port`).
+    pub refused: Vec<String>,
+}
+
+/// The hook's decision so far, from its log ("Who gets the stub").
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// The stub was created for the proxy's connection; the connections
+    /// refused before it.
+    Ours(Vec<String>),
+    /// No decision for the proxy's connection yet.
+    Pending,
+    /// The run must not start.
+    Failed(String),
+}
+
+fn stub_verdict(log: &str, me: &str) -> Verdict {
+    let mut refused = Vec::new();
+    for line in log.lines() {
+        let (word, rest) = line.split_once(' ').unwrap_or((line, ""));
+        match word {
+            "ready" => {}
+            "refused" if rest == me => {
+                return Verdict::Failed(format!(
+                    "Renode's GDB stub hook refused bb's own connection {me}"
+                ))
+            }
+            "refused" => refused.push(rest.to_string()),
+            "stub" if rest == me => return Verdict::Ours(refused),
+            "stub" => {
+                return Verdict::Failed(format!(
+                    "Renode's GDB stub was given to {rest}, not to bb's proxy ({me})"
+                ))
+            }
+            "error" => return Verdict::Failed(format!("Renode's GDB stub hook failed: {rest}")),
+            _ => {
+                return Verdict::Failed(format!(
+                    "unexpected line in Renode's GDB stub log: {line:?}"
+                ))
+            }
+        }
+    }
+    Verdict::Pending
+}
+
+/// Connect to Renode's internal stub port and make sure the stub serves
+/// this connection and no other ("Who gets the stub"). Returns the
+/// connection and the connections refused before it.
+fn claim_stub(
+    stub_port: u16,
+    hs: &StubHandshake,
+    deadline: Instant,
+) -> Result<(TcpStream, Vec<String>), String> {
+    if let Some(ms) = std::env::var(STUB_DELAY_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+    let addr = SocketAddr::from(([127, 0, 0, 1], stub_port));
+    let renode = loop {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+            Ok(s) if s.local_addr().ok() != s.peer_addr().ok() => break s,
+            Ok(_) | Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(2))
+            }
+            Ok(_) => return Err(format!("GDB stub on port {stub_port}: self-connect")),
+            Err(e) => return Err(format!("no GDB stub on port {stub_port}: {e}")),
+        }
+    };
+    let me = renode.local_addr().map_err(|e| e.to_string())?.to_string();
+    // Atomic: the hook reads the file as soon as it exists.
+    let mut tmp = hs.proxy_file.clone().into_os_string();
+    tmp.push(".tmp");
+    std::fs::write(&tmp, &me)
+        .and_then(|_| std::fs::rename(&tmp, &hs.proxy_file))
+        .map_err(|e| format!("{}: {e}", hs.proxy_file.display()))?;
+    let refused = loop {
+        let log = std::fs::read_to_string(&hs.log_file).unwrap_or_default();
+        match stub_verdict(&log, &me) {
+            Verdict::Ours(r) => break r,
+            Verdict::Failed(e) => return Err(e),
+            Verdict::Pending if Instant::now() >= deadline => {
+                return Err(format!(
+                    "Renode's GDB stub was not given to bb's proxy ({me}) in time; its log: {:?}",
+                    log.trim_end()
+                ))
+            }
+            Verdict::Pending => std::thread::sleep(Duration::from_millis(2)),
+        }
+    };
+    // A round trip: the stub answers on this connection.
+    let wait = deadline
+        .saturating_duration_since(Instant::now())
+        .max(Duration::from_secs(1));
+    renode
+        .set_read_timeout(Some(wait))
+        .map_err(|e| e.to_string())?;
+    (&renode)
+        .write_all(&frame(PING))
+        .map_err(|e| format!("GDB stub: {e}"))?;
+    let mut parser = Parser::default();
+    let mut buf = [0u8; 512];
+    'reply: loop {
+        let n = match (&renode).read(&mut buf) {
+            Ok(0) => return Err("GDB stub: the connection closed before the first reply".into()),
+            Ok(n) => n,
+            Err(e) => return Err(format!("GDB stub: no reply on bb's connection: {e}")),
+        };
+        for w in parser.feed(&buf[..n]) {
+            if let Wire::Packet(p) = w {
+                if !is_stop(&p) {
+                    break 'reply;
+                }
+            }
+        }
+    }
+    renode.set_read_timeout(None).map_err(|e| e.to_string())?;
+    Ok((renode, refused))
 }
 
 /// The proxy, owned by the Renode engine.
@@ -132,21 +287,25 @@ const PING: &[u8] = b"qC";
 const RETRY: Duration = Duration::from_millis(2);
 
 impl GdbProxy {
-    /// Connect to Renode's stub on `127.0.0.1:stub_port` and listen for a
-    /// debugger. Renode switches the CPU to single-step mode on this
-    /// connection, so the CPU parks at the start of the first `RUN_FOR`.
-    pub fn start(stub_port: u16, cfg: &GdbConfig, deadline: Instant) -> Result<GdbProxy, String> {
-        let addr = SocketAddr::from(([127, 0, 0, 1], stub_port));
-        let renode = loop {
-            match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
-                Ok(s) if s.local_addr().ok() != s.peer_addr().ok() => break s,
-                Ok(_) | Err(_) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(20))
-                }
-                Ok(_) => return Err(format!("GDB stub on port {stub_port}: self-connect")),
-                Err(e) => return Err(format!("no GDB stub on port {stub_port}: {e}")),
-            }
-        };
+    /// Connect to Renode's stub on `127.0.0.1:stub_port`, make sure it is
+    /// this connection's and no other's ("Who gets the stub"), and listen
+    /// for a debugger. Renode switches the CPU to single-step mode when it
+    /// creates the stub, so the CPU parks at the start of the first
+    /// `RUN_FOR`.
+    pub fn start(
+        stub_port: u16,
+        cfg: &GdbConfig,
+        hs: &StubHandshake,
+        deadline: Instant,
+    ) -> Result<GdbProxy, String> {
+        let (renode, refused) = claim_stub(stub_port, hs, deadline)?;
+        for peer in &refused {
+            eprintln!(
+                "bb run: GDB: refused a connection from {peer} to Renode's internal GDB stub port \
+                 before bb's proxy took it: it never reached the stub (Renode 1.17.0 listens on \
+                 every interface; ADR-008 Amendment 8)"
+            );
+        }
         renode.set_nodelay(true).map_err(|e| e.to_string())?;
         let listener = TcpListener::bind(("127.0.0.1", cfg.port)).map_err(|e| {
             format!(
@@ -167,7 +326,10 @@ impl GdbProxy {
             None => None,
         };
         let (tx, rx) = mpsc::channel();
-        let status = Arc::new(Mutex::new(GdbStatus::default()));
+        let status = Arc::new(Mutex::new(GdbStatus {
+            refused,
+            ..GdbStatus::default()
+        }));
         let stop = Arc::new(AtomicBool::new(false));
 
         let r = renode.try_clone().map_err(|e| e.to_string())?;
@@ -1296,6 +1458,47 @@ mod tests {
         }
         for r in ["OK", "QC1", "E01", "", "l<?xml", "00ff", "PacketSize=400"] {
             assert!(!is_stop(r.as_bytes()), "{r}");
+        }
+    }
+
+    /// Amendment 8: the run starts only once the hook gave the stub to the
+    /// proxy's own connection; a connection that got it first, a refusal of
+    /// the proxy or a hook error fails the run; refused strangers are
+    /// reported.
+    #[test]
+    fn stub_goes_to_the_proxy_only() {
+        let me = "127.0.0.1:40550";
+        assert_eq!(stub_verdict("", me), Verdict::Pending);
+        assert_eq!(stub_verdict("ready 45991\n", me), Verdict::Pending);
+        assert_eq!(
+            stub_verdict("ready 45991\nrefused 127.0.0.1:40542\n", me),
+            Verdict::Pending
+        );
+        assert_eq!(
+            stub_verdict(
+                "ready 45991\nrefused 127.0.0.1:40542\nrefused 10.0.0.7:5000\nstub 127.0.0.1:40550\n",
+                me
+            ),
+            Verdict::Ours(vec!["127.0.0.1:40542".into(), "10.0.0.7:5000".into()])
+        );
+        assert_eq!(
+            stub_verdict("ready 45991\nstub 127.0.0.1:40550\n", me),
+            Verdict::Ours(vec![])
+        );
+        for bad in [
+            "ready 45991\nstub 127.0.0.1:40542\n",
+            "ready 45991\nrefused 127.0.0.1:40550\n",
+            "ready 45991\nerror Could not start\n",
+            "ready 45991\ngarbage\n",
+        ] {
+            assert!(
+                matches!(stub_verdict(bad, me), Verdict::Failed(_)),
+                "{bad:?}"
+            );
+        }
+        // The hook's log words are the ones this parser knows.
+        for w in ["\"ready ", "\"stub ", "\"refused ", "\"error "] {
+            assert!(GDB_STUB_PY.contains(w), "{w}");
         }
     }
 

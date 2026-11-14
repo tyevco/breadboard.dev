@@ -1843,7 +1843,9 @@ without GDB byte for byte, and that is gated.
 - **Renode's internal stub port** listens on every interface from the
   `StartGdbServer` line until the engine connects, a fraction of a second
   at startup, on a random port. A remote client that connected first would
-  hold the stub's only slot, and the run would not start.
+  hold the stub's only slot, and the run would not start. *(Wrong: the
+  run did start, and that client had the raw stub. Amendment 8 measures
+  it and fixes it.)*
 - **Not measured:** watchpoints (forwarded and marked), holds of minutes
   or more (no timeout is left that could fire), and multi-CPU boards
   (Phase 1 has one MCU).
@@ -1860,3 +1862,110 @@ without GDB byte for byte, and that is gated.
   (ADR-008 D10, Amendment 7) is exempt: it may depend on when a debugger
   acts, and it is never compared against a reference."
 
+
+### Amendment 8: only bb's proxy gets Renode's GDB stub (M9 review, 2026-11-14)
+
+#### What the review found
+
+Amendment 7's residual risk was wrong. Renode 1.17.0's
+`SocketServerProvider.Start` binds the stub's port on
+`IPAddress.Any` with a backlog of 1 (hard-coded), and its listener serves
+the first client it accepts. `GdbProxy::start` took any successful TCP
+connect as the stub's slot. A connect that lands in the listen backlog also
+succeeds, so the proxy did not notice when another client got there first.
+
+Reproduced on the spike with `--gdb 0 --gdb-wait off` and a local client
+that polled `/proc/net/tcp` for the new `0.0.0.0` listener. It won the slot
+in 5 of 5 runs, about 10 ms before the engine's startup ended. Over that
+connection:
+
+- `monitor version`, `monitor python` and `monitor start` were answered;
+- a breakpoint at `SysTick_Handler` was hit 3 times;
+- `M40010810,4:20000000` wrote GPIOA's BSRR.
+
+The run then changed its outputs (`nets.csv`, `nets.vcd`, 11 `pin_edge`
+records against 10). It carried no debug mark, and its summary said the
+outputs were those of a run without GDB. The same client could have come
+from another host, and `monitor python` runs code as the user.
+
+#### Decision
+
+Fail closed: the stub is created only for the proxy's own connection. The
+change uses only public Renode 1.17.0 API (`Machine.cs`, `GdbStub.cs`,
+`SocketServerProvider.cs` at v1.17.0). The kernel, the grant protocol and
+`spec/` are unchanged.
+
+- **The session script no longer runs `machine StartGdbServer`.** It runs
+  `engines/cpu-renode/src/gdb_stub.py` (written to the workdir) through
+  `python`. The script creates a `SocketServerProvider` of its own on the
+  internal port. It attaches an accept hook to the provider *before*
+  `Start(port)`, so every connection the listener accepts passes through
+  the hook. The hook runs on the listener thread, before the connection's
+  reader starts, so no byte of a connection has been read when it decides:
+  - **The proxy's connection.** The proxy writes its local endpoint to
+    `gdb-proxy` in the workdir (atomically) right after its connect
+    returns. If the remote endpoint is a loopback address and equals that
+    endpoint, the hook calls `machine.StartGdbServer(terminal, cpus)`. That
+    is Renode's variant for a terminal that already has its client (the
+    one `LoadPreservedState` uses). The stub then puts the CPU in
+    single-step mode, as `StartGdbServer <port>` did on its first
+    connection, and nothing about the run changes.
+  - **Any other connection** is shut down (`SocketShutdown.Both`) without a
+    stub, so no packet of it reaches Renode. The listener then accepts the
+    next connection.
+  - Each decision is one line of `gdb-stub.log`: `ready`, `stub <peer>`,
+    `refused <peer>` or `error <text>`.
+- **The proxy checks ownership before the first `RUN_FOR`** (`claim_stub`).
+  It waits for `stub <its own endpoint>` in the log, then for a reply to a
+  `qC` on its connection, within the startup timeout. Each of these fails
+  the run: a `stub` line for another endpoint, a refusal of its own
+  connection, a hook error, no decision in time, or no reply.
+
+  This replaces the finding's proposed nonce. A nonce check over External
+  Control would need a Renode-side place to read it from. The two files
+  live in the engine's workdir, which other users cannot write: it is now
+  created fresh with mode 0700 (`DirBuilder::create`). A directory that
+  someone else left at that path is an error, not reused. A refused
+  connection changes nothing (none of its bytes were read), so it does not
+  mark or fail the run. `bb` reports each one, on stderr at startup and in
+  the summary line.
+- **Narrowing the window** (the finding's third point) is not needed: an
+  earlier client is refused, however early it comes.
+- **Shutdown order.** While the proxy's connection is open, the listener
+  accepts nothing (it serves one client at a time and joins that client's
+  threads). At the end of a run the engine kills Renode *before* it closes
+  that connection. So a client waiting in the backlog is never accepted;
+  if one were, the hook would refuse it anyway.
+- **Not done: binding the internal port to loopback.** That would need a
+  Renode change, because `IPAddress.Any` is hard-coded in
+  `SocketServerProvider.Start`, or a reflection hack on its private
+  `server` field. While a `--gdb` run starts, the port still listens on
+  every interface. A remote client can still connect, but it is shut down
+  unread and reported. Only bb's own `127.0.0.1` debugger listener is
+  meant to be reached.
+
+#### Gates
+
+- `cargo test` (`gdb::tests::stub_goes_to_the_proxy_only`): the run starts
+  only on `stub <own endpoint>`. Another endpoint's `stub`, a refusal of
+  its own endpoint, `error` and unknown lines fail it. Refused peers are
+  collected.
+- **`make gdb-test`** (in `make test`) adds two checks on the spike:
+  - **An intruder first on the internal port.** `BB_GDB_STUB_DELAY_MS=1500`,
+    a test knob, delays the proxy's connect. The intruder sends
+    `qSupported` and `monitor python` and gets EOF without a reply. The run
+    gives all four committed hashes of the run without GDB, with no mark,
+    and bb reports the refused endpoint. **Negative control:** against
+    14e95b5 (before this amendment) the same check gets a reply and fails.
+  - **An intruder while the proxy holds the stub.** It gets no reply, and
+    Renode's death resets it. The attach and detach run gives the committed
+    hashes. (This check also passes before this amendment: the engine
+    closed the proxy and killed Renode within milliseconds.)
+- **`make gdb`** adds the finding's race without the knob, 5 times. In
+  every run the intruder gets no reply, and the run gives the committed
+  hashes with no mark. The gate prints how often the intruder was first.
+- **Gate runs** (2026-11-14): `make gdb` PASS with `gdb-multiarch` 15.1
+  (42 PASS lines, 5 min 24 s; the intruder was first on the port in 5 of
+  5 races and was refused each time). `make check` green on the pool
+  (9 min 26 s) and fresh (`POOL=0`, 10 min 49 s). `make docs-plots-check`
+  PASS. No committed golden changed.
