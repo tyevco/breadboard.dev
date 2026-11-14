@@ -216,13 +216,19 @@ pub const BB_STM32F0_ADC_CS: &str = include_str!("../platforms/bb_stm32f0_adc.cs
 /// the UARTE tap (ADR-008 D7, D8).
 pub const BB_NRF52_SAADC_CS: &str = include_str!("../platforms/bb_nrf52_saadc.cs");
 
+/// Source of `Miscellaneous.BbNrf52Pwm`, `BbNrf52Temp`, `BbNrf52Nvmc` and
+/// `BbNrf52HostPort`: the nRF52840 PWM model, the TEMP and NVMC stand-ins
+/// and their host port (ADR-008 D9, Amendment 9).
+pub const BB_NRF52_PWM_CS: &str = include_str!("../platforms/bb_nrf52_pwm.cs");
+
 /// Breadboard's STM32F072 overlay (ADR-005 D6), written next to the
 /// generated script for [`Platform::Stm32f072Bb`].
 pub const STM32F072_BB_REPL: &str = include_str!("../platforms/stm32f072-bb.repl");
 
-/// Breadboard's nRF52840, platform `nrf52840-bb@2` (ADR-008 D1, D7, D8):
+/// Breadboard's nRF52840, platform `nrf52840-bb@3` (ADR-008 D1, D7, D8, D9):
 /// Renode's stock nRF52840 without the SVD download, at 64 MIPS, with
-/// Breadboard's SAADC, its host port and the UARTE tap. Written next to the
+/// Breadboard's SAADC, its host port and the UARTE tap, and (@3) the PWM
+/// model, the TEMP and NVMC stand-ins and their host port. Written next to the
 /// generated script for [`Platform::Nrf52840Bb`].
 pub const NRF52840_BB_REPL: &str = include_str!("../platforms/nrf52840-bb.repl");
 
@@ -305,6 +311,7 @@ pub const PLUGIN_SOURCES: &[(&str, &str)] = &[
     ("bb_stm32_timer.cs", BB_STM32_TIMER_CS),
     ("bb_stm32f0_adc.cs", BB_STM32F0_ADC_CS),
     ("bb_nrf52_saadc.cs", BB_NRF52_SAADC_CS),
+    ("bb_nrf52_pwm.cs", BB_NRF52_PWM_CS),
 ];
 
 /// Default address of the lookahead block: unused on the STM32F103.
@@ -445,8 +452,8 @@ pub enum Platform {
     /// before the platform, whatever [`LookaheadCfg::plugin`] says.
     Stm32f072Bb,
     /// [`NRF52840_BB_REPL`]: Renode's stock nRF52840 without the SVD
-    /// download, at 64 MIPS, with Breadboard's SAADC and UARTE tap
-    /// (`nrf52840-bb@2`, ADR-008 D1, D7, D8). Loads the plugin assembly
+    /// download, at 64 MIPS, with Breadboard's SAADC, UARTE tap, PWM, TEMP
+    /// and NVMC (`nrf52840-bb@3`, ADR-008 D1, D7-D9). Loads the plugin assembly
     /// before the platform.
     Nrf52840Bb,
     /// A path understood by Renode's `LoadPlatformDescription`, e.g. the stock
@@ -894,7 +901,7 @@ impl RenodeConfig {
         }
     }
 
-    /// Breadboard's nRF52840 (`nrf52840-bb@2`, ADR-008 D1) with P0.13 as an
+    /// Breadboard's nRF52840 (`nrf52840-bb@3`, ADR-008 D1) with P0.13 as an
     /// output and a 10 us quantum.
     pub fn nrf52840(renode: PathBuf, firmware: PathBuf) -> RenodeConfig {
         RenodeConfig {

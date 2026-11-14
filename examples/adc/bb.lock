@@ -10,5 +10,5 @@ tree = "sha256:ee7e6b80546fe08b7f83301be3946831b79a08b3234c87c5afd88dd0405d3108"
 
 [[platform]]
 id = "renode:stm32f072-bb@1"
-content = "sha256:d3b5248647418df195eca2387fbe924896ea4f2cc050aa5a3441e5aa07b229bb"
+content = "sha256:fa96a27e998ad8a83d1ec4de71afe251a1565c876000a1fa7e0ea533f83d4da1"
 renode = "1.17.0"

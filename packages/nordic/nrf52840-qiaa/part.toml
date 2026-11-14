@@ -1,13 +1,13 @@
 # nordic/nrf52840-qiaa: the Nordic nRF52840 SoC, aQFN73 (Phase 1 plan M5, ADR-006 D9, ADR-008 D1-D2).
 #
-# The behavioural layer is Breadboard's Renode platform nrf52840-bb@2 (ADR-008 D1: Renode 1.17.0's
+# The behavioural layer is Breadboard's Renode platform nrf52840-bb@3 (ADR-008 D1: Renode 1.17.0's
 # nRF52840 without the SVD download, 64 MIPS). The pins carry the GPIO pin models resolved against the
 # PS (pins.toml says how). The suite's GPIO "views" (ADR-006 D9's gpio_led, gpio_lsw, ...) are pad
 # DRIVERS: in a co-simulation the pad's driver is the pin model, so a circuit view of it would put a
 # second driver on the net (the pin-boundary contract allows one). They become pins.toml's named
 # parameter sets instead, and the package has no circuit view (ADR-006 Amendment 3). Its one analog
 # view is the SAADC's pin_load view saadc_se (plan M8, ADR-008 D7), the load a bound adc_in puts on
-# its pad; the behavioural platform nrf52840-bb@2 has the SAADC model it feeds.
+# its pad; the behavioural platform nrf52840-bb@3 has the SAADC model it feeds.
 schema = "bb-part/0"
 
 [part]
@@ -28,7 +28,7 @@ file = "pins.toml"
 
 [behavioral]
 engine = "renode"
-platform = "nrf52840-bb@2"
+platform = "nrf52840-bb@3"
 
 [provenance]
 source = "datasheet"

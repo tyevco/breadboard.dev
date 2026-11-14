@@ -53,7 +53,7 @@ use bbpkg::value::{to_f64, Dim};
 use crate::platforms;
 
 /// The platforms `bb run` supports. `nrf52840` (Phase 1 M2, ADR-008 D1/D2)
-/// is Breadboard's nRF52840 (`nrf52840-bb@2`: Renode's stock nRF52840
+/// is Breadboard's nRF52840 (`nrf52840-bb@3`: Renode's stock nRF52840
 /// without the SVD download, at 64 MIPS, with Breadboard's SAADC). Its pins
 /// are written `<ref>.P<port>.<nn>` (`U1.P0.13`; the reference ends at the
 /// first `.`); P0.00-P0.31 and P1.00-P1.15. An `adc_in` reads an AIN pin or

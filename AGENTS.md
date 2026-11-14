@@ -2,7 +2,9 @@
 
 Breadboard is an open hardware simulator ("QEMU for whole circuit boards"). The
 repo is in **Phase 1** (`docs/phase1-plan.md`), with M0-M9 and M11
-(systems) done; M10 (E3) is planned, not implemented.
+(systems) done; M10 (E3) is in progress: its design and the Renode-side
+models (PWM, TEMP, NVMC on `nrf52840-bb@3`) are done (ADR-008
+Amendment 9).
 
 - **Phase 0** (done) was a Renode (STM32F103, and STM32F072 for the ADC
   board) ↔ ngspice co-simulation spike under a kernel-owned time-grant
@@ -44,7 +46,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 1 min 45 s). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, and from M11 `dms-system`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -74,6 +76,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make ec-long` | ADR-004 Amendment 8 long one-cell gate (`scripts/ec_long.sh`, about 2.5 min): the ADC board's every-lattice-point reference over 1 500 ms (`EC_LONG_FOR`; Renode used to crash after 81 746 grants) must finish, reconnect at least once, pass `check_adc.py` and equal the lookahead run except grant records (CI job `adc`) |
 | `make nrf-gates` | Phase 1 M2 gate (ADR-008 D1-D4, D6; Amendment 2): the Renode engine tests `engines/cpu-renode/tests/nrf52840.rs` on Breadboard's nRF52840 (`Platform::Nrf52840Bb`, `nrf52840-bb@1`: no SVD download, 64 MIPS) with the bare-metal gate firmware in `engines/cpu-renode/tests/firmware/nrf52840/` (nrf-blinky edges identical at one-cell grants, 10 ms grants, plugin armed and lookahead on, self-test status exactly 0x3; nrf-ppi; nrf-busywait: a 10 ms nrfx busy-wait takes 6.66 ms of virtual time; the D6 TIMER-compare-then-long-sleep promise clamp; the PIN_CNF audit, mid-run and end-of-run) and the prebuilt Zephyr gate image (nrf-zephyr), then `make nrf-feedback` (about 2 min) |
 | `make nrf-saadc-model` | Phase 1 M8, first half (ADR-008 D7, D8, Amendment 4; in `make test`, about 25 s): Breadboard's nRF52840 SAADC (`BbNrf52Saadc` on `nrf52840-bb@2`). The Renode-only register and timing tests in ADR-005's test-plan shape (`examples/nrf-saadc/bb_saadc_test.py`, `nrf_saadc_idle.elf` / `nrf_saadc_burst.elf`: reset values, every TACQ x RESOLUTION x OVERSAMPLE x BURST instant, the 8x BURST, transfer and rounding, VDD, EasyDMA, LIMIT, timer mode, the IRQ, the TACQ < 2 L refusal, the UART tap; run twice, byte-identical), then `scripts/nrf_saadc_board.sh` on `examples/nrf-saadc` (the loading `adc_in`: 8 `#smp` toggles and exactly 8 charge transfers per 8x burst against the analytic charge sharing, codes, UART lines; lookahead at 1 ms and 10 ms, push-on-change and `--engine-order analog-first` equal to the every-lattice-point one-cell reference `tests/golden/nrf-saadc/outputs.sha256`; the refusal at `--renode-quantum 25us` and its message; the `load=none` escape). `make nrf-saadc-update` rewrites the hashes; `make cost-table-nrf-saadc` is the board's cost-table row (also in `make cost-table`; idle host) |
+| `make nrf-pwm-model` | Phase 1 M10, first step (ADR-008 D9, Amendment 9; in `make test`, about 25 s): Breadboard's nRF52840 PWM0-PWM3 (`BbNrf52Pwm`), the TEMP and NVMC stand-ins (`BbNrf52Temp`, `BbNrf52Nvmc`) and their host port (`BbNrf52HostPort` at 0x5FFC0000: the PWM pin ring, TEMP's value) on `nrf52840-bb@3`. `examples/nrf-pwm/bb_pwm_test.py`, Renode-only, each group twice and byte-identical: `registers` (`nrf_saadc_idle.elf`; reset values; every pin change exact to 0.5 ns for up and up-and-down x PRESCALER x COUNTERTOP x COMP x POLARITY; REFRESH, ENDDELAY, LOOP, the SHORTS, NextStep, the Grouped, Common and WaveForm decoders, PSEL and ENABLE while running, every event instant, the IRQs, the ring overflow; TEMP's DATARDY at 36 us and STOP; NVMC erase timing, CONFIG gating, partial erase, ERASEALL) and `firmware` (`nrf_pwm_step.elf`: TEMP, an NVMC erase polled on READY, 4 full steps at 446 PPS as `nrfx_pwm_complex_playback` runs them, every pin change against the firmware's duty table, the UART lines, and no lookahead promise past the next PWM edge) |
 | `make nrf-feedback` | ADR-008 D3 board-level gate (in `make test`): `examples/nrf-feedback` (examples/feedback's circuit on the nRF52840: RTC0 drives `U1.P0.13`, GPIOTE IN on `U1.P0.11` copies to `U1.P0.15`) with lookahead on at 1 ms and 10 ms byte-identical to its one-cell `--lookahead off` reference (`tests/golden/nrf-feedback/outputs.sha256`; `make nrf-feedback-ref`), no promise broken, `check_feedback.py --nrf`, and `--engine-order analog-first` byte-identical |
 | `make nrf-costs` | ADR-008 D1: fresh startup and per-grant cost of the nRF52840 blinky at 64 MIPS against the STM32F103 blinky (interleaved, N = `BB_NRF_COST_N`, medians); reports only. Run it on an idle host |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
@@ -173,6 +176,11 @@ examples/nrf-saadc/     Phase 1 M8: the loading adc_in board (AIN0 through the p
                         bb_saadc_test.py (the SAADC model's Renode-only tests)
 engines/cpu-renode/platforms/bb_nrf52_saadc.cs  BbNrf52Saadc, BbSaadcHostPort (0x5FFF0100),
                         BbUartLog (0x5FFF8000; ADR-008 D7, D8), loaded by nrf52840-bb.repl (@2)
+engines/cpu-renode/platforms/bb_nrf52_pwm.cs  BbNrf52Pwm (PWM0-3), BbNrf52Temp, BbNrf52Nvmc and
+                        BbNrf52HostPort (0x5FFC0000: the PWM pin ring; ADR-008 D9, Amendment 9),
+                        loaded by nrf52840-bb.repl (@3)
+examples/nrf-pwm/       bb_pwm_test.py (the PWM, TEMP and NVMC models' Renode-only tests;
+                        firmware engines/cpu-renode/tests/firmware/nrf52840/nrf_pwm_step.c)
 engines/cpu-renode/platforms/nrf52840-bb.repl  Breadboard's nRF52840 (ADR-008 D1); its gate
                         firmware, vendored headers and Zephyr gate image are in
                         engines/cpu-renode/tests/firmware/nrf52840/, its tests in tests/nrf52840.rs
@@ -426,8 +434,9 @@ feedback board).
   so two checkouts sharing `~/.cache/bb-target` overwrite each other's
   crates and a build can silently link the other checkout's code.
 - Breadboard's Renode plugins (the lookahead block, `BbStm32Timer`,
-  `BbStm32F0Adc` and its host port, `BbNrf52Saadc`, its host port and
-  `BbUartLog`) are compiled once, together, into one
+  `BbStm32F0Adc` and its host port, `BbNrf52Saadc`, its host port,
+  `BbUartLog`, and `BbNrf52Pwm`, `BbNrf52Temp`, `BbNrf52Nvmc` with their
+  host port) are compiled once, together, into one
   assembly cached in `~/.cache/bb/renode-plugins` (`$BB_CACHE_DIR` or
   `$XDG_CACHE_HOME/bb` override it); deleting the directory only costs one
   compile (about 2 s). The loader runs before `LoadPlatformDescription`,

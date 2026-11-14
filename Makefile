@@ -138,6 +138,7 @@ pooled-test:
 	$(MAKE) adc-stock
 	$(MAKE) adc-model
 	$(MAKE) nrf-saadc-model
+	$(MAKE) nrf-pwm-model
 	$(MAKE) adc-kicad
 	$(MAKE) dms-rail-test
 	$(MAKE) dms-vsense-test
@@ -715,6 +716,18 @@ nrf-saadc-model: firmware bb
 # Rewrite the reference hashes from a fresh, checked run (review the diff).
 nrf-saadc-update: firmware bb
 	bash scripts/nrf_saadc_board.sh $(BB) $(NRF_SAADC_OUT) $(NRF_SAADC_HASHES) update
+
+# --- Phase 1 M10 (first step): PWM, TEMP and NVMC (ADR-008 D9, Amendment 9) --
+# nrf52840-bb@3: BbNrf52Pwm (PWM0-3), the BbNrf52Temp and BbNrf52Nvmc
+# stand-ins and their host port BbNrf52HostPort (the PWM pin ring). make
+# nrf-pwm-model (in make test, about 25 s): the Renode-only register, timing
+# and sequencer tests and the firmware group (nrf_pwm_step.elf: TEMP, an
+# NVMC erase, 4 full steps at 446 PPS; no lookahead promise past a PWM
+# edge), examples/nrf-pwm/bb_pwm_test.py, each group twice, byte-identical.
+.PHONY: nrf-pwm-model
+nrf-pwm-model: firmware
+	$(PYTHON) examples/nrf-pwm/bb_pwm_test.py --out out/nrf-pwm-model
+	@echo "nrf-pwm-model: PASS"
 
 # ADR-005 test plan 1-3: Renode-only tests of Breadboard's STM32F072 ADC
 # model and BbStm32Timer TRGO (examples/adc/bb_adc_test.py: pwm, trgo,

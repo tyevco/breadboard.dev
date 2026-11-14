@@ -1,4 +1,4 @@
-// Breadboard's nRF52840, platform nrf52840-bb@2 (ADR-008 D1, D7, D8):
+// Breadboard's nRF52840, platform nrf52840-bb@3 (ADR-008 D1, D7, D8, D9):
 // Renode 1.17.0's stock platforms/cpus/nrf52840.repl with
 //   - the network-dependent init removed. The stock file's sysbus init block
 //     starts with
@@ -17,7 +17,12 @@
 //     the lookahead block, which the engine maps at 0x5FFF0000 on boards
 //     that load it), and the UART tap BbUartLog on UARTE0/1 at 0x5FFF8000
 //     (ADR-008 D8). The plugin assembly is therefore loaded before this
-//     file on every nRF52840 run.
+//     file on every nRF52840 run;
+//   - Phase 1 M10 (@3, ADR-008 D9, Amendment 9): Breadboard's PWM0-PWM3
+//     (Miscellaneous.BbNrf52Pwm, platforms/bb_nrf52_pwm.cs) at their PS
+//     addresses with IRQs 28, 33, 34 and 45, the TEMP and NVMC stand-ins
+//     (BbNrf52Temp with IRQ 12, BbNrf52Nvmc), and their host port
+//     (BbNrf52HostPort: the PWM pin ring and TEMP's value) at 0x5FFC0000.
 using "platforms/cpus/nrf52840.repl"
 
 cpu:
@@ -32,6 +37,35 @@ bbSaadcPort: Miscellaneous.BbSaadcHostPort @ sysbus 0x5FFF0100
 bbUartLog: Miscellaneous.BbUartLog @ sysbus 0x5FFF8000
     uart0: uart0
     uart1: uart1
+
+bbPwm0: Miscellaneous.BbNrf52Pwm @ sysbus 0x4001C000
+    instance: 0
+    -> nvic@28
+
+bbPwm1: Miscellaneous.BbNrf52Pwm @ sysbus 0x40021000
+    instance: 1
+    -> nvic@33
+
+bbPwm2: Miscellaneous.BbNrf52Pwm @ sysbus 0x40022000
+    instance: 2
+    -> nvic@34
+
+bbPwm3: Miscellaneous.BbNrf52Pwm @ sysbus 0x4002D000
+    instance: 3
+    -> nvic@45
+
+bbTemp: Miscellaneous.BbNrf52Temp @ sysbus 0x4000C000
+    -> nvic@12
+
+bbNvmc: Miscellaneous.BbNrf52Nvmc @ sysbus 0x4001E000
+
+bbNrfPort: Miscellaneous.BbNrf52HostPort @ sysbus 0x5FFC0000
+    pwm0: bbPwm0
+    pwm1: bbPwm1
+    pwm2: bbPwm2
+    pwm3: bbPwm3
+    temp: bbTemp
+    nvmc: bbNvmc
 
 sysbus:
     init:

@@ -24,13 +24,13 @@ tree = "sha256:f2dfbfccbbffbdae5524b6fe1c7cc0c01b066f7385799d289640cac8e47eb39a"
 id = "nordic/nrf52840-qiaa"
 version = "0.1.0"
 path = "../../packages/nordic/nrf52840-qiaa"
-tree = "sha256:4b51b601331dc8e89672b753b840253069832741e2ca7519c8a900ecfa6bf326"
+tree = "sha256:d1ca9b68ad6b7f109f02593392e193a64f76b5a7dfdb6e4e752d9304f2e1ac72"
 
 [[package]]
 id = "raytac/mdbt50q-u1mv2"
 version = "0.1.0"
 path = "../../packages/raytac/mdbt50q-u1mv2"
-tree = "sha256:9fabf076bb869df7dc3240ecccdf3c13ce26d489fa87052b620474f2095979ed"
+tree = "sha256:097f1b4000d545ab3273503ef6860b9ff0c73eeed95e78f51ee2ef44f2d02229"
 
 [[package]]
 id = "ti/tps22917"
@@ -50,6 +50,6 @@ content = "sha256:f84884a949f6f02b0d24433cd1b1d7f3264d9f98f897e3f3209d97f8078573
 renode = "1.17.0"
 
 [[platform]]
-id = "renode:nrf52840-bb@2"
-content = "sha256:c067580b3f44cd8db6f8976f63799d8c41cc87f130d0cd70b5f093abba64903a"
+id = "renode:nrf52840-bb@3"
+content = "sha256:08cdcd3489f956a72c0af102207821e8c30c661a7ed4c5f8139baef46ae440c2"
 renode = "1.17.0"

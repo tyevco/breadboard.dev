@@ -2,7 +2,7 @@
 """Renode-only tests of Breadboard's nRF52840 SAADC model (ADR-008 D7, D8).
 
 Drives Renode 1.17.0 with Breadboard's nRF52840 (engines/cpu-renode/platforms/
-nrf52840-bb.repl, nrf52840-bb@2: BbNrf52Saadc at 0x40007000, its host port
+nrf52840-bb.repl, nrf52840-bb@3: BbNrf52Saadc at 0x40007000, its host port
 BbSaadcHostPort at 0x5FFF0100, the UART tap BbUartLog at 0x5FFF8000) through
 the External Control API, paused, as the Renode engine does. The plugin
 sources are compiled once with Renode's own compiler into an assembly cached
@@ -62,7 +62,8 @@ sys.path.insert(0, str(ROOT / "examples/adc"))
 from renode_adc_test import CMD_SYSTEM_BUS, Client, find_renode, WIDTH_DW  # noqa: E402
 
 PLATFORMS = ROOT / "engines/cpu-renode/platforms"
-PLUGIN_SOURCES = ["bb_lookahead.cs", "bb_stm32_timer.cs", "bb_stm32f0_adc.cs", "bb_nrf52_saadc.cs"]
+PLUGIN_SOURCES = ["bb_lookahead.cs", "bb_stm32_timer.cs", "bb_stm32f0_adc.cs", "bb_nrf52_saadc.cs",
+                  "bb_nrf52_pwm.cs"]
 OVERLAY = PLATFORMS / "nrf52840-bb.repl"
 FW = ROOT / "engines/cpu-renode/tests/firmware/nrf52840/build"
 MACHINE = "u1"
@@ -120,7 +121,7 @@ class Failures(list):
 
 
 class Session:
-    """A paused Renode with Breadboard's nRF52840 (nrf52840-bb@2)."""
+    """A paused Renode with Breadboard's nRF52840 (nrf52840-bb@3)."""
 
     def __init__(self, renode, elf, dll, lookahead=False, keep=False):
         self.dir = Path(tempfile.mkdtemp(prefix="bb-saadc-"))

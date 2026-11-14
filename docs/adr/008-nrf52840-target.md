@@ -15,6 +15,8 @@
   D10 prototyped and implemented, M9 (2026-11-13, Amendment 7): a
   breakpoint stop changes results, so `bb run --gdb` is a marked debug
   mode, and a session without a stop inside a slice is byte-identical.
+  M10's design (E3) and D9's PWM, TEMP and NVMC models on
+  `nrf52840-bb@3` (2026-11-14, Amendment 9).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -1969,3 +1971,363 @@ change uses only public Renode 1.17.0 API (`Machine.cs`, `GdbStub.cs`,
   5 races and was refused each time). `make check` green on the pool
   (9 min 26 s) and fresh (`POOL=0`, 10 min 49 s). `make docs-plots-check`
   PASS. No committed golden changed.
+
+### Amendment 9: E3's design, and D9's PWM, TEMP and NVMC models (M10, 2026-11-14)
+
+Plan M10 (E3: the detent homing H0-H5 of dial-me-spinner
+`docs/firmware.md` §5.4 at `6854d25`) needs four new pieces before it
+shows anything. This amendment is the design note for all of them. It was
+written before any of them was built, and it records the first step as
+implemented: the Renode-side models. Everything here rests on decisions
+that are already accepted: D9 for the models and their pin behaviour,
+ADR-006 D7 for the device API, and ADR-003 for promises and the lattice.
+The accepted text does not cover two points. Both are named below as open
+points for the approver, and this step implements neither.
+
+#### The modelling split (what runs where, what crosses the pin boundary)
+
+| Piece | Engine | Crosses the boundary as |
+| --- | --- | --- |
+| PWM0 (4 channels, 25 kHz, 8 microsteps per full step, slow decay) | Renode: `BbNrf52Pwm` (this step) | `digital_out` edges on the four IN pins, each at its exact time (D9) |
+| TEMP (the MD-3 duty uses the die temperature) | Renode: the `BbNrf52Temp` stand-in (this step) | nothing; the value comes from the host port (later, the bench temperature) |
+| NVMC (Zephyr's flash driver, NVS) | Renode: the `BbNrf52Nvmc` stand-in (this step) | nothing |
+| 2x DRV8837, the stepper's coils on J40, the VM capacitors | ngspice: a package view of `ti/drv8837` (the bridge) and of the stepper phase (R, L, back-EMF) | consumes the four IN edges and nSLEEP through the existing glue (`spec/pin-model.md` rule 1) |
+| Lead screw, carriage, magnet, the field at U42, the DRV5032 itself | `bbdev` device `dms/mechanism@1` (ADR-006 D7) | consumes the IN and nSLEEP nets as `digital_in`; drives HOME_N as `digital_out` |
+
+- **No duty crosses the boundary.** D9 already fixed that the PWM model's
+  outputs are pin edges with exact timestamps. So the plan's "averaged
+  DRV8837/PWM view" cannot average at the boundary. A view that saw only
+  the duty would need a new pin model (a duty-valued output). That is a
+  `spec/pin-model.md` change, and it is **not** proposed here.
+  - The bridge view is a behavioural, ideal-switch H-bridge: R_on per leg,
+    the slow-decay brake and the coast state as B conductances, no
+    body-diode switching transients, and no branch-current unknown
+    (AGENTS.md).
+  - Inside the view, the 25 kHz ripple of the coil current and of VM
+    stays. That ripple is what `test_firmware_microstep_pwm` checks: VM
+    ripple, VSYS maximum, link current, BAT minimum, the current vector and
+    the thrust estimate.
+  - The plan's "about 1.75 s of wall time per ms" was measured on the
+    suite's switch-level model, with diodes and dead time. M10's next step
+    measures the ideal-switch view with the ADR-003 protocol and records
+    its cost here.
+  - If that cost misses the budget, the fallback is a moving average over
+    one PWM period inside the view, still fed by edges. A duty-valued pin
+    model would be a new ADR and is not part of M10.
+- **The mechanism follows the commanded drive, not the coil current.** The
+  device API is digital (ADR-006 D7), so the device reads the five driver
+  inputs.
+  - For each coil it forms the applied polarity: IN1, IN2 = 1,0 gives +1;
+    0,1 gives -1; brake (1,1), coast (0,0) and nSLEEP low give 0.
+  - It filters that polarity with the coil's L/R time constant. The filter
+    is exact between edges: an exponential, evaluated at each input edge
+    and at each timer.
+  - The field angle is `atan2(i_B, i_A)`. While the vector magnitude is
+    above a pull-in threshold, the rotor moves the shortest way to the
+    field angle. Below it, the rotor holds, because the lead screw is
+    self-locking (zero hold power).
+  - One electrical cycle is 4 full steps, and one full step moves the
+    carriage 0.015 mm (firmware.md §5.1).
+  - The carriage is clamped at the park stop and at the click end. Past
+    the stop, the field slips over the rotor, which is how the H4 stall
+    loses its overdrive steps.
+  - Thrust against the load (MD-4) is not modelled, so a stall in the
+    loaded zone cannot happen. This is a stated limit of the device; the
+    analog side's thrust estimate is the check for it.
+- **The DRV5032 is part of the same device.** Its input is the magnet's
+  field, which is internal state, not a net.
+  - Bz at the die comes from the table in firmware.md §5.4, interpolated
+    linearly in x. The die height is a device parameter (default 2.6 mm).
+  - Omnipolar BOP/BRP with hysteresis: typical 3.0/1.5 mT, with the
+    corners as parameters.
+  - The device samples every tS (typical 50 ms; 27-75 ms as parameters)
+    from a seeded phase (`Ctx::rng`, from the run seed and the instance
+    ref). The output settles tACTIVE = 40 us after each sample.
+  - HOME_N is push-pull, low while the field is above BOP.
+- **Timing of the loop.**
+  - HOME_N feeds the CPU and the CPU's PWM edges feed the device, so
+    Renode and the device form a two-engine loop, as in
+    `examples/feedback`.
+  - ngspice only consumes. It runs after Renode and gets every edge at its
+    exact time.
+  - While PWM runs, the CPU's promise ends at its next edge (every edge is
+    a clock limit, see below). Grants are then about one cell, so the
+    2.4 s homing takes about 240 000 grants.
+  - The device's own promise (`quiet_until` = its next sample instant,
+    ADR-006 D7) is exact. When the CPU is quiet, the kernel's existing
+    loop rule can bound grants by it.
+
+#### The Rust device API (ADR-006 D7, as decided)
+
+- **The crate `bbdev`,** unchanged from D7's sketch:
+  - `Device::pins`, `on_pin_change(ctx, pin, level, t)`,
+    `on_timer(ctx, id, t)`;
+  - `Ctx::now`, `schedule(at, id)`, `cancel(id)`, `set_pin(pin, level)`
+    (stamped at `now`), and `rng()`, seeded from the run seed and the
+    instance ref.
+- **`DeviceEngine`** wraps all of a run's devices as one engine:
+  - `t_safe` and `quiet_until` are its earliest timer;
+  - `input_is_sampled` is false;
+  - every output change is in its trace, at its exact time;
+  - an input transition is applied at its own `edge_time`, never earlier.
+- **Gates and lock.** G6's mock tests (ADR-006 Gates) gate the engine
+  before the mechanism exists. The device's id and the hash of its source
+  files go into `bb.lock` as `device:dms/mechanism@1` (ADR-006 D8).
+
+#### Open points for the approver (not implemented by this step)
+
+1. **Where a device instance comes from.**
+   - ADR-006 D7 lets a package name a device in `[behavioral]`, and
+     `spec/package.md` section 3 already allows `engine = "device"`.
+     Section 12 (a board file's `*bb part`) still says the layer "must be
+     `renode`".
+   - M10 would widen that sentence to "renode or device", as the
+     implementation of D7, with an ADR-006 amendment in the same change.
+   - The mechanism would then appear in E3's board file as a part `M1` of
+     a first-party package `dms/detent-mechanism`, with `*bb pin`
+     bindings on the IN, nSLEEP and HOME_N nets. U42's OUT would not be
+     driven separately, because the device is the DRV5032.
+   - **The imported dial-me-spinner project cannot hold that part.** The
+     mechanism is not on the schematic. J40 is a connector whose pins are
+     the coils, which a digital device cannot read, and `bb.toml` has no
+     off-schematic instance.
+   - Running E3 on the project would need such an entry (for example
+     `[[device]]` with pin-to-net bindings) in `spec/project.md` and its
+     schema. That is beyond the accepted ADR-007, and it is not proposed
+     here.
+   - **Recommended:** run E3 on a board file that carries the detent sheet
+     of the main board: U40, U41, R70, C70, C72, C74, J40's coils, U42's
+     supply and the nRF's pins. This is how E2's model gate ran on
+     `examples/nrf-saadc`. The project route waits for an ADR-007
+     amendment.
+   - The approver may veto the section 12 reading. M10 then stops at the
+     models and the device API.
+2. **The plan's "HOME_N latency within 75 ms".**
+   - The DRV5032FA's tS reaches 75 ms, so the worst latency is
+     tS + tACTIVE = 75.04 ms.
+   - The suite accepts that against its 97.4 ms edge window (a 75 ms lag
+     plus 10 steps at 446 PPS, `test_home_n_levels_and_latency`).
+   - M10 gates the typical corner (tS 50 ms) within 75 ms and the worst
+     corner within the suite's 97.4 ms window, and records both.
+
+#### Firmware
+
+- **The E3 application:** `examples/dial-me-spinner/firmware/homing`, a
+  Zephyr v4.5.0 application on the out-of-tree board. It is pinned and
+  rebuilt by `make fw-rebuild`, like E1 and E2 (prebuilt ELF, image hash
+  in `SHA256SUMS`, no banner).
+- **PWM0 through nrfx directly,** as firmware.md §5.3 says:
+  - `nrfx_pwm_complex_playback` with two ping-pong sequences;
+  - each sequence is one full step: 8 microsteps x 4 channels, Individual
+    decoder;
+  - REFRESH sets the speed;
+  - the SEQEND interrupt refills the idle sequence and counts steps.
+- **Its other inputs and outputs:**
+  - TEMP for the MD-3 duty, and VSYS through the SAADC (E2) for the
+    amplitude;
+  - HOME_N on P1.14 (input, no pull);
+  - H0's waits timed with `k_sleep`;
+  - each phase logged on UARTE0 (D8).
+- **No PPI or TIMER SHORTS.** The application needs neither, so D9's
+  `BbNrf52Ppi` and `BbNrf52Timer` stay unbuilt.
+- **Gate firmware.** A bare-metal gate firmware
+  (`engines/cpu-renode/tests/firmware/nrf52840/nrf_pwm_*.c`) tests the
+  models without Zephyr.
+
+#### Gates (M10 as a whole)
+
+- **The models** (this step):
+  - `make nrf-pwm-model`: Renode-only, run twice and byte-identical, in
+    `make test`;
+  - `make check` on the pool and with `POOL=0`, `make nrf-gates` and
+    `make pool-equiv`, with every committed hash unchanged on
+    `nrf52840-bb@3`.
+- **The engine path** (next step):
+  - the ring below turned into pin transitions, with the GPIO
+    arbitration;
+  - the lookahead gate: no promise passes a PWM edge;
+  - `nrf-gates` with a PWM board.
+- **The device API:** G6 (`DeviceEngine` mock tests).
+- **E3:**
+  - one full step at 446 PPS against
+    `test_firmware_microstep_pwm[VBAT3.7-25C]` (the values in the suite's
+    committed `results.json`; tolerances set from the measurement and
+    recorded);
+  - HOME_N latency (open point 2);
+  - H0-H5 in order, with the step counts of §5.4, and HOME asserted after
+    H4;
+  - equivalence with the one-cell reference (`nets.csv`, `nets.vcd`,
+    non-grant records), both engine orders, 10-run determinism and
+    goldens;
+  - a cost-table row and `pool-equiv` entries.
+
+#### As implemented: the models (`nrf52840-bb@3`)
+
+The models are in `engines/cpu-renode/platforms/bb_nrf52_pwm.cs`, which is
+in `PLUGIN_SOURCES`, so every Renode platform's content hash and the
+plugin cache key change. They are loaded by the overlay
+`nrf52840-bb.repl`. Their behaviour follows the nRF52840 PS (the PWM, TEMP
+and NVMC chapters) where the PS says something, and a recorded choice
+where it does not.
+
+- **`Miscellaneous.BbNrf52Pwm`:** PWM0-PWM3 at `0x4001C000`,
+  `0x40021000`, `0x40022000` and `0x4002D000`, with IRQs 28, 33, 34 and
+  45. It has the full register map with the PS reset values: the tasks,
+  the seven events, SHORTS, INTEN/SET/CLR, ENABLE, MODE, COUNTERTOP,
+  PRESCALER, DECODER, LOOP, SEQ[0..1] PTR, CNT, REFRESH and ENDDELAY, and
+  PSEL.OUT[0..3].
+  - **Waveform.**
+    - PWM_CLK = 16 MHz / 2^PRESCALER.
+    - Each channel's value has COMP in bits 14:0 and POLARITY in bit 15
+      (1 = FallingEdge: the period starts high).
+    - Up mode: the period is COUNTERTOP ticks. The output is the start
+      level for ticks `[0, COMP)` and the other level for
+      `[COMP, COUNTERTOP)`. COMP = 0 gives the other level for the whole
+      period; COMP >= COUNTERTOP gives the start level (the PS: "no
+      edges").
+    - Up-and-down mode: the period is 2 COUNTERTOP ticks. The counter
+      compares on the way up and on the way down, so the edges are at
+      COMP and at 2 COUNTERTOP - COMP.
+  - **Sequences.**
+    - SEQSTART[n] latches SEQ[n]'s PTR, CNT, REFRESH and ENDDELAY.
+    - A step is 1, 2, 4 or 4 half-words (Common, Grouped, Individual,
+      WaveForm). In WaveForm the fourth half-word is the period's
+      COUNTERTOP, and channel 3 is not driven.
+    - Each step is read from RAM when it is loaded, at the start of its
+      first period. In RefreshCount mode it plays REFRESH + 1 periods. In
+      NextStep mode it plays until a NEXTSTEP, and REFRESH and ENDDELAY are
+      ignored.
+    - SEQSTARTED[n] is the start of the sequence's first period. SEQEND[n]
+      is the start of its last step's first period ("after the last value
+      has been loaded and started executing"). ENDDELAY periods of the
+      last step follow.
+    - With LOOP.CNT > 0, SEQ[1] follows SEQ[0], and the count drops after
+      each SEQ[1]. When it reaches zero, LOOPSDONE comes at that period
+      boundary, and SHORTS may restart a sequence or stop there. Otherwise
+      the last step holds (the PS: "the PWM generation will then continue
+      with the last loaded value").
+    - PWMPERIODEND comes at every period boundary.
+    - STOP ends generation at the end of the current period, with STOPPED
+      there; when nothing runs, STOPPED comes at once. ENABLE = 0 ends
+      generation at once, without STOPPED.
+  - **Recorded choices** (the PS gives no figure):
+    - the first period starts at the SEQSTART write itself (start latency
+      0, as approver decision A5 chose for the SAADC);
+    - a SEQSTART while running takes effect at the next period boundary;
+    - COUNTERTOP, MODE and PRESCALER are latched per period;
+    - a SEQSTART whose CNT is smaller than one step is ignored, with a
+      warning;
+    - two channels on one pin are reported as they are, with a warning.
+  - **Pin edges are exact.**
+    - Period boundaries and compare points are multiples of 62.5 ns from
+      the SEQSTART instant, so the model keeps time in half-nanoseconds.
+    - Each edge is a deadline of the model's one 1 GHz `LimitTimer`,
+      armed at the edge's whole nanosecond rounded **down**. Every edge is
+      therefore a clock limit, and the lookahead promise ends at or before
+      it.
+    - Register-visible events are set at that nanosecond, at most 0.5 ns
+      before their exact instant (recorded).
+  - **The PWM drives the pin** (PSEL connected) from the start of the
+    first period until STOPPED or ENABLE = 0. After that the pin is the
+    GPIO's OUT level again (the PS: "pins go to the idle state set in the
+    GPIO OUT register").
+    - Renode's GPIO model is not touched. The model records each change in
+      the host port's ring (below). The engine reports each change as a
+      transition of the bound pin and arbitrates it with the GPIO's own
+      edges (next step).
+    - A GPIO line set from a timer callback would carry the time source's
+      slice-start stamp (Amendment 4), so that route is not used.
+- **`Miscellaneous.BbNrf52Temp`** at `0x4000C000`, IRQ 12.
+  - Registers: START, STOP, DATARDY, INTENSET/CLR and TEMP; A0-A5, B0-B5
+    and T0-T4 are storage with the PS reset values.
+  - DATARDY comes tTEMP = 36 us (PS typical) after START. TEMP then reads
+    the host value in 0.25 degC steps (default 100, that is 25 degC).
+  - STOP cancels a measurement.
+  - The die temperature is a run constant. The engine writes it at
+    startup (from the bench temperature, in the next step).
+- **`Miscellaneous.BbNrf52Nvmc`** at `0x4001E000`.
+  - Registers: READY, READYNEXT, CONFIG, ERASEPAGE (and ERASEPCR1),
+    ERASEPCR0, ERASEALL, ERASEUICR, ERASEPAGEPARTIAL, ERASEPAGEPARTIALCFG,
+    ICACHECNF, IHIT and IMISS.
+  - An erase in erase mode (CONFIG.WEN = Een) fills the page, or the
+    whole flash, with 0xFF at once. It holds READY and READYNEXT low for
+    the PS maximum: tERASEPAGE 85 ms, tERASEALL 169 ms. ERASEUICR takes
+    tERASEPAGE, an assumption.
+  - A partial erase holds READY and READYNEXT low for
+    ERASEPAGEPARTIALCFG ms. The page is erased once the partial erases of
+    that page add up to tERASEPAGE.
+  - An erase outside erase mode, or of an address outside the flash or
+    not on a page boundary, is ignored with a warning.
+  - **Gap, recorded: word writes are not seen.** Renode's flash is a
+    `MappedMemory` that the CPU writes directly. So the stand-in has no
+    write timing (READY stays high), no CONFIG.WEN gating and no
+    1-to-0-only rule for writes. If E3's firmware ends up timing NVS
+    writes, a per-address watchpoint over a flash partition is the way to
+    add this.
+  - The ICACHE registers are storage; IHIT and IMISS stay 0.
+  - The CPU is not halted during an erase (silicon halts a CPU that
+    fetches from flash). Zephyr polls READY, which gives the same wait.
+- **`Miscellaneous.BbNrf52HostPort`** at `0x5FFC0000` (ID `BBNP`), the
+  engine's side of the three models:
+  - **The pin ring:** 8 192 entries of two words, one per PWM pin change
+    of the four instances. An entry holds the time in half-nanoseconds (48
+    bits), the level, the kind (level change, connect or release), the
+    channel, the instance and the PSEL pin.
+  - **Notification:** its GPIO output 0 toggles at the first entry after
+    the host's last acknowledgement (`0x00C`). An advance therefore pays
+    at most one External Control event and one read.
+  - **Overflow:** more entries than the ring holds between two
+    acknowledgements set error bit 0 and fail the run (lower
+    `--max-quantum`). Nothing is dropped silently.
+  - TEMP's host value is at `0x040`.
+  - Firmware accesses are ignored and set error bit 3, as on the SAADC's
+    port.
+- **Platform identity:** `nrf52840-bb@3` (`cli/src/platforms.rs`, and the
+  packages `nordic/nrf52840-qiaa` and `raytac/mdbt50q-u1mv2`). `make
+  locks` rewrote every `bb.lock` and the three project `board.bbm` files
+  (`examples/adc/kicad`, `examples/dial-me-spinner` and its `system/`: the
+  platform id and content, and the two nRF packages' trees), and no other
+  field. `--update-lock` rewrites only the entries it changes (ADR-006
+  G5), so it left the three locks that name the nRF52840 with a stale
+  `renode:nrf52840-bb@2` entry next to the new one; those were deleted by
+  hand, and `bb open --check` passes on all three.
+- **The gate firmware** `nrf_pwm_step.c` installs its TEMP and PWM0
+  handlers in a RAM copy of the vector table (VTOR), so `startup.c` and
+  every other gate image's loadable bytes are unchanged (checked against
+  `HEAD`'s `startup.c`: all eight images identical).
+
+#### Gate runs of this step (2026-11-14)
+
+The runs used `47e5927` plus this change. Load is `/proc/loadavg` at the
+start and end of each run.
+
+- **`make nrf-pwm-model` PASS** (21.4 s in `make check`).
+  - `registers`:
+    - the reset values;
+    - 48 waveform cases, every pin change exact to the half-nanosecond;
+    - every event instant of the LOOP 2 sequencer case (SEQSTARTED,
+      SEQEND, 26 PWMPERIODENDs, LOOPSDONE), each set at its nanosecond and
+      clear 1 ns before;
+    - the ping-pong short, SEQEND0_STOP, LOOPSDONE_STOP, NextStep, Grouped
+      and WaveForm;
+    - PSEL and ENABLE while running, the four IRQs and the ring overflow;
+    - TEMP, NVMC (ERASEPAGE at 85 ms, the ninth partial erase) and
+      ERASEALL.
+  - `firmware`:
+    - 1 046 pin changes equal to the duty table;
+    - `temp=97`;
+    - the erase took 2 785 RTC ticks (85 ms);
+    - `pwm seqends=5 stopped`;
+    - all 427 sampled promises end exactly at the next PWM edge's
+      nanosecond, and none passes it.
+  - Each group ran twice, byte-identical.
+- **`make check` on the pool: green** (13 min 8 s, load 0.3 to 22.7, with
+  the other track's runs on the host).
+- **`make check POOL=0`: green** (12 min 23 s, load 22.7 to 1.3).
+- **`make nrf-gates POOL=0` PASS** (76 s): every committed nRF hash is
+  unchanged on `nrf52840-bb@3`.
+- **`make pool-equiv` PASS** (14 min 6 s): 23 configurations, 2 rounds,
+  46 leases on one Renode process, each identical to its fresh run and to
+  the committed hashes.
+- **No committed golden changed.** The plugin assembly grew and every
+  platform's content hash changed; the results did not.

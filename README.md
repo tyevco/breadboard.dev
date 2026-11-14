@@ -374,6 +374,10 @@ The run writes these files to `out/spike/`:
    input loads its pad (one charge transfer per acquisition, counted
    against the analytic charge sharing) and whose firmware's UART lines
    become log records, against its one-cell every-lattice-point reference.
+   `make nrf-pwm-model` (Phase 1 M10, ADR-008 D9): the Renode-only tests
+   of Breadboard's nRF52840 PWM (every pin change exact to 0.5 ns, the
+   sequencer, a microstepping firmware at 446 PPS) and the TEMP and NVMC
+   stand-ins.
    `make dms-vsense-test` (Phase 1 M8, E2): the battery reading on
    dial-me-spinner at 50 ms and with C5 fitted at 10 nF, each against its
    `load = "none"` run, with `scripts/check_dms_vsense.py` and the committed
