@@ -1332,3 +1332,85 @@ M9 is done through D10's stated fallback (ADR-008 Amendment 7).
   - The site builds.
   - Every committed golden is unchanged.
 
+
+## Review notes: M11 (2026-11-14)
+
+M11 is done (ADR-007 Amendment 5). No schema, kernel or protocol change. The
+E1 and E2 project and every committed golden are unchanged.
+
+- **What exists.**
+  - `examples/dial-me-spinner/system`: a second, separate project that names
+    the vendored main and base netlists at `6854d25` and mates `main:J1`
+    with `base:J3` through the harness view
+    `dial-me-spinner/link-harness@0.1.0:wires`. Its `board.bbm` and `bb.lock`
+    are committed. E1 and E2 stay in the one-board project, because a
+    system qualifies every net and SPICE name (D6), which would change every
+    E1 and E2 output.
+  - The harness: a project-local package of kind `connector`, 24 pins, one
+    resistor per wire (80 mm; 28 AWG power wires, 32 AWG signal wires;
+    20 mΩ per contact). Two DC vectors, qualified at (10 µs, `phase0`),
+    provenance `agent_generated`. No inductance: a branch-current unknown in
+    series with milliohms is AGENTS.md's known bad idea at `phase0`.
+  - `[[connection]]` resolution in `cli/src/import.rs` (Amendment 5 item
+    3), the bench-net refusal and the bench-port warning in `cli/src/elab.rs`
+    (item 5), and D7's names unchanged (item 6).
+  - `make dms-system` (`scripts/dms_system.sh`, in `make test`) and
+    `cli/tests/system.rs` (5 tests, in `make cargo-test`).
+- **The M11 row's gate, item by item.**
+  - **Base board: 21 parts, 17 nets** (81 pin nodes). The main board is
+    unchanged: 201, 142, 657.
+  - **The mated system with U1, U2, J1 and TP1 resolved by qualified
+    name.** 15 references are shared (C1-C4, J1, R1-R4, TP1-TP4, U1, U2).
+    `main:U1` is the RT9080-33GJ5 and `base:U1` the BQ25180YBGR; `main:U2`
+    the TPS22917DBVR and `base:U2` the USBLC6-2SC6; `main:J1` LINK and
+    `base:J1` the TYPE-C-31-M-12; `main:TP1` VSYS and `base:TP1` VBUS. The
+    connection mates 12 pins, each pair on nets of the same leaf name.
+  - **A bare shared reference is an error that lists the candidates.** In
+    `[instances]`, `[[connection]]`, `[[bind]]`, `[probes]`, `bb probe`,
+    `bb flash --target` and a bench's `[analog] exclude`
+    (`cli/tests/system.rs`).
+  - **Byte-identical re-imports.** A fresh import gives the committed
+    `board.bbm` (sha256 `8f1d752e86308597…`), and two imports agree in
+    `board.bbm`, `bb.lock`, `.bb/resolution.json` and
+    `.bb/unresolved.toml`. The `kicad =` route (`kicad-cli` 10.0.8, both
+    boards) gives the same `board.bbm` and leaves the sources unchanged.
+  - **Secondary:** `dc96515`'s KiCad 9.0.9 base netlist differs exactly in
+    `base:J1` and `base:GND` (the shield pin `S1` there, `SH` at
+    `6854d25`), as ADR-007 Context 12 predicted.
+  - **Only one board is simulated.** With E1's targets, bindings and
+    benches, `bb run --elaborate-only` on the system writes E1's own
+    `deck.cir` for both benches once names are mapped (132 instances, all
+    on `main`), and warns that the connector nets on the main side that no
+    bench source drives are left open.
+  - **Schema validation:** `make packages` checks the system project, its
+    `bb.lock`, its `board.bbm` and the harness package against
+    `spec/schema` (69 files, 0 failed when M11 was committed).
+  - **Docs:** ADR-007 Amendment 5, `spec/project.md` (Systems, as D5
+    approves), the `connections` row of `spec/board-bbm.md`, README, the site
+    (reference and roadmap), AGENTS.md and this plan's M11 row.
+- **Not implemented: running the system** (Amendment 5 item 8; the plan
+  keeps multi-board simulation in Phase 3). E1 on the system project as a
+  run mode would need an equivalence gate, a cost-table row and a
+  `pool-equiv` entry, and gives no new result. The base board's battery path
+  in place of the bench supply would need both boards in one deck (the
+  harness view between them, `base:GND` as its own node, M6's convergence
+  gate on the bigger deck) and models for the BQ25180, the NTC and the cell.
+  No cost-table row and no `pool-equiv` entry: M11 adds no run mode.
+- **Gate runs** (2026-11-14, on a clean `git worktree` of `47e5927` with
+  its own `CARGO_TARGET_DIR` and its own work directories, because the M10
+  track's uncommitted package and platform changes make every committed lock
+  stale in the shared checkout; run one after another, load at start and
+  end; another track's `make check` ran beside the first one):
+  - `make check` on the pool: green (8 min 4 s, load 18.1-2.7, 220 cargo
+    tests, `system` 5 passed, `dms-system` PASS; 94 leases).
+  - `make check POOL=0`: green (11 min 1 s, load 2.7-2.7, 220 cargo
+    tests, `dms-system` PASS).
+  - `make dms-system`: PASS (4 s on a warm build).
+  - `make kicad-import`: PASS (16 s), M4b-M4f unchanged.
+  - The site builds (VitePress 1.6.4, from a Linux-filesystem copy); the
+    anchor `systems-connection` exists.
+  - Every committed golden is unchanged.
+- **Coordination with M10.** The system project is in `PKG_BOARDS`, so a
+  package or platform change must run `make locks` and commit
+  `examples/dial-me-spinner/system/bb.lock` and `board.bbm` with it, as for
+  every other example project.
