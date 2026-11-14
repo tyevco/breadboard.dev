@@ -1095,3 +1095,88 @@ minutes; its rows stay labelled with the load they were measured at).
 `make partition`, `make lookahead-equiv`, `make adc-equiv`, `make
 adc-model`, `make ec-long`; `make startup-perf` and `make adc-startup` as
 above. Nothing under `tests/golden` changed.
+
+### Amendment 9: the JIT profile gather raced the External Control restart (2026-11-13)
+
+**Status:** Implemented. Engine-internal (`engines/cpu-renode`): it changes
+the gather teardown of Amendment 6, nothing else. Nothing in `spec/`, the
+time-grant protocol, the output formats or the committed hashes changes;
+the profile only ever affects JIT timing.
+
+**Symptom.** `cli/tests/jit_profile.rs` failed twice under load (once in a
+pooled `make check`, Phase 1 plan "Review notes: M7"): the gather run left
+no profile in its `renode-jit/` directory.
+
+**Root cause** (reproduced, then read in the Renode log). At the teardown
+of a gathering run the engine closed External Control and sent `SIGTERM`
+at once. Renode 1.17.0 restarts its server after a disconnect, on the
+receive thread (`ExternalControlSocket.Disconnect(Unconnected)` →
+`RestartConnection`: a new socket, `Listen`, a new receive thread, then
+`Start`; the new thread calls `Accept`). The shutdown that `SIGTERM`
+starts (`Program.SignalHandler` → `Emulator.Exit` → `EmulationManager.Clear`
+→ `ExternalControlSocket.Dispose`) could land inside that window. The
+renode.log of a failing run, captured with a temporary diagnostic build:
+
+```text
+[ERROR] Thread has not been started.
+   at System.Threading.Thread.Join()
+   at Antmicro.Renode.Network.ExternalControlSocket.Disconnect(State newState)
+   at Antmicro.Renode.Network.ExternalControlSocket.Dispose()
+   ...
+   at Antmicro.Renode.Program.<Main>g__SignalHandler|0_1(PosixSignalContext ctx)
+Unhandled exception. System.ObjectDisposedException: Cannot access a disposed object.
+Object name: 'System.Net.Sockets.Socket'.
+   at System.Net.Sockets.Socket.Accept()
+   at Antmicro.Renode.Network.ExternalControlSocket.RxThreadBody()
+```
+
+The new receive thread then called `Accept` on the disposed socket, the
+exception was unhandled, and Renode aborted (wait status 134, `SIGABRT`
+with a core) 5–8 s later, before the runtime's `StopProfileAll` wrote the
+profile. It is the race of Amendment 2 (`Clear` right after a
+disconnect), reached through the signal handler. The 5 s grace was not
+the cause: with a 120 s grace in the diagnostic build the same runs
+aborted, and every run that exited cleanly did so within 1.7 s even at
+load 70.
+
+**Fix.** Before `SIGTERM`, the engine waits until the server is back in
+`Accept`: a thread of the Renode process whose `comm` starts with
+`ExternalControl` (Renode's receive thread, the name cut to 15 bytes)
+sleeps in the kernel's `inet_csk_accept` (`/proc/<pid>/task/<tid>/wchan`,
+readable for one's own processes). A listening port alone, the pool's
+condition, is not enough: `Listen` comes before the thread starts. Once the
+thread sleeps in `accept`, the dispose closes the socket under it and
+Renode exits cleanly. The wait polls every 2 ms and ends as soon as the
+state is there; it is bounded by 10 s (`JIT_GATHER_ACCEPT_WAIT`), after
+which, or if Renode exits, the engine kills Renode as before and the next
+run gathers again. On a kernel that does not show `wchan` symbols the
+gather would therefore never happen; `cli/tests/jit_profile.rs` would show
+that (no profile). The unit test `ec_server_accepting_reads_wchan` checks
+the reader on a fake `/proc/<pid>/task`. The pool's `end_session` keeps its
+listening-port wait (Amendment 2), which detects a leaked listener and
+discards the process; it is not changed here.
+
+**Evidence.** `scripts/jit_profile_stress.sh` (`make jit-profile-stress`):
+rounds of parallel gathering spike runs (20 ms, each with an empty
+`BB_CACHE_DIR`) while busy loops load every CPU; a run passes if it leaves
+exactly one profile. 24 CPUs, 8 rounds x 8 parallel, 48 busy loops (load
+about 70-87):
+
+| Build | Gathers that left one profile |
+| --- | --- |
+| before (`HEAD` engine), first reproduction, 4 x 8 | 30 of 32 |
+| before, diagnostic build (only the grace changed, 120 s), 2 x (4 x 8) | 59 of 64, all 5 failures `SIGABRT` |
+| before, 8 x 8 | 56 of 64 |
+| after, 8 x 8 | 64 of 64 |
+
+`cli/tests/jit_profile.rs` itself (debug build, its three runs each), after
+the fix, under the same 48 busy loops with 6 copies at a time: 30 of 30
+passed (load about 67-72). An earlier loop of the same kind (stopped after
+three rounds) had 2 of 18 copies fail differently: their gather `bb run`
+exited with status 1 before writing any output, both in the same round,
+while the test still discarded `bb run`'s stderr. That is not this race
+(a missing profile does not fail `bb run`) and did not recur in 30 + 82
+further runs; a guess, not checked, is two processes picking the same
+External Control port (`free_port` is unique only within one process).
+
+The test's failure message now carries `bb run`'s stderr.

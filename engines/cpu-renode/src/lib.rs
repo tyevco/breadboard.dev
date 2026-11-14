@@ -1150,6 +1150,12 @@ struct JitProfile {
 
 const JIT_PROFILE_VERSION: &[u8] = b"bb-mcj-1";
 
+/// How long a gathering engine's teardown waits for Renode's External
+/// Control server to be back in `Accept` before it sends `SIGTERM`
+/// ([`ec_server_accepting`]); a bound, not a delay: the wait ends as soon as
+/// the server is there (about 1 ms on an idle host).
+const JIT_GATHER_ACCEPT_WAIT: Duration = Duration::from_secs(10);
+
 fn jit_profile_dir() -> Option<PathBuf> {
     let base = std::env::var_os("BB_CACHE_DIR")
         .map(PathBuf::from)
@@ -1232,6 +1238,33 @@ impl JitProfile {
             }
         }
     }
+}
+
+/// The External Control server of process `pid` is back in `Accept`: one of
+/// its threads named `ExternalControl…` (Renode's receive thread; `comm` is
+/// cut to 15 bytes) sleeps in the kernel's `inet_csk_accept`
+/// (`/proc/<pid>/task/<tid>/wchan`).
+///
+/// After its client disconnects, Renode 1.17.0 restarts the server on the
+/// receive thread (`ExternalControlSocket.Disconnect(Unconnected)` →
+/// `RestartConnection`: a new socket, `Listen`, a new receive thread, then
+/// `Start`; the new thread calls `Accept`). A dispose in that window, by
+/// `Clear` or by the shutdown that `SIGTERM` starts (`Emulator.Exit` →
+/// `ExternalControlSocket.Dispose`), joins a thread that has not been
+/// started and leaves the new thread calling `Accept` on a disposed socket:
+/// an unhandled `ObjectDisposedException`, so Renode aborts (`SIGABRT`)
+/// before the runtime writes the JIT profile (ADR-004 Amendment 2 and
+/// Amendment 9). A listening port alone is not enough: `Listen` comes before
+/// the thread starts. Once the thread sleeps in `accept`, a dispose closes
+/// the socket under it and Renode exits cleanly.
+fn ec_server_accepting(task_dir: &Path) -> bool {
+    let Ok(rd) = std::fs::read_dir(task_dir) else {
+        return false;
+    };
+    rd.flatten().any(|t| {
+        let read = |f: &str| std::fs::read_to_string(t.path().join(f)).unwrap_or_default();
+        read("comm").starts_with("ExternalControl") && read("wchan").trim() == "inet_csk_accept"
+    })
 }
 
 /// Stop a gathering child gracefully (`SIGTERM`, the runtime writes its JIT
@@ -3183,10 +3216,32 @@ impl Drop for RenodeEngine {
                 // A clean run that gathers the startup JIT profile stops
                 // Renode gracefully so the runtime writes it (ADR-004
                 // Amendment 6); every other child is killed.
+                // Renode is signalled only once its External Control server
+                // is back in Accept after the disconnect: a SIGTERM during
+                // the server's restart aborts Renode before the profile is
+                // written (`ec_server_accepting`, ADR-004 Amendment 9). If
+                // that state does not come, Renode is killed and the next
+                // run gathers again.
                 let gather = self.jit.as_ref().is_some_and(|j| j.gather.is_some());
                 if gather && !self.failed && !std::thread::panicking() {
                     self.client.close();
-                    terminate_gracefully(c, Duration::from_secs(5));
+                    let tasks = PathBuf::from(format!("/proc/{}/task", c.id()));
+                    let deadline = Instant::now() + JIT_GATHER_ACCEPT_WAIT;
+                    let accepting = loop {
+                        if ec_server_accepting(&tasks) {
+                            break true;
+                        }
+                        if Instant::now() >= deadline || matches!(c.try_wait(), Ok(Some(_))) {
+                            break false;
+                        }
+                        std::thread::sleep(Duration::from_millis(2));
+                    };
+                    if accepting {
+                        terminate_gracefully(c, Duration::from_secs(5));
+                    } else {
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
                     if let Some(j) = &self.jit {
                         j.publish();
                     }
@@ -3222,6 +3277,32 @@ impl Drop for RenodeEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ec_server_accepting` on a fake `/proc/<pid>/task`: only an
+    /// `ExternalControl…` thread asleep in `inet_csk_accept` counts (ADR-004
+    /// Amendment 9); another server's accepting thread, a receive thread in
+    /// `recv`, a running thread (`wchan` 0) and a missing directory do not.
+    #[test]
+    fn ec_server_accepting_reads_wchan() {
+        let root = std::env::temp_dir().join(format!("bb-ec-accept-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let task = |tid: u32, comm: &str, wchan: &str| {
+            let d = root.join(tid.to_string());
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("comm"), format!("{comm}\n")).unwrap();
+            std::fs::write(d.join("wchan"), wchan).unwrap();
+        };
+        assert!(!ec_server_accepting(&root), "missing directory");
+        task(1, "renode", "futex_do_wait");
+        task(2, "SocketServerPro", "inet_csk_accept");
+        task(3, "ExternalControl", "sk_wait_data");
+        assert!(!ec_server_accepting(&root), "receive thread in recv");
+        task(3, "ExternalControl", "0");
+        assert!(!ec_server_accepting(&root), "receive thread running");
+        task(4, "ExternalControl", "inet_csk_accept");
+        assert!(ec_server_accepting(&root), "new receive thread in accept");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn stm32_pin_names() {

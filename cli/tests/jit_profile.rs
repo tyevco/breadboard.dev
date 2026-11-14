@@ -61,8 +61,16 @@ fn gather_then_playback_same_outputs() {
         } else {
             c.env_remove("BB_RENODE_JIT_PROFILE");
         }
-        let st = c.status().expect("spawn bb");
-        assert!(st.success(), "bb run {name}: {st}");
+        let o = c
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("spawn bb");
+        assert!(
+            o.status.success(),
+            "bb run {name}: {}\n{}",
+            o.status,
+            String::from_utf8_lossy(&o.stderr)
+        );
         out
     };
 

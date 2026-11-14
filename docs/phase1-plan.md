@@ -1139,7 +1139,9 @@ Each was re-checked before anything changed. What became of each:
   (Renode's profile is written on `SIGTERM`); it passed three times in a
   row on its own and in the full re-run. Its cause was not investigated;
   the profile affects JIT timing only, never an output (ADR-004
-  Amendment 6).
+  Amendment 6). Found later (2026-11-13): a `SIGTERM` that
+  raced Renode's External Control restart aborted Renode before it wrote
+  the profile; fixed in ADR-004 Amendment 9.
 
 ## Review notes: M8 (2026-11-10)
 

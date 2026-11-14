@@ -465,6 +465,19 @@ startup-perf: firmware bb
 	bash scripts/startup_perf.sh $(BB) $(STARTUP_OUT)/feedback $(STARTUP_N) $(STARTUP_MIN_FRAC) \
 	    $(STARTUP_MIN_S) $(STARTUP_BASE) -- $(FEEDBACK_ARGS)
 
+# ADR-004 Amendment 9: the startup JIT profile's gather under load
+# (scripts/jit_profile_stress.sh): JIT_STRESS_ROUNDS rounds of JIT_STRESS_PAR
+# parallel gathering spike runs (each with an empty BB_CACHE_DIR) while
+# JIT_STRESS_LOAD busy loops (default 2 x nproc) load every CPU; every run must
+# leave exactly one profile. About 3 min at the defaults (32 runs). Not in
+# make test: it loads the host on purpose.
+.PHONY: jit-profile-stress
+JIT_STRESS_ROUNDS ?= 4
+JIT_STRESS_PAR    ?= 8
+JIT_STRESS_LOAD   ?=
+jit-profile-stress: firmware bb
+	bash scripts/jit_profile_stress.sh $(BB) $(JIT_STRESS_ROUNDS) $(JIT_STRESS_PAR) $(JIT_STRESS_LOAD)
+
 # --- ADR-004 Part B: the warm Renode pool ----------------------------------
 # G4 pool equivalence (scripts/pool_equiv.sh): one pool process serves every
 # configuration below, in alternating order over POOL_EQUIV_ROUNDS rounds;

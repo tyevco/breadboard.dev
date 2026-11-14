@@ -71,6 +71,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make nrf-costs` | ADR-008 D1: fresh startup and per-grant cost of the nRF52840 blinky at 64 MIPS against the STM32F103 blinky (interleaved, N = `BB_NRF_COST_N`, medians); reports only. Run it on an idle host |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
 | `make startup-perf` | ADR-004 G1: fresh `bb run` engine startup of the spike and the feedback board at least 12 % and 0.3 s below `BB_RENODE_STOCK_RUNTIME=1` (the stock .NET settings, no JIT profile and the 100 ms connect poll), interleaved, N = 7 (`STARTUP_N`), medians, outputs identical; `STARTUP_BASE=<bb>` compares against another binary. Run it on an idle host |
+| `make jit-profile-stress` | ADR-004 Amendment 9: the startup JIT profile's gather under load (`scripts/jit_profile_stress.sh`): `JIT_STRESS_ROUNDS` (4) rounds of `JIT_STRESS_PAR` (8) parallel gathering spike runs, each with an empty `BB_CACHE_DIR`, while `JIT_STRESS_LOAD` busy loops (default 2 x nproc) load every CPU; every run must leave exactly one profile (about 3 min). Not in `make test`: it loads the host on purpose |
 | `make pool-equiv` | ADR-004 G4: one pool process serves, twice each in alternating order (`POOL_EQUIV_ROUNDS`), the spike (default, 1 ms, 500 ms), feedback (on, off, plugin never, polling firmware), adc (on, off), adc-open, adc-stock, adc-open-stock, adc-kicad (Phase 1 M4), nrf-feedback (on, off, plugin never; M2) and E1 (`dms-rail` ok-cold default and one-cell, wrong-nominal; M6); every pooled run must be leased and byte-identical to its fresh run and to the committed hashes (`scripts/pool_equiv.sh`) |
 | `make pool-perf` | ADR-004 G2: on a 1-slot pool, the first lease starts in at most 0.5 s, median engine startup is at most 0.30 s for spike, feedback and adc (N = 7), and spike total wall at most 1.2 s (`scripts/pool_perf.sh`). Run it on an idle host |
 | `bb pool run -- <cmd>` | Run `<cmd>` with a warm Renode pool in `BB_RENODE_POOL` (`--slots N`, `--max-runs K`); `bb pool start` / `stop` / `status` for an interactive shell (`bb pool --help`). `bb run --renode-pool off` ignores a pool |
@@ -195,7 +196,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         dms_m5b.py), check_local_only.sh (+ check_local_only_test.sh),
                         check_dms_rail.py, dms_rail.sh,
                         dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py), demo.sh,
-                        stranger_test.sh, docs_plots.sh (+ docs_plots.py)
+                        stranger_test.sh, docs_plots.sh (+ docs_plots.py),
+                        jit_profile_stress.sh
 ```
 
 ## The three invariants
@@ -348,10 +350,14 @@ feedback board).
   script) that sends many requests must reconnect too. A reconnect must not
   register the GPIO events again: the hooks of the first connection stay
   on the pins and would report every edge twice (ADR-004 Amendment 8).
-- **Sending `Clear` to a Renode right after its External Control client
-  disconnected.** Renode 1.17.0 restarts the server then, and a `Clear`
-  that races the restart leaks the listener or crashes Renode (ADR-004
-  Amendment 2). The pool waits for the re-listen first; keep it that way.
+- **Sending `Clear` or `SIGTERM` to a Renode right after its External
+  Control client disconnected.** Renode 1.17.0 restarts the server then, and
+  a `Clear` that races the restart leaks the listener or crashes Renode
+  (ADR-004 Amendment 2); a `SIGTERM` that races it aborts Renode
+  (`SIGABRT`) before the runtime writes the JIT profile (Amendment 9).
+  The pool waits for the re-listen first, and a gathering engine waits until
+  the server's receive thread sleeps in `accept`
+  (`ec_server_accepting`); keep it that way.
 - **Parsing KiCad files with regex.** Use a real S-expression parser.
 - **A branch-current unknown in series with a milliohm path in an analog
   view.** Under `phase0` (`ABSTOL=1e-13`) ngspice converges every branch
@@ -406,7 +412,9 @@ feedback board).
   `~/.cache/bb/renode-jit` (same overrides), one per Renode install,
   platform and plugin setting (ADR-004 Amendment 6). The first run for a key
   gathers it and stops Renode with `SIGTERM` instead of `SIGKILL` so the
-  runtime writes it. Deleting the directory only costs that one gather.
+  runtime writes it, once the External Control server is back in `accept`
+  (Amendment 9; `make jit-profile-stress` checks the gather under load).
+  Deleting the directory only costs that one gather.
   `BB_RENODE_JIT_PROFILE=off` disables it. It changes JIT timing only; a
   new board must still give its committed hashes with and without it.
 - The repository lives on WSL's `/mnt/c`, where every open or stat can
