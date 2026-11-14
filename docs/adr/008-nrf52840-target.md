@@ -2088,7 +2088,9 @@ points for the approver, and this step implements neither.
     (stamped at `now`), and `rng()`, seeded from the run seed and the
     instance ref.
 - **`DeviceEngine`** wraps all of a run's devices as one engine:
-  - `t_safe` and `quiet_until` are its earliest timer;
+  - `t_safe` and `quiet_until` are its earliest timer (as implemented,
+    `t_safe` is `Time::MAX`: an earliest timer off the lattice would round
+    a grant down to `now`; ADR-006 Amendment 6, A6.3);
   - `input_is_sampled` is false;
   - every output change is in its trace, at its exact time;
   - an input transition is applied at its own `edge_time`, never earlier.

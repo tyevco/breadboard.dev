@@ -1455,3 +1455,121 @@ Each item is fixed and gated, or recorded here.
    two emitted lines are left as they are, because they are part of the
    local-only view's bytes, whose sha256s (`061285e8...`, `f754ea77...`)
    are recorded in Amendment 2, Amendment 3 and `scripts/check_local_only.sh`.
+
+## Amendment 6 (2026-11-14): D7 as implemented for M10, device parts in board files
+
+Approver decision 1 (2026-11-14) accepts device route A. This amendment
+is the design of that route, written before the code (it changes
+`spec/package.md`), and records the implementation under "As
+implemented" below. It implements D7; nothing in `spec/time-grant.md`,
+`spec/event-stream.md`, `spec/pin-model.md` or any schema changes.
+
+### A6.1 The board-file grammar (`spec/package.md` section 12)
+
+- `*bb part <ref> package=<id>` may name a package whose `[behavioral]`
+  layer is `engine = "device"`. A board has exactly one `renode` part (the
+  CPU) and any number of device parts.
+- The other keys on a device part's line are the device's parameters, in
+  the value grammar of D5 (`ts=75ms`). Each device declares its keys,
+  dimensions and defaults in its Rust source, so they are pinned by its
+  content hash (A6.4). No package schema key is added: a parameter is a
+  property of the instance, not of the package.
+- A device pin is `digital_in` or `digital_out`, with parameter sets from
+  the package's `pins.toml` like any pin. `adc_in` is refused (the device
+  API is digital, D7).
+- **Routing.** ADR-008 Amendment 9 needs the device to see the CPU's PWM
+  edges at their exact times and the CPU to see HOME_N without ngspice in
+  between ("ngspice only consumes"). `spec/pin-model.md` already says a
+  net has exactly one driver and the kernel passes the driver's signal
+  unchanged to every load. So:
+  - a device `digital_out` drives its kernel net `<ref>.<pin>`; the analog
+    engine gets it as rule-1 glue on `net=`, and every `digital_in` on that
+    net (the CPU's or another device's) reads the kernel net, with no
+    threshold and no `cin` glue;
+  - a device `digital_in` on a net that another digital engine's
+    `digital_out` drives reads that kernel net the same way;
+  - a device `digital_in` on any other net is thresholded by the analog
+    engine (rule 2), exactly as a CPU input is.
+  - Stated limit: the direct route ignores whatever else the analog net
+    carries (a pull resistor, a load). E3's nets have none that matter:
+    the IN and nSLEEP nets are push-pull nRF outputs, and HOME_N is the
+    DRV5032's push-pull output straight into P1.14.
+
+### A6.2 The crate `bbdev`
+
+- `Device` is D7's trait, plus two hooks that the sketch leaves out and a
+  device needs: `start(ctx)` at t = 0 (the initial outputs and the first
+  timers), and a constructor from the part's parameters.
+- `Ctx`: `now()`, `schedule(at, id)` (one pending timer per id, a new
+  schedule replaces it), `cancel(id)`, `set_pin(pin, level)` stamped at
+  `now()`, and `rng()`: SplitMix64 seeded from FNV-1a-64 of the run seed
+  and the instance reference. No wall clock, no I/O, no floats in any
+  time.
+- **Three rules make a device partition-independent:**
+  1. **Outputs change only in `on_timer` (or `start`).** `set_pin` inside
+     `on_pin_change` is refused (a run error naming the device). A
+     reaction to an input is a timer strictly after the input instant, so
+     a quiet grant, which delivers a CPU change at its boundary, gives the
+     same output times as a one-cell grant.
+  2. **At one instant, timers fire before input changes,** timers in
+     (instance, id) order and inputs in delivery order. A boundary-delivered
+     input at `now` then meets the same state as a pre-advance one.
+  3. **A device's state advances only at its own events** (timers and
+     input changes), never at grant boundaries. Grant boundaries are not
+     part of the result, so they must not add evaluation points, exactly
+     as samples must not (AGENTS.md invariant 1).
+- Schedules must be strictly after `now()` (rule 1's "strictly after").
+
+### A6.3 `DeviceEngine` and the Engine contract
+
+- One engine (`devices`) holds every device part of the run; its pins are
+  `<ref>.<pin>`.
+- **`t_safe` is `Time::MAX`, not "the earliest timer"** as D7 and ADR-008
+  Amendment 9 wrote. A grant is rounded down to the lattice (ADR-003 D2);
+  a timer off the lattice (a DRV5032 sample at a seeded phase plus 40 us)
+  would round down to `now` and stop the run with a `Lattice` error. The
+  device reports every output change in its trace with its exact time,
+  which is what `t_safe = MAX` promises (`spec/time-grant.md`: "I report
+  everything", not "I am idle"). Recorded deviation from D7's text; the
+  behaviour D7 wanted (exact outputs) is unchanged.
+- **`quiet_until`** is the earliest pending timer (exact: by rule 1, with
+  constant inputs no output changes before it). `Time::MAX` without one.
+- **`input_is_sampled`** is `false`.
+- **Inputs.** A trace entry with `t > now` is applied at `t`; one with
+  `t <= now` (a boundary delivery) at `now`, the boundary (ADR-002 D4.4).
+- **`advance_until`** (when the run has a lattice, as the ngspice engine
+  does): the device runs its events in order; at the first change of a
+  watched output at `t_x` it goes on to `r = ceil_L(t_x)` (at most the
+  grant) and stops there.
+- No grant lattice is declared: like ngspice, the device applies inputs at
+  their own times.
+
+### A6.4 Identity and lock
+
+- A device is `device:<id>@<major>` in `bb.lock` (D8's example). Its
+  content hash is the list hash (as for Renode platforms) of
+  `bbdev/src/lib.rs`, `bbdev/src/engine.rs` and the device's own source
+  files, embedded with `include_str!` in `bbdev::DEVICES`. A change to the
+  device API or the engine therefore changes every device's hash, and
+  `make locks` rewrites the locks that name one.
+- `bb pkg lint` checks `[behavioral] device` against that table.
+
+### A6.5 Route B (Phase 2)
+
+Approver decision 2: devices in imported projects need a `[[device]]`
+section with pin-to-net bindings in `bb.toml` (`spec/project.md` and its
+schema), an ADR-007 amendment. Not implemented in Phase 1; plan section 3
+lists it under Out.
+
+### A6.6 Gates
+
+- G6: `DeviceEngine` mock tests under the real `Scheduler`: a lattice-bound
+  mock CPU in a loop with a device, one-cell against lookahead and
+  several `max_quantum`s byte-identical, both registration orders, the
+  three rules, `advance_until`'s stop, and a broken rule refused.
+- The `dms/mechanism@1` device: unit tests (coil filter, rotor follow,
+  stops and slip, field table, BOP/BRP hysteresis, tS sampling and the
+  seeded phase) and determinism tests (same seed, same trace; partition
+  independence of its event trace).
+- The board-file parser and `bb run`'s routing: `cli` tests.
+- `make check` on the pool and with `POOL=0`; `make locks` committed.

@@ -2,7 +2,9 @@
 
 Status: normative. Decided by ADR-006 (accepted 2026-11-09, approver
 decisions A-C; Amendment 1 for the KiCad value qualifiers; Amendment 3 for
-modules, the view conflict report and `bb pkg test --report`). Implementation:
+modules, the view conflict report and `bb pkg test --report`; Amendment 6
+for device parts in board files and device identities, approver decisions
+2026-11-14). Implementation:
 the `bbpkg` crate (`bbpkg/src`), `bb pkg`, `bb open` and `bb run` (`cli/src`).
 JSON Schemas: `spec/schema/part.schema.json`, `pins.schema.json`,
 `lock.schema.json`, `pkgtest.schema.json` (JSON Schema 2020-12; the TOML
@@ -404,6 +406,16 @@ the table (`cli/src/platforms.rs`):
 A behaviour change bumps the major and changes the hash. The lock records
 Renode's version (1.17.0) with each Renode platform.
 
+Every `bbdev` device (ADR-006 D7) has an identity the same way: an id
+`<name>@<major>`, locked as `device:<id>`, and a content hash over the
+sources that decide its behaviour, by file name: the device API and its
+engine (`bbdev/src/lib.rs`, `bbdev/src/engine.rs`) and the device's own
+files. `bb` embeds the table (`bbdev::DEVICES`):
+
+| Device | Sources |
+| --- | --- |
+| `dms/mechanism@1` | `bbdev/src/lib.rs`, `bbdev/src/engine.rs`, `bbdev/src/dms_mechanism.rs` (ADR-008 Amendment 9) |
+
 **`bb.lock`** (`bb-lock/0`), next to the project's `bb.toml`, or next to a
 hand-written `board.cir`:
 
@@ -507,7 +519,9 @@ others in `alt`).
 
 - `package=<id>[@<version>]` takes the engine and platform from the
   package's `[behavioral]` layer, which must be `renode` on a platform `bb`
-  provides. No `engine=` or `platform=` alongside it.
+  provides, or `device` on a device `bb` provides (ADR-006 D7 and
+  Amendment 6). No `engine=` or `platform=` alongside it. A board has
+  exactly one `renode` part (its CPU) and any number of `device` parts.
 - A pin must be in the package's `pins.toml` and allow the model. Its
   parameters are the package's set (`set=`, default `default`); explicit
   keys override them in the value grammar of section 6. An `adc_in` pin's
@@ -515,6 +529,36 @@ others in `alt`).
 - The board needs a current `bb.lock` next to it (`bb open <board.cir>`).
 - The Phase 0 form (`engine=renode platform=...` with every parameter
   written out) is unchanged and needs no lock.
+
+**Device parts** (ADR-006 D7, Amendment 6):
+
+```
+*bb part M1 package=dms/detent-mechanism ts=75ms s0=500
+*bb pin M1.NSLEEP net=MOT_NSLEEP model=digital_in
+*bb pin M1.HOME_N net=HOME_N model=digital_out
+```
+
+- The other keys of a device part's line are the device's parameters, in
+  the value grammar of section 6. Each device states its keys, their
+  dimensions and their defaults; they are part of its source, so of its
+  content hash (section 9). An unknown key or a value of the wrong
+  dimension is an error.
+- A device pin is `digital_in` or `digital_out`; `adc_in` is refused.
+- **Routing.** A device `digital_out` drives its kernel net `<ref>.<pin>`.
+  The analog engine gets it as `digital_out` glue on `net=`
+  (`spec/pin-model.md` glue rule 1), and every `digital_in` on that net
+  (the CPU's or another device's) reads the kernel net itself: the kernel
+  passes the driver's signal unchanged (`spec/pin-model.md`, "A net has
+  exactly one driver"), with no threshold and no `cin` glue. In the same
+  way a device `digital_in` on a net that the CPU's or another device's
+  `digital_out` drives reads that kernel net. On any other net, the analog
+  engine thresholds the node with the pin's `digital_in` parameters (glue
+  rule 2).
+- A device's id and content hash are locked as `device:<id>@<major>`
+  (section 9).
+- A device part exists only in a board file. A `[[device]]` entry for
+  projects (`bb.toml`) is a Phase 2 item (approver decision 2,
+  2026-11-14).
 
 ## 13. Examples
 
