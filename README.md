@@ -242,6 +242,51 @@ make gdb-test   # in make test: attach without a stop is identical, a breakpoint
 make gdb        # the M9 gate, about 5 min
 ```
 
+## Systems: the main and base boards
+
+dial-me-spinner is two KiCad projects, the main board and the base board,
+joined by a 12-wire JST SH harness from main J1 to base J3.
+`examples/dial-me-spinner/system` imports both as one project (Phase 1
+M11, ADR-007 D5 and Amendment 5):
+
+```toml
+[[board]]
+id = "main"
+netlist = "../kicad/main/dial-me-spinner-main.net"
+[[board]]
+id = "base"
+netlist = "../kicad/base/dial-me-spinner-base.net"
+
+[[connection]]                       # main J1 to base J3, pin n to pin n
+a = "main:J1"
+b = "base:J3"
+model = "dial-me-spinner/link-harness:wires"   # the harness view (a project-local package)
+```
+
+```sh
+cd examples/dial-me-spinner/system
+bb open          # 2 boards, 222 instances, 159 nets; prints the 12 mated pins with their nets
+bb probe net:TP1 # an error: TP1 is ambiguous: base:TP1, main:TP1
+```
+
+The boards share 15 reference designators. U1 is the RT9080 LDO on main
+and the BQ25180 charger on base, and U2, J1, TP1 and others repeat too. So
+names are qualified: `main:U1`, `base:TP1`, `main:VSYS`. A bare `U1` is an
+error that lists both candidates, wherever an instance is named. A leaf net
+name resolves on the simulated board first. Each board keeps its own
+ground. The harness view is one resistor per wire (80 mm; 28 AWG power
+wires and 32 AWG signal wires, plus contacts), qualified by `bb pkg test`.
+
+Phase 1 still simulates one board (`[project] simulate = "main"`). E1 and
+E2 run in `examples/dial-me-spinner/bb.toml`, whose names are unqualified.
+A run of the system would elaborate E1's deck unchanged except for its
+names. The base side of J1 is a bench port, and `bb run` warns about the
+nets left open there. Simulating both boards together is Phase 3.
+
+```sh
+make dms-system  # in make test: base 21 parts and 17 nets, the committed board.bbm, the kicad route
+```
+
 ## Phase 0
 
 Phase 0 was a spike that tested the project's top risk: is
@@ -344,6 +389,12 @@ The run writes these files to `out/spike/`:
    on the spike and on E1. Attaching and detaching without a stop give the
    committed hashes of the run without GDB; a breakpoint hit and continued
    marks the run (above, "Debugging firmware with GDB").
+10. `make dms-system` (Phase 1 M11): the dial-me-spinner system import
+    (above, "Systems"). It checks the committed `board.bbm` from a fresh
+    import, twice byte-identical; the base board's 21 parts and 17 nets;
+    the 12 pins mated through the harness view; and E1's deck from the
+    system equal to E1's own. `cargo test` covers the qualified names of
+    the shared U1, U2, J1 and TP1 and the errors for the bare ones.
 
 The example boards take their MCU and its pin models from component
 packages (`packages/`, `spec/package.md`): `*bb part U1

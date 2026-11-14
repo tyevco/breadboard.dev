@@ -1,0 +1,20 @@
+* dial-me-spinner/link-harness DC drop at the view's defaults (80 mm, 28/32 AWG, 20 mOhm contacts): 4 V on the a end of the two VSYS
+* wires (A1, A2) against the a end of the three GND wires (A3, A4, A8),
+* 1 A out of the b end (B1, B2) into node 0, which the GND wires' b ends
+* (B3, B4, B8) are on; every signal wire carries 3.3 V into 330 Ohm.
+V1 va ga DC 4
+I1 vb 0 DC 1
+V5 s5a 0 DC 3.3
+R5 s5b 0 330
+V6 s6a 0 DC 3.3
+R6 s6b 0 330
+V7 s7a 0 DC 3.3
+R7 s7b 0 330
+V9 s9a 0 DC 3.3
+R9 s9b 0 330
+V10 s10a 0 DC 3.3
+R10 s10b 0 330
+V11 s11a 0 DC 3.3
+R11 s11b 0 330
+V12 s12a 0 DC 3.3
+R12 s12b 0 330

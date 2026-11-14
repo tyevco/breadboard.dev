@@ -45,7 +45,7 @@ nets = ["VLED", "LED_DIN"]
 
 (Abridged from the spec's example. The spec also defines `[import] fields`,
 per-instance `analog` view overrides and `[[connection]]` for two-board
-systems; system import is [roadmap](../guide/roadmap) milestone M11.)
+systems, below.)
 
 - **Bindings.** A `[[bind]]` takes its pin model and parameters from the
   target package's `pins.toml`; `set` picks a parameter set, and explicit
@@ -56,6 +56,48 @@ systems; system import is [roadmap](../guide/roadmap) milestone M11.)
   gives the pin model and the CPU engine's pin.
 - **Targets.** A list of typed images. Phase 1 implements exactly one image
   of `kind = "elf"` on one MCU of the simulated board.
+
+## Systems (`[[connection]]`)
+
+A project with more than one `[[board]]` is a system (Phase 1 M11). The
+example is `examples/dial-me-spinner/system`: the main board and the base
+board, with a 12-wire harness from main J1 to base J3.
+
+```toml
+[project]
+simulate = "main"                    # required with more than one board
+
+[[board]]
+id = "main"
+netlist = "../kicad/main/dial-me-spinner-main.net"
+[[board]]
+id = "base"
+netlist = "../kicad/base/dial-me-spinner-base.net"
+
+[[connection]]
+a = "main:J1"
+b = "base:J3"
+model = "dial-me-spinner/link-harness:wires"   # optional: the harness view
+# pins = [["1", "1"], ...]                     # optional: the mated pins
+```
+
+- **Names are qualified.** Instances, pins, test points and nets are
+  `<board>:<name>` (`main:U1`, `base:TP1`, `main:VSYS`). The two
+  dial-me-spinner boards share 15 references, so a bare `U1` is an error
+  that lists `main:U1 (RT9080-33GJ5)` and `base:U1 (BQ25180YBGR)`. Each
+  board keeps its own ground, and only the simulated board's ground is
+  SPICE node `0`.
+- **The harness view** is `<package>[@<version>][:<view>]`. It is a
+  `circuit` view of a `connector` package, and its ports are `A<pin>` (the
+  end on `a`'s pin) and `B<pin>` (the end on `b`'s). It is locked in
+  `bb.lock`.
+- **The mated pins** are `pins` if given; else the harness's wires (`A<n>`
+  with `B<n>`); else pin n to pin n, when both ends have the same pin
+  numbers. `bb open` prints every pair with its two nets and warns when
+  their leaf names differ. `board.bbm` records the complete list.
+- **Only `simulate` is simulated** in Phase 1. A bench net on another board
+  is an error. At a simulated connector, nets that no bench `[[supply]]` or
+  `[[pwl]]` drives are left open, with a warning.
 
 ## Names
 

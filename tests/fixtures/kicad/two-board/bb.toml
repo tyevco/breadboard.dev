@@ -17,6 +17,10 @@ netlist = "b.net"
 [packages]
 paths = ["packages"]
 
+# a's VSYS (U1 VIN, pin 1) mated with b's (U1 SYS, pin B1). The two U1s
+# have different pin numbers, so the mated pins are explicit (M11, ADR-007
+# Amendment 5: without pins, both ends must have the same pin numbers).
 [[connection]]
 a = "a:U1"
 b = "b:U1"
+pins = [["1", "B1"]]

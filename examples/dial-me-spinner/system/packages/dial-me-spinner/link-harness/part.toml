@@ -1,0 +1,50 @@
+# dial-me-spinner/link-harness: the 12-way JST SH link harness between the main
+# board's J1 and the base board's J3 (docs/architecture.md section 4.2, SPEC
+# section 2, `nets.py` LINK_PINOUT at dial-me-spinner 6854d25). It is not on
+# either schematic: examples/dial-me-spinner/system/bb.toml names it as the
+# harness view of its [[connection]] (ADR-007 D5, Amendment 5), and `bb open`
+# resolves and locks it. Phase 1 simulates one board only, so no deck holds it
+# yet; its vectors qualify it for the day both boards are in one deck.
+schema = "bb-part/0"
+
+[part]
+id = "dial-me-spinner/link-harness"
+version = "0.1.0"
+kind = "connector"
+license = "Apache-2.0"
+description = "12-wire JST SH link harness, straight through (pin n to pin n), 80 mm, 28 AWG on the power wires 1-4 and 8, 32 AWG on the signal wires"
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "wires"
+purpose = "the harness as one series resistance per wire (conductor plus two contacts), for DC and rail-drop work at fast"
+fidelity = ["fast"]
+default_for = ["fast"]
+file = "analog/wires.lib"
+subckt = "dms_link_harness_wires"
+ports = ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11", "A12",
+         "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9", "B10", "B11", "B12"]
+params = { wlen = "0.08", rw_pwr = "0.21", rw_sig = "0.538", rc = "0.02" }
+
+[analog.provenance]
+source = "agent_generated"
+base = "dial-me-spinner 6854d25 docs/architecture.md section 4.2 (80 mm, 28 AWG 0.21 Ohm/m, two VSYS and three GND wires) and hardware/sim/models/piezo_bus__link_harness.lib (32 AWG 0.538 Ohm/m signal wires)"
+refs = ["JST SH catalogue (eSH), https://www.jst-mfg.com/product/pdf/eng/eSH.pdf: contact resistance 20 mOhm max initial, 40 mOhm max after environmental tests",
+        "dial-me-spinner 6854d25 SPEC.md section 2: 28 AWG on the power pins 1-4 and 8",
+        "dial-me-spinner 6854d25 docs/assembly.md section 6: the harness is straight through, 1 to 1"]
+deviations = ["rc defaults to the 20 mOhm initial contact maximum; the suite's power-path decks (test_load_switches R_HARNESS 8.5 + 5.7 mOhm, the E1 bench's 14.2 mOhm) leave contacts out, which rc = 0 reproduces (tests/dc_drop_wire_only.toml)"]
+not_modelled = ["wire inductance (the suite's motor_drive deck uses an 80 nH loop)",
+                "capacitance to the bundle and between neighbours (the suite's LINK_SIG4 ladder of piezo_bus__link_harness.lib, a pi/si view)",
+                "skin effect, radiation, temperature coefficient of copper",
+                "the mount pins (MP) of J1 and J3, which carry no wire"]
+generated_by = "Claude (Phase 1 M11)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

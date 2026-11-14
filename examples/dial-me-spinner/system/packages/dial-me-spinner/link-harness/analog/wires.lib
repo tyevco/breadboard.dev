@@ -1,0 +1,23 @@
+* dial-me-spinner/link-harness, view "wires": the 12-way JST SH link harness
+* (main J1 to base J3, straight through, pin n to pin n; docs/architecture.md
+* section 4.2, SPEC section 2) as one series resistance per wire: the conductor
+* (wlen x rw_pwr on the 28 AWG power wires 1-4 and 8, wlen x rw_sig on the 32 AWG
+* signal wires 5-7 and 9-12) plus one contact resistance rc at each end.
+* Port A<n> is the end on [[connection]] a's pin n, B<n> the end on b's pin n
+* (ADR-007 Amendment 5). No inductance, capacitance or coupling (see part.toml).
+.subckt dms_link_harness_wires A1 A2 A3 A4 A5 A6 A7 A8 A9 A10 A11 A12
++ B1 B2 B3 B4 B5 B6 B7 B8 B9 B10 B11 B12
++ wlen=0.08 rw_pwr=0.21 rw_sig=0.538 rc=0.02
+RW1 A1 B1 {wlen*rw_pwr+2*rc}
+RW2 A2 B2 {wlen*rw_pwr+2*rc}
+RW3 A3 B3 {wlen*rw_pwr+2*rc}
+RW4 A4 B4 {wlen*rw_pwr+2*rc}
+RW5 A5 B5 {wlen*rw_sig+2*rc}
+RW6 A6 B6 {wlen*rw_sig+2*rc}
+RW7 A7 B7 {wlen*rw_sig+2*rc}
+RW8 A8 B8 {wlen*rw_pwr+2*rc}
+RW9 A9 B9 {wlen*rw_sig+2*rc}
+RW10 A10 B10 {wlen*rw_sig+2*rc}
+RW11 A11 B11 {wlen*rw_sig+2*rc}
+RW12 A12 B12 {wlen*rw_sig+2*rc}
+.ends dms_link_harness_wires

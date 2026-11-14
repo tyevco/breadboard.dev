@@ -385,7 +385,17 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
 
     // --- Bench names.
     let net_by = |name: &str, what: &str| -> Result<String, String> {
-        resolve_net_or_alias(board, sim, name).map_err(|e| format!("bench {what} {name}: {e}"))
+        let d = resolve_net_or_alias(board, sim, name)
+            .map_err(|e| format!("bench {what} {name}: {e}"))?;
+        // Only the simulated board is in the deck (ADR-007 D5).
+        match board.net(&d) {
+            Some(n) if n.board != sim => Err(format!(
+                "bench {what} {name}: {d} is on board {}, which is not simulated (Phase 1 \
+                 simulates {sim} only, ADR-007 D5)",
+                n.board
+            )),
+            _ => Ok(d),
+        }
     };
     let mut supply_on: BTreeMap<String, i128> = BTreeMap::new();
     for s in &a.bench.supplies {
@@ -944,6 +954,52 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             ));
         }
         nodes_used.insert(n);
+    }
+    // --- Off-board nets at the simulated board's connectors (ADR-007 D5,
+    // Amendment 5): the other end of a [[connection]] is not simulated, so
+    // each net it would join is a bench port, driven by a [[supply]] or a
+    // [[pwl]], or left open with this warning. The simulated ground is the
+    // deck's node 0 and needs no port.
+    let mut bench_driven: BTreeSet<String> = supply_on.keys().cloned().collect();
+    for pw in &a.bench.pwl {
+        bench_driven.insert(net_by(&pw.net, "[[pwl]]")?);
+    }
+    for c in &board.connections {
+        let on_sim = |end: &str| end.split_once(':').map(|x| x.0) == Some(sim);
+        let a_side = on_sim(&c.a);
+        if !a_side && !on_sim(&c.b) {
+            continue;
+        }
+        let (mine, other) = if a_side { (&c.a, &c.b) } else { (&c.b, &c.a) };
+        let (mb, mr) = mine.split_once(':').expect("qualified");
+        let Some(inst) = board.instance(mb, mr) else {
+            continue;
+        };
+        let mut open: BTreeSet<String> = BTreeSet::new();
+        for (pa, pb) in &c.pins {
+            let pin = if a_side { pa } else { pb };
+            let Some(n) = inst
+                .pins
+                .iter()
+                .find(|x| &x.number == pin)
+                .and_then(|x| x.net.as_deref())
+                .and_then(|d| board.net(d))
+            else {
+                continue;
+            };
+            if n.unconnected || n.spice == "0" || bench_driven.contains(&n.name) {
+                continue;
+            }
+            open.insert(n.name.clone());
+        }
+        if !open.is_empty() {
+            warnings.push(format!(
+                "[[connection]] {mine} - {other}: {other} is not simulated (Phase 1 simulates \
+                 {sim} only, ADR-007 D5), so these nets at {mine} are left open: {} (a bench \
+                 [[supply]] or [[pwl]] on one makes it a bench port)",
+                open.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
     }
     for pb in &pins {
         match &pb.kind {

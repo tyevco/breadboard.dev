@@ -1,0 +1,93 @@
+# DC drop without contacts (rc = 0: the suite's power-path figure, 8.4 + 5.6 mOhm): the DC resistance of every wire of the view "wires" against the
+# closed form (one cell of DC: the circuit has no state).
+schema = "bb-pkgtest/0"
+view = "wires"
+circuit = "dc_drop_wire_only.cir"
+stop = "100us"
+params = { rc = "0" }
+
+[ports]
+A1 = "va"
+B1 = "vb"
+A2 = "va"
+B2 = "vb"
+A3 = "ga"
+B3 = "0"
+A4 = "ga"
+B4 = "0"
+A5 = "s5a"
+B5 = "s5b"
+A6 = "s6a"
+B6 = "s6b"
+A7 = "s7a"
+B7 = "s7b"
+A8 = "ga"
+B8 = "0"
+A9 = "s9a"
+B9 = "s9b"
+A10 = "s10a"
+B10 = "s10b"
+A11 = "s11a"
+B11 = "s11b"
+A12 = "s12a"
+B12 = "s12b"
+
+[[expect]]
+meas = { node = "ga", at = "50us" }
+value = "-0.005600V"
+tol = "1uV"
+source = "analytic: -1 A x (0.0168 Ohm / 3), the three GND wires in parallel"
+
+[[expect]]
+meas = { node = "va", at = "50us" }
+value = "3.994400V"
+tol = "1uV"
+source = "analytic: 4 V above ga"
+
+[[expect]]
+meas = { node = "vb", at = "50us" }
+value = "3.986000V"
+tol = "1uV"
+source = "analytic: va - 1 A x (0.0168 Ohm / 2), the two VSYS wires in parallel"
+
+[[expect]]
+meas = { node = "s5b", at = "50us" }
+value = "3.299570V"
+tol = "1uV"
+source = "analytic: 3.3 V x 330 / (330 + 0.04304), wire 5 (VBUS)"
+
+[[expect]]
+meas = { node = "s6b", at = "50us" }
+value = "3.299570V"
+tol = "1uV"
+source = "analytic: 3.3 V x 330 / (330 + 0.04304), wire 6 (USB_DM)"
+
+[[expect]]
+meas = { node = "s7b", at = "50us" }
+value = "3.299570V"
+tol = "1uV"
+source = "analytic: 3.3 V x 330 / (330 + 0.04304), wire 7 (USB_DP)"
+
+[[expect]]
+meas = { node = "s9b", at = "50us" }
+value = "3.299570V"
+tol = "1uV"
+source = "analytic: 3.3 V x 330 / (330 + 0.04304), wire 9 (I2C_SCL)"
+
+[[expect]]
+meas = { node = "s10b", at = "50us" }
+value = "3.299570V"
+tol = "1uV"
+source = "analytic: 3.3 V x 330 / (330 + 0.04304), wire 10 (I2C_SDA)"
+
+[[expect]]
+meas = { node = "s11b", at = "50us" }
+value = "3.299570V"
+tol = "1uV"
+source = "analytic: 3.3 V x 330 / (330 + 0.04304), wire 11 (CHG_INT_N)"
+
+[[expect]]
+meas = { node = "s12b", at = "50us" }
+value = "3.299570V"
+tol = "1uV"
+source = "analytic: 3.3 V x 330 / (330 + 0.04304), wire 12 (BTN_N)"

@@ -2,7 +2,8 @@
 
 Status: normative. Decided by ADR-007 D5 and D7 (accepted 2026-11-09;
 implemented in Phase 1 M4, ADR-007 Amendment 1; module targets, the image
-hash of ADR-008 D5 and Norton bench supplies in M6, ADR-007 Amendment 3). Implementation:
+hash of ADR-008 D5 and Norton bench supplies in M6, ADR-007 Amendment 3;
+systems in M11, ADR-007 Amendment 5). Implementation:
 `cli/src/project.rs`, `names.rs`, `import.rs`, `elab.rs`, `open.rs`,
 `flash.rs`, `probe_cmd.rs`. JSON Schemas: `spec/schema/project.schema.json`
 (`bb-project/0`) and `spec/schema/bench.schema.json` (`bb-bench/0`); the TOML
@@ -63,7 +64,8 @@ nets = ["VLED", "LED_DIN"]
 [[connection]]                       # systems (M11): mated connectors
 a = "main:J1"
 b = "base:J3"
-# model = "<view>"; pins = [["1", "1"], ...]
+model = "dial-me-spinner/link-harness:wires"   # optional: the harness view
+# pins = [["1", "1"], ...]           # optional: the mated pins (a, b)
 ```
 
 - **Bindings.** The pin model and its parameters come from the target
@@ -100,6 +102,27 @@ b = "base:J3"
   then `e_entry` as u64 little-endian. Debug information and section
   headers are not part of it, so two builds that load the same bytes have
   one hash.
+- **Systems** (more than one `[[board]]`; ADR-007 D5, Amendment 5).
+  Instances, pins, test points and nets are qualified `<board>:<name>`
+  (section 2), and each board keeps its own ground. A `[[connection]]`
+  joins two instances on two different boards:
+  - `model` (optional) is a harness view, `<package>[@<version>][:<view>]`
+    (without a view, the package's `fast` default). The package must be of
+    kind `connector` and the view a `circuit` view. Its ports are `A<pin>`
+    for the end on `a`'s pin and `B<pin>` for the end on `b`'s, exactly
+    the mated pins' ends. The package is locked in `bb.lock` like an
+    instance's.
+  - The mated pins are `pins`, each pin existing and mated at most once on
+    each side. Without `pins` and with a harness, its wires (`A<n>` with
+    `B<n>`; a harness whose two ends differ needs `pins`). Without either,
+    pin n to pin n over every pin number, which both ends must have alike.
+  - `bb open` prints each mated pair with its two nets. It warns about a
+    mated pin on no net and about mated nets whose leaf names differ.
+  - Only `[project] simulate` is simulated (Phase 1). A bench name on
+    another board is an error. The nets at a simulated connector whose
+    other end is not simulated are bench ports: a `[[supply]]` or `[[pwl]]`
+    drives one, and `bb run` warns about the rest as left open (not the
+    simulated ground).
 
 ## 2. Names (ADR-007 D7)
 

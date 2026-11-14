@@ -26,20 +26,24 @@ authority. Nothing on this page under "Planned" is implemented.
   ([Debugging with GDB](./debugging)). Attaching, halting, reading and
   detaching leave the outputs byte-identical. A breakpoint stop changes
   them, so such a run is marked as a debug run (ADR-008 D10's fallback).
+- **Phase 1, M11 (systems)**: the base board imported next to the main
+  board (`examples/dial-me-spinner/system`), `[[connection]]` between
+  them through a harness view, and qualified names across the two boards
+  ([Projects and benches](../reference/project#systems-connection)). One
+  board is still simulated.
 
 The stranger test has also been run against the published repository with
 the image's default apt sources: the README took 68.2 s against the
 15-minute limit. The one remaining exit item is the human run
 (`docs/phase1-exit-checklist.md`).
 
-## Planned: the rest of Phase 1 (M10–M11)
+## Planned: the rest of Phase 1 (M10)
 
 These are milestones in the plan, not features. Each has its own gate there.
 
 | Milestone | Plan |
 | --- | --- |
 | **M10: E3 (stretch)** | Detent homing: a PWM model, TEMP and NVMC stand-ins, an averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device. |
-| **M11: Systems** | Base-board import, `[[connection]]` between boards and the harness view. Only one board is ever simulated. |
 
 ## Out of Phase 1
 

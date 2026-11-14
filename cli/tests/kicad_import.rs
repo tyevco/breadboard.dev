@@ -165,7 +165,7 @@ fn qualified_names_resolve() {
         "\"spice\":\"b_GND\"",
         "\"alias\":\"a:TP1\"",
         "\"alias\":\"b:TP1\"",
-        "\"connections\":[{\"a\":\"a:U1\",\"b\":\"b:U1\"}]",
+        "\"connections\":[{\"a\":\"a:U1\",\"b\":\"b:U1\",\"pins\":[[\"1\",\"B1\"]]}]",
     ] {
         assert!(bbm.contains(s), "{s} not in {bbm}");
     }

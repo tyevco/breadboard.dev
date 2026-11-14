@@ -144,6 +144,7 @@ pooled-test:
 	$(MAKE) ec-reconnect
 	$(MAKE) packages
 	$(MAKE) gdb-test
+	$(MAKE) dms-system
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -810,13 +811,28 @@ adc-kicad-ref: adc-kicad-prepare
 kicad-import: bb
 	bash scripts/kicad_import.sh $(BB) out/kicad-import
 
+# --- Phase 1 M11: systems (ADR-007 D5, D7, Amendment 5) --------------------
+# examples/dial-me-spinner/system: the main and base boards at 6854d25 mated
+# by the link harness ([[connection]] main:J1 - base:J3 through the harness
+# view dial-me-spinner/link-harness:wires). scripts/dms_system.sh (about
+# 30 s; in `make test`): the committed board.bbm from a fresh import, twice
+# byte-identical; base 21 parts, 17 nets; the 15 shared references; the 12
+# mated pins; the kicad = route on both boards (when kicad-cli is
+# installed, else reported as skipped); dc96515's base netlist (reported);
+# and E1's deck from the system equal to E1's own with qualified names. The
+# name errors (a bare U1, U2, J1 or TP1) are cli/tests/system.rs.
+.PHONY: dms-system
+dms-system: bb
+	bash scripts/dms_system.sh $(BB) out/dms-system
+
 # --- Phase 1 M3: component packages (ADR-006) ------------------------------
 # The example boards whose parts come from packages; each has a bb.lock.
 PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir \
-              examples/adc/kicad examples/dial-me-spinner examples/nrf-saadc/board.cir
+              examples/adc/kicad examples/dial-me-spinner examples/nrf-saadc/board.cir \
+              examples/dial-me-spinner/system
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
-PKG_LOCAL := examples/adc/kicad/packages
+PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages
 
 # ADR-006 G1 and the package gates of `make test`: every part.toml, pins.toml,
 # test vector and bb.lock validates against spec/schema (python3-jsonschema);

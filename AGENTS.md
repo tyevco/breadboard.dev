@@ -1,8 +1,8 @@
 # AGENTS.md: working on Breadboard
 
 Breadboard is an open hardware simulator ("QEMU for whole circuit boards"). The
-repo is in **Phase 1** (`docs/phase1-plan.md`), with M0-M9 done; M10-M11
-(E3, systems) are planned, not implemented.
+repo is in **Phase 1** (`docs/phase1-plan.md`), with M0-M9 and M11
+(systems) done; M10 (E3) is planned, not implemented.
 
 - **Phase 0** (done) was a Renode (STM32F103, and STM32F072 for the ADC
   board) ↔ ngspice co-simulation spike under a kernel-owned time-grant
@@ -44,7 +44,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 1 min 45 s). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, and from M9 `gdb-test`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, and from M11 `dms-system`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -94,6 +94,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make locks` | `bb open --update-lock` on every example board and project: after an intended change to a package, a platform `.repl` or **any Renode plugin source** (they are in every Renode platform's content hash, ADR-006 D8); review and commit the `bb.lock` and `board.bbm` diffs |
 | `make adc-kicad` | Phase 1 M4 gate M4a (ADR-007 Amendment 1; in `make test`): `examples/adc/kicad`, the ADC board drawn in KiCad, imported and run as a `bb.toml` project (a copy in `~/.cache/bb-adc-kicad`, firmware recorded with `bb flash`; `scripts/adc_kicad.sh`): `board.bbm` current; equal to its one-cell reference and to `tests/golden/adc-kicad/outputs.sha256`; the `.net` and `kicad-cli` routes byte-identical (when `kicad-cli` is installed); board.cir's committed non-grant records byte for byte and `nets.csv`/`nets.vcd` within 1 mV (2 samples differ by 1 µV: C1's `470n` against `4.7e-7`, which the script checks byte for byte); `bb run` writes nothing into the project. `make adc-kicad-prepare` makes the copy that `pool-equiv` and `cost-table` run |
 | `make kicad-import` | Phase 1 M4 gates M4b-M4f on the dial-me-spinner main board at 6854d25 (`scripts/kicad_import.sh`, about 20 s; needs KiCad 10 in WSL and the Windows `kicad-cli.exe` unless `KICAD_WINDOWS=0`): 201 parts, 142 nets, 657 pin nodes; the resolution counts; one `board.bbm` from the committed netlist, fresh Linux and Windows exports and a partial KiCad 10 re-save (dc96515's KiCad 9 netlist as the secondary check); byte-identical re-imports; unchanged sources; the version refusals. Not in `make test` (no KiCad in CI); `cli/tests/kicad_import.rs` (the two-board fixture) is |
+| `make dms-system` | Phase 1 M11 gate (ADR-007 D5, D7, Amendment 5; in `make test`, about 30 s): `examples/dial-me-spinner/system` (`scripts/dms_system.sh`, copies in `~/.cache/bb-dms-system`): a fresh import gives the committed `board.bbm`, twice byte-identical; main 201/142/657 and base 21 parts, 17 nets, 81 pin nodes; the 15 shared references; each board its own ground; the 12 pins mated through `dial-me-spinner/link-harness@0.1.0:wires`, the harness locked; the `kicad =` route on both boards (skipped and reported without `kicad-cli`); dc96515's base netlist (reported: J1's S1/SH); E1's targets, bindings and benches on the system elaborate to E1's own deck with qualified names, the base side of J1 warned as open. `cli/tests/system.rs` (cargo test): a bare U1, U2, J1 or TP1 is an error listing both candidates in every place a name is taken; the connection and harness errors |
 | `make dms-rail` | Phase 1 M6 gate (plan section 2 E1; ADR-008 Amendment 3, ADR-007 Amendment 3): `examples/dial-me-spinner` with the prebuilt Zephyr firmware (`led_rail.elf`, `led_rail_wrong_order.elf`) at `bench/nominal.toml` and `bench/cold.toml`, each run on a copy of the project in `~/.cache/bb-dms-rail` (`scripts/dms_rail.sh gate`, about 3 min fresh): `scripts/check_dms_rail.py` (the correct order passes LED-DATA-V4, LSW-3, LSW-2 and FW-6.4, the firmware rule's timing from the `pin_edge` records; the wrong order fails exactly LSW-3), every case equal to its one-cell reference (`--max-quantum 10us`) except grants and to `tests/golden/dms-rail`, analog-first byte-identical, 120 ms in under 30 s at both engine orders (board-level convergence), the `PIN_CNF` audit clean and its two negative controls, 10-run determinism. `make dms-rail-test` (in `make test`) is the four default runs with the checks, hashes, VLED snapshots, audit and one analog-first run, and two FW-6.4 negative controls (ok-cold's `pin_edge` records moved: each fails exactly FW-6.4); `make dms-rail-update` rewrites the goldens |
 | `make dms-crosscheck` | Phase 1 M6, local only (needs `DMS_REPO` and `make dms-local-packages`): the run's `pin_edge` records replayed into the suite's own `led_rail_sequence` deck with the same bench supply (`scripts/dms_crosscheck.sh`, `scripts/dms_suite_deck.py`); VLED within 5 mV of the co-simulation with the LOCAL-ONLY vendor-derived view, both benches; the fitted view and the suite's battery-network deck reported. Decks stay in `~/.cache/bb-dms-crosscheck` |
 | `make fw-rebuild` / `make dms-firmware` | ADR-008 D5 (M6, M8): rebuild the E1 and E2 images in a FRESH west workspace from `examples/dial-me-spinner/firmware/west.yml` (Zephyr v4.5.0, SDK 1.0.1 in `~/.local/opt`) and require the image hashes of `firmware/prebuilt/SHA256SUMS`; `dms-firmware` rebuilds the prebuilt images (`scripts/dms_zephyr.sh`; `make setup SETUP=zephyr` installs the SDK and host tools). Never uses a developer's workspace |
@@ -161,6 +162,10 @@ examples/dial-me-spinner/ Phase 1 reference board (dial-me-spinner 6854d25): SOU
                         VDD), bench/vsense.toml, bench/sag.toml and bench/sag-recover.toml,
                         firmware/vsense (vsense.elf,
                         vsense_50ms.elf)
+examples/dial-me-spinner/system/ Phase 1 M11 (ADR-007 Amendment 5): main + base as one project
+                        (both vendored netlists, qualified names), [[connection]] main:J1 - base:J3
+                        through the harness view of packages/dial-me-spinner/link-harness (a
+                        project-local package); board.bbm, bb.lock (import only: simulate = main)
 examples/nrf-feedback/  examples/feedback's circuit on the nRF52840 (Phase 1 M2; firmware
                         engines/cpu-renode/tests/firmware/nrf52840/nrf_feedback.c)
 examples/nrf-saadc/     Phase 1 M8: the loading adc_in board (AIN0 through the package's
@@ -205,7 +210,7 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         check_dms_rail.py, dms_rail.sh,
                         dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py), demo.sh,
                         stranger_test.sh, docs_plots.sh (+ docs_plots.py),
-                        jit_profile_stress.sh, gdb_gate.py
+                        jit_profile_stress.sh, gdb_gate.py, dms_system.sh
 ```
 
 ## The three invariants

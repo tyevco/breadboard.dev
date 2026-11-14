@@ -1,0 +1,56 @@
+# examples/dial-me-spinner/system/bb.toml: dial-me-spinner rev A as a system,
+# the main board and the base board mated by the 12-way link harness (Phase 1
+# M11; ADR-007 D5, D7 and Amendment 5; spec/project.md).
+#
+# Both boards are imported from the netlists vendored at dial-me-spinner
+# 6854d25 (KiCad 10.0.8; ../SOURCE), so `bb open` needs no KiCad. With KiCad
+# 10 installed, `kicad = "../kicad/<board>/dial-me-spinner-<board>.kicad_pro"`
+# gives the same board.bbm (make dms-system). The two boards share 15
+# reference designators (U1 is the RT9080 LDO on main and the BQ25180 charger
+# on base; U2, J1, R1-R4, C1-C4 and TP1-TP4 too), so in this project every
+# instance, pin and test point is named <board>:<ref> unless only one board
+# has it, and nets are <board>:<KiCad name> (ADR-007 D7). Each board keeps its
+# own ground.
+#
+# Phase 1 simulates one board (`simulate`). This project is the system's
+# import: E1 and E2 run on the main board alone, in ../bb.toml, whose names
+# are unqualified. A `bb run` here would simulate main only, with the base
+# side of J1 a bench port (ADR-007 D5).
+schema = "bb-project/0"
+
+[project]
+name = "dial-me-spinner rev A (main + base)"
+simulate = "main"
+
+[[board]]
+id = "main"
+netlist = "../kicad/main/dial-me-spinner-main.net"
+ground = "GND"
+
+[[board]]
+id = "base"
+netlist = "../kicad/base/dial-me-spinner-base.net"
+ground = "GND"
+
+# The link harness (part.toml there): not on either schematic.
+[packages]
+paths = ["packages"]
+
+# As in ../bb.toml: the NFC coil pads need a decision (ADR-007 D4).
+[instances."main:J11"]
+package = "none"
+reason = "NFC coil pads: no RF model in Phase 1"
+
+# Main J1 and base J3 are the two SM12B-SRSS-TB link connectors; the harness
+# is straight through (dial-me-spinner docs/assembly.md section 6), so its
+# view's wires mate pin n with pin n for n = 1..12. The mount pins (MP) carry
+# no wire and are not mated.
+[[connection]]
+a = "main:J1"
+b = "base:J3"
+model = "dial-me-spinner/link-harness:wires"
+
+# The test points on VSYS at both ends of the harness, and the base board's
+# VBUS and VBAT. TP1 is on both boards (main VSYS, base VBUS).
+[probes]
+nets = ["main:TP1", "base:TP1", "base:TP2", "base:TP3"]

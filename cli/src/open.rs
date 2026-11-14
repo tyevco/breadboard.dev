@@ -362,6 +362,12 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
             imp.unresolved.join(", ")
         );
     }
+    // Systems (ADR-007 D5, Amendment 5): what each connection mates.
+    for lines in &imp.connections {
+        for l in lines {
+            let _ = writeln!(out, "bb open: {l}");
+        }
+    }
     // Bindings, probes and targets must name resolved instances (D7).
     let problems = crate::elab::check_names(&p, &imp.board);
     let bbm_text = imp.board.to_text();

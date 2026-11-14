@@ -14,7 +14,8 @@
   bench supplies, the board-level convergence gate). Post-M7 review
   (2026-11-09; Amendment 4): E1's FW-6.4 timing check, tests of D2's
   refusals, `[[pwl]]` and the view override, and §5 item 3's KiCad 9
-  wording.
+  wording. Systems in M11 (2026-11-14; Amendment 5): the base board,
+  `[[connection]]` and the harness view, with no schema change.
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestone M4, M6
   for D5, and M11 for systems.
 - **Depends on:** ADR-006 (packages, views, `pins.toml`, `bb.lock`, the
@@ -1159,3 +1160,164 @@ the elaboration needed, and what the gates found:
    `kicad-cli`, and dc96515's schematics are not vendored. Both texts now
    say KiCad 10, with the KiCad 9 netlist importing to the same
    `board.bbm`. M4c as written here never required KiCad 9's `kicad-cli`.
+
+## Amendment 5 (2026-11-14): plan M11, systems
+
+Plan M11 imports dial-me-spinner as a system: the main and base boards at
+`6854d25`, mated by the link harness. D5 named the keys (`[[connection]]
+a`, `b`, `model`, `pins`) and said what they do; this amendment records how
+they resolve, which D5 left open. **Nothing in the schemas changes**: the
+`bb-project/0` and `bb-board/0` keys are those of v0, as D5 promised, and
+the kernel, the protocol and every committed output are unchanged.
+
+1. **A separate project.** `examples/dial-me-spinner/system/bb.toml` names
+   both vendored netlists (`../kicad/main/…`, `../kicad/base/…`), the
+   connection, `[instances."main:J11"]` as in E1, and the probes `main:TP1`,
+   `base:TP1`, `base:TP2`, `base:TP3`. E1 and E2 stay in
+   `examples/dial-me-spinner/bb.toml`, a one-board project. In a system,
+   nets are `<board>:<name>` and SPICE names carry `<board>_` (D6), so
+   adding the base board there would rename every output net and change
+   every E1 and E2 golden.
+2. **The base board** (D3, D4 unchanged): 21 parts, 17 nets, 81 pin nodes
+   (Context 12). Resolution: 8 generic passives (C1-C4, R1-R4), 4 test
+   points that need no model (TP1-TP4: VBUS, VBAT, VSYS, GND), and 9
+   parts unresolved and unmodelled (D1, J1, J2, J3, Q1, RT1, SW1, U1 the
+   BQ25180, U2 the USBLC6). The main board is unchanged (M4b's 201, 142
+   and 657). The system has 222 instances and 159 nets, and the two boards
+   share 15 references (Context 10). Each board keeps its own ground:
+   `main:GND` is node `0`, the simulated board's ground, and `base:GND` is
+   `base_GND`.
+3. **How a `[[connection]]` resolves** (`cli/src/import.rs`
+   `resolve_connection`):
+   - `a` and `b` follow D7's instance rule (a bare shared reference is an
+     error that lists the candidates) and must be on two different boards.
+   - **The harness view.** `model = "<package>[@<version>][:<view>]"`.
+     Without a view, the package's `fast` default is used. The package must
+     be of kind `connector` and the view must be a `circuit`. A harness is
+     not on either schematic, so it has no reference designator, and its
+     view's ports name the ends of its wires: `A<pin>` is the end on `a`'s
+     pin `<pin>`, and `B<pin>` the end on `b`'s. The ports must be exactly
+     the ends of the mated pins. The package is resolved and locked like an
+     instance's: it is in `bb.lock` with its tree hash, so a change to the
+     harness is caught by the lock check. This is a convention on port
+     names inside the existing package format (`spec/package.md` is
+     unchanged).
+   - **The mated pins.** With `pins = [[a, b], …]`, each pin must exist and
+     be mated at most once on each side. Without `pins` and with a harness,
+     its wires decide: `A<n>` with `B<n>`. A harness whose A and B ends
+     differ needs `pins`. Without either, D5's "pin n to pin n" applies to
+     every pin number, and both ends must have the same pin numbers (an
+     error lists the difference). With the harness, main J1's and base
+     J3's mount pins (`MP`, both on GND) are not mated, because the harness
+     has no wire there. Mated directly, they would be.
+   - **What `board.bbm` records** (`connections`, D6): `a` and `b`
+     qualified; `model` resolved to `<id>@<version>:<view>`; and `pins`, the
+     complete list of mated pairs, sorted bytewise (`["1","1"]`,
+     `["10","10"]`, …).
+   - **What `bb open` prints**: one line per mated pair, with both nets
+     (`main:J1.1 main:VSYS = base:J3.1 base:VSYS`). It warns about a mated
+     pin that is on no net, and about two mated nets whose leaf names
+     differ. A mis-pinned harness shows up there. On dial-me-spinner all 12
+     pairs have equal leaf names: VSYS ×2, GND ×3, VBUS, USB_DM, USB_DP,
+     I2C_SCL, I2C_SDA, CHG_INT_N, BTN_N.
+   - The M4 two-board fixture (`tests/fixtures/kicad/two-board`) mated
+     `a:U1` with `b:U1`, which have different pin numbers. It now gives
+     `pins = [["1", "B1"]]`: VSYS with VSYS.
+4. **The harness view: `dial-me-spinner/link-harness`, view `wires`.** It
+   is a project-local package (`examples/dial-me-spinner/system/packages`,
+   linted and tested by `make packages`). It has 24 passive pins
+   `A1`-`A12` and `B1`-`B12`, and it is straight through. Each wire is one
+   resistor: `wlen × rw + 2 × rc`. The defaults are `wlen` = 80 mm and
+   `rw` = 0.21 Ω/m on the 28 AWG power wires 1-4 and 8. On the 32 AWG
+   signal wires `rw` is 0.538 Ω/m (the values of the suite's
+   `piezo_bus__link_harness.lib`), and `rc` is 20 mΩ, JST's initial
+   maximum per contact. The two VSYS wires then give 28.4 mΩ and the
+   three GND wires 18.9 mΩ. With `rc = 0` they give architecture.md's
+   8.4 and 5.6 mΩ, the suite's power-path figure.
+   - It has no inductance and no capacitance. An inductor is a
+     branch-current unknown in series with milliohms, which is AGENTS.md's
+     known bad idea at `phase0`. The suite's `LINK_SIG4` ladder is pi or si
+     work and is listed under `not_modelled`.
+   - Two vectors check every wire's DC drop against the closed form to
+     1 µV, at the defaults and with `rc = 0`. Both partitions agree, and
+     the view is qualified at (10 µs, `phase0`).
+   - Its provenance is `agent_generated`, so a run that put it in a deck
+     would flag it.
+   - In Phase 1 it is never in a deck, because only one board is
+     simulated (item 5).
+5. **`bb run` on a system** (D5: "only `simulate` is ever simulated").
+   - The deck holds the simulated board's instances only.
+   - A bench name that resolves to a net of another board is refused
+     ("is on board base, which is not simulated"). Before M11 such a name
+     was accepted.
+   - D5's bench ports are implemented. For each connection with one end on
+     the simulated board, the nets at that end that no bench `[[supply]]`
+     or `[[pwl]]` drives are listed in one warning as left open. The
+     simulated ground is excluded, because it is node 0. With E1's benches
+     the list is main:BTN_N, CHG_INT_N, I2C_SCL, I2C_SDA, USB_DM, USB_DP
+     and VBUS. VSYS has the bench supply.
+   - The base board's nets cannot be probed, because they have nothing in
+     the deck (Amendment 1 item 10).
+6. **Names: no rule changes.** D7's rules resolve the system. A bare `U1`,
+   `U2`, `J1` or `TP1` is an error that lists both candidates. This holds
+   in `[instances]`, `[[connection]]`, `[[bind]]`, `[probes]`, `bb probe`,
+   `bb flash --target` and a bench's `[analog] exclude`.
+   - `main:U1`, `base:U1`, `main:U2`, `base:U2`, `main:J1`, `base:J1`,
+     `main:TP1` and `base:TP1` each resolve to their own instance.
+   - Leaf net names resolve within the simulated board first (`VSYS` →
+     `main:VSYS`, `I2C_SDA` → `main:I2C_SDA`), then the project
+     (`CHG_TSMR` → `base:/Base board/CHG_TSMR`).
+   - The candidates are listed in `bb.toml`'s board order by `bb open`. A
+     command that reads `board.bbm` lists them in its sorted order (`base`
+     before `main`). Both orders are deterministic.
+7. **Gates** (plan M11). `make dms-system` (`scripts/dms_system.sh`, in
+   `make test`, about 30 s) and `cli/tests/system.rs` (in `make
+   cargo-test`):
+   - a fresh import gives the committed `board.bbm` (sha256 `8f1d752e…`).
+     Two imports are byte-identical in `board.bbm`, `bb.lock`,
+     `.bb/resolution.json` and `.bb/unresolved.toml`, and `bb open
+     --check` passes on the committed project;
+   - the counts in item 2, the 15 shared references, the grounds, the
+     connection with its 12 pairs, and the harness in `bb.lock`;
+   - the `kicad =` route on both boards (`kicad-cli` 10.0.8 in WSL) gives
+     the same `board.bbm` and leaves the sources unchanged. The script
+     reports it as skipped where `kicad-cli` is missing; CI has no KiCad;
+   - **secondary (as M4c's):** with `dc96515`'s KiCad 9.0.9 base
+     netlist, `board.bbm` differs exactly in `base:J1` and `base:GND`. The
+     shield pin is `S1` there and `SH` at `6854d25`, as Context 12
+     predicted;
+   - E1's targets, bindings and benches on the system: `bb run
+     --elaborate-only` writes, for both benches, E1's own `deck.cir`, once
+     every net is mapped through the two `board.bbm` files and
+     `Xmain_<ref>` becomes `X<ref>`. That is 132 instances, none of the
+     base board's and no harness, and the bench-port warning of item 5;
+   - the name errors of item 6, each harness and pin error of item 3
+     (wrong view, wrong package kind, one board, a pin mated twice, a
+     crossed mating against a straight harness, a missing pin), the direct
+     mating of 13 pins without a model, the leaf-name warning, and the
+     refused bench net on the base board.
+   - `validate_packages.py` checks the project, `bb.lock`, `board.bbm` and
+     the harness package against `spec/schema` (in `make packages`).
+8. **What it would take to run the system** (not implemented; the plan
+   puts multi-board simulation in Phase 3).
+   - **E1 on the system project, the main board alone.** The run itself
+     already works: gate 4 shows the deck is E1's. As a run mode it would
+     need what AGENTS.md asks of every new run mode: an equivalence gate
+     (its `nets.csv`, `nets.vcd` and non-grant records equal to E1's once
+     the qualified names are mapped, or its own one-cell reference and
+     goldens), a `make cost-table` row and a `make pool-equiv` entry. It
+     gives no new result, so M11 does not add it.
+   - **The base board's battery path in place of the bench supply.** Both
+     boards' instances would go into one deck: `base:GND` as its own node,
+     the harness view between `main:J1` and `base:J3`, and the board-level
+     convergence gate of M6 on the bigger deck. That is the Phase 3
+     multi-board design doc's work, not D5's. It also needs models the
+     base board lacks: U1, the BQ25180 power path; the NTC RT1; the
+     battery behind J2. The cheaper interim stays as it is: the E1
+     benches already put the suite's power-path constants, harness
+     included (0.0142 Ω), behind `main:VSYS`.
+9. **Deviations.**
+   - No Windows `kicad-cli` export of the base board. M4c did Windows for
+     the main board, and the base board uses the same importer path.
+   - No cost-table row and no `pool-equiv` entry. M11 adds no run mode
+     (item 8) and starts no engine.

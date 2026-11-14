@@ -1,7 +1,8 @@
 # The elaborated board (`board.bbm`, `bb-board/0`)
 
 Status: normative. Decided by ADR-007 D3, D4 and D6 (accepted 2026-11-09;
-implemented in Phase 1 M4, ADR-007 Amendment 1). Implementation:
+implemented in Phase 1 M4, ADR-007 Amendment 1; connections resolved in
+M11, Amendment 5). Implementation:
 `bbcore::board` (types, reading and writing), `importers/kicad` (the
 netlist reader and the version gates) and `cli/src/import.rs` (resolution).
 JSON Schema: `spec/schema/board-bbm.schema.json`. **Changing this file
@@ -39,7 +40,7 @@ canonical and not compared. Firmware, the bench and run options are in
 | `instances` | array | every component, sorted by `board` then `ref` (section 3) |
 | `platforms` | array | `{id, content}` of every engine platform a resolved package names (`renode:stm32f072-bb@1`), sorted by `id` |
 | `probes` | array | `{alias, net}`: test points as probe aliases, sorted by `alias` |
-| `connections` | array, optional | `{a, b, model?, pins?}` per `[[connection]]` (systems; resolved at M11) |
+| `connections` | array, optional | `{a, b, model?, pins}` per `[[connection]]`, sorted by `a` then `b` (systems; ADR-007 Amendment 5): `a`, `b` the qualified instances; `model` the harness view resolved to `<package id>@<version>:<view>`; `pins` every mated pair `[a pin, b pin]`, sorted bytewise (`spec/project.md` section 1) |
 | `spice_body` | string, optional | a hand-written board's verbatim SPICE (ADR-007 D9); an imported board has none |
 
 All sorting is bytewise on UTF-8.

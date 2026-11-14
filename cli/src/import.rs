@@ -185,6 +185,266 @@ pub struct Imported {
     pub status_counts: BTreeMap<String, usize>,
     /// Unresolved (unmodelled) instances, qualified.
     pub unresolved: Vec<String>,
+    /// Per `[[connection]]`, what `bb open` prints: a header line, then one
+    /// line per mated pin pair.
+    pub connections: Vec<Vec<String>>,
+}
+
+/// What [`resolve_connection`] reports besides the resolved connection.
+struct ConnectionReport {
+    lines: Vec<String>,
+    warnings: Vec<String>,
+}
+
+/// The `A<n>` / `B<n>` ends of a harness view's ports (ADR-007 Amendment 5).
+fn harness_ends(
+    pkg: &Package,
+    view: &bbpkg::package::View,
+) -> Result<[BTreeSet<String>; 2], String> {
+    let mut ends: [BTreeSet<String>; 2] = [BTreeSet::new(), BTreeSet::new()];
+    for port in &view.ports {
+        let name = match port {
+            bbpkg::package::Port::Pin(n) => n,
+            _ => {
+                return Err(format!(
+                    "{}:{}: a harness view's ports are pins",
+                    pkg.part.id, view.name
+                ))
+            }
+        };
+        let (side, pin) = match name.split_at_checked(1) {
+            Some(("A", p)) if !p.is_empty() => (0, p),
+            Some(("B", p)) if !p.is_empty() => (1, p),
+            _ => {
+                return Err(format!(
+                    "{}:{}: port {name}: a harness view's ports are A<pin> (the end on \
+                     [[connection]] a's pin) and B<pin> (b's) (ADR-007 Amendment 5)",
+                    pkg.part.id, view.name
+                ))
+            }
+        };
+        ends[side].insert(pin.to_string());
+    }
+    Ok(ends)
+}
+
+/// The leaf of a net's KiCad name (after the board qualifier and the last
+/// `/`), for the mated-name check.
+fn net_leaf(display: &str) -> &str {
+    let k = display.split_once(':').map(|x| x.1).unwrap_or(display);
+    k.rsplit('/').next().unwrap_or(k)
+}
+
+/// Resolve one `[[connection]]` (ADR-007 D5, Amendment 5): `a` and `b` name
+/// instances on two different boards by the instance rule; the mated pins
+/// are `pins` if given, else the harness view's wires (`A<n>` with `B<n>`),
+/// else every pin number, which both instances must have alike; the harness
+/// view is `<package>[@<version>][:<view>]` (without a view, the package's
+/// `fast` default), a `circuit` view of a `connector` package whose ports
+/// are exactly the mated pins' ends. Returns the connection as `board.bbm`
+/// records it, the harness package, and what `bb open` prints.
+fn resolve_connection(
+    c: &crate::project::ConnectionEntry,
+    insts: &names::Instances,
+    board: &Board,
+    pk: &mut Packages,
+) -> Result<(Connection, Option<Package>, ConnectionReport), String> {
+    let ctx = format!("bb.toml [[connection]] a = {:?}, b = {:?}", c.a, c.b);
+    let ka = insts.resolve(&c.a).map_err(|e| format!("{ctx}: a: {e}"))?;
+    let kb = insts.resolve(&c.b).map_err(|e| format!("{ctx}: b: {e}"))?;
+    if ka.0 == kb.0 {
+        return Err(format!(
+            "{ctx}: both ends are on board {} (a connection joins two boards, ADR-007 D5)",
+            ka.0
+        ));
+    }
+    let qa = format!("{}:{}", ka.0, ka.1);
+    let qb = format!("{}:{}", kb.0, kb.1);
+    let ia = board.instance(&ka.0, &ka.1).expect("resolved");
+    let ib = board.instance(&kb.0, &kb.1).expect("resolved");
+    let pins_a: BTreeSet<String> = ia.pins.iter().map(|x| x.number.clone()).collect();
+    let pins_b: BTreeSet<String> = ib.pins.iter().map(|x| x.number.clone()).collect();
+
+    // The harness view.
+    let mut harness: Option<(Package, String, [BTreeSet<String>; 2])> = None;
+    if let Some(spec) = &c.model {
+        let (pspec, vname) = match spec.split_once(':') {
+            Some((p, v)) => (p, Some(v)),
+            None => (spec.as_str(), None),
+        };
+        let pkg = pk
+            .get(pspec)
+            .map_err(|e| format!("{ctx}: model = {spec:?}: {e}"))?
+            .clone();
+        if pkg.part.kind != "connector" {
+            return Err(format!(
+                "{ctx}: model = {spec:?}: package {} is of kind {}; a harness view's package \
+                 is a connector (ADR-007 Amendment 5)",
+                pkg.part.id, pkg.part.kind
+            ));
+        }
+        let view = match vname {
+            Some(v) => pkg
+                .part
+                .analog
+                .iter()
+                .find(|x| x.name == v)
+                .ok_or_else(|| {
+                    format!(
+                        "{ctx}: model = {spec:?}: package {} has no view {v:?}",
+                        pkg.part.id
+                    )
+                })?,
+            None => pkg
+                .part
+                .analog
+                .iter()
+                .find(|x| x.kind != "pin_load" && x.default_for.iter().any(|d| d == "fast"))
+                .ok_or_else(|| {
+                    format!(
+                        "{ctx}: model = {spec:?}: package {} has no default view at fast; \
+                         name one (<package>:<view>)",
+                        pkg.part.id
+                    )
+                })?,
+        };
+        if view.kind != "circuit" {
+            return Err(format!(
+                "{ctx}: model = {spec:?}: view {} is a {} view; a harness view is a circuit",
+                view.name, view.kind
+            ));
+        }
+        let ends = harness_ends(&pkg, view).map_err(|e| format!("{ctx}: {e}"))?;
+        let vn = view.name.clone();
+        harness = Some((pkg, vn, ends));
+    }
+
+    // The mated pins.
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    if !c.pins.is_empty() {
+        let mut seen: [BTreeSet<&str>; 2] = [BTreeSet::new(), BTreeSet::new()];
+        for (x, y) in &c.pins {
+            for (side, q, set, pin) in [(0, &qa, &pins_a, x), (1, &qb, &pins_b, y)] {
+                if !set.contains(pin) {
+                    return Err(format!("{ctx}: pins: {q} has no pin {pin}"));
+                }
+                if !seen[side].insert(pin.as_str()) {
+                    return Err(format!("{ctx}: pins: {q} pin {pin} is mated twice"));
+                }
+            }
+            pairs.push((x.clone(), y.clone()));
+        }
+    } else if let Some((pkg, vn, ends)) = &harness {
+        if ends[0] != ends[1] {
+            return Err(format!(
+                "{ctx}: harness {}:{vn} is not straight through (its A and B ends differ): \
+                 give the mated pins as pins = [[a, b], ...]",
+                pkg.part.id
+            ));
+        }
+        for n in &ends[0] {
+            for (q, set) in [(&qa, &pins_a), (&qb, &pins_b)] {
+                if !set.contains(n) {
+                    return Err(format!(
+                        "{ctx}: harness {}:{vn} has a wire on pin {n}, which {q} does not have",
+                        pkg.part.id
+                    ));
+                }
+            }
+            pairs.push((n.clone(), n.clone()));
+        }
+    } else {
+        if pins_a != pins_b {
+            let only = |x: &BTreeSet<String>, y: &BTreeSet<String>| {
+                x.difference(y).cloned().collect::<Vec<_>>().join(", ")
+            };
+            return Err(format!(
+                "{ctx}: the two ends' pins differ ({qa} only: {}; {qb} only: {}): mating is pin \
+                 n to pin n unless pins = [[a, b], ...] (ADR-007 D5)",
+                only(&pins_a, &pins_b),
+                only(&pins_b, &pins_a)
+            ));
+        }
+        pairs = pins_a.iter().map(|n| (n.clone(), n.clone())).collect();
+    }
+    if pairs.is_empty() {
+        return Err(format!("{ctx}: no pins are mated"));
+    }
+    if let Some((pkg, vn, ends)) = &harness {
+        let want_a: BTreeSet<String> = pairs.iter().map(|x| x.0.clone()).collect();
+        let want_b: BTreeSet<String> = pairs.iter().map(|x| x.1.clone()).collect();
+        if ends[0] != want_a || ends[1] != want_b {
+            return Err(format!(
+                "{ctx}: harness {}:{vn}'s ports must be exactly A<pin> for {qa}'s mated pins \
+                 and B<pin> for {qb}'s (ADR-007 Amendment 5)",
+                pkg.part.id
+            ));
+        }
+    }
+    pairs.sort();
+
+    // What each mated pair joins. A pin with no net, or two nets whose leaf
+    // names differ, is reported (a mis-pinned harness shows up here).
+    let net_of = |i: &Instance, n: &str| {
+        i.pins
+            .iter()
+            .find(|x| x.number == n)
+            .and_then(|x| x.net.clone())
+    };
+    let model_text = harness
+        .as_ref()
+        .map(|(pkg, vn, _)| format!("{}@{}:{vn}", pkg.part.id, pkg.part.version));
+    let mut lines = vec![format!(
+        "connection {qa} - {qb}{}: {} mated pin{}",
+        model_text
+            .as_ref()
+            .map(|m| format!(" through {m}"))
+            .unwrap_or_default(),
+        pairs.len(),
+        if pairs.len() == 1 { "" } else { "s" }
+    )];
+    let mut warnings = Vec::new();
+    for (x, y) in &pairs {
+        let na = net_of(ia, x);
+        let nb = net_of(ib, y);
+        lines.push(format!(
+            "  {qa}.{x} {} = {qb}.{y} {}",
+            na.as_deref().unwrap_or("(no net)"),
+            nb.as_deref().unwrap_or("(no net)")
+        ));
+        let unconnected = |n: &Option<String>| {
+            n.as_deref()
+                .and_then(|d| board.net(d))
+                .is_none_or(|net| net.unconnected)
+        };
+        if unconnected(&na) || unconnected(&nb) {
+            warnings.push(format!(
+                "{ctx}: {qa}.{x} ({}) is mated with {qb}.{y} ({}), and one of them is on no net",
+                na.as_deref().unwrap_or("no net"),
+                nb.as_deref().unwrap_or("no net")
+            ));
+        } else if let (Some(a), Some(b)) = (&na, &nb) {
+            if net_leaf(a) != net_leaf(b) {
+                warnings.push(format!(
+                    "{ctx}: {qa}.{x} on {a} is mated with {qb}.{y} on {b}: the net names differ"
+                ));
+            }
+        }
+    }
+    let conn = Connection {
+        a: qa,
+        b: qb,
+        model: model_text,
+        pins: pairs,
+    };
+    let harness_pkg = match harness {
+        Some((pkg, ..)) => {
+            pk.tree(&pkg.part.id)?;
+            Some(pkg)
+        }
+        None => None,
+    };
+    Ok((conn, harness_pkg, ConnectionReport { lines, warnings }))
 }
 
 fn rel(p: &str) -> String {
@@ -874,6 +1134,20 @@ pub fn import(p: &Project, mode: Mode) -> Result<Imported, String> {
         }
     }
 
+    // Connections (systems; ADR-007 D5, Amendment 5): each end resolves by
+    // the instance rule, the mated pins are written out, and a harness view
+    // is resolved and locked like an instance's package.
+    let mut connections = Vec::new();
+    for c in &p.connections {
+        let (conn, harness, report) = resolve_connection(c, &insts, &board, &mut pk)?;
+        if let Some(h) = harness {
+            used.entry(h.part.id.clone()).or_insert(h);
+        }
+        warnings.extend(report.warnings);
+        connections.push(report.lines);
+        board.connections.push(conn);
+    }
+
     // A module's chip package is part of the resolved set (ADR-006
     // Amendment 3): it supplies the module's behavioural layer and pin
     // models, so the lock pins it (and its platform) like any other package.
@@ -924,21 +1198,6 @@ pub fn import(p: &Project, mode: Mode) -> Result<Imported, String> {
             version: pkg.part.version.clone(),
             path: lock::relative_path(&proj_abs, &dir),
             tree: pk.tree(id)?,
-        });
-    }
-
-    // Connections (systems): names are checked, the pins resolved at M11.
-    for c in &p.connections {
-        for side in [&c.a, &c.b] {
-            insts
-                .resolve(side)
-                .map_err(|e| format!("bb.toml [[connection]] {side}: {e}"))?;
-        }
-        board.connections.push(Connection {
-            a: c.a.clone(),
-            b: c.b.clone(),
-            model: c.model.clone(),
-            pins: c.pins.clone(),
         });
     }
 
@@ -1002,6 +1261,7 @@ pub fn import(p: &Project, mode: Mode) -> Result<Imported, String> {
         stage_counts,
         status_counts,
         unresolved,
+        connections,
     })
 }
 

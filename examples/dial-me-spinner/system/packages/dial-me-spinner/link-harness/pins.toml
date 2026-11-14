@@ -1,0 +1,124 @@
+schema = "bb-pins/0"
+
+# The two ends of each of the 12 wires (ADR-007 Amendment 5): A<n> mates
+# [[connection]] a's pin n (main J1), B<n> mates b's pin n (base J3).
+
+[[pin]]
+number = "A1"
+name = "A1"
+role = "passive"
+
+[[pin]]
+number = "A2"
+name = "A2"
+role = "passive"
+
+[[pin]]
+number = "A3"
+name = "A3"
+role = "passive"
+
+[[pin]]
+number = "A4"
+name = "A4"
+role = "passive"
+
+[[pin]]
+number = "A5"
+name = "A5"
+role = "passive"
+
+[[pin]]
+number = "A6"
+name = "A6"
+role = "passive"
+
+[[pin]]
+number = "A7"
+name = "A7"
+role = "passive"
+
+[[pin]]
+number = "A8"
+name = "A8"
+role = "passive"
+
+[[pin]]
+number = "A9"
+name = "A9"
+role = "passive"
+
+[[pin]]
+number = "A10"
+name = "A10"
+role = "passive"
+
+[[pin]]
+number = "A11"
+name = "A11"
+role = "passive"
+
+[[pin]]
+number = "A12"
+name = "A12"
+role = "passive"
+
+[[pin]]
+number = "B1"
+name = "B1"
+role = "passive"
+
+[[pin]]
+number = "B2"
+name = "B2"
+role = "passive"
+
+[[pin]]
+number = "B3"
+name = "B3"
+role = "passive"
+
+[[pin]]
+number = "B4"
+name = "B4"
+role = "passive"
+
+[[pin]]
+number = "B5"
+name = "B5"
+role = "passive"
+
+[[pin]]
+number = "B6"
+name = "B6"
+role = "passive"
+
+[[pin]]
+number = "B7"
+name = "B7"
+role = "passive"
+
+[[pin]]
+number = "B8"
+name = "B8"
+role = "passive"
+
+[[pin]]
+number = "B9"
+name = "B9"
+role = "passive"
+
+[[pin]]
+number = "B10"
+name = "B10"
+role = "passive"
+
+[[pin]]
+number = "B11"
+name = "B11"
+role = "passive"
+
+[[pin]]
+number = "B12"
+name = "B12"
+role = "passive"
