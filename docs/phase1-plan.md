@@ -120,6 +120,23 @@ in this plan, the three ADRs, the M0/M4b/M4c gates and
 re-derived at `6854d25` (M0 below; they are unchanged: 201 parts, 142
 nets, 657 pin nodes on the main board).
 
+## Approver decisions (2026-11-14)
+
+Recorded after the human approver reviewed ADR-008 Amendment 9 (M10, E3's
+design). The same decisions are in ADR-006 and ADR-008.
+
+1. **Device route A is approved:** an ADR-006 amendment (Amendment 6)
+   widens `spec/package.md` section 12, so a board file's `*bb part` may
+   be a `renode` or a `device` part (ADR-006 D7). E3 runs on a board file
+   carrying the detent sheet, with the mechanism and DRV5032 device as a
+   part (for example `M1`) bound to the IN, nSLEEP and HOME_N nets.
+2. **Route B** (a `[[device]]` section with pin-to-net bindings in
+   `bb.toml`, so devices can live in imported projects) is **not**
+   implemented now: it is a Phase 2 item (§3, Out).
+3. **HOME_N gate:** within 75 ms at the DRV5032 typical corner (tS 50 ms),
+   and within the suite's 97.4 ms window at the worst corner (ADR-008
+   Amendment 10). It replaces M10's "HOME_N latency within 75 ms" (§4).
+
 ## 1. Goal
 
 Phase 0 proved the seam: a hand-written netlist, one MCU pin, an RC or a
@@ -357,6 +374,7 @@ board and `[[connection]]`, M11).
 | Public registry, signing, `bb pkg publish` | Phase 2 (design doc). Packages are local directories plus a lockfile |
 | PCB geometry, parasitics, gerbers | Nothing at `fast` consumes geometry. Phase 1 may parse `.kicad_pcb` only as an optional cross-check (ADR-007 D8) |
 | `pi`/`si`/`em` rungs, rail-tracking pin outputs, brown-out reset from a rail | Phase 2 (S4, S5). Views may already declare `pi` |
+| Devices in imported projects (route B: a `[[device]]` section with pin-to-net bindings in `bb.toml`, `spec/project.md` and its schema) | Phase 2 (approver decision 2, 2026-11-14; ADR-006 Amendment 6). Phase 1's device parts (ADR-006 D7) exist only in hand-written board files (`spec/package.md` section 12), which is how E3 runs |
 | Python device API, the design doc's "5 example sensor packages" | Bus devices: Renode's nRF TWI drives no pins and has no External Control route; SPI has one, but its synchronous callbacks need a time-grant analysis (ADR-006 D7). Phase 2, with TWIM/SPIM models |
 | BLE/RADIO, USBD, NFCT, QSPI, TWIM, SPIM3, I2S-to-pin, PWM (unless E3) | Absent or not faithful in Renode 1.17.0. Each is its own model and gate (ADR-008 D9 lists them) |
 | RP2040 package | The design doc lists it. The Renode 1.17.0 RP2040 platform was not evaluated, and nothing on this board needs it. Deferred |
@@ -388,7 +406,7 @@ These are AGENTS.md rules and they hold here unchanged.
 | M7 | Definition of done, packaged: README quickstart (clone URL as a marked placeholder), `make demo`, cost-table row. **Not published** (approver decision B): the stranger test runs from a local clone and stops; the human decides publication | §5, measured in a clean Ubuntu 24.04 container and on a clean WSL distro, cloning from a local path or `file://` URL | — |
 | M8 | E2: `BbNrf52Saadc` model with BURST, loading `adc_in`, per-sample trace, UART-to-`log` records, VDD channel | `make nrf-saadc-model` (register and timing tests, the ADR-005 test-plan shape, including an 8× burst with one charge transfer per acquisition). `make dms-vsense`: the analog-side check against the `load = "none"` reference run (356 µV at 1 s and 761 µV at 50 ms, tolerance set from M8's measurement), the firmware-visible checks (codes, C5 ÷ 10 fault, LED shed timing). Equivalence with the every-lattice-point reference; no `stop:ngspice` | 008 D7–D8 |
 | M9 | GDB passthrough (`bb run --gdb <port>`) | Prototype first (ADR-008 D10). Then a run with GDB attached, one breakpoint hit and continued, gives `nets.csv`, `nets.vcd` and non-grant records identical to the run without GDB. If that cannot hold, the mode is marked debug-only and its outputs carry a `debug` flag. **Done (2026-11-13) through the fallback:** a breakpoint stop cuts Renode's time slice and changes results (measured), so `--gdb` runs carry a debug mark at the first operation that can change results (a `warn` record; `run.json` `debug: true`). A session with no such operation is byte-identical to the run without GDB, on the spike and on E1. `make gdb-test` (in `make test`), `make gdb` (CI job `dms-rail`); ADR-008 Amendment 7 | 008 D10 |
-| M10 | Stretch E3: PWM model, TEMP and NVMC stand-ins, the averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device | One full step at 446 PPS against `test_firmware_microstep_pwm`. HOME_N latency within 75 ms. Equivalence and determinism | 006 D7, 008 D9 |
+| M10 | Stretch E3: PWM model, TEMP and NVMC stand-ins, the averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device | One full step at 446 PPS against `test_firmware_microstep_pwm`. HOME_N latency within 75 ms at the typical tS, within 97.4 ms at the worst (approver decision 3, 2026-11-14; ADR-008 Amendment 10). Equivalence and determinism | 006 D7, 008 D9 |
 | M11 | Systems: base board import, `[[connection]]`, the harness view | Base board: 21 parts, 17 nets. The mated system with the shared refs U1, U2, J1 and TP1 all resolved by qualified name; a bare shared ref is an error. **Done (2026-11-14):** `examples/dial-me-spinner/system` (main + base, main J1 to base J3 through the harness view `dial-me-spinner/link-harness:wires`), `make dms-system` (in `make test`) and `cli/tests/system.rs`; no schema change; ADR-007 Amendment 5 | 007 D5 |
 
 Dependencies:

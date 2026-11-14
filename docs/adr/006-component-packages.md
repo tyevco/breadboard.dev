@@ -10,6 +10,7 @@
   (2026-11-09: the TPS22917 view's floating QOD and its provenance,
   `source` for agent-written views, the spec examples, `SOURCE` for the
   WS2812C model, the local-only check outside git; Amendment 5).
+  D7's device route decided for M10 (Approver decisions (2026-11-14)).
   Written before implementation because it defines the package schema
   (AGENTS.md: ADRs come before anything that touches the package schema).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestones S1, M3,
@@ -70,6 +71,28 @@ ADR-007 and ADR-008 (the same decisions A–C are in each of them).
   (`git diff --stat dc96515 6854d25 -- hardware/sim` lists only
   `spicelib.py` and `tests/test_led_data.py`), so D9's migration and the
   M0 `results.json` both refer to `6854d25`.
+
+## Approver decisions (2026-11-14)
+
+Recorded after the human approver reviewed ADR-008 Amendment 9 (plan M10,
+E3's design) and its open points, which concern this ADR's D7. The same
+decisions are in ADR-008.
+
+1. **Device route A is approved.** An amendment of this ADR (Amendment 6)
+   widens `spec/package.md` section 12, so a board file's `*bb part` layer
+   may be `renode` or `device`, as the implementation of D7. E3 runs on a
+   board file that carries the detent sheet of the dial-me-spinner main
+   board, with the mechanism and DRV5032 device as a part (for example
+   `M1`) bound to the IN, nSLEEP and HOME_N nets.
+2. **Route B is not implemented now.** A `[[device]]` section with
+   pin-to-net bindings in `bb.toml` (`spec/project.md` and its schema), so
+   that devices can live in imported projects, is a **Phase 2** item. It
+   is recorded in the plan (section 3, Out) and in Amendment 6. Until
+   then a device part exists only in a hand-written board file.
+3. **The HOME_N gate is approved as proposed:** within 75 ms at the
+   DRV5032 typical corner (tS 50 ms), and within the suite's 97.4 ms edge
+   window at the worst corner (tS 75 ms). It is recorded as ADR-008
+   Amendment 10.
 
 ## Context
 

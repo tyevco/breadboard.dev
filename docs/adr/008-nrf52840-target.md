@@ -16,7 +16,8 @@
   breakpoint stop changes results, so `bb run --gdb` is a marked debug
   mode, and a session without a stop inside a slice is byte-identical.
   M10's design (E3) and D9's PWM, TEMP and NVMC models on
-  `nrf52840-bb@3` (2026-11-14, Amendment 9).
+  `nrf52840-bb@3` (2026-11-14, Amendment 9). Amendment 9's open points
+  decided (Approver decisions (2026-11-14); the HOME_N gate, Amendment 10).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -81,6 +82,27 @@ ADR-007 and ADR-008 (the same decisions A–C are in each of them).
   The board, its pins and its firmware rules are the same at both
   commits (ADR-007 Context 12), so nothing in this ADR changes; the E1
   firmware cites `docs/firmware.md` at `6854d25`.
+
+## Approver decisions (2026-11-14)
+
+Recorded after the human approver reviewed Amendment 9 (M10's design) and
+its two open points. The same decisions are in ADR-006, whose D7 they
+implement.
+
+1. **Device route A is approved** (Amendment 9, open point 1). An ADR-006
+   amendment widens `spec/package.md` section 12, so a board file's
+   `*bb part` layer may be `renode` or `device`, as the implementation of
+   ADR-006 D7. E3 runs on a board file that carries the detent sheet of
+   the main board, with the mechanism and DRV5032 device as a part (for
+   example `M1`) bound to the IN, nSLEEP and HOME_N nets.
+2. **Route B is not implemented now.** A `[[device]]` section with
+   pin-to-net bindings in `bb.toml` (`spec/project.md`), so that devices
+   can live in imported projects, is a Phase 2 item. It is recorded in the
+   plan (section 3, Out) and in ADR-006 Amendment 6.
+3. **The HOME_N gate is approved as proposed** (Amendment 9, open point
+   2): HOME_N latency within 75 ms at the DRV5032 typical corner
+   (tS 50 ms), and within the suite's 97.4 ms edge window at the worst
+   corner (tS 75 ms). This is recorded as Amendment 10.
 
 ## Context
 
@@ -2076,6 +2098,10 @@ points for the approver, and this step implements neither.
 
 #### Open points for the approver (not implemented by this step)
 
+Both points were decided on 2026-11-14 (Approver decisions (2026-11-14)
+above): point 1 as recommended, route A, with route B moved to Phase 2;
+point 2 as proposed (Amendment 10).
+
 1. **Where a device instance comes from.**
    - ADR-006 D7 lets a package name a device in `[behavioral]`, and
      `spec/package.md` section 3 already allows `engine = "device"`.
@@ -2331,3 +2357,26 @@ start and end of each run.
   the committed hashes.
 - **No committed golden changed.** The plugin assembly grew and every
   platform's content hash changed; the results did not.
+
+### Amendment 10: the HOME_N latency gate (approver decision 3, 2026-11-14)
+
+Approver decision 3 (2026-11-14) accepts Amendment 9's open point 2 as
+proposed. It replaces the plan's single "HOME_N latency within 75 ms"
+(plan section 4, M10) with two gates, both measured on E3's board with
+the `dms/mechanism@1` device:
+
+- **Typical corner** (DRV5032FA tS = 50 ms, the device's default): from
+  the carriage crossing the BOP field (the instant the device's own field
+  model passes BOP) to the HOME_N edge, within **75 ms**. With the typical
+  tS the bound is tS + tACTIVE = 50.04 ms, so 75 ms has a margin of about
+  25 ms over the worst sample phase.
+- **Worst corner** (tS = 75 ms, the Table 6.5 maximum, as a device
+  parameter): the same latency within the suite's **97.4 ms** edge window
+  (`FW_HOME_WINDOW` of `test_motor_drive.py` at `6854d25`: the 75 ms lag
+  allowance plus 10 steps at 446 PPS). The bound is tS + tACTIVE =
+  75.04 ms, the suite's own "worst-case latency vs the bare lag term"
+  record (`test_home_n_levels_and_latency`, 0.07504 s in
+  `examples/dial-me-spinner/suite/results.json`).
+- Both latencies are recorded in the gate's output with the sample phase
+  the run used (`Ctx::rng`, ADR-006 D7), so a later change of the seed
+  rule shows up as a changed number, not as a silent pass.
