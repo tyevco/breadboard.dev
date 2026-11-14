@@ -101,5 +101,8 @@ reason (and, for the protocol, an ADR).
 (`make test POOL=0`), `verify-every`, `partition`, `feedback`, `adc`,
 `dms-rail` and `fw-rebuild`.
 
+`.github/workflows/docs.yml` builds this site and deploys it to GitHub Pages
+on a push to `main` that touches `site/`, `docs/`, `spec/` or `README.md`.
+
 The full list of targets, with what each one checks, is the table in
 [`AGENTS.md`](https://github.com/tyevco/breadboard.dev/blob/main/AGENTS.md).

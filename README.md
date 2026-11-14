@@ -137,7 +137,9 @@ the checkout is never written.
 `make stranger-test-container` and `make stranger-test-wsl` run the block
 above line by line and time it. The first uses a clean `ubuntu:24.04`
 container; the second uses a freshly imported WSL distro, which it removes
-afterwards. Both clone from this repository's local path.
+afterwards. Both clone from this repository's local path by default;
+`STRANGER_URL=https://github.com/tyevco/breadboard.dev` tests the published
+repository instead.
 
 ## E2: battery reading and the low-battery LED shed
 

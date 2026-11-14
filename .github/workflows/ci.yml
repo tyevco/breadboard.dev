@@ -1,5 +1,5 @@
 # Mirrors `make setup` + `make check` (fmt-check, clippy, test).
-# Written for parity with local runs; this repo is local-only and is not pushed.
+# Written for parity with local runs; runs on every push and pull request.
 name: ci
 
 on:

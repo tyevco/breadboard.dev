@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Phase 1 plan M7 (section 5, the exit): the stranger test, timed, from a LOCAL clone (approver
-# decision B: nothing is published; the README's clone URL is a placeholder).
+# Phase 1 plan M7 (section 5, the exit): the stranger test, timed. Approver decision B measured it
+# from a local clone before anything was published; the repository is now public, and the default
+# is still a local clone (--url selects the published repository instead).
 #
 #   bash scripts/stranger_test.sh container [--url <url>] [--out <dir>] [--image <ref>] [--apt-mirror <url>] [--keep]
 #   bash scripts/stranger_test.sh wsl       [--url <url>] [--out <dir>] [--image <ref>] [--apt-mirror <url>] [--keep]

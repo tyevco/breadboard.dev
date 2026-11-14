@@ -17,13 +17,15 @@ normative specs. This map follows `AGENTS.md`, which is the authority.
 | `examples/feedback/`, `examples/feedback-open/` | A board on which the MCU reads back a node it drives, and the same with the loop opened. |
 | `examples/adc/` | The STM32F072 ADC board, its firmware and the ADC model tests; `examples/adc/kicad/` is the same board drawn in KiCad, as a `bb.toml` project. |
 | `examples/nrf-feedback/` | The feedback circuit on the nRF52840. |
-| `examples/dial-me-spinner/` | The Phase 1 reference board: vendored KiCad inputs, `SOURCE` (commits and sha256s), the suite re-run, `bb.toml`, `board.bbm`, `bb.lock`, the benches and the E1 firmware (sources and prebuilt ELFs). |
+| `examples/nrf-saadc/` | Breadboard's nRF52840 SAADC on a loading `adc_in` board, and the SAADC model's Renode-only tests. |
+| `examples/dial-me-spinner/` | The Phase 1 reference board: vendored KiCad inputs, `SOURCE` (commits and sha256s), the suite re-run, `bb.toml`, `board.bbm`, `bb.lock`, the benches and the E1 and E2 firmware (sources and prebuilt ELFs). |
 | `tests/golden/` | Waveform snapshots and output hashes for every gated board. |
 | `spec/` | Normative protocol and schema documents, and `spec/schema/*.schema.json`. Changing them needs an ADR. |
 | `docs/adr/` | Architecture decision records. |
 | `docs/phase1-plan.md` | The Phase 1 plan, with its approver decisions and review notes. |
 | `scripts/` | Setup, the check scripts (`check_spike.py`, `check_feedback.py`, `check_adc.py`, `check_dms_rail.py`, ...) and the gate drivers. |
-| `site/` | This documentation site (VitePress). |
+| `site/` | This documentation site (VitePress), published to GitHub Pages by `.github/workflows/docs.yml`. `site/public/plots/` holds the waveform figures that `make docs-plots` draws from real runs. |
+| `.github/workflows/` | `ci.yml` (CI, on every push and pull request) and `docs.yml` (the site, on pushes to `main`). |
 
 ## The rules that shape the code
 

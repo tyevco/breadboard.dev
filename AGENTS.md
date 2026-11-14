@@ -1,12 +1,29 @@
 # AGENTS.md: working on Breadboard
 
 Breadboard is an open hardware simulator ("QEMU for whole circuit boards"). The
-repo is in **Phase 0**: a Renode (STM32F103, and STM32F072 for the ADC
-board) ↔ ngspice co-simulation spike under a kernel-owned time-grant
-protocol, with the speed-ups of ADR-003 (the grant lattice, traces, CPU
-lookahead, ADC pushes), ADR-004 (startup) and ADR-005 (Breadboard's own
-STM32F072 ADC model and sampled inputs). Read this file first. Then read
-`spec/time-grant.md` before you touch anything that advances time.
+repo is in **Phase 1** (`docs/phase1-plan.md`), with M0-M8 done; M9-M11
+(GDB passthrough, E3, systems) are planned, not implemented.
+
+- **Phase 0** (done) was a Renode (STM32F103, and STM32F072 for the ADC
+  board) ↔ ngspice co-simulation spike under a kernel-owned time-grant
+  protocol, with the speed-ups of ADR-003 (the grant lattice, traces, CPU
+  lookahead, ADC pushes), ADR-004 (startup and the warm Renode pool) and
+  ADR-005 (Breadboard's own STM32F072 ADC model and sampled inputs). Its
+  boards (`examples/spike`, `feedback`, `feedback-open`, `adc`) still run
+  in `make test`.
+- **Phase 1, M0-M8** (done) runs a real board: component packages
+  (ADR-006, `packages/`), the KiCad importer, `board.bbm` and `bb.toml`
+  projects with `bb open`/`flash`/`run`/`probe` (ADR-007), Breadboard's
+  nRF52840 platform with Zephyr firmware and its SAADC model (ADR-008),
+  and the worked examples on dial-me-spinner rev A: E1, the LED rail power
+  sequencing (M6), and E2, the battery reading and low-battery LED shed
+  (M8). The README quickstart, `make demo` and the stranger test are M7.
+- The repository is public at https://github.com/tyevco/breadboard.dev,
+  with a documentation site (`site/`, VitePress) published to GitHub Pages
+  at https://tyevco.github.io/breadboard.dev/.
+
+Read this file first. Then read `spec/time-grant.md` before you touch
+anything that advances time.
 
 ## Build and test
 
@@ -17,7 +34,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make setup` | Install or verify the pinned toolchain (idempotent): Rust 1.99.1, uv, Renode 1.17.0 portable, arm-none-eabi-gcc, ngspice 42 + libngspice0-dev, python3-jsonschema; then build `bb` and install it into `~/.local/bin`. `make setup SETUP=demo` skips the ARM toolchain, uv and jsonschema (what the demo needs: Rust, Renode, ngspice, `bb`). As root (a container) it runs apt without sudo (Phase 1 M3). `make setup SETUP=zephyr` (optional, M6) adds the Zephyr host tools and the pinned Zephyr SDK 1.0.1 for `make fw-rebuild` |
 | `make setup-container` | Phase 1 M3 gate (R7): `make setup SETUP=demo` timed in a clean `ubuntu:24.04` container (podman, or docker), as root, from `git archive HEAD` (`SETUP_REV=`, or `SETUP_WORKTREE=1`); timing in `out/setup-container/timing.txt` (`scripts/setup_container_test.sh`) |
 | `make demo` | Phase 1 M7 (plan section 5): the README's reference demo in one command, on a copy of `examples/dial-me-spinner` in `~/.cache/bb-demo` (`DEMO_WORK`), every Renode fresh: `bb open`, `bb flash` and `bb run` at the cold bench with the correct and the wrong-order firmware, `check_dms_rail.py` (pass; exactly LSW-3 fails), both runs against `tests/golden/dms-rail/{ok,wrong}-cold`, and `run.json`'s view list (`scripts/demo.sh`, about 15 s; outputs in `out/demo`). Needs only `make setup SETUP=demo` |
-| `make stranger-test-container` / `make stranger-test-wsl` | Phase 1 M7 exit measurement (approver decision B: from a LOCAL clone, nothing published): the README's quickstart block (between the `stranger-test` markers, `<CLONE-URL>` replaced by `STRANGER_URL`, default the local repository) run line by line and timed, as root, in a clean `ubuntu:24.04` container (rootless podman, the repository mounted read-only, cloned from `file:///repo`) or a fresh WSL distro imported from the same image and unregistered afterwards; then the committed hashes and `make demo` (`scripts/stranger_test.sh`; `out/stranger/<mode>/timing.txt`; limit 900 s). The human run: `docs/phase1-exit-checklist.md`. Keep the README block runnable as written |
+| `make stranger-test-container` / `make stranger-test-wsl` | Phase 1 M7 exit measurement (approver decision B measured it from a local clone; the repository has since been published): the README's quickstart block of the commit at HEAD (between the `stranger-test` markers; its `git clone https://github.com/tyevco/breadboard.dev` URL replaced by `STRANGER_URL`, default the local repository, so `STRANGER_URL=https://github.com/tyevco/breadboard.dev` tests the published repository itself) run line by line and timed, as root, in a clean `ubuntu:24.04` container (rootless podman, the repository mounted read-only, cloned from `file:///repo`) or a fresh WSL distro imported from the same image and unregistered afterwards; then the committed hashes and `make demo` (`scripts/stranger_test.sh`; `out/stranger/<mode>/timing.txt`; limit 900 s). The human run: `docs/phase1-exit-checklist.md`. Keep the README block runnable as written |
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 1 min 45 s). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
@@ -158,6 +175,13 @@ tests/fixtures/kicad/   the synthetic two-board system of ADR-007 gate M4b (cli/
 spec/                   normative protocol and schema docs (package.md and schema/*.schema.json: ADR-006;
                         board-bbm.md, canonical-json.md, project.md: ADR-007); changing them needs an ADR
 docs/adr/               architecture decision records
+site/                   the documentation site (VitePress; published to GitHub Pages by
+                        .github/workflows/docs.yml): guide/, concepts/, reference/, records/
+                        (docs/ and spec/ rendered by site/scripts/sync.mjs); public/plots/ holds
+                        the committed waveform figures that `make docs-plots` draws
+                        (scripts/docs_plots.sh, scripts/docs_plots.py) and `make
+                        docs-plots-check` requires byte for byte
+.github/workflows/      ci.yml (CI: make check's parts and the gate jobs) and docs.yml (the site)
 scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determinism.sh,
                         partition.sh, perf.sh, perf_ab.sh (also make cost-table),
                         check_resample.py, check_feedback.py, lookahead_inert.sh,
@@ -171,7 +195,7 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         dms_m5b.py), check_local_only.sh (+ check_local_only_test.sh),
                         check_dms_rail.py, dms_rail.sh,
                         dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py), demo.sh,
-                        stranger_test.sh
+                        stranger_test.sh, docs_plots.sh (+ docs_plots.py)
 ```
 
 ## The three invariants
@@ -267,8 +291,15 @@ feedback board).
   strings or dates into it (they go to `.bb/import.json`, which is not
   committed). Example projects commit `board.bbm` and `bb.lock`; a package
   change means `make locks` and a reviewed `board.bbm` diff.
-- Git is local only: never push and never add remotes. Commit messages end with
-  the co-author trailer given by the orchestrator.
+- **Publication.** The repository is public at
+  https://github.com/tyevco/breadboard.dev (`origin`). Agents commit locally
+  and never push, change remotes or change GitHub settings; only the
+  orchestrating session pushes, and only after the human approves. CI
+  (`.github/workflows/ci.yml`) runs on every push, so on every push to
+  `main`, and on every pull request; a push to `main` that touches `site/`,
+  `docs/`, `spec/` or `README.md` also deploys the docs site to GitHub
+  Pages (`.github/workflows/docs.yml`). Commit messages end
+  with the co-author trailer given by the orchestrator.
 
 ## Known bad ideas (do not do these)
 
