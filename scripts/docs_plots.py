@@ -253,22 +253,31 @@ class Panel:
     def label(self, t, v, s, dy=-8, anchor="start", fill="ink2", dx=0):
         self.s.text(self.px(t) + dx, self.py(v) + dy, s, 12, fill, anchor)
 
-    def bracket_h(self, t1, t2, v, label):
+    def bracket_h(self, t1, t2, v, label, tc=None):
+        """A horizontal span; label is one line or a tuple of lines stacked above it, centred on
+        time tc (default the span's middle)."""
         th = self.s.th
         x1, x2, py = self.px(t1), self.px(t2), self.py(v)
         self.s.line(x1, py, x2, py, th["ink2"], 1)
         self.s.line(x1, py - 4, x1, py + 4, th["ink2"], 1)
         self.s.line(x2, py - 4, x2, py + 4, th["ink2"], 1)
-        self.s.text((x1 + x2) / 2, py - 6, label, 11, "ink2", "middle")
+        lines = (label,) if isinstance(label, str) else label
+        cx = (x1 + x2) / 2 if tc is None else self.px(tc)
+        for i, s in enumerate(reversed(lines)):
+            self.s.text(cx, py - 6 - 13 * i, s, 11, "ink2", "middle")
 
     def bracket_v(self, t, v1, v2, label, anchor="start"):
+        """A vertical span; label is one line or a tuple of lines, centred on the span."""
         th = self.s.th
         px, y1, y2 = self.px(t), self.py(v1), self.py(v2)
         self.s.line(px, y1, px, y2, th["ink"], 1)
         self.s.line(px - 4, y1, px + 4, y1, th["ink"], 1)
         self.s.line(px - 4, y2, px + 4, y2, th["ink"], 1)
         dx = 7 if anchor == "start" else -7
-        self.s.text(px + dx, (y1 + y2) / 2 + 4, label, 12, "ink", anchor, weight="600")
+        lines = (label,) if isinstance(label, str) else label
+        y = (y1 + y2) / 2 + 4 - 15 * (len(lines) - 1) / 2
+        for i, s in enumerate(lines):
+            self.s.text(px + dx, y + 15 * i, s, 12, "ink", anchor, weight="600")
 
 
 def at(t, v, x):
@@ -304,18 +313,22 @@ def fig_e1(theme, runs):
     for i, (name, t, v, recs) in enumerate([
             ("Correct order: led_rail.elf (all four checks pass)", ok_t, ok, ok_r),
             ("Wrong order: led_rail_wrong_order.elf (LSW-3 fails)", wr_t, wr, wr_r)]):
-        p = Panel(s, PL, y0 + i * (ph + 64), pw, ph, (0, 120), (0, 3.5), title=name,
+        # Headroom to 4 V: the EN markers' labels sit above LED_DIN's 3.3 V plateau, not on it.
+        p = Panel(s, PL, y0 + i * (ph + 64), pw, ph, (0, 120), (0, 4.0), title=name,
                   xlabel="Time (ms)" if i == 1 else None, ylabel="Voltage (V)",
-                  yticks=([0, 1, 2, 3], 0))
+                  yticks=([0, 1, 2, 3, 4], 0))
         en = edges(recs, "U10.P1.04")
         din = edges(recs, "U10.P0.06")
         for k, (te, lvl) in enumerate(en):
             p.vmark(te, ("EN ↑" if lvl else "EN ↓"), "auto")
         p.series(t, v["VLED"], c[0])
         p.series(t, v[DIN], c[1])
-        # The firmware's wait: P0.06 rises 30 ms after LED_PWR_EN.
+        # The firmware's wait: P0.06 rises 30 ms after LED_PWR_EN. The label goes between the end
+        # of VLED's rise and P0.06's edge, so neither edge crosses it.
         t_en, t_din = en[0][0], din[0][0]
-        p.bracket_h(t_en, t_din, 1.6, f"P0.06 ↑ {t_din - t_en:.2f} ms after EN ↑")
+        t_up = next(a for a, b in zip(t, v["VLED"]) if a > t_en and b > 0.95 * max(v["VLED"]))
+        p.bracket_h(t_en, t_din, 1.6, (f"P0.06 ↑ {t_din - t_en:.2f} ms", "after EN ↑"),
+                    tc=(t_up + t_din) / 2)
         p.label(16, 2.97, "VLED", -8, "middle")
         p.label(16, 0, "LED_DIN", -8, "middle")
         panels.append((p, t, v, recs))
@@ -326,13 +339,14 @@ def fig_e1(theme, runs):
     tk = t[k]
     p.dot(tk, v[DIN][k], c[1])
     p.dot(tk, v["VLED"][k], c[0])
-    p.bracket_v(tk + 1.2, v["VLED"][k], v[DIN][k], f"{diff[k]:.2f} V > 0.7 V at {tk:.2f} ms")
+    p.bracket_v(tk + 1.2, v["VLED"][k], v[DIN][k], (f"{diff[k]:.2f} V > 0.7 V", f"at {tk:.2f} ms"))
     # Zoom: the wrong order's switch-off, with the limit line VLED + 0.7 V.
     en_off = [te for te, lvl in edges(recs, "U10.P1.04") if not lvl][0]
     din_off = [te for te, lvl in edges(recs, "U10.P0.06") if not lvl][0]
     z0, z1 = 33, 48
     zy = y0 + 2 * (ph + 64) + 14
-    p = Panel(s, PL, zy, pw, 190, (z0, z1), (1.0, 4.0),
+    # Headroom to 4.5 V: the limit line's label sits above it, below the marker labels.
+    p = Panel(s, PL, zy, pw, 190, (z0, z1), (1.0, 4.5),
               title="Wrong order, zoomed: LED_PWR_EN off while the data line is still high",
               xlabel="Time (ms)", ylabel="Voltage (V)", yticks=([1.0, 2.0, 3.0, 4.0], 1))
     lim = [a + 0.7 for a in v["VLED"]]
@@ -350,12 +364,19 @@ def fig_e1(theme, runs):
     p.series(t, v["VLED"], c[0])
     p.series(t, v[DIN], c[1])
     p.dot(tk, v[DIN][k], c[1])
-    p.label(z0 + 0.4, at(t, lim, z0 + 0.4), "VLED + 0.7 V (the LSW-3 limit)", 15)
-    p.label(z0 + 0.4, at(t, v[DIN], z0 + 0.4), "LED_DIN", 18)
+    # Labels clear of every line: the limit's just right of the EN hairline and above the limit
+    # (which only falls from there), LED_DIN's between LED_DIN and the limit, VLED's below VLED.
+    lim_label = "VLED + 0.7 V (the LSW-3 limit)"
+    t_lim = en_off + 0.25
+    p.label(t_lim, at(t, lim, t_lim), lim_label, -7)
+    p.label(z0 + 0.4, at(t, v[DIN], z0 + 0.4), "LED_DIN", -6)
     p.label(z0 + 0.4, at(t, v["VLED"], z0 + 0.4), "VLED", 18)
-    first = idx[0] if idx else k
-    p.label(t[first] + 1.0, at(t, v[DIN], t[first] + 1.0), "LSW-3 violated (shaded): LED_DIN above VLED + 0.7 V",
-            -12, "start", "ink")
+    # The violation's label: two lines above LED_DIN (which only falls to the right), starting
+    # after the limit's label and ending before the P0.06 hairline.
+    ms_per_px = (z1 - z0) / pw
+    t_vio = t_lim + 7.4 * len(lim_label) * ms_per_px
+    for i, line in enumerate(("LSW-3 violated (shaded):", "LED_DIN above VLED + 0.7 V")):
+        p.label(t_vio, at(t, v[DIN], t_vio), line, -26 + 14 * i, "start", "ink")
     p.bracket_v(tk - 0.15, v["VLED"][k], v[DIN][k], f"max {diff[k]:.3f} V", "end")
     h = zy + 190 + 46
     return s.render(h, "E1: VLED and LED_DIN, correct-order and wrong-order firmware, cold bench")
@@ -389,8 +410,11 @@ def fig_e2(theme, runs, case):
     for r in rd:
         prev = [q for q in rd if q["n"] == r["n"] - 1]
         if prev and prev[0]["leds"] != r["leds"]:
-            p.label(r["t"] / 1000, r["est"], f"reading {r['n']}: {r['est']:.4f} V, LEDs {r['leds']}",
-                    18 if r["leds"] == "off" else 30, "end", dx=-8)
+            text = f"reading {r['n']}: {r['est']:.4f} V, LEDs {r['leds']}"
+            if r["leds"] == "off":  # below and left of its reading
+                p.label(r["t"] / 1000, r["est"], text, 18, "end", dx=-8)
+            else:  # on the restore line, like its label, ending before the LED_PWR_EN hairline
+                p.label(r["t"] / 1000, 3.58, text, -5, "end", dx=-16)
     p.label(0.15, at(ts, v["VSYS"], 0.15), "VSYS", -8)
     q = Panel(s, PL, 340, pw, 90, span, (0, 4), title="LED rail", xlabel="Time (s)",
               ylabel="VLED (V)", yticks=([0, 2, 4], 0))
