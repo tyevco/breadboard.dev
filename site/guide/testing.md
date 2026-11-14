@@ -43,6 +43,10 @@ make test        # the exit gate alone
 11. **`packages`**: every package file, lockfile, project, bench and
     `board.bbm` against `spec/schema`, `bb pkg lint`, `bb pkg test`, current
     `bb.lock` files, and that nothing local-only is committed.
+12. **`gdb-test`**: GDB in batch mode against `bb run --gdb` on the spike and
+    E1. Attach and detach without a stop give the committed hashes; a
+    breakpoint marks the run (see [Debugging with GDB](./debugging)). The
+    full gate is `make gdb` (CI job `dms-rail`).
 
 ## Pooled or fresh: `POOL=0`
 

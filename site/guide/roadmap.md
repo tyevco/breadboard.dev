@@ -22,19 +22,22 @@ authority. Nothing on this page under "Planned" is implemented.
   `adc_in`, per-sample records, UART log records and the VDD channel; the
   battery reading and low-battery LED shed on dial-me-spinner
   ([the E2 demo](./demo-e2)).
+- **Phase 1, M9 (GDB passthrough)**: `bb run --gdb <port>`
+  ([Debugging with GDB](./debugging)). Attaching, halting, reading and
+  detaching leave the outputs byte-identical. A breakpoint stop changes
+  them, so such a run is marked as a debug run (ADR-008 D10's fallback).
 
 The stranger test has also been run against the published repository with
 the image's default apt sources: the README took 68.2 s against the
 15-minute limit. The one remaining exit item is the human run
 (`docs/phase1-exit-checklist.md`).
 
-## Planned: the rest of Phase 1 (M9–M11)
+## Planned: the rest of Phase 1 (M10–M11)
 
 These are milestones in the plan, not features. Each has its own gate there.
 
 | Milestone | Plan |
 | --- | --- |
-| **M9: GDB passthrough** | `bb run --gdb <port>`, prototyped first (ADR-008 D10). A run with GDB attached must give the same outputs as without it, or the mode is marked debug-only. `bb run` has no `--gdb` flag today. |
 | **M10: E3 (stretch)** | Detent homing: a PWM model, TEMP and NVMC stand-ins, an averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device. |
 | **M11: Systems** | Base-board import, `[[connection]]` between boards and the harness view. Only one board is ever simulated. |
 

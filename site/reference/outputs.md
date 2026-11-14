@@ -80,6 +80,14 @@ Canonical JSON, with no absolute paths and no wall-clock times. It records:
   `confidence`, its qualifications and whether one covers the run;
 - the out-of-scope and not-simulated instances, with reasons;
 - the locked package and platform hashes, the deck's sha256, every run option
-  that can change results, the probes, and the tool versions.
+  that can change results, the probes, and the tool versions;
+- `"debug": true` when a debugger was attached (`bb run --gdb`, with
+  `options.gdb` and `options.gdb_wait`). The key is absent otherwise.
+
+A debug run also carries a `warn` `log` record from the MCU's engine, "debug
+run: GDB: ...", at the first operation that can have changed the results
+(a breakpoint or watchpoint, a step, a write, a peripheral-register read).
+Never compare such a run against a reference. See
+[Debugging with GDB](../guide/debugging).
 
 See [Fidelity and honesty](../concepts/fidelity) for why.

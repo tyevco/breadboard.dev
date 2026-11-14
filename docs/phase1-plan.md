@@ -42,7 +42,13 @@
   (ADR-008 Amendment 5; Review notes: M8). The post-M8 review's nine
   minor findings are fixed: the LED restore gated, grant partitions and
   `make pool-equiv` cover E2 (ADR-008 Amendment 6; "Review notes: after
-  M8").
+  M8"). M9 done (2026-11-13) through D10's fallback: `bb run --gdb <port>`
+  behind a proxy that keeps Renode's GDB stub from free-running or
+  hanging a grant. Attaching, halting, reading and detaching are
+  byte-identical to the run without GDB on the spike and E1. A breakpoint
+  stop changes results, so such a run is marked as a debug run. `make
+  gdb-test` is in `make test`, and `make gdb` runs in CI (ADR-008
+  Amendment 7; Review notes: M9).
 - **Decisions it depends on:** ADR-006 (component packages), ADR-007 (KiCad
   import and `board.bbm`), ADR-008 (nRF52840 target). All three are
   Accepted (2026-11-09) with the same approver decisions.
@@ -381,7 +387,7 @@ These are AGENTS.md rules and they hold here unchanged.
 | M6 | E1 run: `examples/dial-me-spinner/` (`bb.toml`, `bench/nominal.toml`, `bench/cold.toml`, firmware sources and prebuilt ELFs). Check script `scripts/check_dms_rail.py` | The correct-order firmware passes every E1 check at both benches. The wrong-order firmware fails exactly the LSW-3 check (the script expects it to fail). **Board-level convergence:** the whole E1 deck completes 120 ms at each bench's option set, at both engine orders, in under 30 s. One-cell reference equivalence. 10-run determinism. Goldens in `tests/golden/dms-rail/`. Local cross-check: PWL replay into the suite-derived bench deck within 5 mV on VLED | 006, 007, 008 |
 | M7 | Definition of done, packaged: README quickstart (clone URL as a marked placeholder), `make demo`, cost-table row. **Not published** (approver decision B): the stranger test runs from a local clone and stops; the human decides publication | §5, measured in a clean Ubuntu 24.04 container and on a clean WSL distro, cloning from a local path or `file://` URL | — |
 | M8 | E2: `BbNrf52Saadc` model with BURST, loading `adc_in`, per-sample trace, UART-to-`log` records, VDD channel | `make nrf-saadc-model` (register and timing tests, the ADR-005 test-plan shape, including an 8× burst with one charge transfer per acquisition). `make dms-vsense`: the analog-side check against the `load = "none"` reference run (356 µV at 1 s and 761 µV at 50 ms, tolerance set from M8's measurement), the firmware-visible checks (codes, C5 ÷ 10 fault, LED shed timing). Equivalence with the every-lattice-point reference; no `stop:ngspice` | 008 D7–D8 |
-| M9 | GDB passthrough (`bb run --gdb <port>`) | Prototype first (ADR-008 D10). Then a run with GDB attached, one breakpoint hit and continued, gives `nets.csv`, `nets.vcd` and non-grant records identical to the run without GDB. If that cannot hold, the mode is marked debug-only and its outputs carry a `debug` flag | 008 D10 |
+| M9 | GDB passthrough (`bb run --gdb <port>`) | Prototype first (ADR-008 D10). Then a run with GDB attached, one breakpoint hit and continued, gives `nets.csv`, `nets.vcd` and non-grant records identical to the run without GDB. If that cannot hold, the mode is marked debug-only and its outputs carry a `debug` flag. **Done (2026-11-13) through the fallback:** a breakpoint stop cuts Renode's time slice and changes results (measured), so `--gdb` runs carry a debug mark at the first operation that can change results (a `warn` record; `run.json` `debug: true`). A session with no such operation is byte-identical to the run without GDB, on the spike and on E1. `make gdb-test` (in `make test`), `make gdb` (CI job `dms-rail`); ADR-008 Amendment 7 | 008 D10 |
 | M10 | Stretch E3: PWM model, TEMP and NVMC stand-ins, the averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device | One full step at 446 PPS against `test_firmware_microstep_pwm`. HOME_N latency within 75 ms. Equivalence and determinism | 006 D7, 008 D9 |
 | M11 | Systems: base board import, `[[connection]]`, the harness view | Base board: 21 parts, 17 nets. The mated system with the shared refs U1, U2, J1 and TP1 all resolved by qualified name; a bare shared ref is an error | 007 D5 |
 
@@ -1246,4 +1252,83 @@ became of each:
   20 s); `make pool-equiv` PASS (23 configurations, 46 leased runs,
   20 min 47 s). Every committed golden is unchanged; `rec` is new. Not
   pushed.
+
+## Review notes: M9 (2026-11-13)
+
+M9 is done through D10's stated fallback (ADR-008 Amendment 7).
+
+- **The prototype.** It ran first, as D10 requires, on the spike and on
+  E1. Attaching, halting at a slice boundary, reads and detaching were
+  byte-identical. A breakpoint stop was not, on either board. The stop
+  ends Renode's time slice at the halt, and later stamps in the slice move
+  to the halt instant: two spike edges by 40 and 50 ns, and E1's P1.04
+  rise by 7.6 µs, which moves VLED by up to 12.3 mV. How long the CPU is
+  held does not matter. So the row's identity gate cannot hold for a
+  breakpoint, and the mode is debug-only with a mark in its outputs.
+- **What exists.**
+  - `bb run --gdb <port>` and `--gdb-wait on|off`.
+  - The proxy `engines/cpu-renode/src/gdb.rs` in front of Renode's stub,
+    which runs on an internal port and is never handed to a debugger.
+  - The engine tells the proxy before and after each `RUN_FOR`. A halted
+    CPU holds the `RUN_FOR` open, with no External Control read timeout.
+  - The kernel and the grant protocol are unchanged.
+  - The debug mark: one `warn` record at the first operation that can
+    change results, and `run.json` `debug: true` for a `--gdb` project
+    run (`spec/project.md` section 6, as D10 says).
+  - `scripts/gdb_gate.py`, run by `make gdb-test` (in `make test`) and
+    `make gdb` (CI job `dms-rail`). `make setup` installs `gdb-multiarch`.
+  - The README section and the site page "Debugging with GDB".
+- **The M9 row's gate, item by item.**
+  - **Attached, one breakpoint hit and continued, identical to the run
+    without GDB:** does not hold (above). The fallback holds instead. Such
+    a run carries exactly one mark on both boards, and E1's `run.json`
+    has `debug: true`. A run without `--gdb` has no `debug` key, no `gdb`
+    option and no mark, and gives the committed hashes.
+  - **Attached, never stopping:** byte-identical, all four files, against
+    the committed hashes of the run without GDB, on the spike and on E1.
+    That holds at reset and when attaching to a running spike at 1.0,
+    1.4 and 1.8 s.
+  - **No free-run, no advance past a grant while halted:** a 5 s hold at
+    a breakpoint shows no `RUN_FOR` boundary in the proxy trace, and the
+    CPU's time stays inside the open `RUN_FOR`. Its outputs equal the
+    session without the hold, with the External Control timeout set to
+    2 s. Steps reach Renode only inside a running `RUN_FOR` (R1).
+  - **Detaching mid-run continues correctly:** detach after Ctrl-C and
+    after a breakpoint. Killing GDB while it is halted also lets the run
+    finish.
+  - **Scripted sessions repeat:** the breakpoint session 21 times on the
+    spike, the same with three steps 20 times, and 5 times on E1. Each is
+    byte-identical across repetitions.
+- **Deviations** (ADR-008 Amendment 7).
+  - The proxy replaces D10's literal "issue `StartGdbServer <port>
+    false`" on the user's port.
+  - R1 reads the CPU's state instead of waiting for Renode's park reply.
+    The reply does not come in the `RUN_FOR` after a step that ended the
+    previous one: measured, and a 1 500-step E1 session hung on it before
+    the change.
+  - Ctrl-C and attach halt at the next `RUN_FOR` boundary.
+  - The proxy adds `vContSupported+` to Renode's `qSupported` reply and
+    maps `vCont` onto `c` and `s`. Without that, `gdb-multiarch` 15.1 (the
+    CI GDB) single-stepped in software, which failed the step gates;
+    `arm-zephyr-eabi-gdb` 16.2 did not.
+  - The mark comes at the first operation that can change results, not at
+    t = 0.
+  - `spec/time-grant.md` is unchanged. One exempting sentence is left to
+    the approver (Amendment 7, open question).
+  - No cost-table row: the mode is never on by default, and its runs are
+    not results.
+- **Gate runs** (2026-11-13/14, run one after another; load at start and
+  end):
+  - `make gdb` with `gdb-multiarch` 15.1: PASS, 33 PASS lines (5 min
+    3 s, load 1.0-2.9).
+  - `make gdb` with `arm-zephyr-eabi-gdb` 16.2: PASS, 33 PASS lines
+    (4 min 37 s, load 2.9-2.9).
+  - `make check POOL=0`: green (10 min 47 s, load 1.1-1.3, 214 cargo
+    tests, `gdb-test` 45 s).
+  - `make check` on the pool: green (9 min 17 s, load 1.3-1.3).
+  - `make pool-equiv`: PASS (23 configurations, 46 leased runs, 14 min
+    52 s). The pool path is unchanged, except that `--gdb` never asks
+    the pool.
+  - The site builds.
+  - Every committed golden is unchanged.
 

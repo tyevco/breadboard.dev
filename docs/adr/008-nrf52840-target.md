@@ -12,6 +12,9 @@
   E2 on dial-me-spinner, M8's second half (the firmware, the project
   bindings, `saadc_se` qualified, `make dms-vsense`; 2026-11-10,
   Amendment 5). The post-M8 review's fixes (2026-11-10, Amendment 6).
+  D10 prototyped and implemented, M9 (2026-11-13, Amendment 7): a
+  breakpoint stop changes results, so `bb run --gdb` is a marked debug
+  mode, and a session without a stop inside a slice is byte-identical.
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -608,6 +611,10 @@ a `la_*` gate. Each bumps the platform major (D1).
 - **If a step fails:** that operation is documented as perturbing, and
   `run.json` gets `"debug": true`. Such runs are never compared against
   goldens.
+- **Outcome (Amendment 7):** a breakpoint stop ends Renode's time slice
+  early and changes results, so this fallback applies. Attaching, halting
+  at a slice boundary, reads and detaching are byte-identical and gated.
+  The debugger talks to a proxy in `bb`, not to Renode's stub directly.
 
 ## Exact `spec/` changes (described, not applied)
 
@@ -667,7 +674,7 @@ a `la_*` gate. Each bumps the platform major (D1).
 | `make nrf-saadc-model` | M8 | Register map; TACQ × RESOLUTION × OVERSAMPLE × BURST acquisition and DONE instants; an 8× burst gives 8 `smp` toggles and 8 charge transfers at **both** engine orders; EasyDMA PTR/MAXCNT/AMOUNT; LIMIT events; the VDD reference; host-port timed inputs; the TACQ < 2·L refusal and its message |
 | `la_saadc` in `lookahead.rs` | M8 | A sampled input that never wakes the CPU before `q`, with a burst |
 | `make dms-vsense` | M8 | E2: analog-side and firmware-visible checks (plan §2), equivalence to the every-lattice-point reference, `--engine-order` independence, no `stop:ngspice` |
-| GDB equivalence | M9 | D10 |
+| GDB equivalence | M9 | D10; as implemented `make gdb-test` (in `make test`) and `make gdb`: no stop inside a slice gives the run without GDB byte for byte, a breakpoint marks the run (Amendment 7) |
 | `fw-rebuild` (CI job where a Zephyr workspace can be created) | M6 | Image hashes of ELFs rebuilt in a fresh workspace equal `SHA256SUMS` (`make fw-rebuild`, Amendment 3) |
 | `make cost-table` row for `dms-rail` | M6 | The ADR-003 protocol |
 | `make cost-table` row for `dms-vsense` | M8 | The ADR-003 protocol |
@@ -1585,4 +1592,271 @@ unchanged, and the one new golden is the new case's.
     hashes; 20 min 47 s, load 1.4-1.3).
   - `make locks` changed only the hashes named in item 6. Every committed
     golden is unchanged. `tests/golden/dms-vsense/rec` is new.
+
+### Amendment 7: D10 as prototyped and implemented (M9, 2026-11-13)
+
+D10 asked for a prototype first. It was run on Renode 1.17.0 with
+`arm-zephyr-eabi-gdb` 16.2 (Zephyr SDK 1.0.1), on the spike (STM32F103
+blinky, 500 ms) and on E1 (`led_rail.elf`, cold bench, 120 ms), reading
+the v1.17.0 sources. Then `bb run --gdb` was built on what it found.
+
+#### What the prototype measured
+
+- **Nothing changes** when GDB attaches, halts the CPU at a slice
+  boundary, reads registers or memory and detaches. That held at reset, 3
+  of 3 times in the middle of a 5 s spike run, and on E1, all four output
+  files byte-identical.
+- **A breakpoint stop changes results.** A breakpoint (or any CPU hook)
+  ends the CPU's time slice at the halt (`TranslationCPU.cs` 1478-1494,
+  then `ReportBackAndBreak`, `TimeHandle.cs` 373). The master time source
+  then jumps to the halt instant, and `GPIOPort.cs` 97 stamps a later pin
+  change of that slice with it.
+  - Spike, a breakpoint at `SysTick_Handler` hit twice: `nets.csv` is
+    unchanged; two `pin_edge` stamps move, from 50 ms + 1 fs to
+    50 ms + 50 ns and from 100 ms + 1 fs to 100 ms + 40 ns.
+  - E1, a breakpoint at `gpio_nrfx_port_set_bits_raw`: the `U10.P1.04`
+    rise moves from 130 µs + 1 fs to 137.625 µs; `nets.csv` differs from
+    1.82 ms on in 787 of 12 001 rows (VLED by up to 12.29 mV, VSYS by up to
+    4.36 mV).
+  - A breakpoint at the spike's `main` (140 ns in) shifted every later
+    edge by 40 to 150 ns: the slice sequence stays shifted for the rest of
+    the run.
+- **What does not matter:** how long the CPU is held (5 s holds gave the
+  same outputs as none), lookahead on or off and the grant partition
+  (E1's breakpoint run was byte-identical at all three), register and
+  memory reads at the breakpoint, and three single-steps after it.
+- **Renode's own stub is not safe to hand to a debugger.**
+  - A step calls `emulation.StartAll()` whenever the emulation is not
+    marked started (`BaseCPU.cs` 107-121), which is true during and
+    between `RUN_FOR`s. Inside a `RUN_FOR` that is harmless (and costs a
+    100 ms sleep). Between two, it starts the free-running time loop.
+  - Ctrl-C pauses the CPU in the middle of a slice (`GdbStub.cs` 131-146);
+    1 of 3 such runs hung with the `RUN_FOR` never returning.
+  - `monitor` reaches every Renode command (`MonitorCommand.cs`),
+    `start`, `pause` and OpenOCD's `halt` and `reset init` included.
+  - Its step-wait stop replies race the resume packets
+    (`MultithreadContinueCommand.cs` says so): 6 of 22 scripted runs lost
+    sync, GDB took a park reply for the reply to its `c`, removed its
+    breakpoint and the run changed.
+  - It listens on every interface (`SocketServerProvider.cs` 38).
+
+D10's three questions: (1) a breakpoint inside a `RUN_FOR` stops virtual
+time at the hit and wall-clock waiting changes nothing, but the slice is
+cut, so the stamps and sometimes the firmware's timing change; (2)
+single-steps after a breakpoint add no further change, measured on both
+boards; (3) reads while halted change nothing.
+
+**D10's gate therefore cannot hold for a breakpoint stop**, and D10's own
+fallback applies: the mode is debug-only and its outputs carry a mark.
+What D10 does hold: a session with no stop inside a slice gives the run
+without GDB byte for byte, and that is gated.
+
+#### As implemented
+
+- **The command line.** `bb run --gdb <port>` (0: a free port, printed)
+  and `--gdb-wait on|off`. With `on` (the default) the CPU waits at reset
+  until a debugger attaches and continues or detaches, like QEMU's `-S`.
+  With `off` the run starts at once and a debugger may attach at any time.
+  `--gdb` forces lookahead off (D10; `--gdb --lookahead on` is refused),
+  always starts Renode fresh (never from the pool, never with the JIT
+  startup profile: the stub belongs to the process), and removes the
+  External Control read timeout, because a halted CPU holds a `RUN_FOR`
+  open.
+- **The proxy** (`engines/cpu-renode/src/gdb.rs`). This replaces D10's
+  literal "issues `machine StartGdbServer <port> false`" on the user's
+  port. Renode's stub starts on an internal port (`autostartEmulation`
+  false, as D10 requires). The engine connects to it right after startup,
+  before the first `RUN_FOR`, which takes the stub's only client slot.
+  The debugger talks to `bb` on `127.0.0.1:<port>`. The engine and the
+  kernel are unchanged: the grant boundaries, `ceil_L` and the traces are
+  what they are without GDB. A halted CPU keeps the `RUN_FOR` of `(p, g]`
+  open with virtual time frozen at the halt instant in `(p, g]`. The
+  engine tells the proxy before and after each `RUN_FOR`. The rules:
+  - **R1, the resume barrier.** A `c` or `s` reaches Renode only when a
+    state read says the CPU is parked inside a running `RUN_FOR` that
+    cannot end without it. A Python monitor command reads the CPU's time
+    handle, `SourceSideActive` (the time source is running) and
+    `TotalElapsedTime` (written by the CPU thread before it parks, so not
+    racy), and `IsHalted`. The resume is forwarded only when the source is
+    active, the CPU is not asleep in WFI, and its time is before the
+    `RUN_FOR`'s end `g`. Otherwise it is held, and the read repeats (after
+    a park reply, at the next `RUN_FOR`, or every 2 ms while one is open).
+    So a step never reaches Renode outside a running `RUN_FOR` (no
+    `StartAll`, no free-run), and a `c` never resumes a paused CPU between
+    two `RUN_FOR`s.
+
+    This differs from the prototype's proposal ("only after Renode has
+    sent its step-wait stop reply inside the `RUN_FOR`"), because
+    implementing it measured two cases where that reply does not come or
+    is not enough:
+    - A step can execute the last instruction of a `RUN_FOR`'s time (a
+      WFI step on E1 skipped 125 ns to the slice end). The `RUN_FOR` then
+      ends, and in the next one the CPU is parked **without** sending a
+      park reply. Measured with a monitor-driven `RunFor` harness on the
+      spike and in a 1 500-step E1 session, which hung until R1 read the
+      state instead.
+    - A CPU asleep in WFI in single-step mode is halted: Renode's time
+      flows without it until it wakes, so a step there would be ignored
+      ("Ignoring stepping on a halted CPU") or race the end of the
+      `RUN_FOR`.
+  - **R2, stop replies.** A step's reply is the proxy's own `S05`, sent
+    when Renode's `Step` has returned. A `qC` sent after the `s` is
+    answered only then, because `Step` blocks the stub's receive thread.
+    Renode's two `S05`s per step are never forwarded. After a `c` the
+    debugger gets the first `T` (breakpoint or watchpoint), or an `S02`
+    when a requested halt has parked the CPU. The proxy answers `?` itself,
+    once the CPU is parked.
+  - **R3, Ctrl-C and attach.** Neither reaches Renode as a pause. The
+    proxy sends `sysbus.cpu ExecutionMode SingleStep` between two
+    `RUN_FOR`s (the engine waits for its reply), so the CPU parks at the
+    start of the next one: a slice boundary. The prototype proposed
+    switching the mode at once. In a monitor-driven run the first such
+    command took 0.4 s, longer than the `RUN_FOR` it raced, so where it
+    took effect depended on host timing. Applied between `RUN_FOR`s, with
+    the engine waiting for its reply, it takes effect at a boundary fixed
+    by the grants, at most one grant of virtual time after the Ctrl-C.
+  - **R4, detach.** `D`, `k` or a closed connection remove the debugger's
+    breakpoints and watchpoints (the proxy tracks every accepted `Z`) and
+    continue the CPU. The proxy keeps Renode's connection. Another
+    debugger may attach later; a second one at the same time is refused.
+  - **R5, refused packets.** `monitor` (`qRcmd`, with a message and
+    `E01`), reverse execution (`bc`, `bs`), `vRun`, continue or step with
+    an address or a signal, and Renode's TRACE32 packets. `vCont` is
+    answered by the proxy (`vCont;c;C;s;S`) and mapped onto `c` and `s`
+    (one CPU, all-stop: any step action is a step). Renode's own `vCont`
+    takes a different path (`TryHandleBlockingExecution`, with
+    `DelayGrant` and time skips), so it is never forwarded. The proxy also
+    edits Renode's `qSupported` reply: it drops `ReverseStep+` and
+    `ReverseContinue+` and adds `vContSupported+`. Without that feature
+    GDB must assume the target cannot single-step. `arm-zephyr-eabi-gdb`
+    16.2 used `s` anyway, but `gdb-multiarch` 15.1 (Ubuntu 24.04, the CI
+    GDB) stepped in software, with a temporary breakpoint and a `c` per
+    step. Its steps then let time flow, and a `stepi 700` ran the E1 run to
+    its end (measured in the gate before the fix).
+- **The debug mark.** The proxy records each operation that can change
+  results:
+  - a breakpoint or watchpoint stop, and inserting a breakpoint or
+    watchpoint (conservative: an inserted hook that never fires was not
+    measured);
+  - a single-step;
+  - a register or memory write;
+  - a read in the peripheral or system range (`0x40000000`-`0x5FFFFFFF`,
+    `0xE0000000` and up), since a register read can have side effects
+    (SysTick's `COUNTFLAG` clears on read).
+
+  The first of them becomes one `warn` log record from the CPU engine,
+  stamped at the start of the `RUN_FOR` in (or before) which it happened:
+  "debug run: GDB: <what> in (p ns, g ns]: ... must not be compared
+  against references (bb run --gdb, ADR-008 D10)". This holds for both
+  front ends: a board-file run has no `run.json`, and its mark is this
+  record. A project run's `run.json` has `"debug": true` for every
+  `--gdb` run, with `options.gdb` and `options.gdb_wait`
+  (`spec/project.md` section 6, the edit D10 implies; the key is absent
+  without `--gdb`). The summary line names the first operation.
+
+  This differs from the prototype's proposal (a `warn` record at t = 0 on
+  every `--gdb` board-file run). Marking at the first operation that can
+  change results keeps a session that only attached, read and detached
+  byte-identical to the run without GDB, which is the part of D10's gate
+  that does hold, and gated. And it says where the run stopped being
+  comparable.
+- **`spec/` changes:**
+  - `spec/project.md` section 6: the `debug` key (D10).
+  - `spec/time-grant.md`: unchanged. Its rule that an engine must not
+    depend on wall-clock time holds for every unmarked run, since those
+    are byte-identical to runs without GDB (gated). A marked run can
+    depend on when a person interrupted it: Ctrl-C itself changes
+    nothing, but a breakpoint set after it is anchored there. D10 and
+    "Determinism impact" already put a marked run outside every
+    comparison. The prototype suggested one exempting sentence in
+    `time-grant.md`. It is left to the approver (open question below),
+    not applied.
+  - `spec/event-stream.md`: unchanged (the mark is a `log` record).
+- **Setup.** `make setup` installs `gdb-multiarch` (Ubuntu 24.04: GDB
+  15.1). The gates find `gdb-multiarch`, `arm-none-eabi-gdb` or the Zephyr
+  SDK's `arm-zephyr-eabi-gdb`, in that order (`GDB=` overrides).
+  `make doctor` reports it.
+
+#### Gates
+
+- **`make gdb-test`** (in `make test`): attach at reset and detach without
+  a stop give all four files of the committed hashes of the run without
+  GDB (`tests/golden/spike/outputs.sha256`;
+  `tests/golden/dms-rail/ok-cold/outputs.sha256`, whose `events.jsonl`,
+  grant records included, is E1's one-cell reference, and `--gdb` runs E1
+  in one-cell grants). No mark. A breakpoint hit twice and continued
+  finishes with exactly one mark, on both boards. E1's `run.json` has
+  `debug: true`, `options.gdb` and lookahead off. A run without `--gdb`
+  has no `debug` key, no `gdb` option, no mark and the committed hashes.
+  `monitor` is refused and changes nothing.
+- **`make gdb`** (CI job `dms-rail`) adds:
+  - attach in the middle of a running 5 s spike run (no wait, at 1.0, 1.4
+    and 1.8 s), read registers and RAM, detach: identical to the run
+    without GDB;
+  - the scripted breakpoint session 21 times on the spike, the same with
+    three single-steps 20 times, and 5 times on E1: each byte-identical
+    across repetitions (all four files). This is the case that lost sync
+    6 of 22 times in the prototype: GDB's continue follows the attach at
+    once, and continuing from a breakpoint steps off it first;
+  - single-steps and register and RAM reads at the breakpoint change
+    nothing more than the breakpoint;
+  - a 5 s hold at the breakpoint with the External Control timeout at
+    2 s (`BB_RENODE_IO_TIMEOUT`, a test knob): no failure, outputs equal
+    to the session without the hold. The proxy trace shows no `RUN_FOR`
+    boundary during the hold and the CPU's time inside the open `RUN_FOR`
+    (the run neither free-runs nor passes its grant while halted);
+  - Ctrl-C then detach, and Ctrl-C then continue: the runs finish,
+    identical to the run without GDB, no mark;
+  - on E1, Ctrl-C then 700 single-steps then continue, and 1 500
+    single-steps after the breakpoint, across grant boundaries and a WFI:
+    both finish. The 1 500 steps change nothing more than the
+    breakpoint;
+  - `monitor start`, `pause`, `halt` and `emulation RunFor` refused, the
+    run unchanged; a second debugger refused while one is attached;
+  - GDB killed during a halt: the run finishes. `bb` killed during a
+    halt: its Renode exits too (no orphan);
+  - the listener is bound to `127.0.0.1` only;
+  - `--gdb` with `BB_RENODE_POOL` set never asks the pool and starts
+    Renode fresh (control: the same environment makes a run without
+    `--gdb` ask it).
+- **Not a cost-table row.** `--gdb` is never on by default and its runs
+  are not results. Its cost, attached at reset and detached at once,
+  medians of 3 runs, load 1.7-2.4 (not the ADR-003 protocol):
+  - spike, 500 ms: 1.83 s without GDB and 2.29 s with it (engine startup
+    1.44 s and 1.70 s, simulation 0.38 s and 0.56 s);
+  - E1, 120 ms, against its one-cell run (`--lookahead off`, the grants
+    `--gdb` forces): 8.12 s and 9.41 s (simulation 6.49 s and 7.60 s,
+    12 000 grants, about 0.09 ms more per `RUN_FOR` for the two proxy
+    notifications).
+
+  Against E1's default run (lookahead on, about 4 s) the forced one-cell
+  grants are most of the cost.
+
+- **Gate runs** (2026-11-13/14): `make gdb` PASS with `gdb-multiarch`
+  15.1 (5 min 3 s) and with `arm-zephyr-eabi-gdb` 16.2 (4 min 37 s), 33
+  PASS lines each; `make check` green fresh (`POOL=0`, 10 min 47 s) and on
+  the pool (9 min 17 s); `make pool-equiv` PASS (23 configurations, 46
+  leased runs). No committed golden changed.
+
+#### Residual risks
+
+- **Renode's internal stub port** listens on every interface from the
+  `StartGdbServer` line until the engine connects, a fraction of a second
+  at startup, on a random port. A remote client that connected first would
+  hold the stub's only slot, and the run would not start.
+- **Not measured:** watchpoints (forwarded and marked), holds of minutes
+  or more (no timeout is left that could fire), and multi-CPU boards
+  (Phase 1 has one MCU).
+- **A halted CPU asleep in WFI does not stop time.** After Ctrl-C the
+  CPU parks at the next slice boundary at which it is awake, so a Ctrl-C
+  during a long sleep halts at the wake, not at once. Renode's time flows
+  meanwhile, inside the grants, as it does for a sleeping CPU.
+
+#### Open question for the approver
+
+- **`spec/time-grant.md`.** Add one sentence exempting a marked debug run
+  from the wall-clock rule? **Recommended: yes**, with this text: "A
+  debug run (`bb run --gdb`) whose outputs carry the debug mark
+  (ADR-008 D10, Amendment 7) is exempt: it may depend on when a debugger
+  acts, and it is never compared against a reference."
 

@@ -219,6 +219,13 @@ jobs:
       - name: E1 gate
         run: make dms-rail
 
+      # Phase 1 M9 (ADR-008 D10, Amendment 7): `bb run --gdb` driven by gdb-multiarch (installed by
+      # make setup) in batch mode on the spike and on E1. Attach without a stop is byte-identical to
+      # the run without GDB; a breakpoint marks the run; scripted sessions repeat byte for byte;
+      # holds, Ctrl-C, steps across grants, monitor refusal, kills, the loopback listener, the pool.
+      - name: GDB passthrough gate
+        run: make gdb
+
       # The docs site's committed waveform plots (site/public/plots) regenerated from fresh runs
       # (E1, E2 sag/rec/s50, the spike) must be byte-identical (about 1 min 45 s).
       - name: Docs plots up to date

@@ -156,6 +156,7 @@
 //! the rest of the engine does not depend on where its Renode came from.
 
 pub mod console;
+pub mod gdb;
 pub mod manager;
 pub mod pool;
 pub mod protocol;
@@ -828,6 +829,25 @@ pub struct RenodeConfig {
     /// Turn every line the firmware writes to UARTE0/1 into an `info` log
     /// record (ADR-008 D8; [`Platform::Nrf52840Bb`] only).
     pub uart_log: bool,
+    /// GDB passthrough (`bb run --gdb`, ADR-008 D10, Amendment 7): Renode's
+    /// GDB stub behind the [`gdb::GdbProxy`] on `127.0.0.1`. Needs lookahead
+    /// off; the engine then starts Renode fresh (never from the pool),
+    /// without the JIT startup profile, and its External Control reads have
+    /// no timeout (a halted CPU holds a `RUN_FOR` open).
+    pub gdb: Option<gdb::GdbConfig>,
+}
+
+/// Environment override of [`RenodeConfig::io_timeout`] in seconds (a test
+/// knob: the GDB gate shows that a halt longer than it does not fail).
+#[doc(hidden)]
+pub const IO_TIMEOUT_ENV: &str = "BB_RENODE_IO_TIMEOUT";
+
+fn io_timeout_from_env() -> Duration {
+    std::env::var(IO_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .map_or(Duration::from_secs(120), Duration::from_secs)
 }
 
 /// The default of [`RenodeConfig::ec_messages_per_connection`]: a quarter
@@ -862,7 +882,7 @@ impl RenodeConfig {
             seed: 0,
             verify: Verify::Edges,
             startup_timeout: Duration::from_secs(120),
-            io_timeout: Duration::from_secs(120),
+            io_timeout: io_timeout_from_env(),
             lookahead: LookaheadCfg::default(),
             extra_monitor: Vec::new(),
             pool: pool::from_env(),
@@ -870,6 +890,7 @@ impl RenodeConfig {
             pin_cnf_audit: Vec::new(),
             adc_trace: Vec::new(),
             uart_log: false,
+            gdb: None,
         }
     }
 
@@ -1450,6 +1471,10 @@ pub struct RenodeEngine {
     saadc: Option<SaadcPoll>,
     /// ADR-008 D8: the UARTE tap.
     uart: Option<UartPoll>,
+    /// ADR-008 D10: the GDB proxy (`bb run --gdb`).
+    gdb: Option<gdb::GdbProxy>,
+    /// The debug mark (a `warn` log record) has been emitted.
+    gdb_marked: bool,
 }
 
 /// The External Control connection's parameters, for reconnecting.
@@ -1461,6 +1486,8 @@ struct EcConnection {
     messages_per_connection: u64,
     /// Connections replaced so far.
     reconnects: u64,
+    /// GDB mode: no read timeout (a halted CPU holds a `RUN_FOR` open).
+    no_read_timeout: bool,
 }
 
 /// Lookahead state of a [`RenodeEngine`].
@@ -1587,6 +1614,17 @@ impl RenodeEngine {
                 "lookahead enabled without the lookahead plugin".into(),
             ));
         }
+        // ADR-008 D10: a debugger-halted CPU breaks the lookahead plugin's
+        // WFI-based promises.
+        if cfg.gdb.is_some() && la.enabled {
+            return Err(EngineError::Other(
+                "GDB passthrough needs lookahead off (ADR-008 D10)".into(),
+            ));
+        }
+        let gdb_stub_port = match cfg.gdb {
+            Some(_) => Some(free_port()?),
+            None => None,
+        };
         if !cfg.pin_cnf_audit.is_empty() && cfg.platform != Platform::Nrf52840Bb {
             return Err(EngineError::Other(
                 "the PIN_CNF audit is for the nRF52840 platform only".into(),
@@ -1636,7 +1674,9 @@ impl RenodeEngine {
         // ADR-004 Part B: a warm process from the pool, if one is idle and
         // matches this Renode and plugin; otherwise a fresh Renode.
         let lease = match &cfg.pool {
-            Some(sock) => {
+            // GDB mode always starts Renode fresh (its stub and the CPU's
+            // debugger state belong to the process).
+            Some(sock) if cfg.gdb.is_none() => {
                 let key = pool::PoolKey {
                     renode: pool::canonical_renode(&cfg.renode)
                         .to_string_lossy()
@@ -1653,7 +1693,7 @@ impl RenodeEngine {
                     }
                 }
             }
-            None => None,
+            _ => None,
         };
         // The loader runs before the platform, which may name the plugin's
         // types (ADR-005 D6). A pool process loaded the cached assembly at
@@ -1677,6 +1717,12 @@ impl RenodeEngine {
             (String::new(), String::new())
         };
         let extra: String = cfg.extra_monitor.iter().map(|l| format!("{l}\n")).collect();
+        // ADR-008 D10: Renode's GDB stub on an internal port; never start
+        // the emulation from it (`autostartEmulation false`, Context 8).
+        let gdb_server = match gdb_stub_port {
+            Some(p) => format!("machine StartGdbServer {p} false\n"),
+            None => String::new(),
+        };
         // ADR-008 D4, mid-run: a write hook on each audited GPIO port's
         // DIR/DIRSET/DIRCLR and PIN_CNF registers appends `<t_ns> <port>
         // <offset> <value>` to a file in the workdir; the engine reads it
@@ -1713,6 +1759,7 @@ impl RenodeEngine {
              emulation SetGlobalQuantum \"{quantum}\"\n\
              emulation SetGlobalSerialExecution true\n\
              emulation SetGlobalAdvanceImmediately true\n\
+             {gdb_server}\
              {extra}\
              {plugin_arm}\
              logLevel 2\n\
@@ -1743,7 +1790,9 @@ impl RenodeEngine {
             None => {
                 let log = std::fs::File::create(&log_path)?;
                 let mut cmd = renode_command(&cfg.renode);
-                jit = JitProfile::for_run(cfg, instance);
+                if cfg.gdb.is_none() {
+                    jit = JitProfile::for_run(cfg, instance);
+                }
                 if let Some(j) = &jit {
                     j.apply(&mut cmd);
                 }
@@ -1896,9 +1945,25 @@ impl RenodeEngine {
             };
             Ok((client, md, pins, t0, la))
         };
-        let (client, machine, pins, t0, la_words) = match setup() {
+        let (mut client, machine, pins, t0, la_words) = match setup() {
             Ok(v) => v,
             Err(e) => return Err(fail(&mut host, format!("setup failed: {e}"))),
+        };
+        // ADR-008 D10: the proxy takes the stub's only client slot before
+        // the first RUN_FOR (Renode then switches the CPU to single-step
+        // mode, so it parks at the start of the first RUN_FOR), and RUN_FOR
+        // reads have no timeout.
+        let gdb = match (&cfg.gdb, gdb_stub_port) {
+            (Some(g), Some(p)) => {
+                if let Err(e) = client.set_read_timeout(None) {
+                    return Err(fail(&mut host, format!("setup failed: {e}")));
+                }
+                match gdb::GdbProxy::start(p, g, Instant::now() + cfg.startup_timeout) {
+                    Ok(px) => Some(px),
+                    Err(e) => return Err(fail(&mut host, format!("GDB: {e}"))),
+                }
+            }
+            _ => None,
         };
         if t0 != 0 {
             return Err(fail(
@@ -1970,6 +2035,7 @@ impl RenodeEngine {
                 io_timeout: cfg.io_timeout,
                 messages_per_connection: cfg.ec_messages_per_connection,
                 reconnects: 0,
+                no_read_timeout: gdb.is_some(),
             },
             la: Lookahead {
                 cfg: cfg.lookahead.clone(),
@@ -1996,7 +2062,20 @@ impl RenodeEngine {
                 seen: 0,
                 lines: [Vec::new(), Vec::new()],
             }),
+            gdb,
+            gdb_marked: false,
         })
+    }
+
+    /// The port the GDB proxy listens on (`127.0.0.1`), with `--gdb`.
+    pub fn gdb_port(&self) -> Option<u16> {
+        self.gdb.as_ref().map(|g| g.port())
+    }
+
+    /// The GDB session summary (shared; read it after the run), with
+    /// `--gdb`.
+    pub fn gdb_status(&self) -> Option<std::sync::Arc<Mutex<gdb::GdbStatus>>> {
+        self.gdb.as_ref().map(|g| g.status())
     }
 
     /// ADR-008 D7, after an advance to `target_ns`: fail on the host port's
@@ -2771,7 +2850,34 @@ impl RenodeEngine {
             }
         }
         self.reconnect_if_due()?;
-        self.client.run_for(ns).map_err(proto)?;
+        if let Some(g) = &self.gdb {
+            g.before_run_for(to_ns)
+                .map_err(|e| EngineError::Protocol(format!("GDB: {e}")))?;
+        }
+        let r = self.client.run_for(ns).map_err(proto);
+        if let Some(g) = &self.gdb {
+            let what = g
+                .after_run_for()
+                .map_err(|e| EngineError::Protocol(format!("GDB: {e}")))?;
+            // ADR-008 D10, Amendment 7: the debug mark, once, at the start
+            // of the first RUN_FOR in (or before) which the debugger did
+            // something that can change results.
+            if let (Some(what), false) = (what, self.gdb_marked) {
+                self.gdb_marked = true;
+                self.logs.push(bbcore::LogRecord {
+                    t: Time::from_ns(self.renode_ns),
+                    level: bbcore::LogLevel::Warn,
+                    msg: format!(
+                        "debug run: GDB: {what} in ({} ns, {to_ns} ns]: a stop inside a Renode \
+                         time slice or a change of the CPU's state, so results from here on may \
+                         differ from a run without GDB and must not be compared against \
+                         references (bb run --gdb, ADR-008 D10)",
+                        self.renode_ns
+                    ),
+                });
+            }
+        }
+        r?;
         self.run_for_calls += 1;
         self.renode_ns = to_ns;
         events.extend(self.client.take_events());
@@ -2837,6 +2943,9 @@ impl RenodeEngine {
             }
         };
         let mut client = Client::handshake(stream, self.ec.io_timeout).map_err(proto)?;
+        if self.ec.no_read_timeout {
+            client.set_read_timeout(None).map_err(proto)?;
+        }
         let md = client.get_machine(&self.ec.machine).map_err(proto)?;
         for p in &mut self.pins {
             p.gpio = match p.spec.direction {
@@ -3211,6 +3320,10 @@ fn ceil_lattice_ns(t: Time, quantum_ns: u64) -> u64 {
 
 impl Drop for RenodeEngine {
     fn drop(&mut self) {
+        // The debugger first: it gets `W00` if it waits for a stop reply.
+        if let Some(mut g) = self.gdb.take() {
+            g.shutdown();
+        }
         match &mut self.host {
             Host::Child(c) => {
                 // A clean run that gathers the startup JIT profile stops

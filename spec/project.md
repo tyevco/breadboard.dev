@@ -243,6 +243,9 @@ under the bound pin, `kind = "pin_load"`; an explicit `load = "none"` on
 an `adc_in` binding is recorded the same way, with `view = "none"` and only
 `ref`, `package`, `version` and `kind`); `out_of_scope` and `not_simulated` (with
 reasons); `packages` and `platforms` (the locked hashes); `deck_sha256`;
-`options` (every run option that can change results, the probes); and
+`options` (every run option that can change results, the probes; with
+`--gdb` also `gdb` and `gdb_wait`); `debug`, `true` for a run with a
+debugger attached (`bb run --gdb`, ADR-008 D10 and Amendment 7) and
+absent otherwise: a debug run is never compared against a reference; and
 `versions`. `bb run` flags a view whose provenance is `estimated` or
 `agent_generated` in its summary.

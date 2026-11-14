@@ -157,6 +157,14 @@ impl Client {
         Ok(c)
     }
 
+    /// Replace the read timeout (`None`: wait for ever). GDB mode
+    /// (ADR-008 D10): a debugger-halted CPU keeps a `RUN_FOR` open for as
+    /// long as the debugger holds it.
+    pub fn set_read_timeout(&mut self, t: Option<Duration>) -> Result<()> {
+        self.stream.set_read_timeout(t)?;
+        Ok(())
+    }
+
     /// Close the connection (both directions). Later requests fail.
     pub fn close(&mut self) {
         let _ = self.stream.shutdown(std::net::Shutdown::Both);

@@ -38,7 +38,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 1 min 45 s). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, and from M8 `nrf-saadc-model` and `dms-vsense-test`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, and from M9 `gdb-test`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -64,6 +64,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make adc-startup` | ADR-005 D6 startup gate (`scripts/plugin_startup.sh`, fresh Renode, interleaved, N = `ADC_STARTUP_N`, medians): the ADC board's engine startup on Breadboard's STM32F072 with a warm plugin cache within 0.3 s of the stock STM32F072 with the lookahead plugin, and a cold start (the plugin assembly compiled) within 3 s of a warm one. Run it on an idle host |
 | `make adc-renode` | The Renode-only test of the stock ADC model of ADR-003 Amendment 5 (`make -C examples/adc test`, about 15 s; CI job `adc`) |
 | `make ec-reconnect` | ADR-004 Amendment 8: the one-cell references of `examples/adc` (`--lookahead off --adc-push every`) and `examples/feedback` (`--lookahead off`), with the Renode engine replacing its External Control connection every 2 000 messages (`EC_MESSAGES`, passed as `BB_RENODE_EC_MESSAGES`), must give their committed hashes (about 40 s; in `make test`) |
+| `make gdb` / `make gdb-test` | Phase 1 M9 (ADR-008 D10, Amendment 7): `bb run --gdb <port>` (`--gdb-wait on\|off`) driven by a real GDB in batch mode (`scripts/gdb_gate.py`; GDB: `gdb-multiarch` from `make setup`, else `arm-none-eabi-gdb` or the Zephyr SDK's, `GDB=` overrides) on the spike and E1 (a copy of the project in `~/.cache/bb-gdb-gate`). `gdb-test` (in `make test`, about 45 s): attach and detach without a stop give all four committed hashes of the run without GDB on both boards, a breakpoint hit and continued gives exactly one `warn` debug mark (and run.json `debug: true` on E1), a run without `--gdb` has no debug key, `monitor` is refused. `gdb` (CI job `dms-rail`, about 5 min) adds attach mid-run, the scripted breakpoint session 21 times (5 on E1) byte-identical, steps and reads at a breakpoint, a 5 s hold past a 2 s External Control timeout (`BB_RENODE_IO_TIMEOUT`) with no grant boundary during it, Ctrl-C then detach or continue, 1 500 steps across grants and WFI, a second debugger, GDB or bb killed during a halt, the loopback listener and the pool. A marked run is never compared against a reference |
 | `make ec-long` | ADR-004 Amendment 8 long one-cell gate (`scripts/ec_long.sh`, about 2.5 min): the ADC board's every-lattice-point reference over 1 500 ms (`EC_LONG_FOR`; Renode used to crash after 81 746 grants) must finish, reconnect at least once, pass `check_adc.py` and equal the lookahead run except grant records (CI job `adc`) |
 | `make nrf-gates` | Phase 1 M2 gate (ADR-008 D1-D4, D6; Amendment 2): the Renode engine tests `engines/cpu-renode/tests/nrf52840.rs` on Breadboard's nRF52840 (`Platform::Nrf52840Bb`, `nrf52840-bb@1`: no SVD download, 64 MIPS) with the bare-metal gate firmware in `engines/cpu-renode/tests/firmware/nrf52840/` (nrf-blinky edges identical at one-cell grants, 10 ms grants, plugin armed and lookahead on, self-test status exactly 0x3; nrf-ppi; nrf-busywait: a 10 ms nrfx busy-wait takes 6.66 ms of virtual time; the D6 TIMER-compare-then-long-sleep promise clamp; the PIN_CNF audit, mid-run and end-of-run) and the prebuilt Zephyr gate image (nrf-zephyr), then `make nrf-feedback` (about 2 min) |
 | `make nrf-saadc-model` | Phase 1 M8, first half (ADR-008 D7, D8, Amendment 4; in `make test`, about 25 s): Breadboard's nRF52840 SAADC (`BbNrf52Saadc` on `nrf52840-bb@2`). The Renode-only register and timing tests in ADR-005's test-plan shape (`examples/nrf-saadc/bb_saadc_test.py`, `nrf_saadc_idle.elf` / `nrf_saadc_burst.elf`: reset values, every TACQ x RESOLUTION x OVERSAMPLE x BURST instant, the 8x BURST, transfer and rounding, VDD, EasyDMA, LIMIT, timer mode, the IRQ, the TACQ < 2 L refusal, the UART tap; run twice, byte-identical), then `scripts/nrf_saadc_board.sh` on `examples/nrf-saadc` (the loading `adc_in`: 8 `#smp` toggles and exactly 8 charge transfers per 8x burst against the analytic charge sharing, codes, UART lines; lookahead at 1 ms and 10 ms, push-on-change and `--engine-order analog-first` equal to the every-lattice-point one-cell reference `tests/golden/nrf-saadc/outputs.sha256`; the refusal at `--renode-quantum 25us` and its message; the `load=none` escape). `make nrf-saadc-update` rewrites the hashes; `make cost-table-nrf-saadc` is the board's cost-table row (also in `make cost-table`; idle host) |
@@ -128,7 +129,8 @@ engines/cpu-renode/     Renode engine over the External Control API; platforms/:
                         bb_stm32_timer.cs, STM32_Timer + TRGO; bb_stm32f0_adc.cs, the STM32F0
                         ADC model and its host port, ADR-005) and stm32f072-bb.repl (the F072
                         overlay); tests/firmware (gate firmware); console.rs, pool.rs,
-                        manager.rs (the warm Renode pool, ADR-004)
+                        manager.rs (the warm Renode pool, ADR-004); gdb.rs (the GDB proxy of
+                        `bb run --gdb` in front of Renode's stub, ADR-008 D10, Amendment 7)
 cli/                    `bb` binary (`bb run`, `bb pool`, `bb open`, `bb pkg`, `bb flash`, `bb probe`,
                         board-file parser, platforms.rs: the Renode platform identities of ADR-006 D8;
                         Phase 1 M4: project.rs (bb.toml, benches), names.rs, import.rs (resolution, D4),
@@ -197,7 +199,7 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         check_dms_rail.py, dms_rail.sh,
                         dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py), demo.sh,
                         stranger_test.sh, docs_plots.sh (+ docs_plots.py),
-                        jit_profile_stress.sh
+                        jit_profile_stress.sh, gdb_gate.py
 ```
 
 ## The three invariants
@@ -307,6 +309,17 @@ feedback board).
 
 - **Stepping ngspice per instruction.** ngspice advances one *grant* at a
   time, to a breakpoint at `g`.
+- **Handing Renode's GDB stub to a debugger, or forwarding a resume
+  unchecked.** A GDB step while no `RUN_FOR` runs calls
+  `emulation.StartAll()` (a free-run), Ctrl-C pauses the CPU mid-slice
+  and can hang a `RUN_FOR`, `monitor` reaches Renode's time control, and
+  the stub's park replies race resumes. `bb run --gdb` keeps the stub
+  behind its proxy (`engines/cpu-renode/src/gdb.rs`): a `c` or `s` goes to
+  Renode only after a state read shows the CPU parked inside a running
+  `RUN_FOR` before its end, and Ctrl-C becomes a single-step-mode switch
+  between `RUN_FOR`s (ADR-008 Amendment 7). A breakpoint stop or a step
+  changes results; such a run carries a `warn` debug mark and is never a
+  reference.
 - **Letting Renode's virtual time run ahead of the grant.** Drive Renode only
   with `RunFor` calls that end on the grant lattice at or before `g`. Never use
   `start`/free-running emulation and then try to catch up.

@@ -44,10 +44,12 @@ APT_PACKAGES=(
   libicu74
 )
 # Developer additions: the ARM toolchain for the firmware and the gate
-# firmware, cmake, and python3-jsonschema for the package schema validation
-# (`make packages`, ADR-006 G1).
+# firmware, cmake, python3-jsonschema for the package schema validation
+# (`make packages`, ADR-006 G1), and gdb-multiarch for the GDB passthrough
+# gates (`make gdb-test`, ADR-008 D10).
 if [ "${MODE}" != demo ]; then
-  APT_PACKAGES+=(cmake gcc-arm-none-eabi libnewlib-arm-none-eabi binutils-arm-none-eabi python3-jsonschema)
+  APT_PACKAGES+=(cmake gcc-arm-none-eabi libnewlib-arm-none-eabi binutils-arm-none-eabi python3-jsonschema
+    gdb-multiarch)
 fi
 # The Zephyr host tools a west build of the E1 firmware uses (ninja, gperf, a venv for west).
 if [ "${MODE}" = zephyr ]; then

@@ -212,6 +212,36 @@ The firmware is in `examples/dial-me-spinner/firmware/vsense/`. Both images
 are prebuilt, and `make fw-rebuild` reproduces them from a fresh Zephyr
 v4.5.0 workspace. Details are in ADR-008 Amendment 5.
 
+## Debugging firmware with GDB
+
+`bb run --gdb <port>` (Phase 1 M9, ADR-008 D10 and Amendment 7) puts a GDB
+remote server on `127.0.0.1:<port>` in front of the simulated MCU. The CPU
+waits at reset until a debugger attaches and continues (`--gdb-wait off`
+starts the run at once; attach later). Virtual time stops while the CPU is
+halted, and no grant runs past it, however long you look.
+
+```sh
+bb run --gdb 3333 --for 120ms --bench bench/cold.toml --out out/debug   # in examples/dial-me-spinner
+gdb-multiarch firmware/prebuilt/led_rail.elf -ex 'target remote :3333'
+```
+
+Attaching, halting with Ctrl-C, reading registers and memory, and detaching
+change nothing: such a run is byte-identical to the run without GDB (gated
+on the spike and on E1). A breakpoint or watchpoint stop, a single-step, a
+write, or a read of a peripheral register **can** change the results. A
+breakpoint ends Renode's time slice early, which moves later edge stamps by
+tens of nanoseconds; on E1 one breakpoint moved VLED by up to 12 mV. The
+first such operation marks the run: a `warn` record in `events.jsonl`
+("debug run: GDB: ...") and, for a project, `"debug": true` in `run.json`.
+Never compare a marked run against a reference. `--gdb` forces lookahead
+off and always starts Renode fresh. GDB's `monitor` is refused (it would
+reach Renode's time control).
+
+```sh
+make gdb-test   # in make test: attach without a stop is identical, a breakpoint marks the run
+make gdb        # the M9 gate, about 5 min
+```
+
 ## Phase 0
 
 Phase 0 was a spike that tested the project's top risk: is
@@ -310,6 +340,10 @@ The run writes these files to `out/spike/`:
    vendor-derived TPS22917 view lives only in the git-ignored
    `local-packages/`; the committed `ti/tps22917` is datasheet-fitted,
    Phase 1 M5b).
+9. `make gdb-test` (Phase 1 M9): GDB in batch mode against `bb run --gdb`
+   on the spike and on E1. Attaching and detaching without a stop give the
+   committed hashes of the run without GDB; a breakpoint hit and continued
+   marks the run (above, "Debugging firmware with GDB").
 
 The example boards take their MCU and its pin models from component
 packages (`packages/`, `spec/package.md`): `*bb part U1

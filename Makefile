@@ -143,6 +143,7 @@ pooled-test:
 	$(MAKE) dms-vsense-test
 	$(MAKE) ec-reconnect
 	$(MAKE) packages
+	$(MAKE) gdb-test
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -1010,6 +1011,28 @@ docs-plots-check: firmware bb
 	    echo "docs-plots-check: PASS ($(DOCS_PLOTS_DIR) identical to the regenerated figures)"; \
 	else head -40 $(DOCS_PLOTS_OUT)/svg.diff; \
 	    echo "docs-plots-check: FAIL: the committed plots differ from the runs (make docs-plots, review, commit)"; exit 1; fi
+
+# Phase 1 M9 (ADR-008 D10, Amendment 7): `bb run --gdb` driven by a real GDB in batch mode
+# (scripts/gdb_gate.py), on the spike and on E1 (led_rail.elf, cold bench; a copy of the project in
+# $(GDB_WORK) made by `dms_rail.sh prepare`). `make gdb-test` (in `make test`, about 1 min): attach
+# and detach without a stop give the committed hashes of the run without GDB, on both boards; a
+# breakpoint hit and continued marks the run (one warn record; run.json debug: true); monitor is
+# refused; a run without --gdb has no debug key. `make gdb` (CI job dms-rail, about 5 min) adds
+# attach mid-run, the scripted breakpoint session 20 times (5 on E1), steps and reads at the
+# breakpoint, a 5 s hold past a 2 s External Control timeout, Ctrl-C then detach or continue,
+# 1 500 steps across grants and WFI, a second debugger, GDB or bb killed during a halt, the
+# loopback listener and the pool. GDB: gdb-multiarch (make setup), arm-none-eabi-gdb or the
+# Zephyr SDK's arm-zephyr-eabi-gdb.
+.PHONY: gdb gdb-test
+GDB      ?= $(shell command -v gdb-multiarch 2>/dev/null || command -v arm-none-eabi-gdb 2>/dev/null || \
+              ls $(HOME)/.local/opt/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb 2>/dev/null)
+GDB_OUT  ?= out/gdb
+GDB_WORK ?= $(HOME)/.cache/bb-gdb-gate
+gdb gdb-test: firmware bb
+	@test -n "$(GDB)" || { echo "$@: no GDB found (make setup installs gdb-multiarch; or pass GDB=<path>)"; exit 1; }
+	DMS_RAIL_WORK=$(GDB_WORK) bash scripts/dms_rail.sh prepare $(BB)
+	$(PYTHON) scripts/gdb_gate.py $(if $(filter gdb,$@),gate,test) --bb $(BB) --gdb $(GDB) \
+	    --out $(GDB_OUT)/$(if $(filter gdb,$@),gate,test) --work $(GDB_WORK)
 
 fmt:
 	$(CARGO) fmt --all

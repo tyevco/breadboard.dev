@@ -89,7 +89,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
               [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
-              [--renode-pool env|off] [--uart-log on|off]
+              [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
        bb pool run|start|stop|status ...   (bb pool --help)
        bb open [<dir>|<.kicad_pro>|<.net>|<board.cir>] [--check] [--update-lock]   (bb open --help)
        bb flash --target <instance> <file.elf> [--kind elf] [--project <dir>]
@@ -177,7 +177,22 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  the outputs
   --uart-log     on (default) or off: on the nRF52840, every line the firmware
                  writes to UARTE0/1 becomes an info log record at the time of
-                 its last byte (ADR-008 D8)";
+                 its last byte (ADR-008 D8)
+  --gdb          debug the firmware with GDB: a GDB remote server on
+                 127.0.0.1:<port> (0: a free port; printed) in front of
+                 Renode's stub (ADR-008 D10). `target remote :<port>`. Forces
+                 lookahead off, starts Renode fresh (no pool). Attaching,
+                 halting, reading registers and RAM and detaching change no
+                 output; a breakpoint or watchpoint stop, a step, a write or a
+                 peripheral read can, and the first one marks the run (a
+                 warn log record; run.json debug: true for a --gdb project
+                 run). Never compare a marked run against a reference.
+                 Virtual time stops while the CPU is halted; no grant runs
+                 past it
+  --gdb-wait     on (default): the CPU waits at reset until a debugger has
+                 attached and continued (or detached), like QEMU's -S; off:
+                 the run starts at once and a debugger may attach at any
+                 time (the CPU halts at its next slice boundary)";
 
 struct RunArgs {
     /// `--netlist`: a Phase 0 board file; `None`: a project.
@@ -211,6 +226,10 @@ struct RunArgs {
     renode_pool: bool,
     /// `--uart-log on` (true, the default) or `off` (ADR-008 D8).
     uart_log: bool,
+    /// `--gdb <port>` (ADR-008 D10).
+    gdb: Option<u16>,
+    /// `--gdb-wait on` (true, the default) or `off`.
+    gdb_wait: bool,
 }
 
 fn parse_adc_push(s: &str) -> Result<AdcPush, String> {
@@ -339,6 +358,8 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut adc_bb = ADC_MODEL_DEFAULT_BB;
     let mut uart_log = true;
     let mut renode_pool = true;
+    let mut gdb = None;
+    let mut gdb_wait = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -417,6 +438,16 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
                     v => return Err(format!("--uart-log: {v:?}: expected on or off")),
                 }
             }
+            "--gdb" => {
+                gdb = Some(
+                    val(a)?
+                        .parse::<u16>()
+                        .map_err(|_| "--gdb: expected a TCP port (0-65535)".to_string())?,
+                )
+            }
+            "--gdb-wait" => {
+                gdb_wait = Some(parse_on_off(&val(a)?).map_err(|e| format!("--gdb-wait: {e}"))?)
+            }
             "--renode-pool" => {
                 renode_pool = match val(a)?.as_str() {
                     "env" => true,
@@ -469,6 +500,16 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     if lookahead == Some(true) && plugin == PluginMode::Never {
         return Err("--lookahead on needs the lookahead plugin (--lookahead-plugin never)".into());
     }
+    if gdb.is_some() && lookahead == Some(true) {
+        return Err(
+            "--gdb forces lookahead off: a debugger-halted CPU breaks the lookahead promises \
+             (ADR-008 D10)"
+                .into(),
+        );
+    }
+    if gdb.is_none() && gdb_wait.is_some() {
+        return Err("--gdb-wait needs --gdb".into());
+    }
     Ok(RunArgs {
         netlist,
         firmware,
@@ -494,6 +535,8 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         adc_bb,
         renode_pool,
         uart_log,
+        gdb,
+        gdb_wait: gdb_wait.unwrap_or(true),
     })
 }
 
@@ -744,11 +787,16 @@ fn run(a: RunArgs) -> Result<(), String> {
     rcfg.seed = a.seed;
     rcfg.verify = a.verify;
     // ADR-004 Part B: only $BB_RENODE_POOL names a pool (approver decision 4).
-    rcfg.pool = if a.renode_pool {
+    // --gdb (ADR-008 D10) always starts Renode fresh.
+    rcfg.pool = if a.renode_pool && a.gdb.is_none() {
         bb_cpu_renode::pool::from_env()
     } else {
         None
     };
+    rcfg.gdb = a.gdb.map(|port| bb_cpu_renode::gdb::GdbConfig {
+        port,
+        wait: a.gdb_wait,
+    });
     // The STM32F072's ADC: Breadboard's model on its overlay (ADR-005 D6:
     // bbAdc, BbStm32Timer TRGO; pushes keyed by code12 and delivered as
     // timed inputs), or Renode 1.17.0's stock platform (ADC =
@@ -874,7 +922,9 @@ fn run(a: RunArgs) -> Result<(), String> {
     // ADR-003 plan step 8: lookahead is on by default wherever the plugin
     // is loaded (boards with a feedback loop); `--lookahead off` gives the
     // one-cell reference. Without the plugin there is no promise to give.
-    let lookahead = a.lookahead.unwrap_or(plugin);
+    // ADR-008 D10: --gdb forces lookahead off (the one-cell grants of a
+    // feedback board; the plugin stays loaded, so the platform is the same).
+    let lookahead = a.gdb.is_none() && a.lookahead.unwrap_or(plugin);
     rcfg.lookahead = LookaheadCfg {
         plugin,
         enabled: lookahead && plugin,
@@ -974,6 +1024,17 @@ fn run(a: RunArgs) -> Result<(), String> {
     let wall = Instant::now();
     let cpu = RenodeEngine::start(&rcfg).map_err(|e| format!("start Renode: {e}"))?;
     let pin_cnf = cpu.pin_cnf_findings();
+    let gdb_status = cpu.gdb_status();
+    if let Some(port) = cpu.gdb_port() {
+        eprintln!(
+            "bb run: GDB: listening on 127.0.0.1:{port} (`target remote :{port}`); {}",
+            if a.gdb_wait {
+                "the CPU waits at reset until a debugger attaches and continues"
+            } else {
+                "the run starts now; attach at any time"
+            }
+        );
+    }
     let renode_how = if cpu.leased() {
         format!("leased from the pool (pid {})", cpu.renode_pid())
     } else {
@@ -1153,72 +1214,80 @@ fn run(a: RunArgs) -> Result<(), String> {
     drop(sched); // stops Renode and releases ngspice
     let total_s = wall.elapsed().as_secs_f64();
 
+    // ADR-008 D10: what the debugger did.
+    let gdb = gdb_status.map(|s| s.lock().unwrap_or_else(|e| e.into_inner()).clone());
     if let Some(mut rj) = fe.run_json {
-        rj.push((
-            "options".into(),
-            bbcore::cjson::Json::obj([
-                (
-                    "for_fs",
-                    bbcore::cjson::Json::Int(a.duration.as_fs() as i128),
+        if a.gdb.is_some() {
+            // A --gdb run is a debug run (spec/project.md section 6).
+            rj.push(("debug".into(), bbcore::cjson::Json::Bool(true)));
+        }
+        let mut options = vec![
+            (
+                "for_fs",
+                bbcore::cjson::Json::Int(a.duration.as_fs() as i128),
+            ),
+            (
+                "max_quantum_fs",
+                bbcore::cjson::Json::Int(a.max_quantum.as_fs() as i128),
+            ),
+            (
+                "renode_quantum_fs",
+                bbcore::cjson::Json::Int(a.renode_quantum.as_fs() as i128),
+            ),
+            (
+                "sample_period_fs",
+                bbcore::cjson::Json::Int(a.sample_period.as_fs() as i128),
+            ),
+            ("seed", bbcore::cjson::Json::Int(a.seed as i128)),
+            ("fidelity", bbcore::cjson::Json::str(&a.fidelity)),
+            ("lookahead", bbcore::cjson::Json::Bool(lookahead)),
+            ("lookahead_plugin", bbcore::cjson::Json::Bool(plugin)),
+            (
+                "adc_push",
+                bbcore::cjson::Json::str(match a.adc_push {
+                    AdcPush::OnChange => "change",
+                    AdcPush::EveryLattice => "every",
+                }),
+            ),
+            (
+                "adc_model",
+                bbcore::cjson::Json::str(if a.adc_bb { "bb" } else { "stock" }),
+            ),
+            (
+                "verify",
+                bbcore::cjson::Json::str(format!("{:?}", a.verify).to_lowercase()),
+            ),
+            (
+                "engine_order",
+                bbcore::cjson::Json::str(match a.engine_order {
+                    EngineOrder::McuFirst => "mcu-first",
+                    EngineOrder::AnalogFirst => "analog-first",
+                }),
+            ),
+            (
+                "allow_unqualified",
+                bbcore::cjson::Json::Arr(
+                    a.allow_unqualified
+                        .iter()
+                        .map(bbcore::cjson::Json::str)
+                        .collect(),
                 ),
-                (
-                    "max_quantum_fs",
-                    bbcore::cjson::Json::Int(a.max_quantum.as_fs() as i128),
+            ),
+            (
+                "probes",
+                bbcore::cjson::Json::Arr(
+                    probes
+                        .iter()
+                        .map(|p| bbcore::cjson::Json::str(&p.name))
+                        .collect(),
                 ),
-                (
-                    "renode_quantum_fs",
-                    bbcore::cjson::Json::Int(a.renode_quantum.as_fs() as i128),
-                ),
-                (
-                    "sample_period_fs",
-                    bbcore::cjson::Json::Int(a.sample_period.as_fs() as i128),
-                ),
-                ("seed", bbcore::cjson::Json::Int(a.seed as i128)),
-                ("fidelity", bbcore::cjson::Json::str(&a.fidelity)),
-                ("lookahead", bbcore::cjson::Json::Bool(lookahead)),
-                ("lookahead_plugin", bbcore::cjson::Json::Bool(plugin)),
-                (
-                    "adc_push",
-                    bbcore::cjson::Json::str(match a.adc_push {
-                        AdcPush::OnChange => "change",
-                        AdcPush::EveryLattice => "every",
-                    }),
-                ),
-                (
-                    "adc_model",
-                    bbcore::cjson::Json::str(if a.adc_bb { "bb" } else { "stock" }),
-                ),
-                (
-                    "verify",
-                    bbcore::cjson::Json::str(format!("{:?}", a.verify).to_lowercase()),
-                ),
-                (
-                    "engine_order",
-                    bbcore::cjson::Json::str(match a.engine_order {
-                        EngineOrder::McuFirst => "mcu-first",
-                        EngineOrder::AnalogFirst => "analog-first",
-                    }),
-                ),
-                (
-                    "allow_unqualified",
-                    bbcore::cjson::Json::Arr(
-                        a.allow_unqualified
-                            .iter()
-                            .map(bbcore::cjson::Json::str)
-                            .collect(),
-                    ),
-                ),
-                (
-                    "probes",
-                    bbcore::cjson::Json::Arr(
-                        probes
-                            .iter()
-                            .map(|p| bbcore::cjson::Json::str(&p.name))
-                            .collect(),
-                    ),
-                ),
-            ]),
-        ));
+            ),
+        ];
+        if a.gdb.is_some() {
+            options.push(("gdb", bbcore::cjson::Json::Bool(true)));
+            options.push(("gdb_wait", bbcore::cjson::Json::Bool(a.gdb_wait)));
+        }
+        rj.push(("options".into(), bbcore::cjson::Json::obj(options)));
         rj.push((
             "versions".into(),
             bbcore::cjson::Json::obj([
@@ -1258,6 +1327,22 @@ fn run(a: RunArgs) -> Result<(), String> {
         );
     }
     let _ = writeln!(so, "bb run: renode: {renode_how}");
+    if let Some(g) = &gdb {
+        let _ = match &g.first {
+            Some(first) => writeln!(
+                so,
+                "bb run: GDB: debug run: debugger sessions {}, operations that can change \
+                 results {} (first: {first}); the outputs carry a debug mark (ADR-008 D10)",
+                g.sessions, g.perturbations
+            ),
+            None => writeln!(
+                so,
+                "bb run: GDB: debugger sessions {}, no stop inside a slice and no write: the \
+                 outputs are those of a run without GDB",
+                g.sessions
+            ),
+        };
+    }
     let _ = writeln!(
         so,
         "bb run: wall time {total_s:.2} s total ({startup_s:.2} s engine startup, {run_s:.2} s simulation); outputs in {}",
@@ -1482,5 +1567,27 @@ mod tests {
         assert!(!parse_args(&po).unwrap().renode_pool);
         po.extend(["--renode-pool".into(), "always".into()]);
         assert!(parse_args(&po).is_err());
+        // ADR-008 D10: --gdb <port>, waiting at reset by default; it forces
+        // lookahead off, so an explicit `--lookahead on` is refused.
+        assert_eq!((a.gdb, a.gdb_wait), (None, true));
+        let mut g = v.clone();
+        g.extend(["--gdb".into(), "3333".into()]);
+        let ga = parse_args(&g).unwrap();
+        assert_eq!((ga.gdb, ga.gdb_wait), (Some(3333), true));
+        let mut gw = g.clone();
+        gw.extend(["--gdb-wait".into(), "off".into()]);
+        assert!(!parse_args(&gw).unwrap().gdb_wait);
+        let mut gl = g.clone();
+        gl.extend(["--lookahead".into(), "on".into()]);
+        assert!(parse_args(&gl).is_err(), "--gdb with --lookahead on");
+        let mut glo = g.clone();
+        glo.extend(["--lookahead".into(), "off".into()]);
+        assert!(parse_args(&glo).is_ok());
+        let mut gb = v.clone();
+        gb.extend(["--gdb".into(), "70000".into()]);
+        assert!(parse_args(&gb).is_err(), "not a port");
+        let mut wo = v.clone();
+        wo.extend(["--gdb-wait".into(), "on".into()]);
+        assert!(parse_args(&wo).is_err(), "--gdb-wait without --gdb");
     }
 }

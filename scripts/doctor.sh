@@ -30,6 +30,8 @@ check renode           renode --version
 check ngspice          sh -c 'ngspice --version | grep -m1 -i "ngspice-"'
 if [ "${MODE}" != demo ]; then
   check uv               uv --version
+  # The GDB passthrough gates (make gdb-test, ADR-008 D10).
+  check gdb-multiarch    gdb-multiarch --version
 fi
 check bb               sh -c 'command -v bb'
 check pkg-config       pkg-config --version
