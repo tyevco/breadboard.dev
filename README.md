@@ -11,7 +11,7 @@ simulated time couples them at the pin boundary.
 project, resolves its parts to component packages (`packages/`,
 `spec/package.md`), and runs Zephyr firmware on an nRF52840 against the
 analog part of the board. Its reference demo is below. Phase 0, the spike
-the rest of this README describes, came first.
+described further below, came first.
 
 ## Quickstart: the reference demo
 
