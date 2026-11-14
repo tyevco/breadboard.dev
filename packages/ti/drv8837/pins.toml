@@ -1,0 +1,53 @@
+# ti/drv8837 pins (WSON-8 DSG with exposed pad): numbers and names as the dial-me-spinner main board's
+# netlist at 6854d25 gives them for U40/U41 (KiCad symbol dial_spinner:DRV8837DSGR, footprint
+# Texas_DSG0008A: 1 VM, 2 OUT1, 3 OUT2, 4 GND, 5 IN2, 6 IN1, 7 nSLEEP, 8 VCC, 9 the exposed pad, GND).
+# No pin is bound to a co-simulation engine: the part is an analog view only.
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "VM"
+role = "power_in"
+
+[[pin]]
+number = "2"
+name = "OUT1"
+role = "output"
+
+[[pin]]
+number = "3"
+name = "OUT2"
+role = "output"
+
+[[pin]]
+number = "4"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "5"
+name = "IN2"
+role = "input"
+supply = "VCC"
+
+[[pin]]
+number = "6"
+name = "IN1"
+role = "input"
+supply = "VCC"
+
+[[pin]]
+number = "7"
+name = "nSLEEP"
+role = "input"
+supply = "VCC"
+
+[[pin]]
+number = "8"
+name = "VCC"
+role = "power_in"
+
+[[pin]]
+number = "9"
+name = "GND"
+role = "ground"

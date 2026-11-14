@@ -381,6 +381,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         engine: "renode".into(),
         platform: pdef.board_name.to_string(),
         package: Some(chip.part.id.clone()),
+        params: Vec::new(),
     };
 
     // --- Bench names.

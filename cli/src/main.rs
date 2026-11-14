@@ -49,6 +49,7 @@
 //! lints and tests packages.
 
 mod board;
+mod devices;
 mod elab;
 mod flash;
 mod image;
@@ -76,8 +77,8 @@ use bb_cpu_renode::{
     RenodeConfig, RenodeEngine, Verify,
 };
 use bbcore::{
-    AdcIn, AdcKey, CsvWriter, Direction, Engine, EventSink, Level, Probe, Scheduler,
-    SchedulerConfig, Time, VcdKind, VcdWriter,
+    AdcIn, AdcKey, CsvWriter, Direction, Engine, EventSink, Level, PinSignal, PinSignals, Probe,
+    Scheduler, SchedulerConfig, Time, VcdKind, VcdWriter,
 };
 use board::PinKind;
 
@@ -634,6 +635,66 @@ fn load_glue(board: &board::Board, pins: &[&board::PinBinding]) -> Result<Vec<Lo
     Ok(out)
 }
 
+/// The run's kernel bindings (without the analog probes): the MCU's pins
+/// and loads in the Phase 0 order, then the device pins (ADR-006 D7,
+/// Amendment 6; spec/package.md section 12). `direct` maps a directly routed
+/// input's kernel net to its driver's (`devices::direct_inputs`).
+fn engine_binds(
+    mcu_pins: &[&board::PinBinding],
+    dev_pins: &[&board::PinBinding],
+    loads: &[LoadGlue],
+    direct: &std::collections::BTreeMap<String, String>,
+) -> Vec<devices::Bind> {
+    use devices::{Bind, ANALOG, CPU, DEVICES};
+    let b = |engine, pin: &str, net: &str, dir| Bind {
+        engine,
+        pin: pin.to_string(),
+        net: net.to_string(),
+        dir,
+    };
+    let mut out = Vec::new();
+    for p in mcu_pins {
+        let k = p.kernel_net();
+        match p.kind {
+            PinKind::Out { .. } => {
+                out.push(b(CPU, &p.pin, &k, Direction::Output));
+                out.push(b(ANALOG, &k, &k, Direction::Input));
+            }
+            PinKind::OutUnconnected => out.push(b(CPU, &p.pin, &k, Direction::Output)),
+            PinKind::In { .. } if direct.contains_key(&k) => {
+                out.push(b(CPU, &p.pin, &direct[&k], Direction::Input));
+            }
+            PinKind::In { .. } | PinKind::Adc { .. } => {
+                out.push(b(ANALOG, &k, &k, Direction::Output));
+                out.push(b(CPU, &p.pin, &k, Direction::Input));
+            }
+        }
+    }
+    for l in loads {
+        out.push(b(CPU, &l.cpu_pin, &l.kernel_net, Direction::Output));
+        out.push(b(ANALOG, &l.kernel_net, &l.kernel_net, Direction::Input));
+    }
+    // The device engine's pins are `<ref>.<pin>`, its kernel nets too.
+    for p in dev_pins {
+        let k = p.kernel_net();
+        match p.kind {
+            PinKind::Out { .. } => {
+                out.push(b(DEVICES, &k, &k, Direction::Output));
+                out.push(b(ANALOG, &k, &k, Direction::Input));
+            }
+            PinKind::OutUnconnected => out.push(b(DEVICES, &k, &k, Direction::Output)),
+            PinKind::In { .. } if direct.contains_key(&k) => {
+                out.push(b(DEVICES, &k, &direct[&k], Direction::Input));
+            }
+            PinKind::In { .. } | PinKind::Adc { .. } => {
+                out.push(b(ANALOG, &k, &k, Direction::Output));
+                out.push(b(DEVICES, &k, &k, Direction::Input));
+            }
+        }
+    }
+    out
+}
+
 /// The SPICE text of the loads (glue rule 9, ADR-008 D7): the pin_load
 /// views' definitions, then one instance per load, its ports in the view's
 /// order (pad: the pin's net; ctrl: the toggle's glue net; observe: the
@@ -752,8 +813,14 @@ fn run(a: RunArgs) -> Result<(), String> {
         .iter()
         .find(|p| p.reference == fe.target)
         .ok_or_else(|| format!("--target {}: no such part in the board file", fe.target))?;
-    if board.parts.len() != 1 {
-        return Err("Phase 0 supports exactly one MCU part per board".into());
+    if part.is_device() {
+        return Err(format!(
+            "--target {}: a device part; the target is the board's CPU part",
+            fe.target
+        ));
+    }
+    if board.parts.iter().filter(|p| !p.is_device()).count() != 1 {
+        return Err("a board has exactly one CPU part (plus any number of device parts)".into());
     }
     let mcu_pins: Vec<&board::PinBinding> = board
         .pins
@@ -763,11 +830,23 @@ fn run(a: RunArgs) -> Result<(), String> {
     if mcu_pins.is_empty() {
         return Err(format!("part {} has no *bb pin bindings", part.reference));
     }
+    // ADR-006 D7, Amendment 6: the device parts and their pins, and the
+    // digital inputs that read another digital engine's output directly.
+    let device_parts: Vec<&board::Part> = board.parts.iter().filter(|p| p.is_device()).collect();
+    let dev_pins: Vec<&board::PinBinding> = board
+        .pins
+        .iter()
+        .filter(|p| device_parts.iter().any(|d| d.reference == p.part))
+        .collect();
+    let direct = devices::direct_inputs(&board);
     // MCU pin nets carrying a digital level, and those carrying an ADC
-    // input's pushed value (ADR-003 D6).
+    // input's pushed value (ADR-003 D6). A directly routed input has no net
+    // of its own (it reads its driver's); device pins have theirs.
     let digital_nets: Vec<String> = mcu_pins
         .iter()
+        .chain(dev_pins.iter())
         .filter(|p| !matches!(p.kind, PinKind::Adc { .. }))
+        .filter(|p| !direct.contains_key(&p.kernel_net()))
         .map(|p| p.kernel_net())
         .collect();
     let adc_nets: Vec<String> = mcu_pins
@@ -907,15 +986,13 @@ fn run(a: RunArgs) -> Result<(), String> {
     // plugin, with --lookahead off as well, so both modes run the same
     // platform. Checked against the kernel's plan after the run. A loading
     // adc_in is both (its #smp toggle drives the circuit).
-    let cyclic = mcu_pins
-        .iter()
-        .any(|p| matches!(p.kind, PinKind::In { .. } | PinKind::Adc { .. }))
-        && (!loads.is_empty()
-            || mcu_pins
-                .iter()
-                .any(|p| matches!(p.kind, PinKind::Out { .. })));
+    // With device parts (ADR-006 D7, Amendment 6) the loop may be the CPU
+    // and a device (E3: PWM edges in, HOME_N out); the plugin is loaded when
+    // the CPU is in a loop.
+    let binds = engine_binds(&mcu_pins, &dev_pins, &loads, &direct);
+    let (cyclic, in_cycle) = devices::cycles(3, &binds);
     let plugin = match a.plugin {
-        PluginMode::Auto => cyclic,
+        PluginMode::Auto => in_cycle[devices::CPU],
         PluginMode::Always => true,
         PluginMode::Never => false,
     };
@@ -929,6 +1006,38 @@ fn run(a: RunArgs) -> Result<(), String> {
         plugin,
         enabled: lookahead && plugin,
         ..LookaheadCfg::default()
+    };
+
+    // --- Device engine (ADR-006 D7, Amendment 6): every device part, in
+    // reference order, seeded from the run seed; it stops early on the grant
+    // lattice, as the analog engine does.
+    let mut device_engine = if device_parts.is_empty() {
+        None
+    } else {
+        let mut parts = Vec::new();
+        for d in &device_parts {
+            let def = bbdev::find(&d.platform)
+                .ok_or_else(|| format!("{}: device {} not provided", d.reference, d.platform))?;
+            parts.push(bbdev::DevicePart {
+                reference: d.reference.clone(),
+                device: def.instantiate(&d.params)?,
+            });
+        }
+        Some(
+            bbdev::DeviceEngine::new(
+                bbdev::DeviceEngineConfig {
+                    name: "devices".into(),
+                    seed: a.seed as i64 as u64,
+                    stop_lattice: Some(a.renode_quantum),
+                },
+                parts,
+            )
+            .map_err(|e| format!("devices: {e}"))?,
+        )
+    };
+    let dev_initial: PinSignals = match device_engine.as_mut() {
+        Some(e) => e.read_outputs().map_err(|e| format!("devices: {e}"))?,
+        None => PinSignals::new(),
     };
 
     // --- Analog engine: the board's SPICE body plus generated pin glue.
@@ -975,6 +1084,9 @@ fn run(a: RunArgs) -> Result<(), String> {
                 },
                 glue_node: Some(net.clone()),
             }),
+            // An MCU input on a device's output reads the device's kernel
+            // net directly (ADR-006 Amendment 6): no threshold, no cin.
+            PinKind::In { .. } if direct.contains_key(&p.kernel_net()) => {}
             // An MCU input: ngspice thresholds the node (ADR-003 D3) and
             // adds cin.
             PinKind::In { net, model } => ncfg.digital_outputs.push(DigitalOutputBinding {
@@ -998,6 +1110,38 @@ fn run(a: RunArgs) -> Result<(), String> {
                 },
             }),
             PinKind::OutUnconnected => {}
+        }
+    }
+    // Device pins (ADR-006 D7, Amendment 6): an output into the circuit is
+    // rule-1 glue, starting at the device's own initial level; an input not
+    // routed directly is thresholded like an MCU input.
+    for p in &dev_pins {
+        match &p.kind {
+            PinKind::Out { net, model } => ncfg.inputs.push(InputBinding {
+                pin: p.kernel_net(),
+                source: format!("V_bb_{}", spice_name(&p.kernel_net())),
+                drive: Drive::Digital {
+                    model: *model,
+                    initial: dev_initial
+                        .get(&p.kernel_net())
+                        .and_then(PinSignal::level)
+                        .unwrap_or(Level::Low),
+                },
+                glue_node: Some(net.clone()),
+            }),
+            PinKind::In { .. } if direct.contains_key(&p.kernel_net()) => {}
+            PinKind::In { net, model } => ncfg.digital_outputs.push(DigitalOutputBinding {
+                pin: p.kernel_net(),
+                node: net.clone(),
+                model: *model,
+            }),
+            PinKind::OutUnconnected => {}
+            PinKind::Adc { .. } => {
+                return Err(format!(
+                    "{}: a device pin is digital_in or digital_out",
+                    p.kernel_net()
+                ))
+            }
         }
     }
     ncfg.adc_push = a.adc_push;
@@ -1057,6 +1201,8 @@ fn run(a: RunArgs) -> Result<(), String> {
     sched.record_plans(lookahead);
     // Registration order only breaks ties (plan order, record order); the
     // advance order comes from the bindings (ADR-003 D3).
+    // The device engine is registered last in both orders (ADR-006
+    // Amendment 6).
     let (cpu_id, an_id) = match a.engine_order {
         EngineOrder::McuFirst => {
             let c = sched.add_engine(Box::new(cpu)).map_err(|e| e.to_string())?;
@@ -1073,38 +1219,22 @@ fn run(a: RunArgs) -> Result<(), String> {
             (c, n)
         }
     };
+    let dev_id = match device_engine {
+        Some(e) => Some(sched.add_engine(Box::new(e)).map_err(|e| e.to_string())?),
+        None => None,
+    };
     let bind = |s: &mut Scheduler, id, pin: &str, net: &str, d| {
         s.bind(id, pin, net, d).map_err(|e| e.to_string())
     };
-    for p in &mcu_pins {
-        let k = p.kernel_net();
-        match p.kind {
-            PinKind::Out { .. } => {
-                bind(&mut sched, cpu_id, &p.pin, &k, Direction::Output)?;
-                bind(&mut sched, an_id, &k, &k, Direction::Input)?;
-            }
-            PinKind::OutUnconnected => bind(&mut sched, cpu_id, &p.pin, &k, Direction::Output)?,
-            PinKind::In { .. } | PinKind::Adc { .. } => {
-                bind(&mut sched, an_id, &k, &k, Direction::Output)?;
-                bind(&mut sched, cpu_id, &p.pin, &k, Direction::Input)?;
-            }
-        }
-    }
-    for l in &loads {
-        bind(
-            &mut sched,
-            cpu_id,
-            &l.cpu_pin,
-            &l.kernel_net,
-            Direction::Output,
-        )?;
-        bind(
-            &mut sched,
-            an_id,
-            &l.kernel_net,
-            &l.kernel_net,
-            Direction::Input,
-        )?;
+    // In the order of the Phase 0 loop (MCU pins, then the loads), so a
+    // board without devices binds exactly as before; device pins after.
+    for b in &binds {
+        let id = match b.engine {
+            devices::CPU => cpu_id,
+            devices::ANALOG => an_id,
+            _ => dev_id.ok_or("internal: a device binding without a device engine")?,
+        };
+        bind(&mut sched, id, &b.pin, &b.net, b.dir)?;
     }
     for (n, _) in &analog_probes {
         bind(&mut sched, an_id, n, n, Direction::Output)?;
@@ -1195,6 +1325,8 @@ fn run(a: RunArgs) -> Result<(), String> {
                 .map(|&i| {
                     if i == cpu_id.index() {
                         part.reference.as_str()
+                    } else if Some(i) == dev_id.map(|d| d.index()) {
+                        "devices"
                     } else {
                         analog_name.as_str()
                     }

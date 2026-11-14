@@ -1,0 +1,47 @@
+* Device-route smoke board (ADR-006 D7, Amendment 6; Phase 1 M10): the
+* feedback example's MCU and firmware with the dms/mechanism@1 device in
+* the loop, on Renode's STM32F103 (no new platform).
+*
+*   U1.PA5 -> R2 1k -> SENSE; C1 1 uF SENSE -> GND (the feedback RC, analog)
+*   U1.PA5 -> M1.NSLEEP and M1.IN_A1 (direct digital routes: the device
+*            reads the CPU's kernel net U1.PA5, spec/package.md section 12)
+*   M1.HOME_N -> U1.PB0 (direct: the CPU reads the device's kernel net),
+*            and -> HOME_N through rule-1 glue into R4 100k to ground
+*   U1.PA6 -> R3 330 -> LED_B -> D2 -> GND
+*
+* Firmware (examples/feedback/firmware/feedback.c): SysTick toggles PA5
+* every 50 ms; the EXTI0 ISR (PB0, both edges) copies PB0 to PA6.
+*
+* The device starts with the rotor at electrical phase 3 (270 deg) at
+* s0 = 289 full steps from the park stop, where |Bz| = 2.794 mT is above
+* the operate point set here (bop 2.75 mT), so HOME_N starts low. When PA5
+* rises at 50 ms, nSLEEP and IN_A1 go high together: after twake (30 us)
+* coil A's polarity is +1, the field points at 0 deg, and once the current
+* passes the pull-in magnitude the rotor turns +90 deg: one full step, to
+* s = 290 (|Bz| = 2.74 mT < brp 2.745 mT). The DRV5032 samples at
+* phase + k ts = 7 + 50 k ms; its window ending at 57.04 ms releases
+* HOME_N, the CPU sees PB0 rise at ceil_L(57.04 ms) = 57.04 ms and its ISR
+* raises PA6. The CPU and the device form a feedback loop; ngspice only
+* consumes.
+*
+*bb part U1 package=st/stm32f103c8
+*bb part M1 package=dms/detent-mechanism s0=289 phase0=3 phase=7ms bop=2.75 brp=2.745
+*bb pin U1.PA5 net=PA5 model=digital_out
+*bb pin U1.PB0 net=HOME_N model=digital_in
+*bb pin U1.PA6 net=PA6 model=digital_out
+*bb pin M1.NSLEEP net=PA5 model=digital_in
+*bb pin M1.IN_A1 net=PA5 model=digital_in
+*bb pin M1.HOME_N net=HOME_N model=digital_out
+
+* Circuit body. Node 0 is GND.
+R2 PA5 SENSE 1k
+C1 SENSE 0 1u
+R4 HOME_N 0 100k
+R3 PA6 LED_B 330
+D2 LED_B 0 LED_RED
+
+* Red LED: the spike's model (examples/spike/board.cir).
+.model LED_RED D(IS=1e-18 N=2 RS=2 CJO=10p)
+
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

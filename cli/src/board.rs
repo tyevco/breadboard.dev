@@ -61,14 +61,78 @@ use crate::platforms;
 /// with `load=<pin_load view>|none` and `trace_samples=true|false`.
 pub const PLATFORMS: [&str; 3] = ["stm32f103", "stm32f072", "nrf52840"];
 
-/// A part simulated by a CPU engine.
+/// A part simulated by a CPU engine (`engine = "renode"`) or by the device
+/// engine (`engine = "device"`, ADR-006 D7 and Amendment 6).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Part {
     pub reference: String,
     pub engine: String,
+    /// A Renode part: the board-file platform name (`nrf52840`); a device
+    /// part: the device id (`dms/mechanism@1`).
     pub platform: String,
     /// The package id when the part is given as `package=` (ADR-006).
     pub package: Option<String>,
+    /// A device part's parameters from its `*bb part` line (Amendment 6),
+    /// in key order; empty for a Renode part.
+    pub params: Vec<(String, bbdev::ParamValue)>,
+}
+
+impl Part {
+    /// A device part (ADR-006 D7).
+    pub fn is_device(&self) -> bool {
+        self.engine == "device"
+    }
+}
+
+/// A device part's `key=value` parameters (spec/package.md section 12): each
+/// key one of the device's, each value in the package value grammar of its
+/// kind. The device is built once to check the values' ranges.
+fn device_params(
+    def: &bbdev::DeviceDef,
+    kv: &BTreeMap<&str, &str>,
+) -> Result<Vec<(String, bbdev::ParamValue)>, String> {
+    use bbdev::{ParamKind, ParamValue};
+    let mut out = Vec::new();
+    for (k, v) in kv {
+        let spec = def.params.iter().find(|p| p.key == *k).ok_or_else(|| {
+            format!(
+                "device {}: unknown parameter {k:?} (it takes: {})",
+                def.id,
+                def.params
+                    .iter()
+                    .map(|p| p.key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+        let bad = |e: String| format!("device {}: {k}={v}: {e}", def.id);
+        let pv = match spec.kind {
+            ParamKind::Time => {
+                let fs =
+                    bbpkg::value::parse_quantity(v, Dim::Time).map_err(|e| bad(e.to_string()))?;
+                ParamValue::Time(Time::from_fs(
+                    u64::try_from(fs).map_err(|_| bad("out of range".into()))?,
+                ))
+            }
+            ParamKind::Resistance | ParamKind::Inductance => {
+                let dim = if spec.kind == ParamKind::Resistance {
+                    Dim::Resistance
+                } else {
+                    Dim::Inductance
+                };
+                let q = bbpkg::value::parse_quantity(v, dim).map_err(|e| bad(e.to_string()))?;
+                ParamValue::Real(to_f64(q, dim))
+            }
+            ParamKind::Number => ParamValue::Real(
+                bbpkg::value::parse_number(v)
+                    .map_err(|e| bad(e.to_string()))?
+                    .to_f64(),
+            ),
+        };
+        out.push((k.to_string(), pv));
+    }
+    def.instantiate(&out)?;
+    Ok(out)
 }
 
 /// The ADC channel that reads pin `pin` on `platform`, if any. STM32F0x2
@@ -411,24 +475,55 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
                     return Err(format!("line {lineno}: part {name} declared twice"));
                 }
                 if let Some(spec) = kv.remove("package") {
-                    no_extra(lineno, &kv).map_err(|e| {
-                        format!(
-                            "{e} (a package part takes its engine and platform from the package)"
-                        )
-                    })?;
+                    for k in ["engine", "platform"] {
+                        if kv.contains_key(k) {
+                            return Err(format!(
+                                "line {lineno}: unknown key {k:?} (a package part takes its engine and \
+                                 platform from the package)"
+                            ));
+                        }
+                    }
                     let lookup = lookup.ok_or_else(|| {
                         format!("line {lineno}: package={spec}: packages are not available here")
                     })?;
                     let pkg = lookup(spec).map_err(|e| format!("line {lineno}: {e}"))?;
                     let b = pkg.part.behavioral.as_ref().ok_or_else(|| {
                         format!(
-                            "line {lineno}: package {}: no [behavioral] layer, so it cannot be a CPU part",
+                            "line {lineno}: package {}: no [behavioral] layer, so it cannot be a CPU \
+                             or device part",
                             pkg.part.id
+                        )
+                    })?;
+                    if b.engine == "device" {
+                        // ADR-006 D7, Amendment 6 (spec/package.md section 12).
+                        let did = b.device.as_deref().unwrap_or_default();
+                        let def = bbdev::find(did).ok_or_else(|| {
+                            format!(
+                                "line {lineno}: package {}: device {did} is not one this bb provides ({})",
+                                pkg.part.id,
+                                bbdev::ids().join(", ")
+                            )
+                        })?;
+                        let params =
+                            device_params(def, &kv).map_err(|e| format!("line {lineno}: {e}"))?;
+                        parts.push(Part {
+                            reference: name.to_string(),
+                            engine: "device".into(),
+                            platform: def.id.to_string(),
+                            package: Some(pkg.part.id.clone()),
+                            params,
+                        });
+                        packages.entry(pkg.part.id.clone()).or_insert(pkg);
+                        continue;
+                    }
+                    no_extra(lineno, &kv).map_err(|e| {
+                        format!(
+                            "{e} (a package part takes its engine and platform from the package)"
                         )
                     })?;
                     if b.engine != "renode" {
                         return Err(format!(
-                            "line {lineno}: package {}: engine {} (bb run supports renode parts)",
+                            "line {lineno}: package {}: engine {} (bb run supports renode and device parts)",
                             pkg.part.id, b.engine
                         ));
                     }
@@ -445,6 +540,7 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
                         engine: "renode".into(),
                         platform: def.board_name.to_string(),
                         package: Some(pkg.part.id.clone()),
+                        params: Vec::new(),
                     });
                     packages.entry(pkg.part.id.clone()).or_insert(pkg);
                     continue;
@@ -468,6 +564,7 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
                     engine,
                     platform,
                     package: None,
+                    params: Vec::new(),
                 });
             }
             "pin" => {
@@ -491,6 +588,10 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
                     .expect("checked above")
                     .clone();
                 let pkg = part_def.package.as_ref().map(|id| &packages[id]);
+                if part_def.is_device() {
+                    device_pin(&part_def, pin, model_kind)
+                        .map_err(|e| format!("line {lineno}: pin {name}: {e}"))?;
+                }
                 let explicit: Vec<(&str, &str)> = std::mem::take(&mut kv).into_iter().collect();
                 let kind = build_pin(
                     &PinReq {
@@ -533,6 +634,36 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         warnings,
         audit: None,
     })
+}
+
+/// A device part's pin (spec/package.md section 12): one of the device's
+/// pins, `digital_in` on an input and `digital_out` on an output.
+fn device_pin(part: &Part, pin: &str, model: &str) -> Result<(), String> {
+    let def = bbdev::find(&part.platform)
+        .ok_or_else(|| format!("device {}: not provided by this bb", part.platform))?;
+    let dev = def.instantiate(&part.params)?;
+    let p = dev.pins().iter().find(|p| p.name == pin).ok_or_else(|| {
+        format!(
+            "device {} has no pin {pin} (it has: {})",
+            def.id,
+            dev.pins()
+                .iter()
+                .map(|p| p.name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+    match (p.dir, model) {
+        (bbdev::PinDir::In, "digital_in") | (bbdev::PinDir::Out, "digital_out") => Ok(()),
+        (bbdev::PinDir::In, _) => Err(format!(
+            "model={model}: {pin} is an input of device {}: digital_in",
+            def.id
+        )),
+        (bbdev::PinDir::Out, _) => Err(format!(
+            "model={model}: {pin} is an output of device {}: digital_out",
+            def.id
+        )),
+    }
 }
 
 /// Resolves a supply pin reference (`VDD`, ADR-006 D4) to µV.

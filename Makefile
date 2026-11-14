@@ -139,6 +139,7 @@ pooled-test:
 	$(MAKE) adc-model
 	$(MAKE) nrf-saadc-model
 	$(MAKE) nrf-pwm-model
+	$(MAKE) device-smoke
 	$(MAKE) adc-kicad
 	$(MAKE) dms-rail-test
 	$(MAKE) dms-vsense-test
@@ -729,6 +730,36 @@ nrf-pwm-model: firmware
 	$(PYTHON) examples/nrf-pwm/bb_pwm_test.py --out out/nrf-pwm-model
 	@echo "nrf-pwm-model: PASS"
 
+# --- Phase 1 M10 (second step): device parts (ADR-006 D7, Amendment 6) ------
+# tests/device-smoke/board.cir: examples/feedback's MCU and firmware with the
+# dms/mechanism@1 device in a loop with it (U1.PA5 -> M1.NSLEEP, M1.IN_A1;
+# M1.HOME_N -> U1.PB0, both direct digital routes). make device-smoke (in
+# make test, about 20 s): the one-cell reference (--lookahead off), the
+# default (lookahead on), analog-first and a second default run, each with a
+# fresh Renode (--renode-pool off: the board is not in pool-equiv); every run
+# passes scripts/check_device_smoke.py (HOME_N rises at exactly 57.04 ms,
+# PA6 follows within one cell), and nets.csv, nets.vcd and the non-grant
+# records are identical across all four.
+DEVICE_SMOKE_OUT ?= out/device-smoke
+DEVICE_SMOKE_ARGS = --netlist tests/device-smoke/board.cir --firmware $(FEEDBACK_ELF) \
+                    --target U1 --for 200ms --renode-pool off \
+                    --probe net:HOME_N --probe net:LED_B --probe net:SENSE
+.PHONY: device-smoke
+device-smoke: firmware bb
+	rm -rf $(DEVICE_SMOKE_OUT)
+	$(BB) run $(DEVICE_SMOKE_ARGS) --lookahead off --out $(DEVICE_SMOKE_OUT)/ref
+	$(BB) run $(DEVICE_SMOKE_ARGS) --out $(DEVICE_SMOKE_OUT)/on
+	$(BB) run $(DEVICE_SMOKE_ARGS) --engine-order analog-first --out $(DEVICE_SMOKE_OUT)/order
+	$(BB) run $(DEVICE_SMOKE_ARGS) --out $(DEVICE_SMOKE_OUT)/on2
+	set -e; for r in ref on order on2; do \
+	    $(PYTHON) scripts/check_device_smoke.py $(DEVICE_SMOKE_OUT)/$$r; \
+	    grep -v '"type":"grant"' $(DEVICE_SMOKE_OUT)/$$r/events.jsonl > $(DEVICE_SMOKE_OUT)/$$r/non-grant-records; \
+	done
+	set -e; for r in on order on2; do for f in nets.csv nets.vcd non-grant-records; do \
+	    cmp $(DEVICE_SMOKE_OUT)/ref/$$f $(DEVICE_SMOKE_OUT)/$$r/$$f; done; done
+	@echo "device-smoke: grants ref $$(grep -c '"type":"grant"' $(DEVICE_SMOKE_OUT)/ref/events.jsonl), on $$(grep -c '"type":"grant"' $(DEVICE_SMOKE_OUT)/on/events.jsonl)"
+	@echo "device-smoke: PASS"
+
 # ADR-005 test plan 1-3: Renode-only tests of Breadboard's STM32F072 ADC
 # model and BbStm32Timer TRGO (examples/adc/bb_adc_test.py: pwm, trgo,
 # registers, firmware; about 80 s). In `make test`.
@@ -843,7 +874,7 @@ dms-system: bb
 PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir \
               examples/adc/kicad examples/dial-me-spinner examples/nrf-saadc/board.cir \
-              examples/dial-me-spinner/system
+              examples/dial-me-spinner/system tests/device-smoke/board.cir
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages
 

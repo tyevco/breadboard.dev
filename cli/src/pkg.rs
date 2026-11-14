@@ -101,6 +101,7 @@ fn is_first_party(dir: &Path) -> bool {
 fn lint_cmd(args: &[String]) -> Result<bool, String> {
     let reg = Registry::current();
     let pl = platforms::ids();
+    let devs = bbdev::ids();
     let mut errors = 0;
     let mut warnings = 0;
     let mut n = 0;
@@ -130,7 +131,7 @@ fn lint_cmd(args: &[String]) -> Result<bool, String> {
         };
         let ctx = lint::Context {
             platforms: &pl,
-            devices: &[],
+            devices: &devs,
             first_party: is_first_party(&dir),
             chip: chip.as_ref(),
         };

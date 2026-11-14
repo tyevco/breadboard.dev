@@ -1,0 +1,24 @@
+# bb.lock: written by `bb open` (ADR-006 D8). Do not edit; `bb open --update-lock`
+# rewrites the entries whose package tree or platform content changed.
+schema = "bb-lock/0"
+
+[[package]]
+id = "dms/detent-mechanism"
+version = "0.1.0"
+path = "../../packages/dms/detent-mechanism"
+tree = "sha256:d769fe2777c3ea9a44d0cafb51bdc245fe1ac91e9c019c70484d7e37a935396e"
+
+[[package]]
+id = "st/stm32f103c8"
+version = "0.1.0"
+path = "../../packages/st/stm32f103c8"
+tree = "sha256:64c3d293c3599e3ca426066fbe858afc5725e2f97901e942c99e1d9bfbba6450"
+
+[[platform]]
+id = "device:dms/mechanism@1"
+content = "sha256:3d7cdeaabeaf52fe443b502b59b0c01c5db63a145edd3dda7fc2e1c4b508a4cc"
+
+[[platform]]
+id = "renode:stm32f103-offline@1"
+content = "sha256:5e22105590f9ea23b6de8f870429f74f43922aac928b26b7cb68a608155329eb"
+renode = "1.17.0"

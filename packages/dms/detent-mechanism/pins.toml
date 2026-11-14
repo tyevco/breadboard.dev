@@ -1,0 +1,59 @@
+# dms/detent-mechanism pins: the device's own (bbdev dms/mechanism@1), not a footprint's. The
+# numbers are the device's pin order. Inputs are the DRV8837 commands (U40 = coil A, U41 = coil B)
+# and their shared nSLEEP; HOME_N is the DRV5032FA's push-pull output (U42 OUT).
+schema = "bb-pins/0"
+
+[[pin]]
+number = "1"
+name = "IN_A1"
+role = "input"
+models = ["digital_in"]
+
+[[pin]]
+number = "2"
+name = "IN_A2"
+role = "input"
+models = ["digital_in"]
+
+[[pin]]
+number = "3"
+name = "IN_B1"
+role = "input"
+models = ["digital_in"]
+
+[[pin]]
+number = "4"
+name = "IN_B2"
+role = "input"
+models = ["digital_in"]
+
+[[pin]]
+number = "5"
+name = "NSLEEP"
+role = "input"
+models = ["digital_in"]
+
+[[pin]]
+number = "6"
+name = "HOME_N"
+role = "output"
+models = ["digital_out"]
+
+# Parameter sets (ADR-006 D4). An input that the CPU's digital_out drives is read directly
+# (spec/package.md section 12), so these thresholds apply only to an input on an analog net: the
+# DRV8837's VIH 0.46 x VCC and VIL 0.38 x VCC typ (SLVSBA4F Table 6.5) at VCC = 3.3 V, and no
+# input capacitance (the bridge view carries the pins' load).
+[defaults.digital_in.default]
+vih = "1.52V"
+vil = "1.25V"
+cin = "0pF"
+
+# The DRV5032FA push-pull output at VCC = 3.3 V: VOH = VCC - 0.1 V and VOL = 0.1 V typ at 1 mA
+# (SLVSDC7H Table 6.5, as motor_drive__drv5032.lib quotes it), so about 100 Ohm each way. Its edges
+# are CMOS (ns); 10 ns is an estimate.
+[defaults.digital_out.default]
+voh = "3.3V"
+vol = "0V"
+rise = "10ns"
+fall = "10ns"
+zout = "100"

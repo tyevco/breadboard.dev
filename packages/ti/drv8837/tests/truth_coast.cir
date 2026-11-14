@@ -1,0 +1,11 @@
+* truth_coast: test circuit of ti/drv8837 (view bridge): the suite's test_drv8837_model_matches_datasheet
+* deck, state coast (dial-me-spinner@6854d25:hardware/sim/tests/test_motor_drive.py): VM 5 V, VCC 3 V,
+* nSLEEP 3 V, IN1 0 V, IN2 0 V; each OUT through 1 kOhm to a 2.5 V bias, which shows Z as 2.5 V.
+VVM vm 0 5
+VCC vcc 0 3
+VN ns 0 3
+V1 in1 0 0
+V2 in2 0 0
+Ro1 o1 vh 1k
+Ro2 o2 vh 1k
+Vh vh 0 2.5

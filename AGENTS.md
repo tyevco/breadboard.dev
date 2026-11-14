@@ -4,7 +4,10 @@ Breadboard is an open hardware simulator ("QEMU for whole circuit boards"). The
 repo is in **Phase 1** (`docs/phase1-plan.md`), with M0-M9 and M11
 (systems) done; M10 (E3) is in progress: its design and the Renode-side
 models (PWM, TEMP, NVMC on `nrf52840-bb@3`) are done (ADR-008
-Amendment 9).
+Amendment 9), and so are the device route (device parts in board files, the
+`bbdev` crate and its `DeviceEngine`, the `dms/mechanism@1` device;
+ADR-006 Amendment 6, approver decisions 2026-11-14) and the `ti/drv8837`
+ideal-switch bridge view.
 
 - **Phase 0** (done) was a Renode (STM32F103, and STM32F072 for the ADC
   board) ↔ ngspice co-simulation spike under a kernel-owned time-grant
@@ -46,7 +49,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 1 min 45 s). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model` and `device-smoke`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took 2 min 40 s on the pool against 3 min 10 s fresh before it, under load 6–11, ADR-004 Amendment 4 |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -77,6 +80,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make nrf-gates` | Phase 1 M2 gate (ADR-008 D1-D4, D6; Amendment 2): the Renode engine tests `engines/cpu-renode/tests/nrf52840.rs` on Breadboard's nRF52840 (`Platform::Nrf52840Bb`, `nrf52840-bb@1`: no SVD download, 64 MIPS) with the bare-metal gate firmware in `engines/cpu-renode/tests/firmware/nrf52840/` (nrf-blinky edges identical at one-cell grants, 10 ms grants, plugin armed and lookahead on, self-test status exactly 0x3; nrf-ppi; nrf-busywait: a 10 ms nrfx busy-wait takes 6.66 ms of virtual time; the D6 TIMER-compare-then-long-sleep promise clamp; the PIN_CNF audit, mid-run and end-of-run) and the prebuilt Zephyr gate image (nrf-zephyr), then `make nrf-feedback` (about 2 min) |
 | `make nrf-saadc-model` | Phase 1 M8, first half (ADR-008 D7, D8, Amendment 4; in `make test`, about 25 s): Breadboard's nRF52840 SAADC (`BbNrf52Saadc` on `nrf52840-bb@2`). The Renode-only register and timing tests in ADR-005's test-plan shape (`examples/nrf-saadc/bb_saadc_test.py`, `nrf_saadc_idle.elf` / `nrf_saadc_burst.elf`: reset values, every TACQ x RESOLUTION x OVERSAMPLE x BURST instant, the 8x BURST, transfer and rounding, VDD, EasyDMA, LIMIT, timer mode, the IRQ, the TACQ < 2 L refusal, the UART tap; run twice, byte-identical), then `scripts/nrf_saadc_board.sh` on `examples/nrf-saadc` (the loading `adc_in`: 8 `#smp` toggles and exactly 8 charge transfers per 8x burst against the analytic charge sharing, codes, UART lines; lookahead at 1 ms and 10 ms, push-on-change and `--engine-order analog-first` equal to the every-lattice-point one-cell reference `tests/golden/nrf-saadc/outputs.sha256`; the refusal at `--renode-quantum 25us` and its message; the `load=none` escape). `make nrf-saadc-update` rewrites the hashes; `make cost-table-nrf-saadc` is the board's cost-table row (also in `make cost-table`; idle host) |
 | `make nrf-pwm-model` | Phase 1 M10, first step (ADR-008 D9, Amendment 9; in `make test`, about 25 s): Breadboard's nRF52840 PWM0-PWM3 (`BbNrf52Pwm`), the TEMP and NVMC stand-ins (`BbNrf52Temp`, `BbNrf52Nvmc`) and their host port (`BbNrf52HostPort` at 0x5FFC0000: the PWM pin ring, TEMP's value) on `nrf52840-bb@3`. `examples/nrf-pwm/bb_pwm_test.py`, Renode-only, each group twice and byte-identical: `registers` (`nrf_saadc_idle.elf`; reset values; every pin change exact to 0.5 ns for up and up-and-down x PRESCALER x COUNTERTOP x COMP x POLARITY; REFRESH, ENDDELAY, LOOP, the SHORTS, NextStep, the Grouped, Common and WaveForm decoders, PSEL and ENABLE while running, every event instant, the IRQs, the ring overflow; TEMP's DATARDY at 36 us and STOP; NVMC erase timing, CONFIG gating, partial erase, ERASEALL) and `firmware` (`nrf_pwm_step.elf`: TEMP, an NVMC erase polled on READY, 4 full steps at 446 PPS as `nrfx_pwm_complex_playback` runs them, every pin change against the firmware's duty table, the UART lines, and no lookahead promise past the next PWM edge) |
+| `make device-smoke` | Phase 1 M10, second step (ADR-006 D7, Amendment 6; in `make test`, about 20 s): `tests/device-smoke/board.cir`, examples/feedback's STM32F103 and firmware with the `dms/mechanism@1` device (`packages/dms/detent-mechanism`) in a loop with the CPU through the direct digital routes of `spec/package.md` section 12 (U1.PA5 -> M1.NSLEEP, M1.IN_A1; M1.HOME_N -> U1.PB0). Four fresh runs (`--renode-pool off`: the board is not in `pool-equiv`): the one-cell reference (`--lookahead off`), the default, `--engine-order analog-first` and the default again; `scripts/check_device_smoke.py` on each (HOME_N rises at exactly 57.04 ms, PA6 follows within one cell); `nets.csv`, `nets.vcd` and the non-grant records identical across all four |
 | `make nrf-feedback` | ADR-008 D3 board-level gate (in `make test`): `examples/nrf-feedback` (examples/feedback's circuit on the nRF52840: RTC0 drives `U1.P0.13`, GPIOTE IN on `U1.P0.11` copies to `U1.P0.15`) with lookahead on at 1 ms and 10 ms byte-identical to its one-cell `--lookahead off` reference (`tests/golden/nrf-feedback/outputs.sha256`; `make nrf-feedback-ref`), no promise broken, `check_feedback.py --nrf`, and `--engine-order analog-first` byte-identical |
 | `make nrf-costs` | ADR-008 D1: fresh startup and per-grant cost of the nRF52840 blinky at 64 MIPS against the STM32F103 blinky (interleaved, N = `BB_NRF_COST_N`, medians); reports only. Run it on an idle host |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
@@ -129,9 +133,15 @@ bbpkg/                  component packages (ADR-006, spec/package.md): value gra
                         vectors through NgspiceEngine, tree hashes and bb.lock, schema versions, SHA-256
 packages/               first-party packages: generic/{resistor,capacitor,inductor}, st/stm32f103c8,
                         st/stm32f072rb; Phase 1 M5: ti/tps22917 (datasheet-fitted view), worldsemi/
-                        ws2812c-2020, nordic/nrf52840-qiaa, raytac/mdbt50q-u1mv2 (a module)
+                        ws2812c-2020, nordic/nrf52840-qiaa, raytac/mdbt50q-u1mv2 (a module);
+                        Phase 1 M10: ti/drv8837 (the ideal-switch bridge view), dms/detent-mechanism
+                        (a device package: `[behavioral] engine = "device"`, `dms/mechanism@1`)
 local-packages/         git-ignored, LOCAL-ONLY packages (make dms-local-packages: the vendor-derived
                         ti/tps22917); never committed
+bbdev/                  the Phase 1 device API (ADR-006 D7, Amendment 6): `Device`, `Ctx`, the seeded
+                        `Rng`, `DeviceEngine` (engine.rs; t_safe MAX, quiet_until = the earliest
+                        timer, advance_until), the device table `DEVICES` and dms_mechanism.rs
+                        (the detent mechanism and DRV5032, `dms/mechanism@1`); tests/scheduler.rs (G6)
 engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
                         examples/deck_run.rs: a SPICE body through NgspiceEngine with digital-glue edges (S1)
 engines/cpu-renode/     Renode engine over the External Control API; platforms/: the plugin
@@ -144,7 +154,8 @@ engines/cpu-renode/     Renode engine over the External Control API; platforms/:
 cli/                    `bb` binary (`bb run`, `bb pool`, `bb open`, `bb pkg`, `bb flash`, `bb probe`,
                         board-file parser, platforms.rs: the Renode platform identities of ADR-006 D8;
                         Phase 1 M4: project.rs (bb.toml, benches), names.rs, import.rs (resolution, D4),
-                        elab.rs (bindings, analog scope, the deck, run.json))
+                        elab.rs (bindings, analog scope, the deck, run.json);
+                        Phase 1 M10: devices.rs (device parts' direct digital routes, the engine graph))
 examples/spike/         blinky firmware + board.cir (SPICE body + *bb pin bindings; U1 from the package
                         st/stm32f103c8 since M3, pinned in examples/*/bb.lock like every example)
 examples/feedback/      feedback board (digital_in PB0 reads the RC that PA5 drives) + EXTI firmware and a polling variant
@@ -193,6 +204,7 @@ tests/golden/nrf-feedback/ one-cell reference hashes of examples/nrf-feedback (P
 tests/golden/adc-kicad/ one-cell reference hashes of the examples/adc/kicad project (Phase 1 M4)
 tests/golden/dms-rail/  one-cell reference hashes of E1's four cases and VLED snapshots (Phase 1 M6)
 tests/golden/dms-vsense/ every-lattice-point reference hashes of E2's seven cases (Phase 1 M8)
+tests/device-smoke/     the device route's smoke board (board.cir, bb.lock; make device-smoke)
 tests/fixtures/kicad/   the synthetic two-board system of ADR-007 gate M4b (cli/tests/kicad_import.rs)
 spec/                   normative protocol and schema docs (package.md and schema/*.schema.json: ADR-006;
                         board-bbm.md, canonical-json.md, project.md: ADR-007); changing them needs an ADR
@@ -297,6 +309,16 @@ feedback board).
   new platform adds a row to `cli/src/platforms.rs`. A package value is a
   string in the value grammar (`spec/package.md` section 6), never a SPICE
   suffix: write `Meg`, never a bare `M`.
+- **Devices** (ADR-006 D7, Amendment 6). A device is Rust in `bbdev`,
+  pinned by the content hash of `bbdev/src/lib.rs`, `engine.rs` and its own
+  file (`device:<id>@<major>` in `bb.lock`), so any edit there needs `make
+  locks`. Three rules keep its outputs partition-independent: outputs
+  change only in `on_timer` (never in `on_pin_change`; a reaction is a
+  timer strictly later), timers fire before inputs at one instant, and a
+  device's state advances only at its own events, never at a grant
+  boundary. Its `t_safe` is `Time::MAX` (a timer off the lattice must not
+  bound a grant) and its promise is its earliest timer. Device parts exist
+  only in board files; `[[device]]` in `bb.toml` is Phase 2.
 - **Local-only models stay local** (Phase 1 approver decision A3, ADR-006
   D9 rule 4). A view derived from a vendor model whose redistribution terms
   were not checked (the TI-derived TPS22917) lives only in a

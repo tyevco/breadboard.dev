@@ -111,6 +111,20 @@ pub fn resolved(
                 pl.push(def.locked());
             }
         }
+        // A device package (ADR-006 D7, Amendment 6): its device identity.
+        if let Some(did) = p
+            .part
+            .behavioral
+            .as_ref()
+            .filter(|x| x.engine == "device")
+            .and_then(|x| x.device.as_deref())
+        {
+            let def = bbdev::find(did).ok_or_else(|| format!("device {did}: unknown"))?;
+            let l = platforms::device_locked(def);
+            if !pl.iter().any(|x| x.id == l.id) {
+                pl.push(l);
+            }
+        }
     }
     Ok((pk, pl))
 }

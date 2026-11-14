@@ -1,0 +1,29 @@
+# DRV8837 Table 7-1, state coast (nSLEEP, IN1, IN2 = 3, 0, 0 V at VCC 3 V): OUT1 = Z, OUT2 = Z.
+# The suite's test_drv8837_model_matches_datasheet deck (an operating point there, a transient here,
+# measured at 200 us; the wake has settled from t = 0 at the DC operating point).
+schema = "bb-pkgtest/0"
+view = "bridge"
+circuit = "truth_coast.cir"
+stop = "200us"
+
+[ports]
+GND = "0"
+IN1 = "in1"
+IN2 = "in2"
+OUT1 = "o1"
+OUT2 = "o2"
+VCC = "vcc"
+VM = "vm"
+nSLEEP = "ns"
+
+[[expect]]
+meas = { node = "o1", at = "200us" }
+value = "2.49998V"
+tol = "0.1mV"
+source = "examples/dial-me-spinner/suite/results.json (M0, 6854d25): test_drv8837_model_matches_datasheet coast: OUT1 = Z 2.49998 V (2.4-2.6 V window, SLVSBA4F Table 7-1)"
+
+[[expect]]
+meas = { node = "o2", at = "200us" }
+value = "2.49998V"
+tol = "0.1mV"
+source = "examples/dial-me-spinner/suite/results.json (M0, 6854d25): test_drv8837_model_matches_datasheet coast: OUT2 = Z 2.49998 V (2.4-2.6 V window, SLVSBA4F Table 7-1)"

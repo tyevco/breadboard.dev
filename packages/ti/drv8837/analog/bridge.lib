@@ -1,0 +1,92 @@
+* =====================================================================================================
+* ti/drv8837 view "bridge" (breadboard.dev, Apache-2.0): TI DRV8837 low-voltage H-bridge (IN/IN
+* interface), an IDEAL-SWITCH behavioural view for E3 (Phase 1 M10, ADR-008 Amendment 9).
+*
+* Datasheet: TI SLVSBA4F (June 2012, revised April 2021). SLVSBA4F itself was NOT opened when this view
+* was written; every figure is the datasheet value as dial-me-spinner@6854d25 quotes it, with the table
+* it cites (hardware/sim/models/motor_drive__drv8837.lib header and hardware/sim/tests/
+* test_motor_drive.py; secondary sources, ADR-006 Amendment 5):
+*   Table 7-1  truth table: nSLEEP = 0 -> Z/Z; IN1, IN2 = 0, 0 coast Z/Z; 1, 0 H/L; 0, 1 L/H;
+*              1, 1 brake L/L.
+*   Table 6.5  rDS(on) HS + LS 280 mOhm typ / 330 max at 25 C, IO = 800 mA (split equally between
+*              the high- and low-side FET); input pulldowns RPD 100 kOhm on IN1, IN2, nSLEEP; VIH
+*              0.46 x VCC typ, VIL 0.38 x VCC typ; IVM 0.8 mA typ with PWM, IVMQ 30 nA asleep; IVCC
+*              0.7 mA typ, IVCCQ 5 nA asleep.
+*   Table 6.6  twake <= 30 us after nSLEEP rises (the maximum is the default, the slow corner).
+*   Figure 6-7 rDS(on) drift: +0.32 %/K above 25 C, +0.05 %/K below (params tc_hot, tc_cold, temp_c).
+*
+* Why ideal switches (ADR-008 Amendment 9): the CPU's PWM edges cross the pin boundary at their exact
+* times (D9), so the view sees each 25 kHz edge; the suite's switch-level model (soft current clamp,
+* OCP deglitch and retry, UVLO, Schmitt inputs) costs about 1.75 s of wall time per simulated ms. This
+* view keeps what E3's checks read: the coil current with its PWM ripple, VM's ripple through the
+* bridge, the brake (slow decay) and coast states.
+*
+* Structure (every pass element is a B CURRENT source or a plain R/C/D: no branch-current unknown in
+* series with a milliohm path, so the view runs at the phase0 option set; AGENTS.md "Known bad ideas"):
+*   inputs   one logic level per input, 0..1, a tanh of V(IN) about the threshold midpoint
+*            (vih_k + vil_k) / 2 x VCC over 10 mV (no hysteresis: the inputs are driven by clean
+*            digital edges), low-passed with 60 ns (a first-order node: the datasheet's ~100 ns output
+*            edges, SLVSBA4F 6.6 t9-t12).
+*   wake     node act charges with tau = twake / ln 2 while nSLEEP reads high (it crosses 0.5 at
+*            twake) and discharges in about 1 us when nSLEEP reads low; en = a tanh of act about 0.5
+*            (a 1 A/V current into 1 Ohm: a node voltage, not a V source).
+*   bridge   per leg a conductance 2 / rDS (each FET rDS / 2) times its gate command (Table 7-1):
+*            HS1 = en l1 (1 - l2), LS1 = en l2, HS2 = en l2 (1 - l1), LS2 = en l1, so 1, 1 is the
+*            brake (both low sides, slow decay) and 0, 0 or sleep is Z (coast).
+*   diodes   the four body diodes as D elements with IS 1e-12, N 1.2, RS 50 mOhm (the suite's generic
+*            body diode), WITHOUT junction capacitance or transit time: no switching transients; they
+*            carry the coil current in coast.
+*   leakage  100 MOhm from each OUT to ground (IOFF <= 200 nA).
+*   supply   IVM and IVCC as above, by en.
+*   pins     1 pF on each input (not in the datasheet; the suite's value).
+*
+* NOT modelled: dead time and shoot-through; gate charge and the charge pump; VCC UVLO (Table 6.5,
+*   1.7 / 1.8 V); overcurrent protection (IOCP, tDEG, tRETRY) and the analog current limit; thermal
+*   shutdown; rDS(on) dependence on VM / VCC; input hysteresis; body-diode reverse recovery and
+*   capacitance; OUT slew beyond the 60 ns input filter.
+* Ports: VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP (the package's pin names VM VCC IN1 IN2 nSLEEP OUT1 OUT2
+*   GND; GND is renamed GNDP, the gnd rule of spec/package.md section 5).
+* =====================================================================================================
+.model drv8837_bridge_body D(IS=1e-12 N=1.2 RS=0.05)
+
+.subckt DRV8837_BRIDGE VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP
++ params: rds=0.28 temp_c=25 tc_hot=0.0032 tc_cold=0.0005 vih_k=0.46 vil_k=0.38 rpd=100k
++ twake=30u ivm_on=0.8m ivcc_on=0.7m
+.param rdst = {rds*(1 + (temp_c > 25 ? tc_hot : tc_cold)*(temp_c - 25))}
+.param gleg = {2/rdst}
+.param vth_k = {(vih_k + vil_k)/2}
+* ---- input pulldowns (RPD) and 1 pF pins
+RPD1 IN1 GNDP {rpd}
+RPD2 IN2 GNDP {rpd}
+RPD3 NSLEEP GNDP {rpd}
+CIN1 IN1 GNDP 1p
+CIN2 IN2 GNDP 1p
+CIN3 NSLEEP GNDP 1p
+* ---- logic levels, 60 ns first-order (V(l) follows the tanh level through 1 kOhm x 60 pF)
+B_L1 GNDP drv_l1 I = (0.5*(1 + tanh((V(IN1,GNDP) - vth_k*V(VCC,GNDP))/0.01)) - V(drv_l1,GNDP))/1k
+C_L1 drv_l1 GNDP 60p
+B_L2 GNDP drv_l2 I = (0.5*(1 + tanh((V(IN2,GNDP) - vth_k*V(VCC,GNDP))/0.01)) - V(drv_l2,GNDP))/1k
+C_L2 drv_l2 GNDP 60p
+* ---- wake: act crosses 0.5 twake after nSLEEP reads high; en = tanh step of act
+B_WK GNDP drv_act I = 1n*( 0.5*(1 + tanh((V(NSLEEP,GNDP) - vth_k*V(VCC,GNDP))/0.01))*(1 - V(drv_act,GNDP))*0.6931472/twake
++ - (0.5*(1 - tanh((V(NSLEEP,GNDP) - vth_k*V(VCC,GNDP))/0.01)))*V(drv_act,GNDP)/1u )
+C_WK drv_act GNDP 1n
+R_WK drv_act GNDP 1G
+B_EN GNDP drv_en I = 0.5*(1 + tanh((V(drv_act,GNDP) - 0.5)/0.02))
+R_EN drv_en GNDP 1
+* ---- the bridge: four switches (Table 7-1), each a conductance gleg x its command
+B_HS1 VM OUT1 I = gleg*V(drv_en,GNDP)*V(drv_l1,GNDP)*(1 - V(drv_l2,GNDP))*V(VM,OUT1)
+B_LS1 OUT1 GNDP I = gleg*V(drv_en,GNDP)*V(drv_l2,GNDP)*V(OUT1,GNDP)
+B_HS2 VM OUT2 I = gleg*V(drv_en,GNDP)*V(drv_l2,GNDP)*(1 - V(drv_l1,GNDP))*V(VM,OUT2)
+B_LS2 OUT2 GNDP I = gleg*V(drv_en,GNDP)*V(drv_l1,GNDP)*V(OUT2,GNDP)
+* ---- body diodes (no capacitance, no transit time) and off-state leakage
+D_H1 OUT1 VM drv8837_bridge_body
+D_L1 GNDP OUT1 drv8837_bridge_body
+D_H2 OUT2 VM drv8837_bridge_body
+D_L2 GNDP OUT2 drv8837_bridge_body
+R_OF1 OUT1 GNDP 100Meg
+R_OF2 OUT2 GNDP 100Meg
+* ---- supply currents
+B_IVM VM GNDP I = ivm_on*V(drv_en,GNDP) + 30n*(1 - V(drv_en,GNDP))
+B_IVC VCC GNDP I = ivcc_on*V(drv_en,GNDP) + 5n*(1 - V(drv_en,GNDP))
+.ends DRV8837_BRIDGE

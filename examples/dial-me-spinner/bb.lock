@@ -33,6 +33,12 @@ path = "../../packages/raytac/mdbt50q-u1mv2"
 tree = "sha256:097f1b4000d545ab3273503ef6860b9ff0c73eeed95e78f51ee2ef44f2d02229"
 
 [[package]]
+id = "ti/drv8837"
+version = "0.1.0"
+path = "../../packages/ti/drv8837"
+tree = "sha256:1179d328b55b35c3ec5abbc6b0001ccb92ac685b38ca85ca538db8022e3e8bf3"
+
+[[package]]
 id = "ti/tps22917"
 version = "0.2.0"
 path = "../../packages/ti/tps22917"

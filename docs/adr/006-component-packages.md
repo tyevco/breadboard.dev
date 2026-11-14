@@ -10,7 +10,9 @@
   (2026-11-09: the TPS22917 view's floating QOD and its provenance,
   `source` for agent-written views, the spec examples, `SOURCE` for the
   WS2812C model, the local-only check outside git; Amendment 5).
-  D7's device route decided for M10 (Approver decisions (2026-11-14)).
+  D7's device route decided for M10 (Approver decisions (2026-11-14)) and
+  implemented (2026-11-14: device parts in board files, `bbdev`, the
+  `dms/mechanism@1` device, the `ti/drv8837` bridge view; Amendment 6).
   Written before implementation because it defines the package schema
   (AGENTS.md: ADRs come before anything that touches the package schema).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`), milestones S1, M3,
@@ -1573,3 +1575,103 @@ lists it under Out.
   independence of its event trace).
 - The board-file parser and `bb run`'s routing: `cli` tests.
 - `make check` on the pool and with `POOL=0`; `make locks` committed.
+
+### As implemented (2026-11-14)
+
+- **`bbdev`** (`bbdev/src/lib.rs`, `engine.rs`): the trait, `Ctx`, the
+  SplitMix64 `Rng` (FNV-1a-64 of the seed's little-endian bytes, a zero
+  byte and the reference), `ParamSpec`/`Params` (kinds: time, resistance,
+  inductance, plain number), `DEVICES` with `include_str!` sources, and
+  `DeviceEngine` as A6.3 says. Two changes of one output at one instant
+  cancel (a digital trace is strictly increasing per pin). The rule
+  violations (A6.2) are `EngineError::Protocol` naming the device.
+- **`dms/mechanism@1`** (`bbdev/src/dms_mechanism.rs`, ADR-008 Amendment
+  9): pins IN_A1, IN_A2, IN_B1, IN_B2, NSLEEP (in), HOME_N (out); the
+  parameters and their defaults are in its `PARAMS` (s0 500, stroke 500,
+  phase0 0, dir +1, step_mm 0.015, lph 4.3 mH, rloop 20.28 Ohm, pullin
+  0.2, twake 30 us, ts 50 ms, tactive 40 us, phase seeded, bop 3, brp
+  1.5, die 2.6). Recorded choices beyond Amendment 9:
+  - the rotor's "shortest way" is exact per event: both coils share
+    `tau`, so the current vector moves on a straight line between events,
+    and the parts of that line above the pull-in magnitude are found from
+    a quadratic; the field's sweep over each part is added to the rotor's
+    lag, which is wrapped to `(-pi, pi]` and moves the rotor as far as the
+    stops allow;
+  - the DRV5032 reads the field at the end of each 40 us window and the
+    output changes there; the first window starts at the seeded phase in
+    `(0, ts]` (or the `phase` parameter); at `t = 0` the latch is `|Bz| >
+    bop` for the initial position;
+  - coast decays with `tau` like brake (stated limit).
+- **Packages:** `packages/dms/detent-mechanism` (kind `mechanical`,
+  `[behavioral] engine = "device"`, its six pins; `digital_in` thresholds
+  of the DRV8837 inputs at 3.3 V for an analog route, `digital_out` 3.3 V,
+  10 ns, 100 Ohm for HOME_N) and `packages/ti/drv8837` (ADR-008 Amendment
+  9's bridge view; next item).
+- **The ideal-switch bridge view** `ti/drv8837:bridge`: four conductances
+  `2 / rDS` gated by Table 7-1 from 60 ns-filtered logic levels, the wake
+  node (crosses 0.5 at twake), body diodes as D elements without
+  capacitance or transit time, RPD, 1 pF pins, the supply currents; every
+  element a B current source or R/C/D (no branch-current unknown). Seven
+  vectors: Table 7-1's five states and rDS(on) at 0.8 A in the suite's own
+  `test_drv8837_model_matches_datasheet` circuits, and the nSLEEP wake of
+  `test_nsleep_wake` (the nSLEEP level, the bridge active twake after the
+  edge, coil A's final current and its 90 % time), against
+  `examples/dial-me-spinner/suite/results.json` where the circuit is the
+  suite's and against the datasheet figures where it is not (the suite's
+  sagging VSYS network is not reproduced: its 0.17645 A and 479.5 us are
+  cited, not gated). `bb pkg test` passes at one cell and 1 ms with
+  identical results, and the view is recorded as qualified at
+  (10 us, `phase0`).
+- **Board files** (`cli/src/board.rs`, `cli/src/devices.rs`): a device
+  part's keys are parsed by kind in the value grammar and the device is
+  built once to check their ranges; a device pin must be one of the
+  device's with the matching direction. `bb run` (`cli/src/main.rs`)
+  requires exactly one Renode part, builds the `DeviceEngine` (seed: the
+  run's `--seed` as `i64 as u64`; stop lattice: `--renode-quantum`), gives
+  a device output's glue the device's initial level, and binds in the
+  Phase 0 order with the device pins after it, so a board without devices
+  binds exactly as before. The plugin is loaded when the CPU is in a loop
+  (with devices the loop may be CPU and device only); the cycle classes
+  come from the binding list and are checked against the kernel's plan.
+  The device engine is registered last in both `--engine-order`s.
+- **Locks:** `bb open` adds `device:dms/mechanism@1` for a device
+  package; `bb pkg lint` checks `[behavioral] device` against `DEVICES`.
+  Adding `ti/drv8837` (MPN `DRV8837DSGR`) resolves U40 and U41 of the
+  dial-me-spinner projects by MPN: `make locks` rewrote
+  `examples/dial-me-spinner/{,system/}board.bbm` (U40, U41: `unmodelled`
+  to `ok`, stage `mpn`, the package) and their `bb.lock` (the package
+  entry), nothing else. Neither part is in E1's or E2's analog scope (their
+  OUT and IN nets are not scope nets), so no deck and no golden changes.
+- **Deviation, recorded:** `tests/device-smoke/board.cir` is a test board
+  for the route, not an example: it runs with a fresh Renode only
+  (`--renode-pool off`), so it has no `pool-equiv` entry and no cost-table
+  row. E3's board gets both (ADR-008 Amendment 9's gate list).
+
+### Gate runs (2026-11-14)
+
+On `c7bf7b7` plus this change; load is `/proc/loadavg` at the start and
+end of each run.
+
+- `cargo test -p bbdev`: 15 unit tests (the RNG, the device table, the
+  engine's trace, early stop, rule 1 and rule 2; the mechanism's field
+  table and edges, L/R filter, full steps, microstepping, the park stop
+  and lost overdrive, pull-in hold, DRV5032 sampling and hysteresis,
+  parameter checks, partition independence at 10 us, 370 us and 1 ms
+  deliveries, the edge latency) and G6 (`bbdev/tests/scheduler.rs`: the
+  mock CPU homing the mechanism under the real `Scheduler`; the one-cell
+  reference, 80 000 grants, equals lookahead at 1 ms and 10 ms, the other
+  registration order and `max_quantum` 1 ms in every non-grant record,
+  with quiet grants that stop early at HOME_N, 39 497 grants; a second
+  seed moves only the sample phase). All pass.
+- `bb pkg test packages/ti/drv8837`: 7 vector runs, every expectation
+  within tolerance, one cell and 1 ms identical; recorded as qualified at
+  (10 us, `phase0`). `bb pkg lint`: 0 errors, 0 warnings for both new
+  packages; `scripts/validate_packages.py`: 80 files, 0 failed.
+- `make device-smoke`: PASS; HOME_N rises at 57.040 ms in all four runs,
+  20 000 grants one-cell against 37 with lookahead (21 quiet grants, no
+  promise broken), all four identical.
+- `make locks` committed (A6 "Locks" above; `tests/device-smoke/bb.lock`
+  new).
+- **`make check` on the pool: green** (687 s, load 1.72 to 1.20).
+- **`make check POOL=0`: green** (771 s, load 0.88 to 1.37).
+- No committed golden or hash changed.

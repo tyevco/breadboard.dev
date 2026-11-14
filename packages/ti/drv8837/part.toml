@@ -1,0 +1,62 @@
+# ti/drv8837: TI DRV8837 low-voltage H-bridge (U40, U41 of the dial-me-spinner main board), for E3
+# (Phase 1 M10, ADR-008 Amendment 9).
+#
+# The view `bridge` is breadboard.dev's own IDEAL-SWITCH behavioural model, written from the datasheet
+# figures dial-me-spinner's motor_drive__drv8837.lib quotes (TI publishes no SPICE model for the
+# DRV8837). The suite's switch-level model (current clamp, OCP, UVLO, Schmitt inputs, body-diode
+# transients) is not migrated: it runs at about 1.75 s of wall time per simulated ms (plan section 2
+# E3). The vectors reproduce the suite's test_drv8837_model_matches_datasheet and the nSLEEP wake of
+# test_nsleep_wake against examples/dial-me-spinner/suite/results.json (6854d25).
+schema = "bb-part/0"
+
+[part]
+id = "ti/drv8837"
+version = "0.1.0"
+kind = "power"
+manufacturer = "Texas Instruments"
+mpn = ["DRV8837DSGR", "DRV8837DSGT"]
+lcsc = ["C39159"]
+datasheet = { url = "https://www.ti.com/lit/ds/symlink/drv8837.pdf", rev = "SLVSBA4F" }
+license = "Apache-2.0"
+description = "1.8-11 V, 1.8 A H-bridge motor driver, IN/IN interface, sleep mode"
+
+[footprints]
+kicad = ["Package_SON:Texas_DSG0008A_WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "bridge"
+purpose = "E3's microstep drive: ideal-switch H-bridge (Table 7-1) with rDS(on) per leg, brake (slow decay) and coast, nSLEEP wake (twake), RPD; for the coil current, its 25 kHz PWM ripple and VM's"
+fidelity = ["fast"]
+default_for = ["fast"]
+file = "analog/bridge.lib"
+subckt = "DRV8837_BRIDGE"
+ports = ["VM", "VCC", "IN1", "IN2", "nSLEEP", "OUT1", "OUT2", "GND"]
+params = { rds = "0.28", temp_c = "25", twake = "30us" }
+
+[analog.provenance]
+source = "agent_generated"
+base = "breadboard.dev's own ideal-switch behavioural model (no vendor netlist exists), written by an agent from SLVSBA4F Tables 6.5, 6.6 and 7-1 as dial-me-spinner@6854d25 quotes them; SLVSBA4F itself was not opened (ADR-006 Amendment 5)"
+refs = [
+  "SLVSBA4F Table 7-1 (truth table): dial-me-spinner@6854d25:hardware/sim/models/motor_drive__drv8837.lib (header)",
+  "SLVSBA4F Table 6.5 (rDS(on) 280 mOhm typ, RPD 100 kOhm, VIH/VIL 0.46/0.38 x VCC, IVM, IVCC): dial-me-spinner@6854d25:hardware/sim/models/motor_drive__drv8837.lib and hardware/sim/tests/test_motor_drive.py RDS_TYP",
+  "SLVSBA4F Table 6.6 (twake 30 us max): dial-me-spinner@6854d25:hardware/sim/tests/test_motor_drive.py TWAKE_MAX",
+  "SLVSBA4F Figure 6-7 (rDS(on) temperature drift): dial-me-spinner@6854d25:hardware/sim/models/motor_drive__drv8837.lib (tc_hot, tc_cold)",
+]
+deviations = [
+  "inputs without hysteresis: one threshold at (VIH + VIL) / 2 = 0.42 x VCC, with a 60 ns filter",
+  "body diodes without junction capacitance or transit time (no switching transients)",
+  "no current limit, OCP or UVLO (the suite's model has them)",
+]
+not_modelled = ["dead time and shoot-through", "gate charge, charge pump", "VCC UVLO", "overcurrent protection and the analog current limit", "thermal shutdown", "rDS(on) dependence on VM and VCC", "input hysteresis", "body-diode reverse recovery"]
+generated_by = "Claude (Phase 1 M10)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

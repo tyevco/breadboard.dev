@@ -1,0 +1,10 @@
+[package]
+name = "bbdev"
+description = "Breadboard's Phase 1 device API (ADR-006 D7, Amendment 6): pin-level behavioural devices in Rust, and the DeviceEngine that runs them under the time-grant protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+bbcore.workspace = true

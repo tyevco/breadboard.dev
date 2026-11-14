@@ -1,0 +1,40 @@
+# DRV8837 rDS(on) (HS + LS) at 0.8 A, 25 C: V(OUT2) = I rDS / 2 and V(OUT1) = VM - I rDS / 2, with
+# I = VM / (5.97 Ohm + rDS).
+schema = "bb-pkgtest/0"
+view = "bridge"
+circuit = "rds.cir"
+stop = "200us"
+
+[ports]
+GND = "0"
+IN1 = "in1"
+IN2 = "0"
+OUT1 = "p1"
+OUT2 = "p2"
+VCC = "vcc"
+VM = "vm"
+nSLEEP = "ns"
+
+[[expect]]
+meas = { node = "p2", at = "200us" }
+value = "0.112V"
+tol = "0.1mV"
+source = "SLVSBA4F Table 6.5 rDS(on) HS+LS 280 mOhm typ at 800 mA: 0.8 A x 0.14 Ohm"
+
+[[expect]]
+meas = { node = "p1", at = "200us" }
+value = "4.888V"
+tol = "0.1mV"
+source = "SLVSBA4F Table 6.5 rDS(on) HS+LS 280 mOhm typ at 800 mA: 5 V - 0.8 A x 0.14 Ohm"
+
+[[expect]]
+meas = { node = "p2", at = "200us" }
+value = "0.112V"
+tol = "3.1mV"
+source = "examples/dial-me-spinner/suite/results.json (M0, 6854d25): test_drv8837_model_matches_datasheet rDS(on) check window 0.2716-0.2884 Ohm (280 mOhm +- 3 %) -> V(OUT2) 0.10874-0.11495 V"
+
+[[expect]]
+meas = { node = "p2", at = "200us" }
+value = "0.112580V"
+tol = "0.7mV"
+source = "examples/dial-me-spinner/suite/results.json (M0, 6854d25): test_drv8837_model_matches_datasheet rDS(on) 0.28151862 Ohm (the suite model's soft current clamp adds 0.5 %) -> V(OUT2) = 5 V x 0.1407593 / 6.2515186"

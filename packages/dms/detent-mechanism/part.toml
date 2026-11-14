@@ -1,0 +1,46 @@
+# dms/detent-mechanism: the dial-me-spinner detent mechanism and its home switch as one
+# behavioural device (Phase 1 M10; ADR-006 D7 and Amendment 6, ADR-008 Amendment 9).
+#
+# The micro linear stepper's rotor, the lead screw and carriage, the detent magnet's field at U42
+# and the DRV5032FA itself are one `bbdev` device, `dms/mechanism@1` (bbdev/src/dms_mechanism.rs),
+# because the switch's input is the magnet's field: internal state, not a net. It reads the two
+# DRV8837s' commands (IN1/IN2 of U40 and U41, and the shared nSLEEP) and drives HOME_N. The bridge
+# and the coils' electrical side are the analog view of ti/drv8837 in ngspice. A board file names
+# it with `*bb part M1 package=dms/detent-mechanism` and binds its pins (spec/package.md section
+# 12); its parameters (ts, die, s0, ...) go on that line. It is not on the schematic, so an
+# imported project cannot hold it yet (route B, a Phase 2 item: approver decision 2, 2026-11-14).
+schema = "bb-part/0"
+
+[part]
+id = "dms/detent-mechanism"
+version = "0.1.0"
+kind = "mechanical"
+license = "Apache-2.0"
+description = "dial-me-spinner detent mechanism: stepper rotor, lead screw, carriage, detent magnet field and the DRV5032FA home switch (U42), as one device"
+
+[pins]
+file = "pins.toml"
+
+[behavioral]
+engine = "device"
+device = "dms/mechanism@1"
+
+[provenance]
+source = "agent_generated"
+base = "breadboard.dev's own behavioural model (bbdev/src/dms_mechanism.rs), written from dial-me-spinner@6854d25 docs/firmware.md sections 5.1-5.4 and the suite's model headers"
+refs = [
+  "dial-me-spinner@6854d25:docs/firmware.md 5.1 (0.015 mm of carriage per full step, 500 steps of stroke, self-locking screw)",
+  "dial-me-spinner@6854d25:docs/firmware.md 5.4 (Bz at the die vs die height and distance from the park stop; DRV5032FA BOP/BRP, tS)",
+  "dial-me-spinner@6854d25:hardware/sim/models/motor_drive__stepper.lib (20 Ohm, 4.3 mH nominal phase)",
+  "dial-me-spinner@6854d25:hardware/sim/models/motor_drive__drv5032.lib (omnipolar latch, tS sampling, tACTIVE 40 us, push-pull output)",
+  "dial-me-spinner@6854d25:hardware/sim/models/motor_drive__drv8837.lib (Table 7-1 truth table, twake 30 us)",
+]
+deviations = [
+  "the rotor follows the commanded polarity filtered by L/R, not the coil current the bridge view computes (the device API is digital, ADR-006 D7)",
+  "the rotor follows the field at once above the pull-in magnitude (no inertia, no detent torque); below it the rotor holds",
+  "coast decays like brake (with L/R), not through the body diodes",
+  "the DRV5032's latch holds the verdict for the initial position at t = 0 (a switch powered before the run); the sample phase is seeded",
+]
+not_modelled = ["thrust and load (MD-4): no stall in the loaded zone", "rotor inertia, detent torque, pull-out", "DRV8837 UVLO and OCP", "DRV5032 supply, tON, temperature drift of BOP/BRP", "the 48-magnet track's 0.01 mT", "the IN pins' electrical levels (the commands are read directly)"]
+generated_by = "Claude (Phase 1 M10)"
+confidence = "self_checked"

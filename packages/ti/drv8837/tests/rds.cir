@@ -1,0 +1,8 @@
+* rds: test circuit of ti/drv8837 (view bridge): the suite's rDS(on) load of
+* test_drv8837_model_matches_datasheet (its X2: IN1 high, IN2 grounded, nSLEEP high, 5.97 Ohm between
+* OUT1 and OUT2, so 5 V / (5.97 + 0.28) Ohm = 0.8 A at rDS(on) typ).
+VVM vm 0 5
+VCC vcc 0 3
+VN ns 0 3
+V3 in1 0 3
+RL p1 p2 5.97

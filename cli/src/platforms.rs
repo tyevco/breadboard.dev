@@ -80,9 +80,35 @@ impl PlatformDef {
     }
 }
 
+/// A `bbdev` device's identity (ADR-006 D8, Amendment 6 A6.4): locked as
+/// `device:<id>`, its content the list hash of its sources (the device API,
+/// its engine and the device's own files, `bbdev::DEVICES`).
+pub fn device_locked(def: &bbdev::DeviceDef) -> bbpkg::lock::LockedPlatform {
+    let files: Vec<(&str, &[u8])> = def
+        .sources
+        .iter()
+        .map(|(n, s)| (*n, s.as_bytes()))
+        .collect();
+    bbpkg::lock::LockedPlatform {
+        id: format!("device:{}", def.id),
+        content: bbpkg::lock::content_hash(&files),
+        renode: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_identities() {
+        let d = bbdev::find("dms/mechanism@1").unwrap();
+        let l = device_locked(d);
+        assert_eq!(l.id, "device:dms/mechanism@1");
+        assert!(l.content.starts_with("sha256:") && l.content.len() == 71);
+        assert!(l.renode.is_none());
+        assert!(PLATFORMS.iter().all(|p| p.content() != l.content));
+    }
 
     #[test]
     fn ids_are_unique_and_hashes_differ() {

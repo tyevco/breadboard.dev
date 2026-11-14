@@ -1,0 +1,63 @@
+# DRV8837 nSLEEP wake: the nSLEEP high level, the bridge active twake after the edge (the internal
+# enable node of the view), and coil A's current through the low side of OUT2 (V(OUT2) = I x 0.14 Ohm):
+# its final value VM / (20 + 0.28) Ohm and its 90 % time tau ln 10, tau = 4.3 mH / 20.28 Ohm.
+schema = "bb-pkgtest/0"
+view = "bridge"
+circuit = "wake.cir"
+stop = "11.02ms"
+
+[ports]
+GND = "0"
+IN1 = "in1"
+IN2 = "0"
+OUT1 = "o1"
+OUT2 = "o2"
+VCC = "vcc"
+VM = "vm"
+nSLEEP = "ns"
+
+[[edge]]
+net = "ns"
+model = { voh = "3.3V", vol = "0V", rise = "10ns", fall = "10ns", zout = "800" }
+at = [["20us", "high"]]
+
+[[edge]]
+net = "in1"
+model = { voh = "3.3V", vol = "0V", rise = "10ns", fall = "10ns", zout = "800" }
+at = [["1020us", "high"]]
+
+[[expect]]
+meas = { node = "ns", at = "220us" }
+value = "3.222656V"
+tol = "0.1mV"
+source = "3.3 V x 33.333 kOhm / (33.333 kOhm + 800 Ohm): R70 || RPD || RPD (SLVSBA4F Table 6.5 RPD 100 kOhm)"
+
+[[expect]]
+meas = { node = "ns", at = "220us" }
+value = "3.222586V"
+tol = "0.3mV"
+source = "examples/dial-me-spinner/suite/results.json (M0, 6854d25): test_nsleep_wake[3.3] nSLEEP high level 3.222334 V (R70 x0.99) and 3.222837 V (R70 x1.01); their midpoint, tolerance covering both"
+
+[[expect]]
+meas = { node = "x1.drv_en", when = "0.5V", rise = "1" }
+value = "50.000us"
+tol = "0.1us"
+source = "SLVSBA4F Table 6.6 twake 30 us (maximum, the view's default) after the nSLEEP edge at 20 us"
+
+[[expect]]
+meas = { node = "x1.drv_en", when = "0.5V", rise = "1" }
+value = "49.956us"
+tol = "0.15us"
+source = "examples/dial-me-spinner/suite/results.json (M0, 6854d25): test_nsleep_wake[3.3] bridge active 29.9557 us (R70 x0.99) and 29.9546 us (x1.01) after the nSLEEP edge at 20 us"
+
+[[expect]]
+meas = { node = "o2", at = "11.02ms" }
+value = "25.542mV"
+tol = "0.05mV"
+source = "3.7 V / 20.28 Ohm x 0.14 Ohm: coil 20 Ohm (motor_drive__stepper.lib r25) + rDS(on) 280 mOhm typ (SLVSBA4F Table 6.5), 10 ms after IN1 (firmware.md 5.2 energise)"
+
+[[expect]]
+meas = { node = "o2", when = "22.988mV", rise = "1", after = "1ms" }
+value = "1.508211ms"
+tol = "2us"
+source = "1.02 ms + tau ln 10, tau = 4.3 mH / 20.28 Ohm (motor_drive__stepper.lib lph, r25; rDS(on) typ): the 90 % point of the coil current"

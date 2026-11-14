@@ -1,0 +1,29 @@
+# DRV8837 Table 7-1, state brake (nSLEEP, IN1, IN2 = 3, 3, 3 V at VCC 3 V): OUT1 = L, OUT2 = L.
+# The suite's test_drv8837_model_matches_datasheet deck (an operating point there, a transient here,
+# measured at 200 us; the wake has settled from t = 0 at the DC operating point).
+schema = "bb-pkgtest/0"
+view = "bridge"
+circuit = "truth_brake.cir"
+stop = "200us"
+
+[ports]
+GND = "0"
+IN1 = "in1"
+IN2 = "in2"
+OUT1 = "o1"
+OUT2 = "o2"
+VCC = "vcc"
+VM = "vm"
+nSLEEP = "ns"
+
+[[expect]]
+meas = { node = "o1", at = "200us" }
+value = "350uV"
+tol = "0.1mV"
+source = "examples/dial-me-spinner/suite/results.json (M0, 6854d25): test_drv8837_model_matches_datasheet brake: OUT1 = L 0.000349951 V (-0.01-0.1 V window, SLVSBA4F Table 7-1)"
+
+[[expect]]
+meas = { node = "o2", at = "200us" }
+value = "350uV"
+tol = "0.1mV"
+source = "examples/dial-me-spinner/suite/results.json (M0, 6854d25): test_drv8837_model_matches_datasheet brake: OUT2 = L 0.000349951 V (-0.01-0.1 V window, SLVSBA4F Table 7-1)"

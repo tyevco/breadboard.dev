@@ -1,0 +1,12 @@
+* wake: test circuit of ti/drv8837 (view bridge): the suite's test_nsleep_wake drive (dial-me-spinner
+* @6854d25:hardware/sim/tests/test_motor_drive.py wake_run): MOT_NSLEEP from an nRF pin (standard
+* drive, 800 Ohm) into R70 100 kOhm and the two DRV8837s' RPD (this view's, plus U41's as a resistor);
+* +3V3 = 3.3 V; nSLEEP rises at 20 us, IN1 1 ms later; coil A (motor_drive__stepper.lib: 20 Ohm,
+* 4.3 mH, no back-EMF) between OUT1 and OUT2. VM is a stiff 3.7 V here (the suite's VSYS network sags,
+* so its coil current, 0.17645 A, and 90 % time, 479.5 us, are not this circuit's).
+VVM vm 0 3.7
+VCC vcc 0 3.3
+R70 ns 0 100k
+RPD41 ns 0 100k
+RCOIL o1 cm 20
+LCOIL cm o2 4.3m

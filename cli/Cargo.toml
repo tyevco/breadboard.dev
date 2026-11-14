@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 bbcore.workspace = true
 bbpkg = { path = "../bbpkg" }
+bbdev.workspace = true
 serde_json.workspace = true
 bb-analog-ngspice = { path = "../engines/analog-ngspice" }
 bb-cpu-renode = { path = "../engines/cpu-renode" }
