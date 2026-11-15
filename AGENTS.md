@@ -160,9 +160,32 @@ Actions' job records (read-only), on three consecutive commits: fd63d3a
 re-running CI would act on GitHub. faaf816 predates the GDB step of
 `dms-rail`.
 
+The local baseline was measured on 2026-11-15 at 83e48af, in
+`~/src/bb-baseline` (ext4, made by `make worktree`), on 24 CPUs and
+14.5 GiB under WSL2 kernel 6.18.58.1. The pool was on (the default), and
+nothing else ran. The 1-minute load before each run was 1.2-1.7; that is
+the previous run's tail.
+
 | Local (idle ext4 worktree) | Median | Runs |
 | --- | --- | --- |
-| `make check` | (pending: H0 baseline run) | |
+| **`make check`** (the PR-tier reference) | **470 s (7:50)** | 466, 470, 474 s (warm-up from a cold target directory: 519 s) |
+| `make test POOL=0` (the `fresh` tier, for H6) | 554 s (9:14) | N = 1 |
+
+So the PR-tier target of plan section 5 item 5 is `make check` ≤ 710 s
+(11:50) on this host. `make test`'s steps (medians of the three runs; the
+sum is 461 s, and fmt-check, clippy and the up-to-date builds add about
+10 s):
+
+| Step | s | Step | s | Step | s |
+| --- | --- | --- | --- | --- | --- |
+| `cargo-test` | 152.4 | `nrf-pwm-model` | 43.0 | `ec-reconnect` | 37.0 |
+| `gdb-test` | 36.8 | `dms-vsense-test` | 36.1 | `adc-model` | 32.3 |
+| `adc-kicad` | 26.7 | `dms-home-test` | 18.3 | `nrf-feedback` | 17.3 |
+| `device-smoke` | 13.5 | `nrf-saadc-model` | 13.2 | `dms-rail-test` | 9.2 |
+| `packages` | 7.2 | `adc-stock` | 5.5 | `dms-system` | 4.1 |
+| `adc-order` | 2.1 | `determinism` | 1.7 | `adc` | 1.2 |
+| `feedback-order` | 1.2 | `measure-lock-test` | 0.7 | `feedback` | 0.7 |
+| `spike` | 0.5 | `golden` | 0.1 | | |
 
 | CI job (ubuntu-24.04) | Median | Runs (fd63d3a, f1f0abb, faaf816) | Its `make setup` step (median) |
 | --- | --- | --- | --- |
@@ -188,7 +211,7 @@ milestone may add to `make test` (wall time, on the baseline host). The
 
 | Milestone | `make test` budget | Measured `make test` addition | Full gate (measured) |
 | --- | --- | --- | --- |
-| H0 | — (`measure-lock-test`, a few seconds) | | |
+| H0 | — (`measure-lock-test`, a few seconds) | 0.7 s (`measure-lock-test`) | `make worktree-test` 76 s; `make baseline` 32 min |
 | H1 | +30 s | | |
 | H2 | — | | |
 | H3 | +10 s | | |
@@ -213,8 +236,8 @@ milestone may add to `make test` (wall time, on the baseline host). The
 
 This build adds at most 350 s to `make test` (plan section 8, without
 R3's 10 s; B4, R3, P6, E2, E3 and E5 are not in this build). Section 5
-item 5's target, the baseline + 4 minutes (240 s), therefore needs H6's
-named savings.
+item 5's target allows the baseline + 4 minutes (240 s), so the build
+needs at least 110 s of H6's named savings.
 
 ## Repo map
 
