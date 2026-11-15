@@ -1137,9 +1137,26 @@ pub fn import(p: &Project, mode: Mode) -> Result<Imported, String> {
     // Connections (systems; ADR-007 D5, Amendment 5): each end resolves by
     // the instance rule, the mated pins are written out, and a harness view
     // is resolved and locked like an instance's package.
+    // A pin mates at most once in the whole project (spec/project.md), not
+    // only within one connection.
     let mut connections = Vec::new();
-    for c in &p.connections {
+    let mut mated: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for (k, c) in p.connections.iter().enumerate() {
         let (conn, harness, report) = resolve_connection(c, &insts, &board, &mut pk)?;
+        for (x, y) in &conn.pins {
+            for (end, pin) in [(&conn.a, x), (&conn.b, y)] {
+                if let Some(j) = mated.insert((end.clone(), pin.clone()), k) {
+                    return Err(format!(
+                        "bb.toml [[connection]] {} (a = {:?}, b = {:?}): {end} pin {pin} is \
+                         already mated by [[connection]] {} (a pin is mated at most once)",
+                        k + 1,
+                        c.a,
+                        c.b,
+                        j + 1
+                    ));
+                }
+            }
+        }
         if let Some(h) = harness {
             used.entry(h.part.id.clone()).or_insert(h);
         }

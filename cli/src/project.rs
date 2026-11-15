@@ -276,6 +276,13 @@ impl Project {
             let mut pins = Vec::new();
             match c.get("pins") {
                 None => {}
+                Some(Value::Array(a)) if a.is_empty() => {
+                    return Err(format!(
+                        "{}.pins = []: a connection mates at least one pin (leave pins out to \
+                         mate pin n to pin n, or through the harness's wires)",
+                        c.path
+                    ))
+                }
                 Some(Value::Array(a)) => {
                     for p in a {
                         match p.as_array().map(Vec::as_slice) {

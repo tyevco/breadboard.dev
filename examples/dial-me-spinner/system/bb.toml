@@ -15,7 +15,8 @@
 # Phase 1 simulates one board (`simulate`). This project is the system's
 # import: E1 and E2 run on the main board alone, in ../bb.toml, whose names
 # are unqualified. A `bb run` here would simulate main only, with the base
-# side of J1 a bench port (ADR-007 D5).
+# side of J1 a bench port (ADR-007 D5), and needs [probes] without the base
+# board's nets (below).
 schema = "bb-project/0"
 
 [project]
@@ -51,6 +52,10 @@ b = "base:J3"
 model = "dial-me-spinner/link-harness:wires"
 
 # The test points on VSYS at both ends of the harness, and the base board's
-# VBUS and VBAT. TP1 is on both boards (main VSYS, base VBUS).
+# VBUS and VBAT. TP1 is on both boards (main VSYS, base VBUS). The base
+# board's probes are import-only: they resolve and are recorded in
+# board.bbm, but a `bb run` refuses them (the base board's nets have nothing
+# in the deck, ADR-007 Amendment 5 item 5), so a run here keeps main:TP1 only
+# (make dms-system does; ADR-007 Amendment 6).
 [probes]
 nets = ["main:TP1", "base:TP1", "base:TP2", "base:TP3"]

@@ -1173,7 +1173,8 @@ the kernel, the protocol and every committed output are unchanged.
 1. **A separate project.** `examples/dial-me-spinner/system/bb.toml` names
    both vendored netlists (`../kicad/main/…`, `../kicad/base/…`), the
    connection, `[instances."main:J11"]` as in E1, and the probes `main:TP1`,
-   `base:TP1`, `base:TP2`, `base:TP3`. E1 and E2 stay in
+   `base:TP1`, `base:TP2`, `base:TP3` (the base board's are import-only: a
+   `bb run` refuses them, item 5 and Amendment 6). E1 and E2 stay in
    `examples/dial-me-spinner/bb.toml`, a one-board project. In a system,
    nets are `<board>:<name>` and SPICE names carry `<board>_` (D6), so
    adding the base board there would rename every output net and change
@@ -1273,7 +1274,9 @@ the kernel, the protocol and every committed output are unchanged.
 7. **Gates** (plan M11). `make dms-system` (`scripts/dms_system.sh`, in
    `make test`, about 30 s) and `cli/tests/system.rs` (in `make
    cargo-test`):
-   - a fresh import gives the committed `board.bbm` (sha256 `8f1d752e…`).
+   - a fresh import gives the committed `board.bbm` (sha256 `8f1d752e…`
+     when M11 was committed; M10's `make locks` changed it, see
+     Amendment 6).
      Two imports are byte-identical in `board.bbm`, `bb.lock`,
      `.bb/resolution.json` and `.bb/unresolved.toml`, and `bb open
      --check` passes on the committed project;
@@ -1321,3 +1324,37 @@ the kernel, the protocol and every committed output are unchanged.
      the main board, and the base board uses the same importer path.
    - No cost-table row and no `pool-equiv` entry. M11 adds no run mode
      (item 8) and starts no engine.
+
+## Amendment 6 (2026-11-14): the M10 review of M11
+
+A review after M10 found two holes in how a `[[connection]]` is checked,
+a committed probe list that a run refuses, and a stale hash in the text.
+Nothing in the schemas or in `spec/` changes: both checks enforce what
+`spec/project.md` already says ("each pin existing and mated at most once
+on each side"; a connection mates pins).
+
+1. **`pins = []` is an error** ("a connection mates at least one pin").
+   It used to read as "pins left out": with no harness, every pin mated n
+   to n (`MP` too), and with the harness, the wires decided, without a
+   warning. A missing `pins` key keeps its meaning (item 3 of Amendment 5).
+   `cli/src/project.rs` rejects the empty array when it reads `bb.toml`.
+2. **A pin is mated at most once across the project.** Two identical
+   `[[connection]]` entries were both accepted and both recorded, so every
+   pin of `main:J1` and `base:J3` was mated twice; the check applied only
+   within one connection. `bb open` now refuses an instance pin that an
+   earlier connection already mates ("`main:J1` pin 1 is already mated by
+   [[connection]] 1"). Two connections on one instance with disjoint pins
+   stay legal. Both cases, with and without the harness for item 1, are in
+   `a_connection_is_checked` (`cli/tests/system.rs`).
+3. **The system project's base-board probes are import-only.**
+   `examples/dial-me-spinner/system/bb.toml` names `base:TP1`, `base:TP2`
+   and `base:TP3` beside `main:TP1`. They resolve and are recorded in
+   `board.bbm` (the import tests check them), but `bb run` refuses them
+   (item 5: the base board's nets have nothing in the deck), and `make
+   dms-system` runs E1 on the system with `main:TP1` only. The project's
+   comment now says so; the probes stay, so `board.bbm` is unchanged.
+4. **The `board.bbm` hash in item 7** was M11's (`8f1d752e…`). M10's
+   `make locks` runs changed it legitimately: `nrf52840-bb@3`
+   (`4fed4ee8…` at `ee40df0`), then `ti/drv8837` resolving U40 and U41
+   (`642a400c…` from `62f9886`). The gate compares against the committed
+   file, so the text no longer pins a hash.

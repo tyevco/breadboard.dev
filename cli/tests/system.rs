@@ -401,7 +401,7 @@ fn a_bare_shared_ref_is_an_error_listing_the_candidates() {
 #[test]
 fn a_connection_is_checked() {
     let conn = "[[connection]]\na = \"main:J1\"\nb = \"base:J3\"\nmodel = \"dial-me-spinner/link-harness:wires\"\n";
-    let cases: [(&str, String, &str); 6] = [
+    let cases: [(&str, String, &str); 9] = [
         (
             "noview",
             conn.replace(":wires", ":nope"),
@@ -431,6 +431,26 @@ fn a_connection_is_checked() {
             "nopin",
             format!("{conn}pins = [[\"13\", \"13\"]]\n"),
             "main:J1 has no pin 13",
+        ),
+        // An explicit empty list is not "pins left out" (the M10 review).
+        (
+            "empty",
+            format!("{conn}pins = []\n"),
+            "pins = []: a connection mates at least one pin",
+        ),
+        (
+            "empty-direct",
+            format!(
+                "{}pins = []\n",
+                conn.replace("model = \"dial-me-spinner/link-harness:wires\"\n", "")
+            ),
+            "pins = []: a connection mates at least one pin",
+        ),
+        // A pin is mated at most once across the project's connections too.
+        (
+            "duplicate",
+            format!("{conn}\n{conn}"),
+            "main:J1 pin 1 is already mated by [[connection]] 1",
         ),
     ];
     for (name, new, want) in cases {
