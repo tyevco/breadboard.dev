@@ -10,8 +10,10 @@
 #      holds the marker and B's does not; bbpkg's rlib and each bb binary carry their own
 #      worktree's package path (bbpkg compiles CARGO_MANIFEST_DIR in) and never the other's;
 #   3. negative control (the mechanism acted): the same two builds into ONE shared target
-#      directory, A then B, leave at A's $(BB) a binary with B's package path, the crossing that
-#      AGENTS.md warns about and that separate directories prevent.
+#      directory, A then B, cross: either B's `make bb` leaves B a binary with A's code (cargo
+#      names sources by their workspace-relative path, so B's tree can look fresh), or it replaces
+#      the binary A's $(BB) names. That is the crossing AGENTS.md warns about and that separate
+#      directories prevent.
 set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 main=$(dirname "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)")
@@ -88,8 +90,16 @@ S=$tmp/cache/bb-target-shared
 $MAKE -C "$A" --no-print-directory bb CARGO_TARGET_DIR="$S" > "$tmp/shared-a.log" 2>&1 || fail "shared build A failed"
 has "$S/release/bb" "$A/bbpkg" || fail "control: A's build into the shared directory lacks A's path"
 $MAKE -C "$B" --no-print-directory bb CARGO_TARGET_DIR="$S" > "$tmp/shared-b.log" 2>&1 || fail "shared build B failed"
-has "$S/release/bb" "$A/bbpkg" && fail "control: the shared directory kept A's binary (no crossing shown)"
-has "$S/release/bb" "$B/bbpkg" || fail "control: the shared binary is not B's"
-nrl=$(ls "$S"/release/deps/libbbpkg-*.rlib | wc -l)
-log "control: with one shared target directory, A's \$(BB) is B's binary after B builds (bbpkg rlibs in it: $nrl)"
-echo "worktree-test: PASS (concurrent builds in separate target directories cross nothing; a shared one crosses)"
+ncomp=$(grep -c ' Compiling ' "$tmp/shared-b.log" || true)
+# Either way is a crossing: B's `make bb` leaves B with A's code (cargo's fingerprints name sources
+# by their workspace-relative path, so B's tree can look fresh), or B's build replaces the binary
+# that A's $(BB) names.
+if has "$S/release/bb" "$A/bbpkg"; then
+  has "$S/release/bb" "$B/bbpkg" && fail "control: the shared binary holds both package paths"
+  marker_note=$(has "$(one "$S" bbcore)" "$marker" && echo "with A's bbcore marker, which B's tree does not have" || echo "")
+  log "control: with one shared target directory, B's make bb ($ncomp crates compiled) left B's \$(BB) holding A's code: A's package path $marker_note"
+else
+  has "$S/release/bb" "$B/bbpkg" || fail "control: the shared binary holds neither package path"
+  log "control: with one shared target directory, B's build ($ncomp crates compiled) replaced the binary at A's \$(BB) with B's"
+fi
+echo "worktree-test: PASS (concurrent builds in separate target directories cross nothing; one shared directory crosses them)"
