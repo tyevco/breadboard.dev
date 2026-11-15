@@ -1065,7 +1065,7 @@ measured-cost-table-dms-vsense: firmware bb dms-vsense-prepare
 # carrying the main board's detent sheet, the nRF52840 (PWM0, TEMP, SAADC) and the mechanism and
 # DRV5032 device M1 (dms/mechanism@1), with firmware/prebuilt/homing.elf (the procedure) and
 # homing_step.elf (one full step at 446 PPS). scripts/dms_home.sh; ADR-008 Amendments 9-11.
-.PHONY: pooled-dms-home pooled-dms-home-test dms-home-ref dms-home-update cost-table-dms-home
+.PHONY: pooled-dms-home pooled-dms-home-test dms-home-ref dms-home-update cost-table-dms-home dms-home-rss
 DMS_HOME_OUT  ?= out/dms-home
 DMS_HOME_GOLD := tests/golden/dms-home
 DMS_HOME_E3   := examples/dial-me-spinner/e3
@@ -1111,6 +1111,26 @@ measured-cost-table-dms-home: firmware bb
 	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
 	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-home $(PERF_N) \
 	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
+
+# --- Phase 2 H1: ngspice robustness (ADR-015 D1-D4) --------------------------------------------
+# ADR-015 G1, the progress watchdog (D1): the SAADC stall repro (e3/board.cir with P0.02 on the
+# loading saadc_se view, homing_step.elf, 100 ms) ends in NoProgress:ngspice at 77.43 ms in the cell
+# (77.43 ms, 77.44 ms] within STALL_MAX_S (120 s) and with bb's peak RSS under STALL_MAX_RSS_KB
+# (500 MB); the outputs before the error equal a run that ends at 77.43 ms; a lower limit trips
+# identically twice; the committed board (load=none) is the negative control. Fresh Renode, under
+# the host measurement lock (a timing gate; about 3.5 minutes, so not in make test: its tier is
+# nightly, ADR-015 D11). scripts/ngspice_stall.sh.
+NGSPICE_STALL_OUT ?= out/ngspice-stall
+measured-ngspice-stall: firmware bb
+	bash scripts/ngspice_stall.sh $(BB) $(NGSPICE_STALL_OUT)
+
+# ADR-015 G2, engine-owned .save (D2): E3 typ (homing.elf, 2700 ms, bb's defaults) with bb's peak RSS
+# at most DMS_HOME_RSS_MAX_KB: the full-length measurement with .save plus 20 % (ADR-015 Amendment 1;
+# 1.5 GB without .save), and its outputs equal to tests/golden/dms-home/typ (one partition: a
+# consistency check of .save). About 4 minutes; make dms-home runs the same check on its typ run.
+DMS_HOME_RSS_OUT ?= out/dms-home-rss
+dms-home-rss: firmware bb
+	bash scripts/dms_home.sh rss $(BB) $(DMS_HOME_RSS_OUT)
 
 # After an intended change to a package, a platform's .repl or a Renode
 # plugin source: rewrite the changed bb.lock entries (review, then commit).
@@ -1219,7 +1239,8 @@ worktree-test:
 MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-table-dms-rail \
                    cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
-                   setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe
+                   setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \
+                   ngspice-stall
 .PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
 $(MEASURE_TARGETS):
 	@bash scripts/measure_lock.sh $@ $(MAKE) --no-print-directory measured-$@

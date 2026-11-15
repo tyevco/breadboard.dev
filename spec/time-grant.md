@@ -509,6 +509,15 @@ at `ceil_L(t_x)`, so the outputs equal the one-cell run's byte for byte.
 - Report a digital `edge_time` outside `(p, g]`, hide a change from the trace
   (a traced engine), or hide a second edge inside a grant (a legacy engine).
 - Step ngspice per CPU instruction.
+- Accept unbounded solver work in one lattice cell: an engine reports
+  `NoProgress` (ADR-015 D1). ngspice's watchdog counts accepted solver
+  points, never wall time: more than `max_points_per_cell` (default
+  200 000) in one cell `((k-1)L, kL]`, or `max_points_without_progress`
+  (default 10 000) consecutive points that do not advance its time by a
+  whole fs, fails the run with `NoProgress:<engine>` at the tripping
+  point's time, the same in every run; the outputs of every completed grant
+  stay written. The limits are run options (`bb run --ngspice-watchdog`,
+  recorded in `run.json`).
 - Depend on wall-clock time, thread timing or unseeded randomness.
 - Change anything that affects results in `end_of_run`: it is for pure
   self-checks (e.g. the Renode cross-check), and a later `run` may resume.

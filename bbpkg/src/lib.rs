@@ -4,6 +4,7 @@
 //! - [`toml`]: the TOML reader for the authored files;
 //! - [`package`]: `part.toml` and `pins.toml`;
 //! - [`lint`]: `bb pkg lint`;
+//! - [`bexpr`]: B-expression lint against ngspice 42's function table;
 //! - [`spice`]: view files, the `gnd` rule, deck assembly;
 //! - [`pkgtest`]: test vectors through `NgspiceEngine` (`bb pkg test`);
 //! - [`lock`]: tree hashes, platform content hashes and `bb.lock`;
@@ -12,6 +13,7 @@
 //! - [`pattern`]: `mpn_patterns`, anchored regular expressions (ADR-007 D4);
 //! - [`sha256`].
 
+pub mod bexpr;
 pub mod lint;
 pub mod lock;
 pub mod obj;

@@ -43,8 +43,12 @@
 #   scripts/dms_home.sh update <out>      write tests/golden/dms-home from <out>'s references
 #   scripts/dms_home.sh run <bb> <out> <cases...>   only run the named cases at bb's defaults, no checks
 #                                         (make docs-plots draws from them)
-# DMS_HOME_JOBS (default 5) runs at a time: a homing run holds about 1.5 GB (ngspice keeps every
-# solver point) and takes about 4.5 minutes alone, 6-7 with five in parallel (the gate: about 45).
+#   scripts/dms_home.sh rss <bb> <out>    typ alone: bb's peak RSS at most RSS_MAX_KB (ADR-015 G2) and
+#                                         its committed hashes (make dms-home-rss; the gate checks the
+#                                         same on its typ run)
+# DMS_HOME_JOBS (default 5) runs at a time: a homing run holds about 330 MB (ngspice keeps every
+# solver point of the vectors the engine saves, ADR-015 D2; 1.5 GB before H1) and takes about 4.5
+# minutes alone, 6-7 with five in parallel (the gate: about 45).
 set -euo pipefail
 MODE=$1
 shift
@@ -54,6 +58,9 @@ FWD=$ROOT/examples/dial-me-spinner/firmware/prebuilt
 GOLD=$ROOT/tests/golden/dms-home
 JOBS=${DMS_HOME_JOBS:-5}
 DET_RUNS=${DET_RUNS:-10}
+# ADR-015 G2: E3 typ's peak RSS with the engine's .save, measured over the full 2.7 s (336 356 kB,
+# H1, ADR-015 Amendment 1; 1.5 GB without .save), plus 20 %.
+RSS_MAX_KB=${DMS_HOME_RSS_MAX_KB:-403627}
 PY=${PYTHON:-python3}
 CASES=(step typ worst park)
 NEGS=(neg-fast neg-fb200 neg-fb286)
@@ -172,6 +179,18 @@ negcheck() { # <dir> <patterns...>
   else fail "$(basename "$d"): the negative control does not fail exactly: $*"; fi
 }
 
+# ADR-015 G2 (D2, engine-owned .save): bb's own peak RSS on a typ run (the "bb run: peak RSS" line)
+# at most RSS_MAX_KB: the full-length measurement with .save plus 20 % (ADR-015 Amendment 1).
+rss_check() { # <dir>
+  local kb
+  kb=$(sed -n 's/^bb run: peak RSS \([0-9]*\) kB.*/\1/p' "$1.log" | tail -1)
+  if [[ -n $kb ]] && (( kb <= RSS_MAX_KB )); then
+    pass "typ: bb's peak RSS ${kb} kB <= ${RSS_MAX_KB} kB (ADR-015 G2; 1.5 GB without .save)"
+  else
+    fail "typ: bb's peak RSS ${kb:-unknown} kB > ${RSS_MAX_KB} kB (ADR-015 G2)"
+  fi
+}
+
 boards() {
   if "$PY" "$ROOT/scripts/dms_home_boards.py" --check; then pass "the E3 board files are the generator's output"
   else fail "the E3 board files differ from scripts/dms_home_boards.py's output"; fi
@@ -215,6 +234,7 @@ do_gate() { # <bb> <out>
     grep -q '0 promises broken' "$out/$c.log" && pass "$c: 0 promises broken" \
       || fail "$c: a lookahead promise was broken"
   done
+  rss_check "$out/typ"
   for c in typ step; do
     same "$out/$c" "$out/$c-order" "$c: --engine-order analog-first byte-identical" nets.csv events.jsonl nets.vcd
     hashes "$out/$c-q1ms" "$c" nongrant
@@ -255,6 +275,7 @@ case $MODE in
   test) do_test "$BB" "$OUT" ;;
   gate) do_gate "$BB" "$OUT" ;;
   ref) boards; do_ref "$BB" "$OUT" "${CASES[@]}" ;;
+  rss) run_jobs "$BB" "$OUT/typ||"; rss_check "$OUT/typ"; hashes "$OUT/typ" typ all ;;
   run) shift 2; jobs=(); for c in "$@"; do jobs+=("$OUT/$c|$c|"); done; run_jobs "$BB" "${jobs[@]}" ;;
   *) sed -n '2,/^set -euo/{/^set -euo/!p}' "$0"; exit 2 ;;
 esac

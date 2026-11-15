@@ -564,6 +564,20 @@ pub fn run(
         now: Time::ZERO,
         trace: Vec::new(),
     };
+    // ADR-015 D3: a wrong call can crash libngspice 42, so the deck is linted
+    // before ngspice reads it.
+    let lint = crate::bexpr::check(&cfg.netlist);
+    if !lint.is_empty() {
+        return Err(format!(
+            "the deck's expressions (ADR-015 D3): {}",
+            lint.join("; ")
+        ));
+    }
+    // ADR-015 D4: the operating point first, under this option set, in the
+    // time ngspice's DC iteration takes (no transient-op fallback), with the
+    // nodes ngspice names.
+    bb_analog_ngspice::operating_point(&cfg)
+        .map_err(|e| format!("operating point under {options}: {e}"))?;
     let engine = NgspiceEngine::new(cfg).map_err(|e| format!("start ngspice: {e}"))?;
     let mut s = Scheduler::new(SchedulerConfig {
         max_quantum,
