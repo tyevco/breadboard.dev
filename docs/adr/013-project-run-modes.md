@@ -316,7 +316,9 @@ every committed output of a Phase 1 board are unchanged.
      sample phase; `compare_project_run.py` must fail it on M1's first
      record (it does), so the comparison is not vacuous.
    - **`make pool-equiv`** gains `dms-home-project-step` and
-     `dms-home-project` (both `all`: one partition).
+     `dms-home-project` (both `all`: one partition). It passed with them:
+     27 configurations, 2 rounds, every pooled run leased and byte-identical
+     to its fresh run and to the committed hashes (104 min under load).
 7. **Deviation: the step case's suite checks stay on the board file.**
    `check_dms_home.py --step` reads COILA_L and COILB_L (nodes inside J40's
    view, which a project probe cannot name: `spec/project.md` section 2)
