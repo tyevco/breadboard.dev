@@ -96,6 +96,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make dms-source` | Phase 1 M0: the vendored dial-me-spinner KiCad inputs (`examples/dial-me-spinner/kicad/`) against the sha256s in `examples/dial-me-spinner/SOURCE`, and against `git show <commit>:<path>` when `DMS_REPO` (default `../dial-me-spinner`) exists, and that every package file migrated from dial-me-spinner (a `part.toml` `origin`, the WS2812C view) has an entry (`scripts/dms_source_check.sh`) |
 | `make dms-suite-check` | Phase 1 M0 gate: re-run the dial-me-spinner SPICE suite (`-m "not slow"`) at the reference commit `6854d25` from a `git archive` export in `~/.cache/bb-dms-suite` (`scripts/dms_suite.sh`, about 4-5 min) and require `out/dms-suite/results.json` to equal the committed `examples/dial-me-spinner/suite/results.json` byte for byte (checks, test outcomes, every deck's numeric fallback level, ngspice version). `make dms-suite-update` regenerates it. Never check out, stash or write in the dial-me-spinner repository |
 | `make dms-s1` | Phase 1 plan S1 (ADR-006 Amendment 2): the E1 deck (two LED rail on/off cycles, 120 ms, both benches) through `NgspiceEngine` at `phase0`, with the S1 fix of the TPS22917 view. The view and every deck are built in `~/.cache/bb-dms-s1` from a `git archive` export of `6854d25`; they are TI-derived, so they stay local-only and never enter the repository (`scripts/dms_s1.sh`, `scripts/dms_s1.py`, `engines/analog-ngspice/examples/deck_run.rs`). Its 18 gates: 120 ms at both benches; grants of 10 µs, 1 ms and 10 ms byte-identical; VLED at the check instants and the LSW-2 time against the suite's `suite_fallback` run; VLED at every 10 µs against the converged run; the fix's result neutrality. About 1.5 min on 8 jobs (`DMS_S1_JOBS`). `make dms-s1-cost` is the S1 cost table (plan §8; `DMS_S1_N` interleaved rounds, medians; run it on an idle host) |
+| `make pi-spike` | Phase 2 P0 (ADR-009 D2, G3; Amendment 1 is its report): the W1 and W2 suite replicas (the suite's decks with the S1-fixed TPS22917 at `phase0`) against `results.json`, and the static-load decks with the first RT9080, BQ25180 and TPS61040 `pi` views (`examples/dial-me-spinner/pi-spike/views`) at `phase0` and the suite's option sets: grant partitions, the converged reference, the model difference and its attribution, the tolerances of `pi-spike/tolerances.toml`, W1's feasibility row, the Q1 stress-corner sweep (`scripts/pi_spike.sh`, `scripts/pi_spike.py`; decks local-only in `$BB_SCRATCH/bb-pi-spike`; about 100 s on 8 jobs, `PI_SPIKE_JOBS`). Not in `make test`; needs `DMS_REPO` and the suite venv |
 | `make packages` | ADR-006 (Phase 1 M3; in `make test`): every `part.toml`, `pins.toml`, test vector, `bb.lock`, project `bb.toml`, bench and `board.bbm` against `spec/schema/*.schema.json` (`scripts/validate_packages.py`, python3-jsonschema), `bb pkg lint` clean, `bb pkg test` (every vector through `NgspiceEngine` at one cell and 1 ms, identical, and at every recorded qualification; the first-party packages and `examples/adc/kicad/packages`), and every example's `bb.lock` and every example project's `board.bbm` current (`bb open --check`); `scripts/check_local_only.sh` (no `LicenseRef-local-only` package, nothing under `local-packages/` and no TI-derived model file is tracked; outside a git checkout it checks every file of the tree), and its regression test `scripts/check_local_only_test.sh` |
 | `make dms-vectors` / `make dms-vectors-check` | Phase 1 M5 (ADR-006 Amendment 3): regenerate the test vectors of `packages/ti/tps22917` and `packages/worldsemi/ws2812c-2020` from the dial-me-spinner suite's own deck builders at `6854d25` (`scripts/dms_packages.sh`, `scripts/dms_packages.py`; `git archive` export, suite venv), or require the committed ones byte for byte and `nordic/nrf52840-qiaa`'s GPIO sets to equal the suite's resistances (needs `DMS_REPO`) |
 | `make dms-local-packages` | Phase 1 M5: build the LOCAL-ONLY vendor-derived `ti/tps22917` (`LicenseRef-local-only`: the suite's TI-derived view with the S1 fix and the `GND` -> `GNDP` rename) in the git-ignored `local-packages/` (`DMS_LOCAL_PACKAGES`), qualify it with `bb pkg test --record`, and run gate G8 (the rename gives byte-identical `bb pkg test --report` lines). Never commit `local-packages/` |
@@ -224,7 +225,7 @@ milestone may add to `make test` (wall time, on the baseline host). The
 | B3 | +0 s (replaces scripts) | | |
 | R1 | +15 s | | |
 | R2 | +30 s | | |
-| P0 | — (spike) | | |
+| P0 | — (spike) | 0 s (`make pi-spike` is not in `make test`) | `make pi-spike` 102 s (82 runs, 8 jobs, host load 8-11) |
 | P1 | +30 s | | |
 | P2 | +15 s | | |
 | P3 | +30 s | | |
@@ -303,6 +304,10 @@ examples/dial-me-spinner/system/ Phase 1 M11 (ADR-007 Amendment 5): main + base 
                         (both vendored netlists, qualified names), [[connection]] main:J1 - base:J3
                         through the harness view of packages/dial-me-spinner/link-harness (a
                         project-local package); board.bbm, bb.lock (import only: simulate = main)
+examples/dial-me-spinner/pi-spike/ Phase 2 P0 (ADR-009 Amendment 1): views/ (the first `pi` views:
+                        RT9080_LDO_PI, BQ25180_PP_PI, TPS61040_BOOST_PI, restated from their
+                        datasheets) and tolerances.toml (the option set and the static-load
+                        tolerances that make pi-spike checks)
 examples/nrf-feedback/  examples/feedback's circuit on the nRF52840 (Phase 1 M2; firmware
                         engines/cpu-renode/tests/firmware/nrf52840/nrf_feedback.c)
 examples/nrf-saadc/     Phase 1 M8: the loading adc_in board (AIN0 through the package's
@@ -358,7 +363,7 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         jit_profile_stress.sh, gdb_gate.py, dms_system.sh, check_nrf_pwm.py,
                         dms_home.sh (+ dms_home_boards.py, check_dms_home.py); Phase 2 H0:
                         worktree.sh (+ worktree_test.sh), measure_lock.sh (+ measure_lock_test.sh),
-                        baseline.sh, step_time.sh
+                        baseline.sh, step_time.sh; P0: pi_spike.sh (+ pi_spike.py)
 .github/actions/bb-setup/ make setup with the Renode tarball and the apt packages cached (Phase 2 H0)
 ```
 
