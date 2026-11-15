@@ -2382,3 +2382,278 @@ the `dms/mechanism@1` device:
 - Both latencies are recorded in the gate's output with the sample phase
   the run used (`Ctx::rng`, ADR-006 D7), so a later change of the seed
   rule shows up as a changed number, not as a silent pass.
+
+### Amendment 11: E3 as implemented (M10, third step, 2026-11-14)
+
+This step completes M10: the PWM engine path (Amendment 9's "next step"),
+the homing firmware, E3's board files, the gate and its records. It
+changes no `spec/` file, no schema and no event format. Three findings
+changed Amendment 9's plan; each is recorded here with what replaced it.
+
+#### The PWM engine path
+
+- **`RenodeConfig::pwm`** (`bb run` sets it on the nRF52840): at startup
+  the engine checks `bbNrfPort`'s ID (`BBNP`) and registers an External
+  Control event on its GPIO 0 (descriptor `0x7FFF0003`). That is a
+  host-port registration, no emulation state; without PWM activity no ring
+  entry exists and nothing is read, so every committed nRF hash is
+  unchanged.
+- **After each advance whose events include the port's line,** the engine
+  reads the error word and the entry count, the new ring entries (one read,
+  two when the ring wraps) and acknowledges them (`0x00C`). An overflow or
+  a firmware access fails the run. An entry of a pin no binding names is
+  counted and reported once on stderr.
+- **Times.** An entry's time is exact (half-nanoseconds from the SEQSTART
+  write); an instant exactly on a lattice point is reported 1 fs after it
+  (the lattice rule of GPIO stamps, ADR-003 D2), so a change never
+  coincides with a grant boundary and its reported time does not depend on
+  the partition. An entry past the grant end (an edge at `target + 0.5 ns`
+  whose timer deadline rounds down to `target`) is carried to the next
+  grant. While a PWM change is carried, `quiet_until` gives no promise,
+  and the promise audit counts a carried change before the promise as a
+  break.
+- **Arbitration** (`arbitrate`, unit-tested): per pin, in time order, a
+  GPIO change shows while no PWM channel drives the pin; a PWM connect or
+  level change shows at once; a release shows the GPIO's level at that
+  instant; two changes at one instant that return to the level before
+  cancel. The engine tracks the GPIO's own level beside the reported one,
+  and the cross-check (`--verify`) compares Renode's GPIO state with the
+  GPIO's level. The trace keeps emulation order at one instant across
+  pins (the order of the changes), as before, so boards without PWM give
+  the same records.
+- **TEMP's value** stays the model's default, 25 °C (100 quarter-degrees):
+  a board file has no bench, and 25 °C is the suite's corner of the step
+  comparison. A bench temperature for TEMP waits for a project route.
+- **The gate** (`make nrf-pwm-model`, in `make test`): after the
+  Renode-only groups, `examples/nrf-pwm/board.cir` runs `nrf_pwm_step.elf`
+  through `bb run`. `scripts/check_nrf_pwm.py` recomputes the firmware's
+  duty table and the PS rules' pin changes (`bb_pwm_test.py`'s `expected`)
+  and requires the four pins' `pin_edge` records to be exactly those
+  changes, arbitrated with the firmware's GPIO (OUT low): 1 044 edges, each
+  to the femtosecond. The board closes a loop (a `digital_in` on a
+  constant net), so lookahead is on by default: the one-cell reference
+  (12 000 grants), the default (9 596 grants, 239 quiet grants), `--max-
+  quantum 1ms` and `--engine-order analog-first` give identical
+  `nets.csv`, `nets.vcd` and non-grant records with no broken promise.
+  That is Amendment 9's "lookahead gate: no promise passes a PWM edge" at
+  the kernel level.
+
+#### The homing firmware
+
+`examples/dial-me-spinner/firmware/homing` (Zephyr v4.5.0, the out-of-tree
+board; `dts/bindings/dial,detent-stepper.yaml` transcribes firmware.md
+§3.2), as Amendment 9's "Firmware" says, with these recorded choices:
+
+- PWM0 through nrfx (`CONFIG_NRFX_PWM`, `&pwm0` disabled for Zephyr's
+  driver), 16 MHz, COUNTERTOP 640, Individual decoder, two ping-pong
+  sequences of one full step each with `NRFX_PWM_FLAG_LOOP`. Polarity bit
+  0 on every value: COMP 0 holds a channel high, COMP = d x 640 gives the
+  drive part first, as the suite's `microstep_ctrl` does. The SEQEND
+  handler refills the sequence whose last value just loaded with the next
+  *segment* (a full step, a hold or the brake) and that segment's REFRESH,
+  so the homing state machine decides one segment ahead of what plays, and
+  HOME is read when a segment is decided.
+- MD-3 amplitude from TEMP and one idle SAADC reading of VSYS (E2's
+  channel), clamped to 1: `d_run` for 160 mA, `d_stall` for 80 mA.
+- H0-H5 with firmware.md's unlearned defaults (s_rel,L 333, s_ast,L 263:
+  H1 limit 377, H2 limit 540, H3 199 steps, H4 128 steps at 80 PPS and
+  half current, the 4-step back-off at 313 PPS), then SETTLE 20.16 ms,
+  the brake (IN1 = IN2 = 1 on both bridges, 3.12 ms) and STOP, which
+  returns the pins to their GPIO level (low: coast), then nSLEEP low. A
+  failed attempt retries from H0 at 313 PPS, three attempts, then FAULT.
+- Not here: the speed ramp (446 to 80 PPS switches at a full-step
+  boundary), learned edges and edge windows, the NVS write of
+  `state/carriage` (the NVMC stand-in has no write timing).
+- `homing_step.elf` (`CONFIG_HOMING_STEP_TEST`): H0, then one full step
+  toward the click end at 446 PPS, SETTLE, brake, sleep.
+- Every phase prints one UART line (a log record, D8).
+- **Images:** `make dms-firmware`'s update rebuilt all six prebuilt images;
+  E1's and E2's image hashes are unchanged, and `homing.elf` is
+  `dd0a5d24...`, `homing_step.elf` `9479106a...` (`SHA256SUMS`).
+  `make fw-rebuild` (a fresh workspace) gives all six hashes: PASS (194 s).
+
+#### E3's boards (route A)
+
+`examples/dial-me-spinner/e3/` holds four board files that
+`scripts/dms_home_boards.py` writes from one template (`make
+dms-home-test` checks that the committed files are its output). Each
+carries the nRF52840's pins of the detent sheet (P0.26, P0.05, P0.07,
+P0.11 as PWM0's channels, at the suite's 800 Ohm `S0S1_bound` set; P1.15
+nSLEEP; P1.14 HOME_N), the device part `M1` bound to the IN, nSLEEP and
+HOME_N nets, the VSYS reading (R1, R2, C5 on P0.02) and, as the bench,
+the suite's own power path of `test_firmware_microstep_pwm[VBAT3.7-25C]`
+(captured from the suite's `power()` at `6854d25`: the cell behind RPACK,
+the base board's VBAT and VSYS capacitors, the BQ25180's battery-mode
+BAT-FET, the link, the main board's VSYS capacitors at the suite's
+worst-case values, the 150 mA of other loads and +3V3), written with
+Norton sources and without the link's 80 nH (a branch-current unknown in
+series with milliohms, AGENTS.md).
+
+| Board | M1 | Analog side | Firmware, run |
+| --- | --- | --- | --- |
+| `board-step.cir` | s0 400 | the whole detent sheet: U40, U41 as `ti/drv8837:bridge` (rds 0.33 Ohm, the suite's RDS_MAX), J40's coils (20 Ohm, 4.3 mH) with the suite's back-EMF (KE_MAX, 446 PPS, load angle pi/2) from the step's microstep 0 | `homing_step.elf`, 45 ms, 1 MHz samples |
+| `board.cir` | s0 500, tS 50 ms | the input side: the IN pins' RPD, R70 | `homing.elf`, 2 700 ms |
+| `board-ts75.cir` | s0 500, tS 75 ms, phase 47.26675 ms | the same | `homing.elf`, 2 800 ms |
+| `board-park.cir` | s0 150, tS 50 ms | the same | `homing.elf`, 3 000 ms (H1 runs) |
+
+- **The bridge view is a verbatim copy** of
+  `packages/ti/drv8837/analog/bridge.lib` in `board-step.cir` (a board
+  file's SPICE body cannot name a package view); the generator reads the
+  package's file, and its `--check` compares byte for byte.
+- **The back-EMF's start** (11 972 875 000 000 fs) is the instant
+  `homing_step.elf` starts the step's microstep 0 (the last 280 us of the
+  hold, as the suite's `t_s0`). `check_dms_home.py --step` derives it
+  from the run's PWM edges and fails unless the board's value equals it to
+  the femtosecond, so a firmware change cannot silently misalign the EMF.
+- **The worst sample phase** of `board-ts75.cir` puts a DRV5032 window's
+  end 10 us before the device's field first passes BOP in H2, the suite's
+  "worst phase" construction. The seeded phase at tS 75 ms happens to give
+  HOME_N's fall at the same instant as the typical corner's (44.30 ms:
+  500 = 10 x 50 and 525 = 7 x 75 ms from the two seeded phases), which
+  would not exercise the corner, so the phase is set.
+
+#### Finding 1: the full sheet costs too much for a homing (replaces the averaged view)
+
+Measured on `board-step.cir`'s circuit, standalone and in `bb run`: while
+the PWM runs, ngspice takes about 60 solver points per edge (the view's
+60 ns logic filters and the inductive switching at reltol 1e-5) and
+0.25-0.5 s of wall time per simulated ms, and the engine keeps every
+solver point in memory. A 2.6 s homing with the full sheet would take
+about 20 minutes and several GB per run, and the gate needs about twenty
+runs. Amendment 9's fallback, a moving-average view, still gives ngspice
+every edge (it is fed by edges), so it would not remove the cost.
+
+Instead, the homing boards carry only the sheet's input side (the DRV8837
+inputs' 100 kOhm pull-downs and R70): nothing on the analog side feeds
+back into the homing (the device reads the driver commands, Amendment 9;
+the VSYS reading is taken before H0), so the homing checks do not read
+it. The bridges' analog check is the one-step board, which has the whole
+sheet. A homing run then takes about 270 000 one-cell grants and 4.5
+minutes at about 1.5 GB (ngspice still keeps every lattice point).
+Recorded deviation from Amendment 9's table (the bridge view "consumes the
+four IN edges" in every E3 run): it does in `board-step.cir` only.
+
+#### Finding 2: the loading SAADC input stalls ngspice after one reading
+
+With P0.02 bound as the loading `adc_in` (E2's `saadc_se` view), every
+E3 run that reads VSYS once and then stays quiet stalled ngspice 28-40 ms
+into the quiet stretch after the move (ngspice's step size collapsed at
+`phase0`; with ideal sources instead of the Norton bench, or without the
+bridges and coils, it stalled the same way; with `load=none` it does
+not). E2's runs, which read periodically, never showed it, and its
+gates are unchanged. E3 reads VSYS once, at idle, before H0, so the
+charge sharing E2 studies (a few hundred uV) does not reach the duty: the
+E3 boards bind P0.02 with `load=none`. Open finding for a later
+milestone: the cause inside `saadc_se` (a 2.5 pF node behind 5 kOhm and a
+20 ns delay node, both far stiffer than TMAX) is not yet isolated.
+
+#### Finding 3: no quiet grant on E3's boards
+
+Two engines feed the CPU on every E3 board: the device (HOME_N) and
+ngspice (the SAADC's VSYS_SENSE and VDD). ADR-003 D5's quiet grant needs
+exactly one producer feeding the quiet set (`quiet_order`), so the kernel
+never builds one: bb's defaults (lookahead on) run one-cell grants, the
+same partition as `--lookahead off`, and `--max-quantum` does not change
+it either. Amendment 9's "the kernel's existing loop rule can bound grants
+by [the device's promise]" does not apply. A wider rule (several
+producers in the plan order) is a kernel-protocol change and needs its
+own ADR; it would also gain little here, because a sleeping CPU's promise
+ends at its next PWM edge, at most 40 us away, while the motor runs. The
+gate still runs the variants (`--lookahead off`, `--max-quantum 1ms`,
+`--engine-order analog-first`) and requires them identical; the PWM
+lookahead path itself is gated on `examples/nrf-pwm` (above).
+
+#### The gate (`make dms-home`; `make dms-home-test` in `make test`)
+
+`scripts/dms_home.sh` and `scripts/check_dms_home.py`:
+
+- **`step`, against `test_firmware_microstep_pwm[VBAT3.7-25C]`** over the
+  suite's window (the step's microstep 0 to the end of its microstep 8),
+  from `nets.csv` at 1 MHz (each coil's current is its 20 Ohm drop):
+
+  | Check | Co-simulation | Suite | Tolerance (set from this measurement) |
+  | --- | --- | --- | --- |
+  | PWM duty amplitude | 0.8922 (571/640) | 0.8778 | 2.5 % (+1.63 %) |
+  | Current-vector magnitude (time mean) | 128.470 mA | 126.677 mA | 2.5 % (+1.42 %) |
+  | Current per unit duty | 143.994 mA | 144.306 mA | 1.0 % (-0.22 %) |
+  | Thrust estimate | 0.5255 N | 0.5182 N | >= 0.5 N (the suite's limit) and 2.5 % (+1.42 %) |
+  | VSYS max | 3.6060 V | 3.6224 V | <= 5.5 V and 50 mV (-16 mV) |
+  | BAT pin min | 3.6089 V | 3.6253 V | >= 3.0 V |
+  | Link current per contact | 0.435 A | 0.209 A | <= 1 A |
+  | VM ripple pk-pk | 57.3 mV | 43.2 mV | info in both |
+
+  The duty differs because the firmware scales it with its own VSYS
+  reading (3.645 V, read under the bench's 150 mA of other loads) where
+  the suite assumes the 3.7 V cell, and uses MD-3's 20.33 Ohm where the
+  suite's case keeps the pre-MD-3 20.3 Ohm; per unit of duty the drive
+  chain (PWM edges, bridge, coils, back-EMF) is within 0.25 %. The link
+  current and the ripple differ because the bench leaves out the link's
+  80 nH (the base board's capacitors then supply more of each pulse) and
+  `nets.csv` samples every 1 us where the suite reads its solver points;
+  both are within their limits.
+- **`typ`, `worst`, `park`:** H0-H5 in order (with H1 for `park`), no
+  failed attempt; step counts within firmware.md's limits and the
+  firmware's final microstep equal to 8 x (H1 - H2 - 199 - 128 + 4); HOME
+  asserted (M1.HOME_N low) when H5 reads it; the park stop reached in H4
+  with at least 20 steps of overdrive; the final position 4 +- 2 steps
+  from the stop (the device's `nSLEEP low at s=...` record); the brake
+  >= 3 ms before coast and nSLEEP low; and the HOME_N latency of
+  Amendment 10 from the device's records:
+
+  | Case | Sample phase | H1 / H2 steps | Assert latency (gate) | Release latency | Final s |
+  | --- | --- | --- | --- | --- | --- |
+  | `typ` (tS 50 ms) | seeded, 41.578 ms | - / 236 | 44.302 ms (<= 75 ms) | - | 5.0 |
+  | `worst` (tS 75 ms) | 47.26675 ms (the worst) | - / 250 | 74.990 ms (<= 97.4 ms) | - | 3.0 |
+  | `park` (tS 50 ms) | seeded, 41.578 ms | 167 / 42 | 19.839 ms (<= 75 ms) | 7.918 ms (<= 75 ms) | 4.0 |
+
+  The bound tS + tACTIVE (50.04 ms, 75.04 ms) holds in every case.
+- **Equivalence and determinism:** each case at bb's defaults equals its
+  one-cell reference (`--lookahead off`) in every record, and the
+  references equal `tests/golden/dms-home/<case>/outputs.sha256`;
+  `--engine-order analog-first` is byte-identical and `--max-quantum 1ms`
+  equal except grants (`typ`, `step`); `typ` is identical over 10 runs.
+- **`pool-equiv`** has `dms-home-step` and `dms-home` (typ), and the cost
+  table a `dms-home` row (`make cost-table-dms-home`).
+
+#### Gate runs of this step (2026-11-14)
+
+On `62f9886` plus this change. Load is `/proc/loadavg` at the start of
+each run; the runs overlapped as noted.
+
+- `cargo test -p bb-cpu-renode --lib` (the ring decoding and the
+  arbitration), `cargo test -p bbdev` (17 tests, G6 included): pass.
+- **`make nrf-pwm-model`: PASS** (in both `make check` runs): the
+  Renode-only groups, then the PWM board: 1 044 edges as the duty table
+  says in all four runs; grants 12 000 (one cell), 9 596 (default), 9 617
+  (1 ms); identical outputs.
+- **`make fw-rebuild`: PASS** (194 s): a fresh workspace gives all six
+  committed image hashes.
+- **`make dms-home`: gate PASS** (on the pool, 5 jobs, 43 min 39 s; the
+  last 7 minutes beside `make docs-plots`): every check of the tables above, each default equal
+  to its reference in every record, the references equal to the committed
+  hashes, analog-first byte-identical and `--max-quantum 1ms` equal except
+  grants (`typ`, `step`), `typ` identical over 10 runs (`events.jsonl`
+  `f76a5871bd762008...`). A homing took 369-452 s with five in parallel
+  (231 s for the last two), 270 000-300 000 grants.
+- **`make check` on the pool: green** (833 s, load 1.51 at the start,
+  beside `make docs-plots-check` and the start of `make pool-equiv`; 243
+  cargo tests; `dms-home-test` PASS, 21.5 s per step run).
+- **`make check POOL=0`: green** (832 s, load 1.49 at the start, beside
+  `make pool-equiv`; 243 cargo tests).
+- **`make pool-equiv`: PASS** (36 min 37 s, beside `make check POOL=0`
+  for its first 14 minutes): 25 configurations, 2 rounds, 50 leases on one
+  Renode process, each identical to its fresh run and to the committed
+  hashes, `dms-home-step` and `dms-home` (`typ`, 190 s leased) included.
+- **`make docs-plots-check`: PASS** (450 s): the committed figures,
+  including the new `e3-homing` and `e3-step`, regenerate byte for byte;
+  the E1, E2 and spike figures are unchanged.
+- The site builds (VitePress 1.6.4, from a Linux-filesystem copy) with
+  the new page "The E3 demo".
+- **The cost-table row** (`make cost-table-dms-home PERF_N=3`, 50 min 30 s
+  on an otherwise idle host, load 0.6-1.3; N = 3 because a run takes
+  almost three minutes): `typ` one-cell (`--lookahead off`) against bb's
+  defaults, 270 000 grants each; simulation medians 165.06 s and 163.93 s
+  fresh (startup 1.47 s and 1.51 s), 165.23 s and 165.04 s on a one-slot
+  pool (startup 0.08 s and 0.10 s, all 6 runs leased); every B run
+  identical to A except grant records. In the README's table.
+- No committed golden of E1, E2 or Phase 0 changed.

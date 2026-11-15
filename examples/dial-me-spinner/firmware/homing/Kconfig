@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+config HOMING_STEP_TEST
+	bool "One full step at 446 PPS instead of the homing procedure"
+	help
+	  The one switch between homing.elf (the homing procedure H0-H5 of
+	  dial-me-spinner docs/firmware.md section 5.4) and homing_step.elf:
+	  H0 (wake, energise microstep 0 for 10 ms at run current), then one
+	  full step toward the click end at 446 PPS (8 microsteps of 7 PWM
+	  periods), then SETTLE, brake and sleep. That is the drive of the
+	  dial-me-spinner suite's test_firmware_microstep_pwm, which E3's
+	  analog check compares against (Phase 1 plan M10).
+
+source "Kconfig.zephyr"

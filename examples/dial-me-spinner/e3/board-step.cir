@@ -1,0 +1,236 @@
+* examples/dial-me-spinner/e3/board-step.cir: E3, one full step at 446 PPS (homing_step.elf), mid-stroke, with the bridges, the coils and the suite's back-EMF.
+* Written by scripts/dms_home_boards.py (do not edit; `make dms-home-test` checks it). Phase 1 M10,
+* plan section 2 E3; ADR-006 Amendment 6 (device parts in board files), ADR-008 Amendments 9 and 10.
+*
+* The detent sheet of the dial-me-spinner main board at 6854d25 ("Detent actuator & home sensor",
+* examples/dial-me-spinner/kicad/main/dial-me-spinner-main.net): U40 and U41 (DRV8837, coil A and coil
+* B), the shared nSLEEP with R70 100 kOhm, the VM capacitors C70, C72 (100 nF) and C74 (10 uF), J40's
+* two coils, U42's supply capacitors (C71, C73, C75 on +3V3) and the nRF52840's pins (what of the
+* sheet's analog side this file carries: below):
+*   P0.26 MOT_A_IN1, P0.05 MOT_A_IN2, P0.07 MOT_B_IN1, P0.11 MOT_B_IN2  PWM0 channels 0-3 (digital_out,
+*         the suite's S0S1 bound: 800 Ohm; the PWM model's edges at their exact instants, ADR-008 D9)
+*   P1.15 MOT_NSLEEP (digital_out), P1.14 HOME_N (digital_in, reads M1.HOME_N directly)
+*   P0.02 VSYS_SENSE (adc_in, the loading SAADC input of E2; R1 2.2 MOhm, R2 1 MOhm, C5 100 nF)
+*   VDD   +3V3 (adc_in: the SAADC's VDD input and VPRE of the pin_load view)
+* U10 is the Raytac module's chip, bound directly (nordic/nrf52840-qiaa, as examples/nrf-saadc): a module
+* pad has no VDD adc_in in a board file.
+*
+* M1 (dms/detent-mechanism, device dms/mechanism@1) is the lead screw, carriage, magnet and U42
+* DRV5032FA as one device: it reads the five driver commands and drives HOME_N (push-pull, low = magnet
+* present). Its parameters here: s0=400 ts=50ms (the rest at their defaults: die 2.6 mm, BOP/BRP 3/1.5 mT,
+* phase seeded from the run seed and "M1").
+*
+* The analog side of this board is the whole detent sheet: U40 and U41 as the package view
+* ti/drv8837:bridge (ideal switches, rDS(on) 0.33 Ohm, the suite's RDS_MAX; twake 30 us), fed by the PWM
+* edges at their exact instants through the pins' glue, and J40's coils, 20 Ohm + 4.3 mH each
+* (motor_drive__stepper.lib r25 and lph at 25 C), with the suite's back-EMF of a rotor turning at 446 PPS from the step's
+* microstep 0 (t0 = 11972875000000 fs, from homing_step.elf's PWM edges) to the end of its microstep 8 (14492875000000 fs):
+* ke 1.37 V per k step/s (KE_MAX), load angle pi/2, motor_drive__stepper.lib's PMSTEP_PHASE (phase A -E sin, phase B +E cos).
+*
+* The VSYS reading binds P0.02 with load=none (an ideal input): the firmware reads VSYS once, at idle,
+* before H0, so the SAADC's charge sharing (E2's subject, a few hundred uV) does not reach the duty; with
+* the loading view (saadc_se) after that one acquisition, ngspice stalled 28-40 ms into the quiet
+* stretch after the move at phase0 (found in M10; recorded in ADR-008 Amendment 11).
+*
+* The bench (the main board alone, as E1 and E2): the suite's own power path of
+* test_firmware_microstep_pwm[VBAT3.7-25C] (test_motor_drive.py power() at 6854d25): the cell 3.7 V
+* behind RPACK 0.2 Ohm (a Norton source), the base board's VBAT (C3) and VSYS (C2, C4) capacitors,
+* the BQ25180's battery-mode BAT-FET (RON_BAT max 90 mOhm, the only element of BQ25180_PATH with
+* usb = 0), the 12-way link (28 AWG 80 mm + two aged JST contacts: 48.4 mOhm VSYS, 32.3 mOhm GND), the
+* main board's VSYS capacitors (C1, C2, C6, C41, C70, C72, C74), the 150 mA of other VSYS loads, and
+* +3V3 from an ideal 3.3 V behind 50 mOhm (a Norton source) with the main board's +3V3 capacitors. Every
+* VSYS capacitor at the suite's worst-case value at 3.7 V (Samsung DC bias minus the MPN tolerance) with
+* 10 mOhm ESR. Left out: the link's 80 nH (a branch-current unknown in series with milliohms stalls
+* phase0, AGENTS.md; its corner is 4 MHz, the suite's comment: "no effect at the 25 kHz PWM or
+* slower").
+*
+*bb part U10 package=nordic/nrf52840-qiaa
+*bb pin U10.P0.26 net=MOT_A_IN1 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P0.05 net=MOT_A_IN2 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P0.07 net=MOT_B_IN1 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P0.11 net=MOT_B_IN2 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P1.15 net=MOT_NSLEEP model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P1.14 net=HOME_N model=digital_in vih=2.31 vil=0.99
+*bb pin U10.P0.02 net=VSYS_SENSE model=adc_in vref=3.6 load=none
+*bb pin U10.VDD net=P3V3 model=adc_in vref=3.6
+*bb part M1 package=dms/detent-mechanism s0=400 ts=50ms
+*bb pin M1.IN_A1 net=MOT_A_IN1 model=digital_in
+*bb pin M1.IN_A2 net=MOT_A_IN2 model=digital_in
+*bb pin M1.IN_B1 net=MOT_B_IN1 model=digital_in
+*bb pin M1.IN_B2 net=MOT_B_IN2 model=digital_in
+*bb pin M1.NSLEEP net=MOT_NSLEEP model=digital_in
+*bb pin M1.HOME_N net=HOME_N model=digital_out
+
+* Circuit body. Node 0 is the main board's GND.
+* ---- bench: the suite's power path at VBAT3.7, 25 C (node NB_GND is the base board's ground)
+BCELL NB_GND NB_VBAT I = (3.7 - V(NB_VBAT,NB_GND))/0.2
+RBC3_ESR NB_VBAT NB_VBAT_C3 0.01
+CBC3 NB_VBAT_C3 NB_GND 4.7u
+RBATFET NB_VBAT NB_VSYS 0.09
+RBC2_ESR NB_VSYS NB_VSYS_C2 0.01
+CBC2 NB_VSYS_C2 NB_GND 4.88u
+RBC4_ESR NB_VSYS NB_VSYS_C4 0.01
+CBC4 NB_VSYS_C4 NB_GND 4.88u
+RLINK NB_VSYS VSYS 0.0484
+RLGND 0 NB_GND 0.0322667
+IOTHER VSYS 0 DC 0.15
+B3V3 0 P3V3 I = (3.3 - V(P3V3))/0.05
+* ---- main board VSYS capacitors (worst case at 3.7 V) and the +3V3 capacitors
+RC1_ESR VSYS VSYS_C1 0.01
+CC1 VSYS_C1 0 11.0176u
+RC2_ESR VSYS VSYS_C2 0.01
+CC2 VSYS_C2 0 4.88u
+RC6_ESR VSYS VSYS_C6 0.01
+CC6 VSYS_C6 0 4.88u
+RC41_ESR VSYS VSYS_C41 0.01
+CC41 VSYS_C41 0 4.88u
+RC70_ESR VSYS VSYS_C70 0.01
+CC70 VSYS_C70 0 85.374n
+RC72_ESR VSYS VSYS_C72 0.01
+CC72 VSYS_C72 0 85.374n
+RC74_ESR VSYS VSYS_C74 0.01
+CC74 VSYS_C74 0 5.7906u
+RC3_ESR P3V3 P3V3_C3 0.01
+CC3 P3V3_C3 0 10u
+RC4_ESR P3V3 P3V3_C4 0.01
+CC4 P3V3_C4 0 100n
+RC10_ESR P3V3 P3V3_C10 0.01
+CC10 P3V3_C10 0 10u
+RC11_ESR P3V3 P3V3_C11 0.01
+CC11 P3V3_C11 0 100n
+RC15_ESR P3V3 P3V3_C15 0.01
+CC15 P3V3_C15 0 100n
+RC33_ESR P3V3 P3V3_C33 0.01
+CC33 P3V3_C33 0 1u
+RC35_ESR P3V3 P3V3_C35 0.01
+CC35 P3V3_C35 0 4.7u
+RC36_ESR P3V3 P3V3_C36 0.01
+CC36 P3V3_C36 0 100n
+RC50_ESR P3V3 P3V3_C50 0.01
+CC50 P3V3_C50 0 100n
+RC51_ESR P3V3 P3V3_C51 0.01
+CC51 P3V3_C51 0 1u
+RC52_ESR P3V3 P3V3_C52 0.01
+CC52 P3V3_C52 0 100n
+RC53_ESR P3V3 P3V3_C53 0.01
+CC53 P3V3_C53 0 10u
+RC54_ESR P3V3 P3V3_C54 0.01
+CC54 P3V3_C54 0 100n
+RC71_ESR P3V3 P3V3_C71 0.01
+CC71 P3V3_C71 0 100n
+RC73_ESR P3V3 P3V3_C73 0.01
+CC73 P3V3_C73 0 100n
+RC75_ESR P3V3 P3V3_C75 0.01
+CC75 P3V3_C75 0 100n
+* ---- the VSYS reading (power sheet): R1 2.2 MOhm over R2 1 MOhm, C5 100 nF
+R1 VSYS VSYS_SENSE 2.2Meg
+R2 VSYS_SENSE 0 1Meg
+C5 VSYS_SENSE 0 100n
+* ---- the detent sheet: U40 (coil A), U41 (coil B), R70, J40's coils
+XU40 VSYS P3V3 MOT_A_IN1 MOT_A_IN2 MOT_NSLEEP MOT_A_OUT1 MOT_A_OUT2 0 DRV8837_BRIDGE params: rds=0.33 temp_c=25 twake=30u
+XU41 VSYS P3V3 MOT_B_IN1 MOT_B_IN2 MOT_NSLEEP MOT_B_OUT1 MOT_B_OUT2 0 DRV8837_BRIDGE params: rds=0.33 temp_c=25 twake=30u
+R70 MOT_NSLEEP 0 100k
+RCOILA MOT_A_OUT1 COILA_L 20
+RCOILB MOT_B_OUT1 COILB_L 20
+LCOILA COILA_L COILA_E 4.3m
+LCOILB COILB_L COILB_E 4.3m
+BEMFA COILA_E MOT_A_OUT2 V = (time > 0.011972875 && time < 0.014492875) ? 0.6110200000000001*(-sin(700.5751617505232*(time - 0.011972875) - 1.5707963267949)) : 0
+BEMFB COILB_E MOT_B_OUT2 V = (time > 0.011972875 && time < 0.014492875) ? 0.6110200000000001*cos(700.5751617505232*(time - 0.011972875) - 1.5707963267949) : 0
+
+* ---- ti/drv8837 view bridge (packages/ti/drv8837/analog/bridge.lib, verbatim)
+* =====================================================================================================
+* ti/drv8837 view "bridge" (breadboard.dev, Apache-2.0): TI DRV8837 low-voltage H-bridge (IN/IN
+* interface), an IDEAL-SWITCH behavioural view for E3 (Phase 1 M10, ADR-008 Amendment 9).
+*
+* Datasheet: TI SLVSBA4F (June 2012, revised April 2021). SLVSBA4F itself was NOT opened when this view
+* was written; every figure is the datasheet value as dial-me-spinner@6854d25 quotes it, with the table
+* it cites (hardware/sim/models/motor_drive__drv8837.lib header and hardware/sim/tests/
+* test_motor_drive.py; secondary sources, ADR-006 Amendment 5):
+*   Table 7-1  truth table: nSLEEP = 0 -> Z/Z; IN1, IN2 = 0, 0 coast Z/Z; 1, 0 H/L; 0, 1 L/H;
+*              1, 1 brake L/L.
+*   Table 6.5  rDS(on) HS + LS 280 mOhm typ / 330 max at 25 C, IO = 800 mA (split equally between
+*              the high- and low-side FET); input pulldowns RPD 100 kOhm on IN1, IN2, nSLEEP; VIH
+*              0.46 x VCC typ, VIL 0.38 x VCC typ; IVM 0.8 mA typ with PWM, IVMQ 30 nA asleep; IVCC
+*              0.7 mA typ, IVCCQ 5 nA asleep.
+*   Table 6.6  twake <= 30 us after nSLEEP rises (the maximum is the default, the slow corner).
+*   Figure 6-7 rDS(on) drift: +0.32 %/K above 25 C, +0.05 %/K below (params tc_hot, tc_cold, temp_c).
+*
+* Why ideal switches (ADR-008 Amendment 9): the CPU's PWM edges cross the pin boundary at their exact
+* times (D9), so the view sees each 25 kHz edge; the suite's switch-level model (soft current clamp,
+* OCP deglitch and retry, UVLO, Schmitt inputs) costs about 1.75 s of wall time per simulated ms. This
+* view keeps what E3's checks read: the coil current with its PWM ripple, VM's ripple through the
+* bridge, the brake (slow decay) and coast states.
+*
+* Structure (every pass element is a B CURRENT source or a plain R/C/D: no branch-current unknown in
+* series with a milliohm path, so the view runs at the phase0 option set; AGENTS.md "Known bad ideas"):
+*   inputs   one logic level per input, 0..1, a tanh of V(IN) about the threshold midpoint
+*            (vih_k + vil_k) / 2 x VCC over 10 mV (no hysteresis: the inputs are driven by clean
+*            digital edges), low-passed with 60 ns (a first-order node: the datasheet's ~100 ns output
+*            edges, SLVSBA4F 6.6 t9-t12).
+*   wake     node act charges with tau = twake / ln 2 while nSLEEP reads high (it crosses 0.5 at
+*            twake) and discharges in about 1 us when nSLEEP reads low; en = a tanh of act about 0.5
+*            (a 1 A/V current into 1 Ohm: a node voltage, not a V source).
+*   bridge   per leg a conductance 2 / rDS (each FET rDS / 2) times its gate command (Table 7-1):
+*            HS1 = en l1 (1 - l2), LS1 = en l2, HS2 = en l2 (1 - l1), LS2 = en l1, so 1, 1 is the
+*            brake (both low sides, slow decay) and 0, 0 or sleep is Z (coast).
+*   diodes   the four body diodes as D elements with IS 1e-12, N 1.2, RS 50 mOhm (the suite's generic
+*            body diode), WITHOUT junction capacitance or transit time: no switching transients; they
+*            carry the coil current in coast.
+*   leakage  100 MOhm from each OUT to ground (IOFF <= 200 nA).
+*   supply   IVM and IVCC as above, by en.
+*   pins     1 pF on each input (not in the datasheet; the suite's value).
+*
+* NOT modelled: dead time and shoot-through; gate charge and the charge pump; VCC UVLO (Table 6.5,
+*   1.7 / 1.8 V); overcurrent protection (IOCP, tDEG, tRETRY) and the analog current limit; thermal
+*   shutdown; rDS(on) dependence on VM / VCC; input hysteresis; body-diode reverse recovery and
+*   capacitance; OUT slew beyond the 60 ns input filter.
+* Ports: VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP (the package's pin names VM VCC IN1 IN2 nSLEEP OUT1 OUT2
+*   GND; GND is renamed GNDP, the gnd rule of spec/package.md section 5).
+* =====================================================================================================
+.model drv8837_bridge_body D(IS=1e-12 N=1.2 RS=0.05)
+
+.subckt DRV8837_BRIDGE VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP
++ params: rds=0.28 temp_c=25 tc_hot=0.0032 tc_cold=0.0005 vih_k=0.46 vil_k=0.38 rpd=100k
++ twake=30u ivm_on=0.8m ivcc_on=0.7m
+.param rdst = {rds*(1 + (temp_c > 25 ? tc_hot : tc_cold)*(temp_c - 25))}
+.param gleg = {2/rdst}
+.param vth_k = {(vih_k + vil_k)/2}
+* ---- input pulldowns (RPD) and 1 pF pins
+RPD1 IN1 GNDP {rpd}
+RPD2 IN2 GNDP {rpd}
+RPD3 NSLEEP GNDP {rpd}
+CIN1 IN1 GNDP 1p
+CIN2 IN2 GNDP 1p
+CIN3 NSLEEP GNDP 1p
+* ---- logic levels, 60 ns first-order (V(l) follows the tanh level through 1 kOhm x 60 pF)
+B_L1 GNDP drv_l1 I = (0.5*(1 + tanh((V(IN1,GNDP) - vth_k*V(VCC,GNDP))/0.01)) - V(drv_l1,GNDP))/1k
+C_L1 drv_l1 GNDP 60p
+B_L2 GNDP drv_l2 I = (0.5*(1 + tanh((V(IN2,GNDP) - vth_k*V(VCC,GNDP))/0.01)) - V(drv_l2,GNDP))/1k
+C_L2 drv_l2 GNDP 60p
+* ---- wake: act crosses 0.5 twake after nSLEEP reads high; en = tanh step of act
+B_WK GNDP drv_act I = 1n*( 0.5*(1 + tanh((V(NSLEEP,GNDP) - vth_k*V(VCC,GNDP))/0.01))*(1 - V(drv_act,GNDP))*0.6931472/twake
++ - (0.5*(1 - tanh((V(NSLEEP,GNDP) - vth_k*V(VCC,GNDP))/0.01)))*V(drv_act,GNDP)/1u )
+C_WK drv_act GNDP 1n
+R_WK drv_act GNDP 1G
+B_EN GNDP drv_en I = 0.5*(1 + tanh((V(drv_act,GNDP) - 0.5)/0.02))
+R_EN drv_en GNDP 1
+* ---- the bridge: four switches (Table 7-1), each a conductance gleg x its command
+B_HS1 VM OUT1 I = gleg*V(drv_en,GNDP)*V(drv_l1,GNDP)*(1 - V(drv_l2,GNDP))*V(VM,OUT1)
+B_LS1 OUT1 GNDP I = gleg*V(drv_en,GNDP)*V(drv_l2,GNDP)*V(OUT1,GNDP)
+B_HS2 VM OUT2 I = gleg*V(drv_en,GNDP)*V(drv_l2,GNDP)*(1 - V(drv_l1,GNDP))*V(VM,OUT2)
+B_LS2 OUT2 GNDP I = gleg*V(drv_en,GNDP)*V(drv_l1,GNDP)*V(OUT2,GNDP)
+* ---- body diodes (no capacitance, no transit time) and off-state leakage
+D_H1 OUT1 VM drv8837_bridge_body
+D_L1 GNDP OUT1 drv8837_bridge_body
+D_H2 OUT2 VM drv8837_bridge_body
+D_L2 GNDP OUT2 drv8837_bridge_body
+R_OF1 OUT1 GNDP 100Meg
+R_OF2 OUT2 GNDP 100Meg
+* ---- supply currents
+B_IVM VM GNDP I = ivm_on*V(drv_en,GNDP) + 30n*(1 - V(drv_en,GNDP))
+B_IVC VCC GNDP I = ivcc_on*V(drv_en,GNDP) + 5n*(1 - V(drv_en,GNDP))
+.ends DRV8837_BRIDGE
+
+* phase0 (spec/package.md section 8), the set ti/drv8837:bridge is qualified at.
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# dial-me-spinner docs/firmware.md section 3.2 (at 6854d25): the detent-stepper binding, transcribed
+# for E3's homing firmware (Phase 1 M10, ADR-008 Amendment 9).
+description: Micro linear stepper on 2x DRV8837 driven by nrfx_pwm complex playback
+
+compatible: "dial,detent-stepper"
+
+properties:
+  pwm:
+    type: phandle
+    required: true
+  nsleep-gpios:
+    type: phandle-array
+    required: true
+  home-gpios:
+    type: phandle-array
+    required: true
+  carriage-um-per-step:
+    type: int
+    required: true
+  microsteps:
+    type: int
+    default: 8
+  stroke-steps:
+    type: int
+    required: true
+  coil-milliohms:
+    type: int
+    required: true

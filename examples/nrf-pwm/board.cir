@@ -1,0 +1,46 @@
+* Breadboard nRF52840 PWM board (Phase 1 M10, ADR-008 D9, Amendment 9; make nrf-pwm-model):
+* the PWM model's pin ring through the Renode engine, the engine path of E3.
+*
+*   U1.P0.26, P0.05, P0.07, P0.11 (PWM0 channels 0-3: E3's MOT_A_IN1, MOT_A_IN2, MOT_B_IN1,
+*          MOT_B_IN2) -> digital_out (S0S1, 200 Ohm, the package default) -> 100 kOhm || 1 pF
+*          to ground each (a DRV8837 input's RPD and pin capacitance)
+*
+* Firmware (engines/cpu-renode/tests/firmware/nrf52840/nrf_pwm_step.c): TEMP, an NVMC page erase,
+* then PWM0 microstepping 4 full steps at 446 PPS (25 kHz, Individual decoder, two ping-pong
+* sequences), then STOP. The firmware leaves the four pins' GPIO configuration at reset (input,
+* OUT low), so before the PWM connects and after it releases them each pin reports the GPIO's
+* OUT level, low (the PIN_CNF audit reports the four pins as not configured as outputs).
+*
+*   U1.P0.13 <- MARK (0 V, a digital_in the firmware never reads): it closes the loop
+*          U1 -> ngspice -> U1, so the board loads the lookahead plugin and runs CPU lookahead
+*          by default, as E3's boards do
+*
+* Every PWM edge is in the CPU engine's trace at its exact instant (half-nanoseconds from the
+* SEQSTART write), and each one is a clock limit of the PWM model, so a sleeping CPU's promise
+* ends at or before it (ADR-008 Amendment 9; the kernel audits every promise).
+* scripts/check_nrf_pwm.py checks the pin_edge records against the firmware's duty table; make
+* nrf-pwm-model requires the one-cell reference (--lookahead off), the default (lookahead on, 10 ms
+* cap), --max-quantum 1ms and --engine-order analog-first to give the same nets.csv, nets.vcd and
+* non-grant records, with no broken promise.
+*
+*bb part U1 package=nordic/nrf52840-qiaa
+*bb pin U1.P0.26 net=A1 model=digital_out voh=3.3
+*bb pin U1.P0.05 net=A2 model=digital_out voh=3.3
+*bb pin U1.P0.07 net=B1 model=digital_out voh=3.3
+*bb pin U1.P0.11 net=B2 model=digital_out voh=3.3
+*bb pin U1.P0.13 net=MARK model=digital_in vih=2.31 vil=0.99
+
+* Circuit body. Node 0 is GND.
+RA1 A1 0 100k
+CA1 A1 0 1p
+RA2 A2 0 100k
+CA2 A2 0 1p
+RB1 B1 0 100k
+CB1 B1 0 1p
+RB2 B2 0 100k
+CB2 B2 0 1p
+VMARK MARK 0 0
+
+* Solver tolerances, as in the spike.
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

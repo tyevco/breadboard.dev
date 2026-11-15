@@ -52,7 +52,7 @@
 
 use bbcore::{Level, Time};
 
-use crate::{Ctx, Device, DevicePin, ParamKind, ParamSpec, ParamValue, Params, PinDir};
+use crate::{Ctx, Device, DevicePin, LogLevel, ParamKind, ParamSpec, ParamValue, Params, PinDir};
 
 /// Pin indices.
 pub const IN_A1: usize = 0;
@@ -269,6 +269,15 @@ pub struct Mechanism {
     home: bool,
     /// Sampling windows handled (diagnostics).
     samples: u64,
+    /// The rotor angles of the park stop and the click end.
+    theta_park: f64,
+    theta_click: f64,
+    /// What the last event's position gave, for the records (`watch`):
+    /// `|Bz| > bop`, `|Bz| < brp`, and the stop the carriage touches (-1
+    /// park, 1 click, 0 none).
+    above_bop: bool,
+    below_brp: bool,
+    at_stop: i8,
 }
 
 /// Build a `dms/mechanism@1` from its parameters.
@@ -357,7 +366,68 @@ impl Mechanism {
             lag: 0.0,
             home: false,
             samples: 0,
+            theta_park: a,
+            theta_click: b,
+            above_bop: false,
+            below_brp: false,
+            at_stop: 0,
         })
+    }
+
+    /// The comparator inputs and the stop contact of the current position.
+    fn position_state(&self) -> (bool, bool, i8) {
+        let b = self.field().abs();
+        let stop = if self.theta == self.theta_park {
+            -1
+        } else if self.theta == self.theta_click {
+            1
+        } else {
+            0
+        };
+        (b > self.bop, b < self.brp, stop)
+    }
+
+    /// Records (no output, rule 1) at an event where the position crossed
+    /// BOP or BRP, or touched or left a stop: the instant the device's
+    /// field model passes a threshold is the event that moved the rotor
+    /// there (the rotor moves only at events), which is what the HOME_N
+    /// latency gate measures from (ADR-008 Amendment 10).
+    fn watch(&mut self, ctx: &mut Ctx) {
+        let (above, below, stop) = self.position_state();
+        let s = self.steps();
+        let b = self.field().abs();
+        if above != self.above_bop {
+            ctx.log(
+                LogLevel::Info,
+                format!(
+                    "field {} BOP: |Bz| {b:.4} mT {} {} mT at s={s:.3}",
+                    if above { "above" } else { "below" },
+                    if above { ">" } else { "<=" },
+                    self.bop
+                ),
+            );
+        }
+        if below != self.below_brp {
+            ctx.log(
+                LogLevel::Info,
+                format!(
+                    "field {} BRP: |Bz| {b:.4} mT {} {} mT at s={s:.3}",
+                    if below { "below" } else { "above" },
+                    if below { "<" } else { ">=" },
+                    self.brp
+                ),
+            );
+        }
+        if stop != self.at_stop {
+            let what = match (self.at_stop, stop) {
+                (_, -1) => "carriage at the park stop".to_string(),
+                (_, 1) => "carriage at the click end".to_string(),
+                (-1, _) => format!("carriage left the park stop at s={s:.3}"),
+                _ => format!("carriage left the click end at s={s:.3}"),
+            };
+            ctx.log(LogLevel::Info, what);
+        }
+        (self.above_bop, self.below_brp, self.at_stop) = (above, below, stop);
     }
 
     /// The carriage position in full steps from the park stop.
@@ -503,17 +573,49 @@ impl Device for Mechanism {
     fn start(&mut self, ctx: &mut Ctx) {
         self.home = self.field().abs() > self.bop;
         ctx.set_pin(HOME_N, self.home_level());
-        let phase = match self.phase {
-            Some(p) => p,
-            None => Time::from_fs(1 + ctx.rng().below(self.ts.as_fs())),
+        let (seeded, phase) = match self.phase {
+            Some(p) => (false, p),
+            None => (true, Time::from_fs(1 + ctx.rng().below(self.ts.as_fs()))),
         };
         ctx.schedule(phase + self.tactive, T_SAMPLE);
+        (self.above_bop, self.below_brp, self.at_stop) = self.position_state();
+        ctx.log(
+            LogLevel::Info,
+            format!(
+                "DRV5032 tS {} ms, tactive {} us, BOP {} mT, BRP {} mT, die {} mm; first window \
+                 at {} fs ({}); s={:.3}, |Bz| {:.4} mT, HOME_N {}",
+                self.ts.as_fs() as f64 / 1e12,
+                self.tactive.as_fs() as f64 / 1e9,
+                self.bop,
+                self.brp,
+                self.die,
+                phase.as_fs(),
+                if seeded {
+                    "seeded phase"
+                } else {
+                    "phase parameter"
+                },
+                self.steps(),
+                self.field().abs(),
+                if self.home { "low" } else { "high" }
+            ),
+        );
     }
 
     fn on_pin_change(&mut self, ctx: &mut Ctx, pin: usize, level: Level, t: Time) {
         self.advance(t);
+        self.watch(ctx);
         self.inputs[pin] = level;
         if pin == NSLEEP {
+            ctx.log(
+                LogLevel::Info,
+                format!(
+                    "nSLEEP {} at s={:.3} (rotor {:.4} full steps)",
+                    if level == Level::High { "high" } else { "low" },
+                    self.steps(),
+                    self.theta / std::f64::consts::FRAC_PI_2
+                ),
+            );
             if level == Level::High {
                 if self.twake.is_zero() {
                     self.active = true;
@@ -530,6 +632,7 @@ impl Device for Mechanism {
 
     fn on_timer(&mut self, ctx: &mut Ctx, id: u32, t: Time) {
         self.advance(t);
+        self.watch(ctx);
         match id {
             T_WAKE => {
                 self.active = true;
@@ -537,7 +640,20 @@ impl Device for Mechanism {
             }
             T_SAMPLE => {
                 self.samples += 1;
+                let was = self.home;
                 self.latch();
+                if self.home != was {
+                    ctx.log(
+                        LogLevel::Info,
+                        format!(
+                            "HOME_N {} at sample {} (s={:.3}, |Bz| {:.4} mT)",
+                            if self.home { "low" } else { "high" },
+                            self.samples,
+                            self.steps(),
+                            self.field().abs()
+                        ),
+                    );
+                }
                 ctx.set_pin(HOME_N, self.home_level());
                 ctx.schedule(t + self.ts, T_SAMPLE);
             }
@@ -598,6 +714,7 @@ mod tests {
                         self.timers.remove(&id);
                     }
                     crate::Cmd::SetPin(_, l) => self.out.push((t, l)),
+                    crate::Cmd::Log(..) => {}
                 }
             }
         }

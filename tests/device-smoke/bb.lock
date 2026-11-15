@@ -16,7 +16,7 @@ tree = "sha256:64c3d293c3599e3ca426066fbe858afc5725e2f97901e942c99e1d9bfbba6450"
 
 [[platform]]
 id = "device:dms/mechanism@1"
-content = "sha256:3d7cdeaabeaf52fe443b502b59b0c01c5db63a145edd3dda7fc2e1c4b508a4cc"
+content = "sha256:2967684c80a6b7a9527550f7b16cb745e5353d5a7341952b3c894d7d8f8ce698"
 
 [[platform]]
 id = "renode:stm32f103-offline@1"

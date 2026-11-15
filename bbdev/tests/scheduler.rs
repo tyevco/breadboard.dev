@@ -355,7 +355,21 @@ fn device_loop_is_partition_and_order_independent() {
             reference.events.len(),
             "lookahead {lookahead} max_quantum {mq} device first {first}"
         );
-        for (a, b) in reference.events.iter().zip(&r.events) {
+        // The device's records (dms/mechanism@1's field and stop records)
+        // are made at the CPU's edge instants; the kernel orders records of
+        // one instant by registration order (ADR-003 D3), so with the device
+        // registered first they come before the CPU's pin edges at that
+        // instant. The records themselves, and every time, are the same.
+        let (want, got) = if first {
+            let mut a = reference.events.clone();
+            let mut b = r.events.clone();
+            a.sort();
+            b.sort();
+            (a, b)
+        } else {
+            (reference.events.clone(), r.events.clone())
+        };
+        for (a, b) in want.iter().zip(&got) {
             assert_eq!(
                 a, b,
                 "lookahead {lookahead} max_quantum {mq} device first {first}"
@@ -389,14 +403,21 @@ fn the_seed_moves_the_sample_phase_only() {
         ea, ec,
         "a different seed gives another DRV5032 sample phase"
     );
-    // The CPU's own edges before HOME_N first falls are the same.
-    let first_fall = |r: &Run| {
+    // The CPU's own edges before HOME_N first falls are the same (the
+    // device's records state the seeded phase, so they differ).
+    let edges_only = |r: &Run| -> Vec<String> {
         r.events
             .iter()
+            .filter(|l| !l.contains("\"type\":\"log\""))
+            .cloned()
+            .collect()
+    };
+    let (pa, pc) = (edges_only(&a), edges_only(&c));
+    let first_fall = |e: &[String]| {
+        e.iter()
             .position(|l| l.contains("\"net\":\"M1.HOME_N\""))
             .unwrap()
     };
-    let (ka, kc) = (first_fall(&a), first_fall(&c));
-    let k = ka.min(kc);
-    assert_eq!(a.events[..k], c.events[..k]);
+    let k = first_fall(&pa).min(first_fall(&pc));
+    assert_eq!(pa[..k], pc[..k]);
 }

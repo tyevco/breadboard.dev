@@ -295,8 +295,29 @@ const UART_EVENT_DESC: i32 = 0x7FFF_0001;
 /// every ring entry and error: the engine polls the port only in an
 /// advance that has such an event.
 const SAADC_EVENT_DESC: i32 = 0x7FFF_0002;
+/// The event descriptor of the PWM/TEMP/NVMC host port's line
+/// (`bbNrfPort`, ADR-008 Amendment 9), which toggles at the first pin-ring
+/// entry after the engine's last acknowledgement and at an error: the engine
+/// reads the ring only in an advance that has such an event.
+const PWM_EVENT_DESC: i32 = 0x7FFF_0003;
 /// A UART line longer than this is logged in pieces.
 const UART_LINE_MAX: usize = 1024;
+
+/// Bus address of `bbNrfPort`, the host port of Breadboard's nRF52840 PWM,
+/// TEMP and NVMC models on [`Platform::Nrf52840Bb`] (`nrf52840-bb@3`,
+/// ADR-008 Amendment 9).
+pub const BB_NRF_PORT_ADDRESS: u64 = 0x5FFC_0000;
+/// Its ID word, `"BBNP"`.
+const NRF_PORT_ID: u32 = 0x504E_4242;
+/// Its error word (then the count of ring entries recorded, at +4), the
+/// acknowledgement the host writes, and the pin ring (two words per entry).
+const NRF_PORT_ERROR: u64 = 0x004;
+const NRF_PORT_ACK: u64 = 0x00C;
+const NRF_PORT_RING: u64 = 0x1000;
+const NRF_PORT_RING_LEN: u64 = 8192;
+/// Error bits: the ring overflowed; a firmware access to the port.
+const NRF_PORT_ERR_OVERFLOW: u32 = 1 << 0;
+const NRF_PORT_ERR_FIRMWARE: u32 = 1 << 3;
 
 /// Offset of the host port's batch window (header, then `(t_ns low, t_ns
 /// high | channel << 16, uV)` per entry).
@@ -836,6 +857,14 @@ pub struct RenodeConfig {
     /// Turn every line the firmware writes to UARTE0/1 into an `info` log
     /// record (ADR-008 D8; [`Platform::Nrf52840Bb`] only).
     pub uart_log: bool,
+    /// Report the PWM models' pin changes (ADR-008 D9, Amendment 9;
+    /// [`Platform::Nrf52840Bb`] only): every change of a pin that a PWM
+    /// channel drives (`PSEL.OUT[n]` connected, generation running), read
+    /// from the host port's pin ring after each advance at its exact time,
+    /// and arbitrated with the pin's GPIO level (a released pin is the
+    /// GPIO's `OUT` level again). Changes nothing in Renode; without PWM
+    /// activity no ring entry exists and nothing is read.
+    pub pwm: bool,
     /// GDB passthrough (`bb run --gdb`, ADR-008 D10, Amendment 7): Renode's
     /// GDB stub behind the [`gdb::GdbProxy`] on `127.0.0.1`. Needs lookahead
     /// off; the engine then starts Renode fresh (never from the pool),
@@ -897,6 +926,7 @@ impl RenodeConfig {
             pin_cnf_audit: Vec::new(),
             adc_trace: Vec::new(),
             uart_log: false,
+            pwm: false,
             gdb: None,
         }
     }
@@ -1346,8 +1376,14 @@ pub fn find_renode() -> Option<PathBuf> {
 struct PinState {
     spec: PinSpec,
     gpio: i32,
+    /// The level reported to the kernel: the GPIO's, or a PWM channel's
+    /// while one drives the pin (ADR-008 Amendment 9).
     level: Level,
     edge_time: Time,
+    /// The GPIO's own level, from Renode's GPIO events.
+    gpio_level: Level,
+    /// A PWM channel drives the pin.
+    pwm_owned: bool,
     /// Input pin: the last level driven or queued to be driven.
     scheduled: Option<Level>,
     /// ADC input: the last value (µV) set or queued to be set.
@@ -1406,6 +1442,126 @@ struct SaadcPoll {
     /// `#smp` toggles stamped after the last grant end (at a lattice point
     /// that ends a grant: lattice rule 3), `(t, pin)`.
     carried: Vec<(Time, usize)>,
+}
+
+/// One change of an output pin's drivers within an advance (ADR-008
+/// Amendment 9): the GPIO's level, or a PWM channel connecting with a
+/// level, changing it, or releasing the pin.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum PinChange {
+    Gpio(Level),
+    PwmConnect(Level),
+    PwmLevel(Level),
+    PwmRelease,
+}
+
+/// What the engine reads from the PWM host port's pin ring after each
+/// advance (ADR-008 Amendment 9).
+struct PwmPoll {
+    /// Ring entries consumed (and acknowledged), the low 32 bits.
+    seen: u32,
+    /// `(PSEL pin = port << 5 | pin, engine pin index)` of every output.
+    sel: Vec<(u32, usize)>,
+    /// Changes stamped after the last grant end, `(t, pin, change)`.
+    carried: Vec<(Time, usize, PinChange)>,
+    /// Entries for pins no binding names (reported once on stderr).
+    unbound: u64,
+}
+
+/// One decoded pin-ring entry of `bbNrfPort` (`bb_nrf52_pwm.cs`): the time
+/// in half-nanoseconds, the level, the kind (0 level change, 1 connect, 2
+/// release), the channel, the PWM instance and the PSEL pin.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct PwmEntry {
+    t_hns: u64,
+    level: Level,
+    kind: u32,
+    channel: u32,
+    instance: u32,
+    pin: u32,
+}
+
+impl PwmEntry {
+    fn decode(lo: u32, hi: u32) -> PwmEntry {
+        PwmEntry {
+            t_hns: u64::from(lo) | (u64::from(hi & 0xFFFF) << 32),
+            level: Level::from_bool(hi >> 16 & 1 != 0),
+            kind: hi >> 17 & 3,
+            channel: hi >> 19 & 3,
+            instance: hi >> 21 & 3,
+            pin: hi >> 24 & 0x3F,
+        }
+    }
+
+    /// The entry's time with the lattice +1 fs rule (ADR-003 D2): an
+    /// instant exactly on a lattice point is reported 1 fs after it, as a
+    /// GPIO stamp there is, so a change never coincides with a grant
+    /// boundary and its reported time does not depend on the partition.
+    fn time(&self, quantum_ns: u64) -> Time {
+        let fs = self.t_hns * (FS_PER_NS / 2);
+        if fs.is_multiple_of(quantum_ns * FS_PER_NS) {
+            Time::from_fs(fs + 1)
+        } else {
+            Time::from_fs(fs)
+        }
+    }
+
+    fn change(&self) -> Option<PinChange> {
+        match self.kind {
+            0 => Some(PinChange::PwmLevel(self.level)),
+            1 => Some(PinChange::PwmConnect(self.level)),
+            2 => Some(PinChange::PwmRelease),
+            _ => None,
+        }
+    }
+}
+
+/// The reported level of one output pin through a time-ordered list of
+/// driver changes (ADR-008 Amendment 9): a GPIO change shows while no PWM
+/// channel drives the pin; a PWM connect or level change shows at once; a
+/// release shows the GPIO's level at that instant. `changes` are `(t, seq,
+/// change)`; returns the reported transitions `(t, seq, level)` (`seq` of
+/// the change that made it), strictly increasing in `t`; two changes at one
+/// instant that return to the level before cancel (a digital pin has two
+/// levels). `gpio` and `owned` are the state before the list and are left
+/// at the state after it.
+fn arbitrate(
+    level: Level,
+    gpio: &mut Level,
+    owned: &mut bool,
+    changes: &[(Time, usize, PinChange)],
+) -> Vec<(Time, usize, Level)> {
+    let mut out: Vec<(Time, usize, Level)> = Vec::new();
+    let mut cur = level;
+    for &(t, seq, ch) in changes {
+        let want = match ch {
+            PinChange::Gpio(l) => {
+                *gpio = l;
+                if *owned {
+                    continue;
+                }
+                l
+            }
+            PinChange::PwmConnect(l) | PinChange::PwmLevel(l) => {
+                *owned = true;
+                l
+            }
+            PinChange::PwmRelease => {
+                *owned = false;
+                *gpio
+            }
+        };
+        if want == cur {
+            continue;
+        }
+        if out.last().is_some_and(|(lt, ..)| *lt == t) {
+            out.pop();
+        } else {
+            out.push((t, seq, want));
+        }
+        cur = want;
+    }
+    out
 }
 
 /// The UARTE tap's reader (ADR-008 D8): bytes consumed and the open line
@@ -1478,6 +1634,8 @@ pub struct RenodeEngine {
     saadc: Option<SaadcPoll>,
     /// ADR-008 D8: the UARTE tap.
     uart: Option<UartPoll>,
+    /// ADR-008 Amendment 9: the PWM pin ring.
+    pwm: Option<PwmPoll>,
     /// ADR-008 D10: the GDB proxy (`bb run --gdb`).
     gdb: Option<gdb::GdbProxy>,
     /// The debug mark (a `warn` log record) has been emitted.
@@ -1668,6 +1826,7 @@ impl RenodeEngine {
         // ADR-008 D7/D8: the SAADC's loading toggles, sample records and the
         // UART lines exist on Breadboard's nRF52840 only.
         let nrf_only = cfg.uart_log
+            || cfg.pwm
             || !cfg.adc_trace.is_empty()
             || cfg
                 .pins
@@ -1675,8 +1834,8 @@ impl RenodeEngine {
                 .any(|p| p.direction == PinDirection::AdcSample);
         if nrf_only && cfg.platform != Platform::Nrf52840Bb {
             return Err(EngineError::Other(
-                "a loading adc_in (#smp), trace_samples and UART log lines are for the nRF52840 \
-                 platform only"
+                "a loading adc_in (#smp), trace_samples, UART log lines and PWM pins are for the \
+                 nRF52840 platform only"
                     .into(),
             ));
         }
@@ -1914,6 +2073,8 @@ impl RenodeEngine {
                         gpio: -1,
                         level: Level::Low,
                         edge_time: Time::ZERO,
+                        gpio_level: Level::Low,
+                        pwm_owned: false,
                         scheduled: None,
                         scheduled_uv: None,
                         applied_uv: None,
@@ -1935,6 +2096,8 @@ impl RenodeEngine {
                         gpio: adc,
                         level: Level::Low,
                         edge_time: Time::ZERO,
+                        gpio_level: Level::Low,
+                        pwm_owned: false,
                         scheduled: None,
                         scheduled_uv: None,
                         applied_uv: None,
@@ -1952,6 +2115,8 @@ impl RenodeEngine {
                     gpio,
                     level,
                     edge_time: Time::ZERO,
+                    gpio_level: level,
+                    pwm_owned: false,
                     scheduled: None,
                     scheduled_uv: None,
                     applied_uv: None,
@@ -1961,6 +2126,20 @@ impl RenodeEngine {
             if cfg.uart_log {
                 let tap = client.get_gpio(md, "bbUartLog")?;
                 client.gpio_register_event(tap, 0, UART_EVENT_DESC)?;
+            }
+            // ADR-008 Amendment 9: the PWM pin ring's notification line.
+            // Host-port registration only: no emulation state.
+            if cfg.pwm {
+                let sb = client.get_sysbus(md, "sysbus")?;
+                let id = client.sysbus_read_u32s(sb, BB_NRF_PORT_ADDRESS, 1)?[0];
+                if id != NRF_PORT_ID {
+                    return Err(ProtocolError::Server(format!(
+                        "bbNrfPort at {BB_NRF_PORT_ADDRESS:#x}: ID {id:#x}, expected \
+                         {NRF_PORT_ID:#x} (the platform is not nrf52840-bb@3)"
+                    )));
+                }
+                let port = client.get_gpio(md, "bbNrfPort")?;
+                client.gpio_register_event(port, 0, PWM_EVENT_DESC)?;
             }
             let t0 = client.get_time()?;
             // ADR-008 D7: tell the SAADC the lattice (for the TACQ >= 2 L
@@ -2111,6 +2290,18 @@ impl RenodeEngine {
             uart: cfg.uart_log.then(|| UartPoll {
                 seen: 0,
                 lines: [Vec::new(), Vec::new()],
+            }),
+            pwm: cfg.pwm.then(|| PwmPoll {
+                seen: 0,
+                sel: cfg
+                    .pins
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.direction == PinDirection::Output)
+                    .filter_map(|(i, p)| nrf_pin(&p.name).map(|(port, n)| (port << 5 | n, i)))
+                    .collect(),
+                carried: Vec::new(),
+                unbound: 0,
             }),
             gdb,
             gdb_marked: false,
@@ -2313,6 +2504,101 @@ impl RenodeEngine {
         Ok(())
     }
 
+    /// ADR-008 Amendment 9, after an advance whose events include the PWM
+    /// host port's line: fail on its error word, read the pin ring's new
+    /// entries and acknowledge them. Returns the bound pins' changes `(t,
+    /// pin, change)` in ring (emulation) order; entries for unbound pins
+    /// are counted and dropped.
+    fn poll_pwm(&mut self) -> Result<Vec<(Time, usize, PinChange)>, EngineError> {
+        let Some(mut pp) = self.pwm.take() else {
+            return Ok(Vec::new());
+        };
+        let r = self.poll_pwm_inner(&mut pp);
+        self.pwm = Some(pp);
+        r
+    }
+
+    fn poll_pwm_inner(
+        &mut self,
+        pp: &mut PwmPoll,
+    ) -> Result<Vec<(Time, usize, PinChange)>, EngineError> {
+        let st = self.sysbus_read_u32s(BB_NRF_PORT_ADDRESS + NRF_PORT_ERROR, 2)?;
+        let (err, count) = (st[0], st[1]);
+        if err & NRF_PORT_ERR_OVERFLOW != 0 {
+            return Err(EngineError::Protocol(format!(
+                "{}: more than {NRF_PORT_RING_LEN} PWM pin changes in one advance overflow the \
+                 host port's pin ring (lower --max-quantum; ADR-008 Amendment 9)",
+                self.name
+            )));
+        }
+        if err != 0 {
+            return Err(EngineError::Protocol(format!(
+                "{}: the PWM host port reports error {err:#x}{}",
+                self.name,
+                if err & NRF_PORT_ERR_FIRMWARE != 0 {
+                    " (the firmware accessed bbNrfPort, which is for the engine only)"
+                } else {
+                    ""
+                }
+            )));
+        }
+        let new = count.wrapping_sub(pp.seen);
+        if u64::from(new) > NRF_PORT_RING_LEN {
+            return Err(EngineError::Protocol(format!(
+                "{}: {new} PWM pin changes in one advance overflow the host port's pin ring of \
+                 {NRF_PORT_RING_LEN} (lower --max-quantum)",
+                self.name
+            )));
+        }
+        let mut out = Vec::with_capacity(new as usize);
+        if new == 0 {
+            return Ok(out);
+        }
+        // One read of the ring part that holds the new entries (two when it
+        // wraps).
+        let first = u64::from(pp.seen) % NRF_PORT_RING_LEN;
+        let head = (NRF_PORT_RING_LEN - first).min(u64::from(new));
+        let mut words = self.sysbus_read_u32s(
+            BB_NRF_PORT_ADDRESS + NRF_PORT_RING + 8 * first,
+            2 * head as u32,
+        )?;
+        if u64::from(new) > head {
+            let rest = u64::from(new) - head;
+            words.extend(
+                self.sysbus_read_u32s(BB_NRF_PORT_ADDRESS + NRF_PORT_RING, 2 * rest as u32)?,
+            );
+        }
+        self.sysbus_write_u32(BB_NRF_PORT_ADDRESS + NRF_PORT_ACK, count)?;
+        pp.seen = count;
+        for w in words.chunks(2) {
+            let e = PwmEntry::decode(w[0], w[1]);
+            let Some(ch) = e.change() else {
+                return Err(EngineError::Protocol(format!(
+                    "{}: PWM pin-ring entry of unknown kind {} ({e:?})",
+                    self.name, e.kind
+                )));
+            };
+            match pp.sel.iter().find(|(s, _)| *s == e.pin) {
+                Some(&(_, i)) => out.push((e.time(self.quantum_ns), i, ch)),
+                None => {
+                    if pp.unbound == 0 {
+                        eprintln!(
+                            "{}: PWM{} channel {} drives P{}.{:02}, which no binding names (its \
+                             changes are not reported)",
+                            self.name,
+                            e.instance,
+                            e.channel,
+                            e.pin >> 5,
+                            e.pin & 31
+                        );
+                    }
+                    pp.unbound += 1;
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Read the `PIN_CNF` write hooks' new lines (ADR-008 D4) and turn each
     /// write that leaves an audited pin disagreeing with its binding (or
     /// disagreeing differently) into a `warn`/`error` log record stamped
@@ -2438,7 +2724,12 @@ impl RenodeEngine {
     fn quiet_inner(&mut self, now: Time) -> Result<Time, EngineError> {
         // Outputs change right after `now`: an event stamped at the last
         // grant end is reported at `now + 1 fs` (lattice rule 3).
-        if !self.carried.is_empty() || self.saadc.as_ref().is_some_and(|s| !s.carried.is_empty()) {
+        // So does a PWM pin change past the last grant end (ADR-008
+        // Amendment 9), which is due before the next clock limit.
+        if !self.carried.is_empty()
+            || self.saadc.as_ref().is_some_and(|s| !s.carried.is_empty())
+            || self.pwm.as_ref().is_some_and(|p| !p.carried.is_empty())
+        {
             return Ok(now);
         }
         let st = match self.la.cached {
@@ -2483,6 +2774,16 @@ impl RenodeEngine {
         let carried_at = Time::from_ns(self.renode_ns) + Time::from_fs(1);
         if !self.carried.is_empty() && carried_at < until {
             return Err(broken(carried_at));
+        }
+        // A PWM pin change recorded past the grant end (ADR-008 Amendment 9).
+        if let Some(at) = self
+            .pwm
+            .as_ref()
+            .and_then(|p| p.carried.iter().map(|c| c.0).min())
+        {
+            if at < until {
+                return Err(broken(at));
+            }
         }
         let st = self.lookahead_query()?;
         if let Some(e) = st.first_exit_ns.map(Time::from_ns) {
@@ -2862,12 +3163,15 @@ impl RenodeEngine {
             if p.spec.direction != PinDirection::Output {
                 continue;
             }
+            // The GPIO's own level (a pin a PWM channel drives reports the
+            // channel's, which Renode's GPIO does not show; ADR-008
+            // Amendment 9).
             let want = self
                 .carried
                 .iter()
                 .rev()
                 .find(|e| e.descriptor == i as i32)
-                .map_or(p.level, |e| Level::from_bool(e.state));
+                .map_or(p.gpio_level, |e| Level::from_bool(e.state));
             let s = self
                 .client
                 .gpio_get_state(p.gpio, p.spec.index)
@@ -3062,7 +3366,13 @@ impl RenodeEngine {
         // ADR-008 D7: the SAADC recorded an acquisition or a sample, or
         // set an error bit.
         let saadc_due = events.iter().any(|e| e.descriptor == SAADC_EVENT_DESC);
-        events.retain(|e| e.descriptor != UART_EVENT_DESC && e.descriptor != SAADC_EVENT_DESC);
+        // ADR-008 Amendment 9: the PWM pin ring has entries (or an error).
+        let pwm_due = events.iter().any(|e| e.descriptor == PWM_EVENT_DESC);
+        events.retain(|e| {
+            e.descriptor != UART_EVENT_DESC
+                && e.descriptor != SAADC_EVENT_DESC
+                && e.descriptor != PWM_EVENT_DESC
+        });
         if let Some(Fault::DropGpioEvent { at_ns }) = self.fault {
             if let Some(k) = events.iter().position(|e| e.time_ns >= at_ns) {
                 events.remove(k);
@@ -3082,6 +3392,11 @@ impl RenodeEngine {
         self.trace.clear();
         // Per pin: the time of its last change in this grant.
         let mut last_change: Vec<Option<Time>> = vec![None; self.pins.len()];
+        // Per pin: the time of its last GPIO change in this grant, and the
+        // drivers' changes (GPIO and PWM, ADR-008 Amendment 9) to arbitrate.
+        let mut last_gpio: Vec<Option<Time>> = vec![None; self.pins.len()];
+        let mut gpio_now: Vec<Level> = self.pins.iter().map(|p| p.gpio_level).collect();
+        let mut changes: Vec<(Time, usize, PinChange)> = Vec::new();
         for ev in events {
             let i = usize::try_from(ev.descriptor)
                 .ok()
@@ -3103,9 +3418,8 @@ impl RenodeEngine {
                 self.carried_edges += 1;
                 continue;
             }
-            let pin = &mut self.pins[i];
             let level = Level::from_bool(ev.state);
-            if level == pin.level {
+            if level == gpio_now[i] {
                 continue; // not a change (e.g. re-write of the same value)
             }
             // Lattice rules 1 and 2. A stamp at `start_ns` (the previous
@@ -3117,20 +3431,70 @@ impl RenodeEngine {
             }
             // Two changes stamped in one slice would share a time: Renode's
             // stamps cannot order them (ADR-003 D2/D3).
-            if last_change[i].is_some_and(|t| edge_time <= t) {
+            if last_gpio[i].is_some_and(|t| edge_time <= t) {
                 return Err(EngineError::Protocol(format!(
                     "{}: two changes stamped in the same Renode slice ({} ns); the edge-stamp \
                      resolution is the quantum, lower --renode-quantum",
-                    pin.spec.name, ev.time_ns
+                    self.pins[i].spec.name, ev.time_ns
                 )));
             }
-            last_change[i] = Some(edge_time);
-            pin.level = level;
-            pin.edge_time = edge_time;
+            last_gpio[i] = Some(edge_time);
+            gpio_now[i] = level;
+            changes.push((edge_time, i, PinChange::Gpio(level)));
+        }
+        // ADR-008 Amendment 9: the PWM channels' pin changes of this advance
+        // (and those carried from the last grant end), each at its exact
+        // instant; one past the grant end belongs to the next grant.
+        if self.pwm.is_some() {
+            let mut pwm = std::mem::take(&mut self.pwm.as_mut().expect("some").carried);
+            if pwm_due {
+                pwm.extend(self.poll_pwm()?);
+            }
+            let mut carried = Vec::new();
+            for c in pwm {
+                if c.0 > t {
+                    carried.push(c);
+                } else {
+                    changes.push(c);
+                }
+            }
+            self.pwm.as_mut().expect("some").carried = carried;
+        }
+        // Per pin, in time order (stable: emulation order at one instant),
+        // the reported level: the GPIO's unless a PWM channel drives it.
+        // The trace keeps emulation order at one instant across pins (the
+        // order of the changes), as before PWM pins existed.
+        changes.sort_by_key(|c| c.0);
+        let mut per_pin: Vec<Vec<(Time, usize, PinChange)>> = vec![Vec::new(); self.pins.len()];
+        for (seq, (at, i, ch)) in changes.into_iter().enumerate() {
+            per_pin[i].push((at, seq, ch));
+        }
+        let mut reported: Vec<(Time, usize, usize, Level)> = Vec::new();
+        for (i, list) in per_pin.into_iter().enumerate() {
+            if list.is_empty() {
+                continue;
+            }
+            let pin = &mut self.pins[i];
+            for (at, seq, level) in
+                arbitrate(pin.level, &mut pin.gpio_level, &mut pin.pwm_owned, &list)
+            {
+                last_change[i] = Some(at);
+                pin.level = level;
+                pin.edge_time = at;
+                reported.push((at, seq, i, level));
+            }
+        }
+        debug_assert!(self
+            .pins
+            .iter()
+            .zip(&gpio_now)
+            .all(|(p, g)| p.gpio_level == *g));
+        reported.sort_by_key(|r| (r.0, r.1));
+        for (at, _, i, level) in reported {
             self.trace.push(Transition {
-                t: edge_time,
-                pin: pin.spec.name.clone(),
-                signal: PinSignal::digital(level, edge_time),
+                t: at,
+                pin: self.pins[i].spec.name.clone(),
+                signal: PinSignal::digital(level, at),
             });
         }
         // ADR-008 D7: the `#smp` toggles of the acquisitions this advance
@@ -3692,5 +4056,94 @@ mod tests {
         assert!(monitor_path(Path::new("/a b/c.elf")).is_err());
         assert!(monitor_path(Path::new("/a;b")).is_err());
         assert_eq!(monitor_path(Path::new("/a/b.elf")).unwrap(), "/a/b.elf");
+    }
+
+    /// ADR-008 Amendment 9: the pin-ring entry layout of `bb_nrf52_pwm.cs`
+    /// (`Record`) and the lattice +1 fs rule on its exact times.
+    #[test]
+    fn pwm_ring_entries_decode() {
+        // t = 0x1_2345_6789 hns, level 1, kind 1 (connect), channel 2,
+        // instance 0, PSEL P0.26 (26).
+        let t_hns: u64 = 0x1_2345_6789;
+        let lo = t_hns as u32;
+        let hi = (t_hns >> 32) as u32 | 1 << 16 | 1 << 17 | 2 << 19 | 26 << 24;
+        let e = PwmEntry::decode(lo, hi);
+        assert_eq!(e.t_hns, t_hns);
+        assert_eq!(e.level, Level::High);
+        assert_eq!(e.change(), Some(PinChange::PwmConnect(Level::High)));
+        assert_eq!((e.channel, e.instance, e.pin), (2, 0, 26));
+        // P1.15 is 32 + 15; kind 2 releases; kind 3 is unknown.
+        let r = PwmEntry::decode(0, 2 << 17 | 3 << 21 | 47 << 24);
+        assert_eq!(
+            (r.change(), r.instance, r.pin),
+            (Some(PinChange::PwmRelease), 3, 47)
+        );
+        assert_eq!(PwmEntry::decode(0, 3 << 17).change(), None);
+        // 20 001 hns = 10 000.5 ns exactly; 20 000 hns = 10 us, a lattice
+        // point of a 10 us lattice, is reported 1 fs after it.
+        let at = |hns: u64| PwmEntry::decode(hns as u32, 0).time(10_000);
+        assert_eq!(at(20_001), Time::from_fs(10_000_500_000));
+        assert_eq!(at(20_000_000), Time::from_us(10_000) + Time::from_fs(1));
+        assert_eq!(at(20_000), Time::from_us(10) + Time::from_fs(1));
+    }
+
+    /// ADR-008 Amendment 9: a PWM channel's level shows while it drives the
+    /// pin, the GPIO's otherwise; a release shows the GPIO's level at that
+    /// instant; two changes at one instant that return cancel.
+    #[test]
+    fn pwm_and_gpio_arbitration() {
+        use Level::{High, Low};
+        use PinChange::*;
+        let t = Time::from_ns;
+        let (mut gpio, mut owned) = (Low, false);
+        let list = [
+            (t(100), 0, Gpio(High)),      // GPIO high: shows
+            (t(200), 1, PwmConnect(Low)), // PWM takes the pin low
+            (t(300), 2, Gpio(Low)),       // hidden: the PWM drives
+            (t(400), 3, PwmLevel(High)),  // shows
+            (t(500), 4, PwmLevel(Low)),   // shows
+            (t(600), 5, Gpio(High)),      // hidden
+            (t(700), 6, PwmRelease),      // the GPIO's level: High
+            (t(800), 7, Gpio(Low)),       // shows again
+        ];
+        let out = arbitrate(Low, &mut gpio, &mut owned, &list);
+        assert_eq!(
+            out,
+            vec![
+                (t(100), 0, High),
+                (t(200), 1, Low),
+                (t(400), 3, High),
+                (t(500), 4, Low),
+                (t(700), 6, High),
+                (t(800), 7, Low),
+            ]
+        );
+        assert_eq!((gpio, owned), (Low, false));
+        // A connect at the GPIO's own level is no change; a release to the
+        // same level neither.
+        let (mut gpio, mut owned) = (High, false);
+        let out = arbitrate(
+            High,
+            &mut gpio,
+            &mut owned,
+            &[(t(10), 0, PwmConnect(High)), (t(20), 1, PwmRelease)],
+        );
+        assert!(out.is_empty());
+        assert!(!owned);
+        // Two changes at one instant that return to the level before cancel;
+        // the pin stays owned.
+        let (mut gpio, mut owned) = (Low, true);
+        let out = arbitrate(
+            Low,
+            &mut gpio,
+            &mut owned,
+            &[
+                (t(10), 0, PwmLevel(High)),
+                (t(10), 1, PwmLevel(Low)),
+                (t(30), 2, PwmLevel(High)),
+            ],
+        );
+        assert_eq!(out, vec![(t(30), 2, High)]);
+        assert!(owned);
     }
 }

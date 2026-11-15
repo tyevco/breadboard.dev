@@ -26,6 +26,12 @@ authority. Nothing on this page under "Planned" is implemented.
   ([Debugging with GDB](./debugging)). Attaching, halting, reading and
   detaching leave the outputs byte-identical. A breakpoint stop changes
   them, so such a run is marked as a debug run (ADR-008 D10's fallback).
+- **Phase 1, M10 (E3, the stretch)**: Breadboard's nRF52840 PWM, TEMP and
+  NVMC models with the PWM engine path; the Rust device API and device
+  parts in board files (ADR-006 Amendment 6); the mechanism and DRV5032
+  device `dms/mechanism@1`; the ideal-switch `ti/drv8837` view; the Zephyr
+  homing firmware; the detent homing H0–H5 on dial-me-spinner with the
+  HOME_N latency gate ([the E3 demo](./demo-e3)).
 - **Phase 1, M11 (systems)**: the base board imported next to the main
   board (`examples/dial-me-spinner/system`), `[[connection]]` between
   them through a harness view, and qualified names across the two boards
@@ -37,13 +43,7 @@ the image's default apt sources: the README took 68.2 s against the
 15-minute limit. The one remaining exit item is the human run
 (`docs/phase1-exit-checklist.md`).
 
-## Planned: the rest of Phase 1 (M10)
-
-These are milestones in the plan, not features. Each has its own gate there.
-
-| Milestone | Plan |
-| --- | --- |
-| **M10: E3 (stretch)** | Detent homing: a PWM model, TEMP and NVMC stand-ins, an averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device. |
+Every Phase 1 milestone (M0–M11) is done.
 
 ## Out of Phase 1
 
@@ -53,7 +53,9 @@ The plan names these as decisions, not gaps ("Scope", `docs/phase1-plan.md`):
 | --- | --- |
 | Public package registry, signing, `bb pkg publish` | Phase 2. Packages are local directories plus a lockfile. |
 | `pi`/`si`/`em` fidelity rungs, rail-tracking pin outputs, brown-out reset from a rail | Phase 2. Views may already declare `pi`. |
+| Devices in imported projects (route B: a `[[device]]` section with pin-to-net bindings in `bb.toml`) | Phase 2 (approver decision 2, 2026-11-14). Phase 1's device parts exist only in hand-written board files, which is how E3 runs. |
 | Python device API, bus devices (TWIM/SPIM) | Phase 2. |
+| An averaged DRV8837 view, and a lookahead for a CPU fed by two engines | Not needed for E3's gates; the homing runs take one-cell grants and leave the bridges' power stage out of ngspice (ADR-008 Amendment 11). |
 | BLE/RADIO, USBD, NFCT, QSPI, TWIM, SPIM3, I2S-to-pin, PWM (unless E3) | Absent or not faithful in Renode 1.17.0; each is its own model and gate. |
 | Bench files with CSV playback, `bb test`, JUnit | Phase 2. Phase 1 checks are scripts over the outputs. |
 | Multi-MCU and multi-board simulation | Phase 3. |

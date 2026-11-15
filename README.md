@@ -212,6 +212,69 @@ The firmware is in `examples/dial-me-spinner/firmware/vsense/`. Both images
 are prebuilt, and `make fw-rebuild` reproduces them from a fresh Zephyr
 v4.5.0 workspace. Details are in ADR-008 Amendment 5.
 
+## E3: detent homing
+
+The third worked example (Phase 1 plan section 2 E3, M10, the stretch)
+homes dial-me-spinner's detent actuator as its `docs/firmware.md` 5.4
+describes. The Zephyr firmware drives a micro linear stepper through the two
+DRV8837 bridges (U40, U41) with PWM0 at 25 kHz, 8 microsteps per full
+step, slow decay and two ping-pong sequences, and reads the DRV5032 Hall
+switch U42 on HOME_N. The amplitude follows the MD-3 rule from the nRF's
+die temperature (TEMP) and an idle VSYS reading. The procedure: H0 wake
+and energise, H1 back off if HOME is asserted, H2 approach until HOME
+asserts, H3 run in 199 steps, H4 stall into the park stop at 80 PPS and
+half current, H5 confirm HOME and back off 4 steps, then settle, brake and
+sleep.
+
+Three new pieces carry it:
+
+- **Breadboard's nRF52840 PWM, TEMP and NVMC models** (ADR-008 D9,
+  Amendment 9). The Renode engine reads every PWM pin change from the
+  model's ring and reports it at its exact instant, arbitrated with the
+  pin's GPIO level (Amendment 11).
+- **A device**, `dms/mechanism@1` (ADR-006 D7, Amendment 6): the lead
+  screw, carriage, magnet and DRV5032 as one Rust model in `bb`, placed in
+  a board file as a part (`*bb part M1 package=dms/detent-mechanism`). It
+  reads the bridges' inputs and drives HOME_N.
+- **`ti/drv8837`'s ideal-switch bridge view** with the stepper's coils in
+  ngspice.
+
+The mechanism is not on the schematic, so E3 runs on hand-written board
+files in `examples/dial-me-spinner/e3/` that carry the main board's detent
+sheet, with the suite's own power path as the bench (devices in imported
+projects are a Phase 2 item).
+
+```sh
+make dms-home        # the M10 gate, about 45 min; make dms-home-test (in make test) is the one-step case
+```
+
+What the gate checks (`scripts/dms_home.sh`, `scripts/check_dms_home.py`):
+
+- **One full step at 446 PPS** (`homing_step.elf`, `board-step.cir`, the
+  bridges, coils and the suite's back-EMF) against
+  `test_firmware_microstep_pwm[VBAT3.7-25C]` over the same window: the
+  current-vector magnitude 128.47 mA (suite 126.68 mA, +1.42 %), the thrust
+  estimate 0.5255 N (suite 0.5182 N; limit ≥ 0.5 N), VSYS max 3.606 V
+  (suite 3.622 V). The firmware's duty is 1.63 % higher because it scales
+  with its own VSYS reading (3.645 V under load, where the suite assumes
+  3.7 V); per unit of duty the drive chain is within 0.25 % of the suite.
+- **The homing procedure** (`homing.elf`): H0-H5 in order with their step
+  counts, HOME asserted after the stall, the carriage at the park stop with
+  at least 20 steps of overdrive, the final position 4 ± 2 steps from the
+  stop, and the brake before sleep. From the click end it takes 2.62 s.
+- **The HOME_N latency** (ADR-008 Amendment 10), from the device's field
+  passing BOP to the HOME_N edge: 44.30 ms at the typical tS of 50 ms (gate
+  75 ms), and 74.99 ms at tS 75 ms with the worst sample phase (gate: the
+  suite's 97.4 ms window).
+- **Equivalence and determinism.** Each case equals its one-cell reference
+  (`--lookahead off`) and the committed hashes in `tests/golden/dms-home/`;
+  `--max-quantum 1ms` and the other engine order are identical too, and the
+  typical homing is identical over 10 runs.
+
+The firmware is in `examples/dial-me-spinner/firmware/homing/`; both images
+are prebuilt, and `make fw-rebuild` reproduces them. Details are in ADR-008
+Amendments 9-11 and ADR-006 Amendments 6-7.
+
 ## Debugging firmware with GDB
 
 `bb run --gdb <port>` (Phase 1 M9, ADR-008 D10 and Amendment 7) puts a GDB
@@ -377,7 +440,12 @@ The run writes these files to `out/spike/`:
    `make nrf-pwm-model` (Phase 1 M10, ADR-008 D9): the Renode-only tests
    of Breadboard's nRF52840 PWM (every pin change exact to 0.5 ns, the
    sequencer, a microstepping firmware at 446 PPS) and the TEMP and NVMC
-   stand-ins.
+   stand-ins, then `examples/nrf-pwm` through `bb run`: every PWM edge in
+   `events.jsonl` at its exact instant, identical at one cell, with
+   lookahead and in the other engine order.
+   `make device-smoke` (M10): a device part in a loop with the CPU.
+   `make dms-home-test` (M10, E3): one full step at 446 PPS on
+   dial-me-spinner's detent sheet against the suite (below, "E3").
    `make dms-vsense-test` (Phase 1 M8, E2): the battery reading on
    dial-me-spinner at 50 ms and with C5 fitted at 10 nF, each against its
    `load = "none"` run, with `scripts/check_dms_vsense.py` and the committed
@@ -535,6 +603,8 @@ fresh runs.
 | `examples/nrf-saadc`, defaults (`make nrf-saadc-model`: lookahead on) | 30 ms | 209 | **0.30 s** (5.2×) | 1.59 s | **0.11 s** | 1.95 s | 0.33 s |
 | `examples/dial-me-spinner` E2 s50, `--lookahead off --adc-push every` (Phase 1 M8: `vsense_50ms.elf`, an 8× burst on the loaded VSYS_SENSE every 50 ms, `bench/vsense.toml`; the every-lattice-point reference) | 650 ms | 65 000 | 39.51 s | 1.63 s | 0.07 s | 41.18 s | 39.88 s |
 | `examples/dial-me-spinner` E2 s50, defaults (`make dms-vsense`: lookahead on) | 650 ms | 732 | **12.85 s** (3.1×) | 1.58 s | **0.07 s** | 14.48 s | 12.84 s |
+| `examples/dial-me-spinner/e3` E3 typ, `--lookahead off` (Phase 1 M10: `homing.elf` from the click end, PWM0 at 25 kHz, the device M1; one-cell grants) | 2 700 ms | 270 000 | 165.06 s | 1.47 s | 0.08 s | 166.61 s | 165.38 s |
+| `examples/dial-me-spinner/e3` E3 typ, defaults (`make dms-home`: lookahead on, no quiet grant) | 2 700 ms | 270 000 | **163.93 s** (1.0×) | 1.51 s | **0.10 s** | 165.54 s | 165.30 s |
 
 The two `examples/nrf-feedback` rows (ADR-008 Amendment 2) were measured
 later, with the same protocol (`make cost-table`'s nRF row, N = 5,
@@ -575,6 +645,19 @@ dominates again: ngspice steps the whole E1 scope (132 instances) at
 TMAX = 10 µs through 650 ms whatever the grants are, so lookahead gains
 3.1× here, not the 5× of `examples/nrf-saadc`. The pool saves only the
 1.6 s of startup.
+
+The two E3 rows (Phase 1 M10, ADR-008 Amendment 11) were measured with
+`make cost-table-dms-home PERF_N=3` (N = 3, not 5: a run takes almost
+three minutes; interleaved, medians): fresh at load 0.6–1.3 and on a
+one-slot pool at load 1.0–1.3, all 6 pooled runs leased, every B run
+identical to A except grant records. The board has no quiet grant (two
+engines feed the CPU, ADR-003 D5 builds one for one producer), so bb's
+defaults run the one-cell partition: both rows are 270 000 grants, about
+0.6 ms each with the PWM ring read in most of them. While the motor runs,
+a sleeping CPU's promise would end at its next PWM edge anyway, at most
+40 µs away. The analog side is the bench and the bridges' inputs; the full
+detent sheet in ngspice (the one-step board) costs 0.25–0.5 s per simulated
+millisecond of PWM.
 
 The two `examples/adc/kicad` rows (ADR-007 Amendment 1) were measured
 fresh only, with `make cost-table-adc-kicad` (N = 5, interleaved, medians,

@@ -26,6 +26,7 @@
 
 use std::collections::BTreeMap;
 
+pub use bbcore::LogLevel;
 use bbcore::{Level, Time};
 
 pub mod dms_mechanism;
@@ -138,6 +139,7 @@ pub(crate) enum Cmd {
     Schedule(u32, Time),
     Cancel(u32),
     SetPin(usize, Level),
+    Log(LogLevel, String),
 }
 
 /// The device's view of the engine during one call (ADR-006 D7): the time,
@@ -198,6 +200,14 @@ impl<'a> Ctx<'a> {
             return;
         }
         self.cmds.push(Cmd::SetPin(pin, level));
+    }
+
+    /// A log record at [`Ctx::now`] (`<reference>: <msg>` in
+    /// `events.jsonl`). Allowed in every call, `on_pin_change` too: a record
+    /// is not an output (rule 1), and its time is the event's own, so it
+    /// does not depend on the grant partition.
+    pub fn log(&mut self, level: LogLevel, msg: String) {
+        self.cmds.push(Cmd::Log(level, msg));
     }
 
     /// The device's random numbers, seeded from the run seed and the

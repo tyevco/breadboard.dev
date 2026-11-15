@@ -1,0 +1,141 @@
+* examples/dial-me-spinner/e3/board-park.cir: E3, homing from inside the park zone (s0 = 150 steps: H1 runs), typical corner.
+* Written by scripts/dms_home_boards.py (do not edit; `make dms-home-test` checks it). Phase 1 M10,
+* plan section 2 E3; ADR-006 Amendment 6 (device parts in board files), ADR-008 Amendments 9 and 10.
+*
+* The detent sheet of the dial-me-spinner main board at 6854d25 ("Detent actuator & home sensor",
+* examples/dial-me-spinner/kicad/main/dial-me-spinner-main.net): U40 and U41 (DRV8837, coil A and coil
+* B), the shared nSLEEP with R70 100 kOhm, the VM capacitors C70, C72 (100 nF) and C74 (10 uF), J40's
+* two coils, U42's supply capacitors (C71, C73, C75 on +3V3) and the nRF52840's pins (what of the
+* sheet's analog side this file carries: below):
+*   P0.26 MOT_A_IN1, P0.05 MOT_A_IN2, P0.07 MOT_B_IN1, P0.11 MOT_B_IN2  PWM0 channels 0-3 (digital_out,
+*         the suite's S0S1 bound: 800 Ohm; the PWM model's edges at their exact instants, ADR-008 D9)
+*   P1.15 MOT_NSLEEP (digital_out), P1.14 HOME_N (digital_in, reads M1.HOME_N directly)
+*   P0.02 VSYS_SENSE (adc_in, the loading SAADC input of E2; R1 2.2 MOhm, R2 1 MOhm, C5 100 nF)
+*   VDD   +3V3 (adc_in: the SAADC's VDD input and VPRE of the pin_load view)
+* U10 is the Raytac module's chip, bound directly (nordic/nrf52840-qiaa, as examples/nrf-saadc): a module
+* pad has no VDD adc_in in a board file.
+*
+* M1 (dms/detent-mechanism, device dms/mechanism@1) is the lead screw, carriage, magnet and U42
+* DRV5032FA as one device: it reads the five driver commands and drives HOME_N (push-pull, low = magnet
+* present). Its parameters here: s0=150 ts=50ms (the rest at their defaults: die 2.6 mm, BOP/BRP 3/1.5 mT,
+* phase seeded from the run seed and "M1").
+*
+* The analog side of this board is the detent sheet's input side (U40/U41's input pull-downs and R70)
+* and the bench; the bridges' power stage and J40's coils are on board-step.cir only. With them, ngspice
+* takes about 0.4 s of wall time per simulated ms while the PWM runs (the ideal-switch view at phase0:
+* about 60 solver points per edge, 100 000 edges per second; measured in M10, ADR-008 Amendment 11),
+* about 20 minutes for one homing, and it keeps every solver point in memory. The homing checks read
+* the device, the firmware and the pins, none of which the analog side feeds back into (the device
+* reads the driver commands, ADR-008 Amendment 9), so the homing runs leave the power stage out.
+*
+* The VSYS reading binds P0.02 with load=none (an ideal input): the firmware reads VSYS once, at idle,
+* before H0, so the SAADC's charge sharing (E2's subject, a few hundred uV) does not reach the duty; with
+* the loading view (saadc_se) after that one acquisition, ngspice stalled 28-40 ms into the quiet
+* stretch after the move at phase0 (found in M10; recorded in ADR-008 Amendment 11).
+*
+* The bench (the main board alone, as E1 and E2): the suite's own power path of
+* test_firmware_microstep_pwm[VBAT3.7-25C] (test_motor_drive.py power() at 6854d25): the cell 3.7 V
+* behind RPACK 0.2 Ohm (a Norton source), the base board's VBAT (C3) and VSYS (C2, C4) capacitors,
+* the BQ25180's battery-mode BAT-FET (RON_BAT max 90 mOhm, the only element of BQ25180_PATH with
+* usb = 0), the 12-way link (28 AWG 80 mm + two aged JST contacts: 48.4 mOhm VSYS, 32.3 mOhm GND), the
+* main board's VSYS capacitors (C1, C2, C6, C41, C70, C72, C74), the 150 mA of other VSYS loads, and
+* +3V3 from an ideal 3.3 V behind 50 mOhm (a Norton source) with the main board's +3V3 capacitors. Every
+* VSYS capacitor at the suite's worst-case value at 3.7 V (Samsung DC bias minus the MPN tolerance) with
+* 10 mOhm ESR. Left out: the link's 80 nH (a branch-current unknown in series with milliohms stalls
+* phase0, AGENTS.md; its corner is 4 MHz, the suite's comment: "no effect at the 25 kHz PWM or
+* slower").
+*
+*bb part U10 package=nordic/nrf52840-qiaa
+*bb pin U10.P0.26 net=MOT_A_IN1 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P0.05 net=MOT_A_IN2 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P0.07 net=MOT_B_IN1 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P0.11 net=MOT_B_IN2 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P1.15 net=MOT_NSLEEP model=digital_out set=S0S1_bound voh=3.3
+*bb pin U10.P1.14 net=HOME_N model=digital_in vih=2.31 vil=0.99
+*bb pin U10.P0.02 net=VSYS_SENSE model=adc_in vref=3.6 load=none
+*bb pin U10.VDD net=P3V3 model=adc_in vref=3.6
+*bb part M1 package=dms/detent-mechanism s0=150 ts=50ms
+*bb pin M1.IN_A1 net=MOT_A_IN1 model=digital_in
+*bb pin M1.IN_A2 net=MOT_A_IN2 model=digital_in
+*bb pin M1.IN_B1 net=MOT_B_IN1 model=digital_in
+*bb pin M1.IN_B2 net=MOT_B_IN2 model=digital_in
+*bb pin M1.NSLEEP net=MOT_NSLEEP model=digital_in
+*bb pin M1.HOME_N net=HOME_N model=digital_out
+
+* Circuit body. Node 0 is the main board's GND.
+* ---- bench: the suite's power path at VBAT3.7, 25 C (node NB_GND is the base board's ground)
+BCELL NB_GND NB_VBAT I = (3.7 - V(NB_VBAT,NB_GND))/0.2
+RBC3_ESR NB_VBAT NB_VBAT_C3 0.01
+CBC3 NB_VBAT_C3 NB_GND 4.7u
+RBATFET NB_VBAT NB_VSYS 0.09
+RBC2_ESR NB_VSYS NB_VSYS_C2 0.01
+CBC2 NB_VSYS_C2 NB_GND 4.88u
+RBC4_ESR NB_VSYS NB_VSYS_C4 0.01
+CBC4 NB_VSYS_C4 NB_GND 4.88u
+RLINK NB_VSYS VSYS 0.0484
+RLGND 0 NB_GND 0.0322667
+IOTHER VSYS 0 DC 0.15
+B3V3 0 P3V3 I = (3.3 - V(P3V3))/0.05
+* ---- main board VSYS capacitors (worst case at 3.7 V) and the +3V3 capacitors
+RC1_ESR VSYS VSYS_C1 0.01
+CC1 VSYS_C1 0 11.0176u
+RC2_ESR VSYS VSYS_C2 0.01
+CC2 VSYS_C2 0 4.88u
+RC6_ESR VSYS VSYS_C6 0.01
+CC6 VSYS_C6 0 4.88u
+RC41_ESR VSYS VSYS_C41 0.01
+CC41 VSYS_C41 0 4.88u
+RC70_ESR VSYS VSYS_C70 0.01
+CC70 VSYS_C70 0 85.374n
+RC72_ESR VSYS VSYS_C72 0.01
+CC72 VSYS_C72 0 85.374n
+RC74_ESR VSYS VSYS_C74 0.01
+CC74 VSYS_C74 0 5.7906u
+RC3_ESR P3V3 P3V3_C3 0.01
+CC3 P3V3_C3 0 10u
+RC4_ESR P3V3 P3V3_C4 0.01
+CC4 P3V3_C4 0 100n
+RC10_ESR P3V3 P3V3_C10 0.01
+CC10 P3V3_C10 0 10u
+RC11_ESR P3V3 P3V3_C11 0.01
+CC11 P3V3_C11 0 100n
+RC15_ESR P3V3 P3V3_C15 0.01
+CC15 P3V3_C15 0 100n
+RC33_ESR P3V3 P3V3_C33 0.01
+CC33 P3V3_C33 0 1u
+RC35_ESR P3V3 P3V3_C35 0.01
+CC35 P3V3_C35 0 4.7u
+RC36_ESR P3V3 P3V3_C36 0.01
+CC36 P3V3_C36 0 100n
+RC50_ESR P3V3 P3V3_C50 0.01
+CC50 P3V3_C50 0 100n
+RC51_ESR P3V3 P3V3_C51 0.01
+CC51 P3V3_C51 0 1u
+RC52_ESR P3V3 P3V3_C52 0.01
+CC52 P3V3_C52 0 100n
+RC53_ESR P3V3 P3V3_C53 0.01
+CC53 P3V3_C53 0 10u
+RC54_ESR P3V3 P3V3_C54 0.01
+CC54 P3V3_C54 0 100n
+RC71_ESR P3V3 P3V3_C71 0.01
+CC71 P3V3_C71 0 100n
+RC73_ESR P3V3 P3V3_C73 0.01
+CC73 P3V3_C73 0 100n
+RC75_ESR P3V3 P3V3_C75 0.01
+CC75 P3V3_C75 0 100n
+* ---- the VSYS reading (power sheet): R1 2.2 MOhm over R2 1 MOhm, C5 100 nF
+R1 VSYS VSYS_SENSE 2.2Meg
+R2 VSYS_SENSE 0 1Meg
+C5 VSYS_SENSE 0 100n
+* ---- the detent sheet's input side: U40/U41's RPD (100 kOhm, SLVSBA4F Table 6.5) on IN1, IN2 and the
+*      shared nSLEEP (two in parallel), and R70
+RPD_A1 MOT_A_IN1 0 100k
+RPD_A2 MOT_A_IN2 0 100k
+RPD_B1 MOT_B_IN1 0 100k
+RPD_B2 MOT_B_IN2 0 100k
+RPD_NS MOT_NSLEEP 0 50k
+R70 MOT_NSLEEP 0 100k
+
+* phase0 (spec/package.md section 8).
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

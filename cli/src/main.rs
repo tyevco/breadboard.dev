@@ -980,6 +980,9 @@ fn run(a: RunArgs) -> Result<(), String> {
         .collect();
     // ADR-008 D8: the firmware's UARTE lines become log records.
     rcfg.uart_log = nrf && a.uart_log;
+    // ADR-008 Amendment 9: a PWM channel's pin changes are the bound output
+    // pin's (arbitrated with its GPIO level), from the host port's ring.
+    rcfg.pwm = nrf;
     // ADR-003 D5: the binding graph has a feedback loop when the MCU both
     // drives the circuit and reads it (U1 -> ngspice and ngspice -> U1; one
     // MCU and one analog engine in Phase 1). Such boards load the lookahead

@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bbcore::{Engine, EngineError, Level, PinSignal, PinSignals, Time, Transition};
+use bbcore::{Engine, EngineError, Level, LogRecord, PinSignal, PinSignals, Time, Transition};
 
 use crate::{Cmd, Ctx, Device, PinDir, Rng};
 
@@ -79,6 +79,8 @@ pub struct DeviceEngine {
     seq: u64,
     /// Output changes in `(prev, now]`.
     trace: Vec<Transition>,
+    /// The devices' log records not yet drained, in event order.
+    logs: Vec<LogRecord>,
 }
 
 impl DeviceEngine {
@@ -100,6 +102,7 @@ impl DeviceEngine {
             inputs: BTreeMap::new(),
             seq: 0,
             trace: Vec::new(),
+            logs: Vec::new(),
         };
         for (k, p) in parts.into_iter().enumerate() {
             if p.reference.is_empty() || p.reference.contains('.') {
@@ -200,6 +203,11 @@ impl DeviceEngine {
                     })?;
                     self.drive(ep, level)?;
                 }
+                Cmd::Log(level, msg) => self.logs.push(LogRecord {
+                    t: now,
+                    level,
+                    msg: format!("{}: {msg}", self.instances[k].reference),
+                }),
             }
         }
         Ok(())
@@ -337,6 +345,12 @@ impl Engine for DeviceEngine {
 
     fn read_output_trace(&mut self) -> Result<Option<Vec<Transition>>, EngineError> {
         Ok(Some(self.trace.clone()))
+    }
+
+    /// The records of every event up to `now` (they are made at events, so
+    /// none lies past it).
+    fn drain_logs(&mut self) -> Vec<LogRecord> {
+        std::mem::take(&mut self.logs)
     }
 
     fn apply_inputs(&mut self, inputs: &PinSignals) -> Result<(), EngineError> {

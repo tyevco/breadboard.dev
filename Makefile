@@ -92,7 +92,7 @@ else
 WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
-                  nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test
+                  nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -143,6 +143,7 @@ pooled-test:
 	$(MAKE) adc-kicad
 	$(MAKE) dms-rail-test
 	$(MAKE) dms-vsense-test
+	$(MAKE) dms-home-test
 	$(MAKE) ec-reconnect
 	$(MAKE) packages
 	$(MAKE) gdb-test
@@ -396,6 +397,8 @@ cost-table-runs:
 	$(MAKE) --no-print-directory dms-vsense-prepare
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-vsense $(PERF_N) "--lookahead off --adc-push every" "" \
 	    - - - -- $(DMS_VSENSE_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-home $(PERF_N) "--lookahead off" "" - - - \
+	    -- $(DMS_HOME_TYP_ARGS)
 
 # The Phase 1 M8 row alone (examples/nrf-saadc, the loading adc_in): lookahead off (one cell) vs
 # bb's defaults, fresh and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
@@ -515,7 +518,9 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare
 	    "nrf-saadc;$(NRF_SAADC_HASHES);nongrant;$(NRF_SAADC_ARGS)" \
 	    "nrf-saadc-ref;$(NRF_SAADC_HASHES);all;$(NRF_SAADC_ARGS) --lookahead off --adc-push every" \
 	    "dms-vsense;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;nongrant;$(DMS_VSENSE_ARGS)" \
-	    "dms-vsense-ref;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;all;$(DMS_VSENSE_ARGS) --lookahead off --adc-push every"
+	    "dms-vsense-ref;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;all;$(DMS_VSENSE_ARGS) --lookahead off --adc-push every" \
+	    "dms-home-step;$(DMS_HOME_GOLD)/step/outputs.sha256;all;$(DMS_HOME_STEP_ARGS)" \
+	    "dms-home;$(DMS_HOME_GOLD)/typ/outputs.sha256;all;$(DMS_HOME_TYP_ARGS)"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -725,9 +730,35 @@ nrf-saadc-update: firmware bb
 # and sequencer tests and the firmware group (nrf_pwm_step.elf: TEMP, an
 # NVMC erase, 4 full steps at 446 PPS; no lookahead promise past a PWM
 # edge), examples/nrf-pwm/bb_pwm_test.py, each group twice, byte-identical.
+# Then the engine path (M10, ADR-008 Amendment 11): examples/nrf-pwm/board.cir
+# runs the same firmware through bb run; the Renode engine reports every PWM
+# pin change from the host port's ring at its exact instant, arbitrated with
+# the GPIO (scripts/check_nrf_pwm.py: the duty table to the femtosecond). The
+# board is cyclic (a digital_in on a constant net), so lookahead is on by
+# default: the one-cell reference (--lookahead off), the default, --max-quantum
+# 1ms and analog-first give identical nets.csv, nets.vcd and non-grant records,
+# with no broken promise (no promise passes a PWM edge). Fresh Renodes: the
+# board is not in pool-equiv.
+NRF_PWM_BOARD_OUT ?= out/nrf-pwm-board
+NRF_PWM_BOARD_ARGS = --netlist examples/nrf-pwm/board.cir \
+                     --firmware $(NRF_FW)/build/nrf_pwm_step.elf --target U1 --for 120ms \
+                     --renode-pool off --probe net:A1 --probe net:A2 --probe net:U1.P0.26 \
+                     --probe net:U1.P0.05
 .PHONY: nrf-pwm-model
-nrf-pwm-model: firmware
+nrf-pwm-model: firmware bb
 	$(PYTHON) examples/nrf-pwm/bb_pwm_test.py --out out/nrf-pwm-model
+	rm -rf $(NRF_PWM_BOARD_OUT)
+	$(BB) run $(NRF_PWM_BOARD_ARGS) --lookahead off --out $(NRF_PWM_BOARD_OUT)/ref
+	$(BB) run $(NRF_PWM_BOARD_ARGS) --out $(NRF_PWM_BOARD_OUT)/default
+	$(BB) run $(NRF_PWM_BOARD_ARGS) --max-quantum 1ms --out $(NRF_PWM_BOARD_OUT)/q1ms
+	$(BB) run $(NRF_PWM_BOARD_ARGS) --engine-order analog-first --out $(NRF_PWM_BOARD_OUT)/order
+	set -e; for r in ref default q1ms order; do \
+	    $(PYTHON) scripts/check_nrf_pwm.py $(NRF_PWM_BOARD_OUT)/$$r; \
+	    grep -v '"type":"grant"' $(NRF_PWM_BOARD_OUT)/$$r/events.jsonl > $(NRF_PWM_BOARD_OUT)/$$r/non-grant-records; \
+	done
+	set -e; for r in default q1ms order; do for f in nets.csv nets.vcd non-grant-records; do \
+	    cmp $(NRF_PWM_BOARD_OUT)/ref/$$f $(NRF_PWM_BOARD_OUT)/$$r/$$f; done; done
+	@echo "nrf-pwm-model: board: grants ref $$(grep -c '"type":"grant"' $(NRF_PWM_BOARD_OUT)/ref/events.jsonl), default $$(grep -c '"type":"grant"' $(NRF_PWM_BOARD_OUT)/default/events.jsonl), q1ms $$(grep -c '"type":"grant"' $(NRF_PWM_BOARD_OUT)/q1ms/events.jsonl)"
 	@echo "nrf-pwm-model: PASS"
 
 # --- Phase 1 M10 (second step): device parts (ADR-006 D7, Amendment 6) ------
@@ -874,7 +905,8 @@ dms-system: bb
 PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir \
               examples/adc/kicad examples/dial-me-spinner examples/nrf-saadc/board.cir \
-              examples/dial-me-spinner/system tests/device-smoke/board.cir
+              examples/dial-me-spinner/system tests/device-smoke/board.cir \
+              examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages
 
@@ -1015,6 +1047,55 @@ cost-table-dms-vsense: firmware bb dms-vsense-prepare
 	    "--lookahead off --adc-push every" "" - - - -- $(DMS_VSENSE_ARGS)
 	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-vsense $(PERF_N) \
 	    "--lookahead off --adc-push every" "" - - - -- $(DMS_VSENSE_ARGS)
+
+# --- Phase 1 M10: E3, the detent homing H0-H5 on dial-me-spinner (route A) ---------------------
+# examples/dial-me-spinner/e3: hand-written board files (scripts/dms_home_boards.py writes them)
+# carrying the main board's detent sheet, the nRF52840 (PWM0, TEMP, SAADC) and the mechanism and
+# DRV5032 device M1 (dms/mechanism@1), with firmware/prebuilt/homing.elf (the procedure) and
+# homing_step.elf (one full step at 446 PPS). scripts/dms_home.sh; ADR-008 Amendments 9-11.
+.PHONY: pooled-dms-home pooled-dms-home-test dms-home-ref dms-home-update cost-table-dms-home
+DMS_HOME_OUT  ?= out/dms-home
+DMS_HOME_GOLD := tests/golden/dms-home
+DMS_HOME_E3   := examples/dial-me-spinner/e3
+DMS_HOME_FW   := examples/dial-me-spinner/firmware/prebuilt
+DMS_HOME_PINS  = --probe net:VSYS --probe net:HOME_N --probe net:MOT_NSLEEP --probe net:U10.P0.26 \
+                 --probe net:U10.P0.05 --probe net:U10.P0.07 --probe net:U10.P0.11 --probe net:U10.P1.15 \
+                 --probe net:M1.HOME_N
+DMS_HOME_TYP_ARGS  = --netlist $(DMS_HOME_E3)/board.cir --firmware $(DMS_HOME_FW)/homing.elf --target U10 \
+                     --for 2700ms $(DMS_HOME_PINS) --sample-rate 10kHz
+DMS_HOME_STEP_ARGS = --netlist $(DMS_HOME_E3)/board-step.cir --firmware $(DMS_HOME_FW)/homing_step.elf \
+                     --target U10 --for 45ms $(DMS_HOME_PINS) --probe net:MOT_A_OUT1 --probe net:COILA_L \
+                     --probe net:MOT_B_OUT1 --probe net:COILB_L --probe net:NB_VBAT --probe net:NB_VSYS \
+                     --sample-rate 1MHz
+
+# In `make test` (about 40 s): the E3 boards are the generator's output, the step case at bb's
+# defaults and with --engine-order analog-first (byte-identical), check_dms_home.py --step (one full
+# step at 446 PPS against the suite's test_firmware_microstep_pwm), its committed one-cell hashes.
+pooled-dms-home-test: bb
+	bash scripts/dms_home.sh test $(BB) $(DMS_HOME_OUT)-test
+
+# The plan's M10 gate (E3, about 45 minutes on 5 jobs): step, typ (tS 50 ms), worst (tS 75 ms at its
+# worst sample phase) and park (H1) at bb's defaults and as their one-cell references
+# (--lookahead off), check_dms_home.py on each (H0-H5, step counts, the park stall, the HOME_N latency
+# gate of ADR-008 Amendment 10), defaults equal to the references, the references equal to
+# tests/golden/dms-home, analog-first byte-identical and --max-quantum 1ms equal except grants (typ,
+# step), 10-run determinism (typ). make pool-equiv has step and typ.
+pooled-dms-home: bb
+	bash scripts/dms_home.sh gate $(BB) $(DMS_HOME_OUT)
+
+dms-home-ref: bb
+	bash scripts/dms_home.sh ref $(BB) $(DMS_HOME_OUT)-ref
+dms-home-update: dms-home-ref
+	bash scripts/dms_home.sh update $(DMS_HOME_OUT)-ref
+
+# The Phase 1 M10 E3 row (typ: homing.elf, 2700 ms): the one-cell reference vs bb's defaults, fresh
+# and on a 1-slot pool, with the protocol. Run it on an otherwise idle host (about 50 minutes at
+# PERF_N = 5).
+cost-table-dms-home: firmware bb
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-home $(PERF_N) \
+	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
+	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-home $(PERF_N) \
+	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
 
 # After an intended change to a package, a platform's .repl or a Renode
 # plugin source: rewrite the changed bb.lock entries (review, then commit).

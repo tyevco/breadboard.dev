@@ -11,6 +11,8 @@
   <runs>/vsense/{sag,rec,s50,s50-none}  scripts/dms_vsense.sh run: the E2 cases of make dms-vsense at
                                       bb's defaults
   <runs>/spike                        the Phase 0 spike, make spike's arguments (SPIKE_ARGS)
+  <runs>/home/{typ,step}              scripts/dms_home.sh run: E3's typical homing and the one-step case
+                                      at bb's defaults (the arguments of make dms-home)
 
 Every figure is written twice, <name>.light.svg and <name>.dark.svg (the site shows one per theme).
 Plain Python, no plotting library: the SVG text is a pure function of the run outputs (fixed
@@ -474,8 +476,96 @@ def fig_spike(theme, runs):
     return s.render(56 + 170 + 46, "Phase 0 spike: PA5 and LED_A over 500 ms")
 
 
+def uart_lines(recs, prefix):
+    return [(r["t_fs"] / FS_PER_MS, r["msg"][len("uart0: "):]) for r in recs
+            if r["type"] == "log" and r.get("msg", "").startswith("uart0: " + prefix)]
+
+
+def device_logs(recs, prefix):
+    return [(r["t_fs"] / FS_PER_MS, r["msg"]) for r in recs
+            if r["type"] == "log" and r.get("source") == "devices" and r["msg"].startswith(prefix)]
+
+
+def fig_e3_homing(theme, runs):
+    recs = records(f"{runs}/home/typ/events.jsonl")
+    t, v = read_csv(f"{runs}/home/typ/nets.csv", ["M1.HOME_N", "U10.P1.15"])
+    s = Svg(theme, W)
+    c = s.th["s"]
+    s.legend(PL, 26, [("HOME_N (U42, the device M1)", c[0], "line"), ("nSLEEP (P1.15)", c[1], "line"),
+                      ("phase change (UART line)", s.th["muted"], "ref")])
+    pw = W - PL - PR
+    ts = [a / 1000 for a in t]
+    span = (0, round(ts[-1], 1))
+    p = Panel(s, PL, 70, pw, 170, span, (-0.15, 3.1), title="The homing procedure H0-H5 from the click end "
+              "(typical corner, tS 50 ms)", xlabel="Time (s)", ylabel="Level", yticks=([], 0))
+    # (label, label row, anchor) of the UART lines that start each phase.
+    phase = {"homing: H0 energise": ("H0", 0, "start"), "homing: H1 skipped": ("H2", 1, "start"),
+             "homing: H2 done": ("H3", 0, "start"), "homing: H3 done": ("H4", 0, "start"),
+             "homing: H5 confirm": ("H5", 0, "end"), "homing: IDLE": ("IDLE", 1, "start")}
+    for te, m in uart_lines(recs, "homing: "):
+        for pre, (name, row, anchor) in phase.items():
+            if m.startswith(pre):
+                p.vmark(te / 1000, name, anchor, row=row)
+    # HOME_N on the upper lane (1.6 .. 2.6), nSLEEP on the lower one (0 .. 1).
+    p.series(ts, [1.6 + a for a in v["M1.HOME_N"]], c[0])
+    p.series(ts, v["U10.P1.15"], c[1])
+    p.label(1.2, 1.6, "HOME_N low: the magnet is near the switch", -6, "middle")
+    p.label(1.2, 1.0, "nSLEEP high: the bridges are awake", -6, "middle")
+    stop = device_logs(recs, "M1: carriage at the park stop")
+    if stop:
+        p.dot(stop[0][0] / 1000, 0.5, s.th["ink"])
+        p.label(stop[0][0] / 1000, 0.5, "park stop reached (H4 stall)", 16, "middle")
+    # The HOME_N assert latency, zoomed.
+    bop = device_logs(recs, "M1: field above BOP")[0][0]
+    fall = next(a for a, lv in edges(recs, "M1.HOME_N") if lv == 0)
+    z0, z1 = bop - 15, fall + 15
+    q = Panel(s, PL, 322, pw, 120, (z0, z1), (-0.2, 1.4),
+              title="H2 approach at 446 PPS: the field passes BOP, HOME_N falls at the DRV5032's next sample",
+              xlabel="Time (ms)", ylabel="HOME_N", yticks=([0, 1], 0))
+    q.vmark(bop, f"|Bz| > BOP (3 mT) at {bop:.3f} ms", "start")
+    q.vmark(fall, f"HOME_N ↓ {fall:.3f} ms", "end")
+    zt = [a for a in t if z0 <= a <= z1]
+    zv = [b for a, b in zip(t, v["M1.HOME_N"]) if z0 <= a <= z1]
+    q.series(zt, zv, c[0])
+    q.bracket_h(bop, fall, 0.55, (f"latency {fall - bop:.2f} ms", "gate: <= 75 ms"))
+    return s.render(322 + 120 + 46, "E3: the homing procedure, HOME_N and nSLEEP, and the HOME_N latency")
+
+
+def fig_e3_step(theme, runs):
+    d = f"{runs}/home/step"
+    recs = records(f"{d}/events.jsonl")
+    t, v = read_csv(f"{d}/nets.csv", ["MOT_A_OUT1", "COILA_L", "MOT_B_OUT1", "COILB_L"])
+    t_ms1 = next(a for a, lv in edges(recs, "U10.P0.11") if lv == 0)
+    t_s0, t_end = t_ms1 - 0.28, t_ms1 - 0.28 + 9 * 0.28
+    ia = [(a - b) / 20 * 1000 for a, b in zip(v["MOT_A_OUT1"], v["COILA_L"])]
+    ib = [(a - b) / 20 * 1000 for a, b in zip(v["MOT_B_OUT1"], v["COILB_L"])]
+    mag = [math.hypot(a, b) for a, b in zip(ia, ib)]
+    w = [(a, m) for a, m in zip(t, mag) if t_s0 <= a <= t_end]
+    avg = sum((w[k][1] + w[k + 1][1]) / 2 * (w[k + 1][0] - w[k][0]) for k in range(len(w) - 1)) / (w[-1][0] - w[0][0])
+    s = Svg(theme, W)
+    c = s.th["s"]
+    s.legend(PL, 26, [("coil A current (U40)", c[0], "line"), ("coil B current (U41)", c[1], "line"),
+                      ("|i| (current-vector magnitude)", c[2], "line")])
+    pw = W - PL - PR
+    z0, z1 = t_s0 - 0.4, t_end + 0.4
+    zs = [(a, x, y, m) for a, x, y, m in zip(t, ia, ib, mag) if z0 <= a <= z1]
+    p = Panel(s, PL, 70, pw, 230, (z0, z1), (-10, 190),
+              title="One full step at 446 PPS (8 microsteps of 7 PWM periods at 25 kHz, slow decay)",
+              xlabel="Time (ms)", ylabel="Current (mA)", yticks=([0, 50, 100, 150], 0))
+    p.hline(126.677, "the suite's mean |i|: 126.68 mA", color=s.th["ink2"], anchor="start", above=False)
+    p.series([a for a, *_ in zs], [x for _, x, _, _ in zs], c[0], 1.5, 0.3)
+    p.series([a for a, *_ in zs], [y for _, _, y, _ in zs], c[1], 1.5, 0.3)
+    p.series([a for a, *_ in zs], [m for *_, m in zs], c[2], 1.5, 0.3)
+    p.vmark(t_s0, "microstep 0", "start")
+    p.vmark(t_end, "end of microstep 8", "end")
+    p.label(t_end, avg, f"mean |i| {avg:.2f} mA (+{(avg / 126.677 - 1) * 100:.1f} %)", -8, "end", dx=-6)
+    return s.render(70 + 230 + 46, "E3: coil currents through one full step at 446 PPS against the suite")
+
+
 FIGURES = {
     "e1-rail": fig_e1,
+    "e3-homing": fig_e3_homing,
+    "e3-step": fig_e3_step,
     "e2-sag": lambda th, runs: fig_e2(th, runs, "sag"),
     "e2-recover": lambda th, runs: fig_e2(th, runs, "rec"),
     "e2-sampling": fig_e2_sampling,

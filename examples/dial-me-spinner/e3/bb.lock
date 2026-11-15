@@ -1,0 +1,24 @@
+# bb.lock: written by `bb open` (ADR-006 D8). Do not edit; `bb open --update-lock`
+# rewrites the entries whose package tree or platform content changed.
+schema = "bb-lock/0"
+
+[[package]]
+id = "dms/detent-mechanism"
+version = "0.1.0"
+path = "../../../packages/dms/detent-mechanism"
+tree = "sha256:d769fe2777c3ea9a44d0cafb51bdc245fe1ac91e9c019c70484d7e37a935396e"
+
+[[package]]
+id = "nordic/nrf52840-qiaa"
+version = "0.1.0"
+path = "../../../packages/nordic/nrf52840-qiaa"
+tree = "sha256:d1ca9b68ad6b7f109f02593392e193a64f76b5a7dfdb6e4e752d9304f2e1ac72"
+
+[[platform]]
+id = "device:dms/mechanism@1"
+content = "sha256:2967684c80a6b7a9527550f7b16cb745e5353d5a7341952b3c894d7d8f8ce698"
+
+[[platform]]
+id = "renode:nrf52840-bb@3"
+content = "sha256:08cdcd3489f956a72c0af102207821e8c30c661a7ed4c5f8139baef46ae440c2"
+renode = "1.17.0"

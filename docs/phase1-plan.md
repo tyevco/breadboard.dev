@@ -310,6 +310,11 @@ DRV5032 HOME_N input.
   - a pin-level device for the mechanism and field.
 - **It is the stretch** because it needs four new models before it shows
   anything.
+- **Done (M10, 2026-11-14):** the PWM, TEMP and NVMC models and the PWM
+  engine path, the device API and `dms/mechanism@1`, an ideal-switch
+  DRV8837 view in place of the averaged one, and E3 on board files that
+  carry the detent sheet (`examples/dial-me-spinner/e3`, `make dms-home`).
+  See "Review notes: M10" and ADR-008 Amendments 9-11.
 
 **Not in Phase 1:**
 
@@ -406,7 +411,7 @@ These are AGENTS.md rules and they hold here unchanged.
 | M7 | Definition of done, packaged: README quickstart (clone URL as a marked placeholder), `make demo`, cost-table row. **Not published** (approver decision B): the stranger test runs from a local clone and stops; the human decides publication | §5, measured in a clean Ubuntu 24.04 container and on a clean WSL distro, cloning from a local path or `file://` URL | — |
 | M8 | E2: `BbNrf52Saadc` model with BURST, loading `adc_in`, per-sample trace, UART-to-`log` records, VDD channel | `make nrf-saadc-model` (register and timing tests, the ADR-005 test-plan shape, including an 8× burst with one charge transfer per acquisition). `make dms-vsense`: the analog-side check against the `load = "none"` reference run (356 µV at 1 s and 761 µV at 50 ms, tolerance set from M8's measurement), the firmware-visible checks (codes, C5 ÷ 10 fault, LED shed timing). Equivalence with the every-lattice-point reference; no `stop:ngspice` | 008 D7–D8 |
 | M9 | GDB passthrough (`bb run --gdb <port>`) | Prototype first (ADR-008 D10). Then a run with GDB attached, one breakpoint hit and continued, gives `nets.csv`, `nets.vcd` and non-grant records identical to the run without GDB. If that cannot hold, the mode is marked debug-only and its outputs carry a `debug` flag. **Done (2026-11-13) through the fallback:** a breakpoint stop cuts Renode's time slice and changes results (measured), so `--gdb` runs carry a debug mark at the first operation that can change results (a `warn` record; `run.json` `debug: true`). A session with no such operation is byte-identical to the run without GDB, on the spike and on E1. `make gdb-test` (in `make test`), `make gdb` (CI job `dms-rail`); ADR-008 Amendment 7 | 008 D10 |
-| M10 | Stretch E3: PWM model, TEMP and NVMC stand-ins, the averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device | One full step at 446 PPS against `test_firmware_microstep_pwm`. HOME_N latency within 75 ms at the typical tS, within 97.4 ms at the worst (approver decision 3, 2026-11-14; ADR-008 Amendment 10). Equivalence and determinism. **In progress (2026-11-14):** the PWM, TEMP and NVMC models (`nrf52840-bb@3`, ADR-008 Amendment 9); the device route (device parts in board files, `bbdev`, `DeviceEngine`, `dms/mechanism@1`, `make device-smoke`; ADR-006 Amendment 6) and the ideal-switch `ti/drv8837` bridge view in place of the averaged one (no duty crosses the pin boundary, ADR-008 Amendment 9). Still open: the PWM engine path, the homing firmware and E3 itself | 006 D7, 008 D9 |
+| M10 | Stretch E3: PWM model, TEMP and NVMC stand-ins, the averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device | One full step at 446 PPS against `test_firmware_microstep_pwm`. HOME_N latency within 75 ms at the typical tS, within 97.4 ms at the worst (approver decision 3, 2026-11-14; ADR-008 Amendment 10). Equivalence and determinism. **Done (2026-11-14):** the PWM, TEMP and NVMC models (`nrf52840-bb@3`, ADR-008 Amendment 9) and the PWM engine path (`make nrf-pwm-model`); the device route (device parts in board files, `bbdev`, `DeviceEngine`, `dms/mechanism@1`, `make device-smoke`; ADR-006 Amendments 6-7); the ideal-switch `ti/drv8837` bridge view in place of the averaged one (no duty crosses the pin boundary); the Zephyr homing firmware (`homing.elf`, `homing_step.elf`, `make fw-rebuild`); E3 on the board files of `examples/dial-me-spinner/e3`, `make dms-home` (the one-step comparison within 2.5 %, HOME_N 44.30 ms at the typical corner and 74.99 ms at the worst, H0-H5, equivalence, 10-run determinism) and `make dms-home-test` (in `make test`); ADR-008 Amendment 11 (the homing boards leave the bridges' power stage out of ngspice; no quiet grant with two producers) | 006 D7, 008 D9 |
 | M11 | Systems: base board import, `[[connection]]`, the harness view | Base board: 21 parts, 17 nets. The mated system with the shared refs U1, U2, J1 and TP1 all resolved by qualified name; a bare shared ref is an error. **Done (2026-11-14):** `examples/dial-me-spinner/system` (main + base, main J1 to base J3 through the harness view `dial-me-spinner/link-harness:wires`), `make dms-system` (in `make test`) and `cli/tests/system.rs`; no schema change; ADR-007 Amendment 5 | 007 D5 |
 
 Dependencies:
@@ -1432,3 +1437,76 @@ E1 and E2 project and every committed golden are unchanged.
   package or platform change must run `make locks` and commit
   `examples/dial-me-spinner/system/bb.lock` and `board.bbm` with it, as for
   every other example project.
+
+## Review notes: M10 (2026-11-14)
+
+M10 is done, in three steps: the PWM, TEMP and NVMC models (`ee40df0`,
+ADR-008 Amendment 9), the device route (`62f9886`, ADR-006 Amendment 6,
+after the approver decisions of 2026-11-14) and E3 itself (this step,
+ADR-008 Amendment 11, ADR-006 Amendment 7). No `spec/` file, schema,
+event format or kernel rule changed in this step, and every committed
+golden of E1, E2 and Phase 0 is unchanged.
+
+- **What exists.**
+  - The PWM engine path in the Renode engine (`RenodeConfig::pwm`): every
+    PWM pin change at its exact instant, arbitrated with the GPIO, gated
+    on `examples/nrf-pwm/board.cir` in `make nrf-pwm-model` (with
+    lookahead: 239 quiet grants, no broken promise, identical to one cell).
+  - Device records (`Ctx::log`): the mechanism's field crossings, stop
+    contacts, latch changes and nSLEEP changes, which the HOME_N latency
+    gate reads.
+  - `examples/dial-me-spinner/firmware/homing` (`homing.elf`,
+    `homing_step.elf`), rebuilt by `make fw-rebuild` from a fresh
+    workspace with the committed image hashes (E1's and E2's unchanged).
+  - `examples/dial-me-spinner/e3`: four board files from
+    `scripts/dms_home_boards.py` (route A, approver decision 1), with the
+    suite's own power path as the bench.
+  - `make dms-home` (the gate), `make dms-home-test` (in `make test`),
+    `tests/golden/dms-home`, a `pool-equiv` entry for `step` and `typ`, the
+    cost-table row `make cost-table-dms-home`, the figures `e3-homing` and
+    `e3-step`, the site page "The E3 demo", README section "E3".
+- **The M10 row's gate, item by item.**
+  - **One full step at 446 PPS against `test_firmware_microstep_pwm`**
+    (`[VBAT3.7-25C]`, the suite's committed values): the current-vector
+    magnitude 128.47 mA against 126.68 mA (+1.42 %), the thrust estimate
+    0.5255 N against 0.5182 N (and above the 0.5 N limit), the duty
+    0.8922 against 0.8778 (+1.63 %: the firmware reads VSYS 3.645 V under
+    load where the suite assumes 3.7 V), the current per unit of duty
+    within 0.22 %, VSYS max 3.606 V against 3.622 V. Tolerances set from
+    this measurement: 2.5 % (duty, current vector, thrust), 1 % (per unit
+    of duty), 50 mV (VSYS max); BAT minimum and link current against the
+    suite's limits; the VM ripple (57.3 mV against 43.2 mV) is info in
+    both (Amendment 11).
+  - **HOME_N latency** (approver decision 3, Amendment 10): 44.30 ms at the
+    typical corner (tS 50 ms, the seeded phase; gate 75 ms) and 74.99 ms
+    at the worst (tS 75 ms with its worst sample phase; gate 97.4 ms). From
+    inside the park zone: 19.84 ms on assert and 7.92 ms on release in H1.
+  - **H0-H5** in order with the step counts of §5.4 (H2 236, H3 199, H4
+    128, back-off 4; H1 167 from the park zone), HOME asserted after H4,
+    the park stop reached with 62 steps of overdrive, the carriage 5 steps
+    from the stop at the end (4 and 3 in the other cases), the brake
+    3.12 ms before sleep. Homing from the click end takes 2.62 s, as
+    firmware.md's "about 2.4 s" plus boot and settle.
+  - **Equivalence and determinism:** every case equals its one-cell
+    reference and the committed hashes, `--max-quantum 1ms` and
+    `--engine-order analog-first` agree, and the typical homing is
+    identical over 10 runs.
+- **What changed from the plan and from Amendment 9** (all in Amendment 11):
+  - No averaged DRV8837 view: the edges cross the pin boundary (D9), the
+    ideal-switch view takes them, and a homing with the full sheet would
+    cost about 20 minutes and several GB per run. The homing boards carry
+    the sheet's input side only; the one-step board has the whole sheet.
+  - No quiet grant on E3's boards: two engines (the device and ngspice)
+    feed the CPU, and ADR-003 D5 builds a quiet grant for one producer. A
+    homing is 270 000 one-cell grants (4.5 min fresh, 6-7 min with five in
+    parallel).
+  - The VSYS reading binds P0.02 with `load=none`: with the loading view
+    after one reading, ngspice stalled in the quiet stretch after the move
+    (an open finding about `saadc_se`; E2's gates are unchanged).
+  - TEMP reads the model's default 25 °C (a board file has no bench).
+- **Gate runs** (2026-11-14, on `62f9886` plus this step): `make
+  dms-home` gate PASS (43 min 39 s on the pool), `make nrf-pwm-model`
+  PASS, `make fw-rebuild` PASS, `make check` green on the pool (833 s) and
+  with `POOL=0` (832 s), `make pool-equiv` PASS (25 configurations),
+  `make docs-plots-check` PASS, the site builds, and the cost-table row
+  (README). Details, loads and overlaps: ADR-008 Amendment 11.

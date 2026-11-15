@@ -1675,3 +1675,46 @@ end of each run.
 - **`make check` on the pool: green** (687 s, load 1.72 to 1.20).
 - **`make check POOL=0`: green** (771 s, load 0.88 to 1.37).
 - No committed golden or hash changed.
+
+## Amendment 7 (2026-11-14): device records, for E3 (M10, third step)
+
+E3's HOME_N latency gate (ADR-008 Amendment 10) measures from "the instant
+the device's own field model passes BOP", which is the device's internal
+state. So a device may now write log records. No spec, schema or event
+format changes: a record is the existing `log` record of
+`spec/event-stream.md`, with `source` the device engine's name.
+
+- **`Ctx::log(level, msg)`** (`bbdev/src/lib.rs`): a record at
+  `Ctx::now()`, written `<reference>: <msg>`. It is allowed in every call,
+  `on_pin_change` included: a record is not an output, so rule 1 (A6.2)
+  does not apply. Its time is the event's own, so it does not depend on
+  the grant partition (rule 3). `DeviceEngine::drain_logs` hands the
+  kernel every record made since the last exchange (all are at or before
+  `now`).
+- **`dms/mechanism@1`'s records** (`bbdev/src/dms_mechanism.rs`):
+  - at `t = 0`: the DRV5032's tS, tACTIVE, BOP, BRP, die height, the
+    first sampling window's start in fs (seeded, or the `phase`
+    parameter), the position and the initial HOME_N;
+  - at every event (timer or input change) whose new position puts `|Bz|`
+    across BOP or BRP, or makes the carriage touch or leave a stop:
+    `field above BOP ... at s=...`, `field below BRP ...`, `carriage at
+    the park stop`, `carriage left the park stop at s=...`. The rotor
+    moves only at events (rule 3), so the event that moved it across a
+    threshold is the instant the device's field model passes it;
+  - at every sample whose verdict changes the latch: `HOME_N low (high) at
+    sample k (s=..., |Bz| ...)`;
+  - at every nSLEEP change: `nSLEEP high (low) at s=... (rotor ...)`.
+- **Ordering.** A record made at an input event shares its instant with
+  the CPU's `pin_edge` that caused it. The kernel orders records of one
+  instant by engine registration order (ADR-003 D3); `bb run` registers
+  the device engine last in both `--engine-order`s (Amendment 6, "As
+  implemented"), so `--engine-order analog-first` stays byte-identical
+  (E3's gate checks it). G6's mock run with the device registered *first*
+  puts the device's records before the CPU's edges of the same instant;
+  that case now compares the sorted non-grant records (the same records,
+  at the same times), and every other G6 case compares them in order, as
+  before.
+- The device's content hash changed (its sources are hashed, A6.4):
+  `make locks` rewrote `tests/device-smoke/bb.lock` and wrote
+  `examples/dial-me-spinner/e3/bb.lock`. `make device-smoke` checks only
+  agreement between its runs, so it holds as before.
