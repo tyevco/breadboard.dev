@@ -340,4 +340,13 @@ every committed output of a Phase 1 board are unchanged.
    but beside other tracks' builds and gates (1-minute load 16-48, so not
    an idle host): `dms-home-test` 62.4 s median before, 67.2 s after
    (+4.8 s). The baseline host's idle figure (18.3 s) is to be re-measured
-   on an idle host. The full gate took 9 min 0 s under the same load.
+   on an idle host. The full gate took 9 min 0 s under the same load;
+   its committed run passed pooled (714 s) and with `POOL=0` (1 014 s),
+   under a 1-minute load of 10-70. `make check` passed pooled (1 725 s)
+   and with `POOL=0` (1 696 s; `dms-home-test` 73.8 s) under that load.
+10. **Cost-table row.** `make cost-table-dms-home-project` (also in `make
+    cost-table`): `project-step`, the one-cell reference against bb's
+    defaults, fresh and on a 1-slot pool, with the ADR-003 protocol. On E3
+    the two are one partition, so the row's ratio is 1 by construction. It
+    was not measured: the host was never idle while other tracks ran, and
+    the protocol requires an idle host.

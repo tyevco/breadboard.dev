@@ -412,6 +412,8 @@ cost-table-runs:
 	    - - - -- $(DMS_VSENSE_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-home $(PERF_N) "--lookahead off" "" - - - \
 	    -- $(DMS_HOME_TYP_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-home-project $(PERF_N) "--lookahead off" "" - - - \
+	    -- $(DMS_HOME_PSTEP_ARGS)
 
 # The Phase 1 M8 row alone (examples/nrf-saadc, the loading adc_in): lookahead off (one cell) vs
 # bb's defaults, fresh and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
@@ -1071,7 +1073,7 @@ measured-cost-table-dms-vsense: firmware bb dms-vsense-prepare
 # DRV5032 device M1 (dms/mechanism@1), with firmware/prebuilt/homing.elf (the procedure) and
 # homing_step.elf (one full step at 446 PPS). scripts/dms_home.sh; ADR-008 Amendments 9-11.
 .PHONY: pooled-dms-home pooled-dms-home-test pooled-dms-home-project dms-home-ref dms-home-update \
-        cost-table-dms-home
+        cost-table-dms-home cost-table-dms-home-project
 DMS_HOME_OUT  ?= out/dms-home
 DMS_HOME_GOLD := tests/golden/dms-home
 DMS_HOME_E3   := examples/dial-me-spinner/e3
@@ -1136,6 +1138,15 @@ measured-cost-table-dms-home: firmware bb
 	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
 	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-home $(PERF_N) \
 	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
+
+# The Phase 2 R1 row (the project route, e3/step: homing_step.elf, 45 ms): the one-cell reference vs
+# bb's defaults (one partition on E3), fresh and on a 1-slot pool, with the protocol. Run it on an
+# otherwise idle host.
+measured-cost-table-dms-home-project: firmware bb
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-home-project $(PERF_N) \
+	    "--lookahead off" "" - - - -- $(DMS_HOME_PSTEP_ARGS)
+	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-home-project $(PERF_N) \
+	    "--lookahead off" "" - - - -- $(DMS_HOME_PSTEP_ARGS)
 
 # After an intended change to a package, a platform's .repl or a Renode
 # plugin source: rewrite the changed bb.lock entries (review, then commit).
@@ -1242,7 +1253,8 @@ worktree-test:
 # list. make measure-lock-test (in make test): on a private lock, every member refuses while a
 # probe holds it (scripts/measure_lock_test.sh).
 MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-table-dms-rail \
-                   cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home adc-startup adc-speed \
+                   cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home cost-table-dms-home-project \
+                   adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
                    setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe
 .PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
