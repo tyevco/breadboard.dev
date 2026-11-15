@@ -1,0 +1,3 @@
+* dial-me-spinner/detent-stepper "coils" test circuit: both phases from in, each into 10 ohm.
+R1 outa 0 10
+R2 outb 0 10

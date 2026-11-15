@@ -1,0 +1,36 @@
+# The view "coils" at its defaults (20 Ohm + 4.3 mH per phase): a 1 V step into each phase, its
+# other end into 10 Ohm to ground, so V(out) = I x 10 follows 1/3 (1 - exp(-t / tau)), tau = L / 30 Ohm
+# = 143.33 us. Both phases alike.
+schema = "bb-pkgtest/0"
+view = "coils"
+circuit = "coils_step.cir"
+stop = "3ms"
+
+[ports]
+Pin_1 = "in"
+Pin_2 = "outa"
+Pin_3 = "in"
+Pin_4 = "outb"
+
+[[edge]]
+net = "in"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+at = [["1ms", "high"]]
+
+[[expect]]
+meas = { node = "outa", at = "1.143333ms" }
+value = "0.210706V"
+tol = "0.1mV"
+source = "analytic: 1 V step at 1 ms (1 ns ramp: an ideal step at 1 ms + 0.5 ns), tau = 4.3 mH / 30 Ohm; (1/3)(1 - exp(-(tau - 0.5 ns) / tau)) at 1 ms + 143.333 us"
+
+[[expect]]
+meas = { node = "outb", at = "2ms" }
+value = "0.333022V"
+tol = "0.1mV"
+source = "analytic: (1/3)(1 - exp(-(1 ms - 0.5 ns) / tau))"
+
+[[expect]]
+meas = { node = "outa", when = "0.166667V", rise = "1" }
+value = "1.099352ms"
+tol = "2us"
+source = "analytic: 1 ms + 0.5 ns + ln(2) x tau"

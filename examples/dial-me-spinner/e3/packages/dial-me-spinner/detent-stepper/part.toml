@@ -1,0 +1,81 @@
+# dial-me-spinner/detent-stepper: the detent actuator's micro linear stepper as J40 sees it (the
+# main board's 4-way JST SH motor connector, "MOTOR"), for the E3 projects of
+# examples/dial-me-spinner/e3 (Phase 2 R1, ADR-013 D1). Project-local: the E3 projects resolve J40
+# to it with an [instances] override; the connector's MPN is not the motor's.
+#
+# The electrical side only: the two phases, 20 Ohm + 4.3 mH each (dial-me-spinner@6854d25
+# hardware/sim/models/motor_drive__stepper.lib, r25 and lph at 25 C), between Pin_1/Pin_2 (phase A:
+# MOT_A_OUT1, MOT_A_OUT2) and Pin_3/Pin_4 (phase B). The rotor, the lead screw, the carriage, the
+# magnet and the home switch are the device dms/detent-mechanism (bbdev dms/mechanism@1), which
+# reads the bridges' commands; it has no analog outputs, so the back-EMF is not the device's.
+#
+# Two views:
+#   coils     the phases with the rotor at rest (no back-EMF): the fast default.
+#   step_emf  the phases with the back-EMF of a rotor turning at 446 PPS over one window, the
+#             dial-me-spinner suite's worst-case constants (KE_MAX 1.37 V per k step/s, load angle
+#             pi/2, motor_drive__stepper.lib's PMSTEP_PHASE: phase A -E sin, phase B +E cos). Its
+#             default window is homing_step.elf's step (examples/dial-me-spinner/e3/board-step.cir:
+#             t0 = 11 972 875 000 000 fs, 9 microsteps of 280 us), so it is that test's fixture, as
+#             board-step.cir's BEMFA/BEMFB lines are: scripts/check_dms_home.py requires the run's
+#             PWM edges to start the step at t0.
+schema = "bb-part/0"
+
+[part]
+id = "dial-me-spinner/detent-stepper"
+version = "0.1.0"
+kind = "connector"
+license = "Apache-2.0"
+description = "dial-me-spinner detent micro linear stepper on its 4-way JST SH connector J40: two phases, 20 Ohm + 4.3 mH each"
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "coils"
+purpose = "the two phases (R + L) with the rotor at rest, for the bridges' load and VSYS"
+fidelity = ["fast"]
+default_for = ["fast"]
+file = "analog/coils.lib"
+subckt = "dms_detent_stepper_coils"
+ports = ["Pin_1", "Pin_2", "Pin_3", "Pin_4"]
+params = { r = "20", l = "4.3mH" }
+
+[analog.provenance]
+source = "agent_generated"
+base = "dial-me-spinner@6854d25 hardware/sim/models/motor_drive__stepper.lib (r25 20 Ohm, lph 4.3 mH per phase at 25 C)"
+refs = ["dial-me-spinner@6854d25:hardware/sim/models/motor_drive__stepper.lib",
+        "dial-me-spinner@6854d25:docs/firmware.md 5.1 (MD-3: 20.33 Ohm, the firmware's r_eff)"]
+deviations = ["the phase resistance at 25 C only (the suite's r(T) is not migrated)"]
+not_modelled = ["back-EMF (the rotor at rest; view step_emf has one window of it)", "the phases' mutual inductance, iron losses and saturation", "the connector's contact resistance"]
+generated_by = "Claude (Phase 2 R1)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[[analog]]
+name = "step_emf"
+purpose = "the two phases with the back-EMF of a rotor turning at 446 PPS over one window (E3's step case, homing_step.elf)"
+fidelity = ["fast"]
+file = "analog/step_emf.lib"
+subckt = "dms_detent_stepper_step_emf"
+ports = ["Pin_1", "Pin_2", "Pin_3", "Pin_4"]
+params = { r = "20", l = "4.3mH", ke = "1.37", pps = "446", delta = "1.5707963267949", t0 = "11.972875ms", tstop = "14.492875ms" }
+
+[analog.provenance]
+source = "agent_generated"
+base = "dial-me-spinner@6854d25 hardware/sim/tests/test_motor_drive.py (test_firmware_microstep_pwm: KE_MAX, the pi/2 load angle) and hardware/sim/models/motor_drive__stepper.lib (PMSTEP_PHASE), as examples/dial-me-spinner/e3/board-step.cir writes them (scripts/dms_home_boards.py)"
+refs = ["dial-me-spinner@6854d25:hardware/sim/tests/test_motor_drive.py",
+        "dial-me-spinner@6854d25:hardware/sim/models/motor_drive__stepper.lib"]
+deviations = ["the back-EMF is a fixed sine over [t0, tstop], not the rotor's motion (the device's rotor has no analog output, ADR-006 D7)"]
+not_modelled = ["back-EMF outside [t0, tstop]", "the phases' mutual inductance, iron losses and saturation", "the connector's contact resistance"]
+generated_by = "Claude (Phase 2 R1)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

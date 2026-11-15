@@ -57,6 +57,43 @@ pub struct Bind {
     pub params: Vec<(String, String)>,
 }
 
+/// The pin-model parameter keys a binding may set explicitly (the value
+/// grammar; `spec/pin-model.md`).
+pub const PIN_PARAM_KEYS: &[&str] = &[
+    "voh", "vol", "rise", "fall", "zout", "vih", "vil", "cin", "vref", "bits", "load",
+];
+
+/// `[[device.bind]]` (`bb-project/1`, ADR-013 D1): a device pin on a net.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceBind {
+    /// The device package's pin name (`HOME_N`).
+    pub pin: String,
+    /// The net, by the project's name rules (ADR-007 D7).
+    pub net: String,
+    /// `digital_in` or `digital_out` (`adc_in` is refused, spec/package.md
+    /// section 12).
+    pub model: String,
+    pub set: Option<String>,
+    /// Explicit pin-model parameter overrides, in key order.
+    pub params: Vec<(String, String)>,
+}
+
+/// `[[device]]` (`bb-project/1`, ADR-013 D1, Phase 1 route B).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceEntry {
+    /// `<board>:<ref>` or a bare `<ref>`, as written.
+    pub reference: String,
+    /// A package id (`id` or `id@version`) whose `[behavioral]` engine is
+    /// `device`.
+    pub package: String,
+    /// The device's parameters (value grammar), in key order.
+    pub params: Vec<(String, String)>,
+    /// No schematic symbol: the instance exists only in `board.bbm`
+    /// (`virtual: true`), and `ref` must not collide with a symbol's.
+    pub is_virtual: bool,
+    pub binds: Vec<DeviceBind>,
+}
+
 /// `[[connection]]` (systems, M11; validated from M4).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectionEntry {
@@ -83,6 +120,11 @@ pub struct Project {
     pub binds: Vec<Bind>,
     pub probes: Vec<String>,
     pub connections: Vec<ConnectionEntry>,
+    /// `[[device]]` (`bb-project/1`).
+    pub devices: Vec<DeviceEntry>,
+    /// The migration hint when the file is the previous major
+    /// (`bb-project/0`, ADR-006 D11).
+    pub schema_hint: Option<String>,
 }
 
 /// The D3 fields every import reads.
@@ -106,7 +148,13 @@ impl Project {
         let t = toml::parse(text).map_err(|e| e.to_string())?;
         let mut o = Obj::new("", &t);
         let schema = o.str_req("schema")?;
-        Registry::current().check("bb-project", &schema)?;
+        let schema_hint = match Registry::current().check("bb-project", &schema)? {
+            bbpkg::schema::Version::Current => None,
+            bbpkg::schema::Version::Previous { .. } => Some(format!(
+                "bb.toml is {schema}, the previous major: bb reads it; change its schema line to \
+                 \"bb-project/1\" (the only difference, ADR-013)"
+            )),
+        };
         let mut name = None;
         let mut simulate = None;
         if let Some(mut p) = o.table_opt("project")? {
@@ -237,9 +285,7 @@ impl Project {
             let set = b.str_opt("set")?;
             let net = b.str_opt("net")?;
             let mut params = Vec::new();
-            for k in [
-                "voh", "vol", "rise", "fall", "zout", "vih", "vil", "cin", "vref", "bits", "load",
-            ] {
+            for k in PIN_PARAM_KEYS {
                 if let Some(v) = b.str_opt(k)? {
                     params.push((k.to_string(), v));
                 }
@@ -304,6 +350,70 @@ impl Project {
             c.done()?;
             connections.push(e);
         }
+        let mut devices: Vec<DeviceEntry> = Vec::new();
+        if o.has("device") && schema_hint.is_some() {
+            return Err(format!(
+                "[[device]] is a bb-project/1 key (ADR-013 D1); this file is {schema}"
+            ));
+        }
+        for mut d in o.tables("device")? {
+            let at = d.path.clone();
+            let reference = d.str_req("ref")?;
+            let package = d.str_req("package")?;
+            let params = d.str_map("params")?;
+            let is_virtual = d.bool_opt("virtual")?.unwrap_or(false);
+            let mut binds: Vec<DeviceBind> = Vec::new();
+            for mut b in d.tables("bind")? {
+                let bat = b.path.clone();
+                let pin = b.str_req("pin")?;
+                let net = b.str_req("net")?;
+                let model = b.str_req("model")?;
+                let set = b.str_opt("set")?;
+                let mut params = Vec::new();
+                for k in PIN_PARAM_KEYS {
+                    if let Some(v) = b.str_opt(k)? {
+                        params.push((k.to_string(), v));
+                    }
+                }
+                b.done().map_err(|e| {
+                    format!("{e} (a [[device.bind]] takes pin, net, model, set and pin-model parameters)")
+                })?;
+                if !matches!(model.as_str(), "digital_in" | "digital_out") {
+                    return Err(format!(
+                        "{bat}: model = {model:?}: a device pin is digital_in or digital_out \
+                         (spec/package.md section 12)"
+                    ));
+                }
+                if binds.iter().any(|x| x.pin == pin) {
+                    return Err(format!("{bat}: pin {pin} is bound twice"));
+                }
+                binds.push(DeviceBind {
+                    pin,
+                    net,
+                    model,
+                    set,
+                    params,
+                });
+            }
+            d.done().map_err(|e| {
+                format!(
+                    "{e} (a [[device]] takes ref, package, params, virtual and [[device.bind]])"
+                )
+            })?;
+            if binds.is_empty() {
+                return Err(format!("{at}: a device needs at least one [[device.bind]]"));
+            }
+            if devices.iter().any(|x| x.reference == reference) {
+                return Err(format!("{at}: device {reference} is declared twice"));
+            }
+            devices.push(DeviceEntry {
+                reference,
+                package,
+                params,
+                is_virtual,
+                binds,
+            });
+        }
         o.done()?;
         Ok(Project {
             dir: dir.to_path_buf(),
@@ -317,6 +427,8 @@ impl Project {
             binds,
             probes,
             connections,
+            devices,
+            schema_hint,
         })
     }
 

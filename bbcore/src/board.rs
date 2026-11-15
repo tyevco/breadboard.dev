@@ -16,8 +16,12 @@ use std::collections::BTreeMap;
 
 use crate::cjson::{Json, JsonError};
 
-/// The schema id of `board.bbm` (ADR-006 D11: every schema is at major 0).
-pub const SCHEMA: &str = "bb-board/0";
+/// The schema id of `board.bbm`: `bb-board/1` adds the `virtual` flag of an
+/// instance (ADR-013 D1, Phase 2 R1). `bb-board/0`, the previous major, is
+/// read (ADR-006 D11); `bb open` rewrites it.
+pub const SCHEMA: &str = "bb-board/1";
+/// The previous major, read and migrated (the schema member only).
+pub const SCHEMA_PREVIOUS: &str = "bb-board/0";
 
 /// One KiCad project of the system (`[[board]]` in `bb.toml`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,6 +132,10 @@ pub struct Instance {
     pub status: String,
     pub reason: Option<String>,
     pub pins: Vec<InstancePin>,
+    /// A virtual instance (`bb-board/1`, ADR-013 D1): a `[[device]]` of
+    /// `bb.toml` with no schematic symbol (the mechanism, a magnet). Its pins
+    /// are the device package's, on the nets its bindings name.
+    pub is_virtual: bool,
 }
 
 /// An engine platform identity and its content hash (ADR-006 D8).
@@ -364,6 +372,9 @@ fn instance_json(i: &Instance) -> Json {
     opt_str(&mut r, "key", &i.resolution.key);
     o.push(("resolution".into(), Json::Obj(r)));
     opt_str(&mut o, "reason", &i.reason);
+    if i.is_virtual {
+        o.push(("virtual".into(), Json::Bool(true)));
+    }
     o.push((
         "pins".into(),
         Json::Arr(
@@ -451,11 +462,12 @@ impl<'a> O<'a> {
 fn from_json(j: &Json) -> Result<Board, String> {
     let mut top = O::new("board", j)?;
     let schema = top.str("schema")?;
-    if schema != SCHEMA {
+    if schema != SCHEMA && schema != SCHEMA_PREVIOUS {
         return Err(format!(
-            "schema {schema:?}: this bb reads {SCHEMA} (ADR-006 D11; run `bb open` again)"
+            "schema {schema:?}: this bb reads {SCHEMA} and {SCHEMA_PREVIOUS} (ADR-006 D11; run `bb open` again)"
         ));
     }
+    let previous = schema == SCHEMA_PREVIOUS;
     let mut b = Board::default();
     for x in top.arr("boards")? {
         let mut o = O::new("boards[]", x)?;
@@ -491,7 +503,14 @@ fn from_json(j: &Json) -> Result<Board, String> {
         o.done()?;
     }
     for x in top.arr("instances")? {
-        b.instances.push(instance_from(x)?);
+        let i = instance_from(x)?;
+        if previous && i.is_virtual {
+            return Err(format!(
+                "instances[] {}: virtual is a {SCHEMA} key",
+                i.reference
+            ));
+        }
+        b.instances.push(i);
     }
     for x in top.arr("platforms")? {
         let mut o = O::new("platforms[]", x)?;
@@ -619,6 +638,11 @@ fn instance_from(x: &Json) -> Result<Instance, String> {
     if !STATUSES.contains(&status.as_str()) {
         return Err(format!("instances[]: unknown status {status:?}"));
     }
+    let is_virtual = match o.get("virtual") {
+        None => false,
+        Some(Json::Bool(true)) => true,
+        Some(_) => return Err("instances[]: virtual must be true when present".into()),
+    };
     let i = Instance {
         board: o.str("board")?,
         reference: o.str("ref")?,
@@ -635,6 +659,7 @@ fn instance_from(x: &Json) -> Result<Instance, String> {
         status,
         reason: o.opt_str("reason")?,
         pins,
+        is_virtual,
     };
     o.done()?;
     Ok(i)
@@ -710,6 +735,7 @@ mod tests {
                     name: "".into(),
                     net: Some("VSYS".into()),
                 }],
+                is_virtual: false,
             }],
             platforms: vec![],
             probes: vec![ProbeAlias {
@@ -737,7 +763,18 @@ mod tests {
         });
         assert_eq!(back.to_text(), text);
         assert!(text.ends_with("}\n") && text.matches('\n').count() == 1);
-        assert!(Board::parse(&text.replace("bb-board/0", "bb-board/9")).is_err());
+        assert!(Board::parse(&text.replace("bb-board/1", "bb-board/9")).is_err());
+        // The previous major is read (ADR-006 D11), without bb-board/1 keys.
+        let prev = text.replace("bb-board/1", "bb-board/0");
+        assert_eq!(Board::parse(&prev).unwrap(), back);
+        // A virtual instance (ADR-013 D1) round-trips; /0 refuses the key.
+        let mut v = b.clone();
+        v.instances[0].is_virtual = true;
+        let vt = v.to_text();
+        assert!(vt.contains("\"virtual\":true"));
+        assert!(Board::parse(&vt).unwrap().instances[0].is_virtual);
+        assert!(Board::parse(&vt.replace("bb-board/1", "bb-board/0")).is_err());
+        assert!(Board::parse(&vt.replace("\"virtual\":true", "\"virtual\":false")).is_err());
         assert!(
             Board::parse(&text.replace("\"status\":\"excluded\"", "\"status\":\"maybe\"")).is_err()
         );

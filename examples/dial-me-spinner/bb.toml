@@ -11,7 +11,7 @@
 # (P1.04, the ON pin of U2, the TPS22917 VLED load switch) and LED_DIN_MCU
 # (P0.06, through R40 into the LED ring's data input). The benches are in
 # bench/. The base board and the harness ([[connection]]) are M11.
-schema = "bb-project/0"
+schema = "bb-project/1"
 
 [project]
 name = "dial-me-spinner rev A"

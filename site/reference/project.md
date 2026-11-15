@@ -9,10 +9,10 @@ In every one of these files, unknown keys are an error, and every number is a
 string in the [value grammar](./packages#values) (`"3.3V"`, `"50mA"`,
 `"44.167mV"`).
 
-## `bb.toml` (`bb-project/0`)
+## `bb.toml` (`bb-project/1`)
 
 ```toml
-schema = "bb-project/0"
+schema = "bb-project/1"
 [project]
 name = "dial-me-spinner rev A"
 simulate = "main"                    # required with more than one [[board]]
@@ -41,6 +41,17 @@ net = "LED_PWR_EN"                   # optional: checked against the netlist
 
 [probes]
 nets = ["VLED", "LED_DIN"]
+
+[[device]]                           # a device part, here one with no schematic symbol
+ref = "main:M1"
+package = "dms/detent-mechanism"     # its [behavioral] engine is "device"
+params = { s0 = "500", ts = "50ms" }
+virtual = true
+
+[[device.bind]]
+pin = "HOME_N"
+net = "HOME_N"
+model = "digital_out"                # digital_in | digital_out
 ```
 
 (Abridged from the spec's example. The spec also defines `[import] fields`,
@@ -56,6 +67,16 @@ systems, below.)
   gives the pin model and the CPU engine's pin.
 - **Targets.** A list of typed images. Phase 1 implements exactly one image
   of `kind = "elf"` on one MCU of the simulated board.
+- **Devices** (`bb-project/1`). A `[[device]]` runs a device package (a
+  mechanism, a switch) in the device engine beside the MCU, with a board
+  file's device rules. A device on a schematic symbol is that instance; a
+  `virtual` one (no symbol) is written into `board.bbm` as an instance with
+  `virtual: true`. Its bindings route through the kernel: the MCU reads a
+  device's output, and a device the MCU's, directly.
+- **Digital-only nets.** A bound digital net outside the bench's `[analog]
+  nets` gets no glue: its pins meet only through the kernel, so the analog
+  engine neither drives nor reads it. `examples/dial-me-spinner/e3/home`
+  runs E3's homing that way.
 
 ## Systems (`[[connection]]`)
 

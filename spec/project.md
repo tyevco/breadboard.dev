@@ -3,10 +3,12 @@
 Status: normative. Decided by ADR-007 D5 and D7 (accepted 2026-11-09;
 implemented in Phase 1 M4, ADR-007 Amendment 1; module targets, the image
 hash of ADR-008 D5 and Norton bench supplies in M6, ADR-007 Amendment 3;
-systems in M11, ADR-007 Amendment 5). Implementation:
+systems in M11, ADR-007 Amendment 5; devices and digital-only nets in
+Phase 2 R1, ADR-013 D1 and Amendment 1, with ADR-014 D4's project rule).
+Implementation:
 `cli/src/project.rs`, `names.rs`, `import.rs`, `elab.rs`, `open.rs`,
 `flash.rs`, `probe_cmd.rs`. JSON Schemas: `spec/schema/project.schema.json`
-(`bb-project/0`) and `spec/schema/bench.schema.json` (`bb-bench/0`); the TOML
+(`bb-project/1`) and `spec/schema/bench.schema.json` (`bb-bench/0`); the TOML
 files are converted to JSON as they are and validated (`make packages`).
 **Changing this file requires an ADR.**
 
@@ -16,10 +18,14 @@ files of `.bb/`; `bb run` runs it. Unknown keys are an error. Every number
 is a string in the value grammar of `spec/package.md` section 6 (ADR-006
 D5).
 
-## 1. `bb.toml` (`bb-project/0`)
+## 1. `bb.toml` (`bb-project/1`)
+
+`bb-project/1` adds `[[device]]` (ADR-013 D1). A `bb-project/0` file is the
+previous major (ADR-006 D11): `bb` reads it with a migration hint, and its
+migration is the schema line only; `[[device]]` in it is an error.
 
 ```toml
-schema = "bb-project/0"
+schema = "bb-project/1"
 [project]
 name = "dial-me-spinner rev A"
 simulate = "main"                    # required with more than one [[board]]
@@ -61,6 +67,18 @@ trace_samples = true                 # a boolean: every sample becomes a log rec
 [probes]
 nets = ["VLED", "LED_DIN"]
 
+[[device]]                           # a device part (ADR-013 D1; spec/package.md section 12)
+ref = "main:M1"                      # an instance of the board, or (virtual) a new reference
+package = "dms/detent-mechanism"     # a package whose [behavioral] engine is "device"
+params = { s0 = "500", ts = "50ms" } # the device's parameters (value grammar)
+virtual = true                       # no schematic symbol (default false)
+
+[[device.bind]]                      # a device pin on a net
+pin = "IN_A1"                        # the device package's pin name
+net = "MOT_A_IN1"                    # by the name rules (section 2)
+model = "digital_in"                 # digital_in | digital_out
+# set = "default", vih = "1.5V" ...  # the package's set and explicit overrides, as [[bind]]
+
 [[connection]]                       # systems (M11): mated connectors
 a = "main:J1"
 b = "base:J3"
@@ -92,6 +110,35 @@ model = "dial-me-spinner/link-harness:wires"   # optional: the harness view
 - **The `PIN_CNF` audit** (nRF52840, ADR-008 D4): every bound pin, with the
   drive its `set` names (`spec/package.md` section 4), and every unbound
   GPIO of the target whose net is in the bench's analog scope.
+- **Devices** (`[[device]]`, ADR-013 D1; Phase 1's route B). Every rule of
+  `spec/package.md` section 12 applies as in a board file: the package's
+  `[behavioral]` engine is `device` and names a device `bb` provides; its
+  parameters are the device's keys in the value grammar (an unknown key, a
+  wrong dimension or a value out of range is an error); a pin is a pin of
+  the device package, `digital_in` on a device input and `digital_out` on
+  an output (`adc_in` is refused); the routing through the kernel net
+  (a device output read by the MCU or another device, the MCU's output
+  read by a device, with no threshold and no `cin` glue) and the glue
+  rules on the analog side are section 12's; one driver per net; the
+  device identity is locked as `device:<id>@<major>` in `bb.lock` and
+  listed in `board.bbm`'s `platforms`. The kernel net of a device pin is
+  `<ref>.<pin>` without the board (`M1.HOME_N`), as the target MCU's is.
+  - `ref` is `<board>:<ref>`, or a bare `<ref>` in a project with one
+    board; the device must be on the simulated board.
+  - **On a schematic symbol** (`virtual` false): the instance must exist
+    and resolve to `package` (resolution stage 1, an `[instances]`
+    override or its `bb:part` field), and each binding's net must be the
+    net that pin is on.
+  - **Virtual** (`virtual = true`): a physical thing with no symbol (a
+    mechanism, a magnet, a motor's load). `ref` must not be an instance
+    of the board. `bb open` writes it into `board.bbm` as an instance with
+    `virtual: true` (`spec/board-bbm.md` section 3), its pins the device
+    package's, each on the net its binding names, and adds those pins to
+    the nets' `nodes`: a device binding is board content.
+  - A device instance is never in the analog deck. `bb open` prints each
+    device and reports a binding it cannot honour; `bb run` refuses it.
+  - Device parameters are not board content: they are in `bb.toml` and
+    `run.json` (`devices`, section 6), like an MCU binding's parameters.
 - **Targets** are a list of typed images; Phase 1 implements exactly one
   image of `kind = "elf"` on one MCU of the simulated board. `bin`, `hex`,
   `uf2` and `flash` are reserved. An `elf` image's `hash` is its **image
@@ -179,6 +226,17 @@ set = "phase0"                       # a named option set (spec/package.md)
   reason are listed in `run.json`.
 - **Two drivers.** A `[[supply]]` on a net that an in-scope part's
   `power_out` pin drives is an error unless that part is excluded.
+- **Digital-only nets** (ADR-014 D4, ADR-013 D1). A net that a
+  `digital_out` or `digital_in` binding (an MCU's or a device's) is on,
+  and that is not in `nets`, is digital-only: it gets no glue, and the
+  analog engine has no input or output on it. Its pins are routed through
+  the kernel net only (section 12 of `spec/package.md`), so every
+  `digital_in` on it must read a digital output that a device drives or
+  that a device reads; anything else is an error that names the net.
+  Elements on it leave the deck by the scope rule above. A probe of such
+  a net by name is an error that names its driver's pin (the column is the
+  pin's). `run.json` lists the digital-only nets. Without `[analog] nets`
+  every net is in scope and nothing changes.
 - `bb run` without `--bench` uses an empty bench: no sources, every net in
   scope, option set `phase0`.
 - Phase 2 defines the full bench (CSV playback, timed actions,
@@ -265,7 +323,10 @@ whether one covers the run; and per loading `adc_in`, its `pin_load` view
 under the bound pin, `kind = "pin_load"`; an explicit `load = "none"` on
 an `adc_in` binding is recorded the same way, with `view = "none"` and only
 `ref`, `package`, `version` and `kind`); `out_of_scope` and `not_simulated` (with
-reasons); `packages` and `platforms` (the locked hashes); `deck_sha256`;
+reasons); `devices`, only when the project has a `[[device]]` (per device
+`ref`, `package`, `version`, `device` (its id), `virtual` and `params` as
+written; ADR-013 D1); `digital_only`, only when a net is (its display
+names, sorted; ADR-014 D4); `packages` and `platforms` (the locked hashes); `deck_sha256`;
 `options` (every run option that can change results, the probes; with
 `--gdb` also `gdb` and `gdb_wait`); `debug`, `true` for a run with a
 debugger attached (`bb run --gdb`, ADR-008 D10 and Amendment 7) and

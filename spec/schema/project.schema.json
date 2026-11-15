@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/project.schema.json",
-  "title": "bb-project/0: bb.toml, a Breadboard project (spec/project.md, ADR-007 D5)",
+  "title": "bb-project/1: bb.toml, a Breadboard project (spec/project.md, ADR-007 D5, ADR-013 D1)",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "board"],
   "properties": {
-    "schema": { "const": "bb-project/0" },
+    "schema": { "const": "bb-project/1" },
     "project": {
       "type": "object",
       "additionalProperties": false,
@@ -107,6 +107,40 @@
       "type": "object",
       "additionalProperties": false,
       "properties": { "nets": { "type": "array", "items": { "type": "string" } } }
+    },
+    "device": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "package", "bind"],
+        "properties": {
+          "ref": { "type": "string", "pattern": "^([a-z0-9_-]+:)?[^.:]+$" },
+          "package": { "type": "string", "pattern": "^[a-z0-9._-]+/[a-z0-9._-]+(@[0-9]+\\.[0-9]+\\.[0-9]+)?$" },
+          "params": { "type": "object", "additionalProperties": { "type": "string" } },
+          "virtual": { "type": "boolean" },
+          "bind": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["pin", "net", "model"],
+              "properties": {
+                "pin": { "type": "string", "minLength": 1 },
+                "net": { "type": "string", "minLength": 1 },
+                "model": { "enum": ["digital_out", "digital_in"] },
+                "set": { "type": "string" },
+                "voh": { "type": "string" }, "vol": { "type": "string" },
+                "rise": { "type": "string" }, "fall": { "type": "string" },
+                "zout": { "type": "string" },
+                "vih": { "type": "string" }, "vil": { "type": "string" },
+                "cin": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
     },
     "connection": {
       "type": "array",

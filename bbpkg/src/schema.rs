@@ -5,9 +5,11 @@
 //! previous major prints a migration hint; a newer major is refused with
 //! "upgrade bb". `bb pkg migrate` rewrites a package to the current major.
 //!
-//! Every schema is at major 0 today, so no previous major exists yet. The
-//! machinery is exercised by a synthetic `bb-part/1` registry in the tests
-//! (gate G9), which is exactly what the first real bump will use.
+//! `bb-project` and `bb-board` are at major 1 (ADR-013 D1, Phase 2 R1: the
+//! draft of the schema epoch S for `[[device]]` and virtual instances; their
+//! `/0` files are read and migrated, the schema line only). Every other
+//! schema is at major 0. The machinery is also exercised by a synthetic
+//! `bb-part/1` registry in the tests (gate G9).
 
 use std::fmt;
 
@@ -74,10 +76,30 @@ pub enum Version {
 }
 
 impl Registry {
-    /// The registry of this build: every schema at major 0.
+    /// The registry of this build: `bb-project/1` and `bb-board/1` (ADR-013,
+    /// Phase 2 R1), every other schema at major 0.
     pub fn current() -> Registry {
+        fn project_0_to_1(t: &str) -> Result<String, String> {
+            rewrite_schema_line(t, "bb-project/1")
+        }
+        // board.bbm is canonical JSON with one `"schema":"bb-board/0"` member;
+        // `bb open` rewrites it whole anyway.
+        fn board_0_to_1(t: &str) -> Result<String, String> {
+            let from = "\"schema\":\"bb-board/0\"";
+            if t.matches(from).count() != 1 {
+                return Err("board.bbm: no single schema member".into());
+            }
+            Ok(t.replacen(from, "\"schema\":\"bb-board/1\"", 1))
+        }
         Registry {
-            entries: SCHEMAS.iter().map(|s| (*s, 0, Vec::new())).collect(),
+            entries: SCHEMAS
+                .iter()
+                .map(|s| match *s {
+                    "bb-project" => (*s, 1, vec![project_0_to_1 as Migration]),
+                    "bb-board" => (*s, 1, vec![board_0_to_1 as Migration]),
+                    _ => (*s, 0, Vec::new()),
+                })
+                .collect(),
         }
     }
 
@@ -204,6 +226,33 @@ mod tests {
         assert!(r.check("bb-part", "bb-part").is_err());
         assert!(r.check("bb-part", "bb-part/01").is_err());
         assert_eq!(r.migrate("bb-part", "bb-part/0", "x"), Ok(None));
+    }
+
+    #[test]
+    fn project_and_board_are_at_major_1() {
+        // ADR-013 (Phase 2 R1): bb-project/1 and bb-board/1; /0 is read and
+        // migrated, the schema line only.
+        let r = Registry::current();
+        assert_eq!(r.current_id("bb-project"), "bb-project/1");
+        assert_eq!(r.current_id("bb-board"), "bb-board/1");
+        assert!(matches!(
+            r.check("bb-project", "bb-project/0"),
+            Ok(Version::Previous { .. })
+        ));
+        assert!(r
+            .check("bb-project", "bb-project/2")
+            .unwrap_err()
+            .contains("upgrade bb"));
+        let t = "# p\nschema = \"bb-project/0\"\n[[board]]\nid = \"main\"\n";
+        assert_eq!(
+            r.migrate("bb-project", "bb-project/0", t).unwrap().unwrap(),
+            "# p\nschema = \"bb-project/1\"\n[[board]]\nid = \"main\"\n"
+        );
+        let b = "{\"boards\":[],\"schema\":\"bb-board/0\"}\n";
+        assert_eq!(
+            r.migrate("bb-board", "bb-board/0", b).unwrap().unwrap(),
+            "{\"boards\":[],\"schema\":\"bb-board/1\"}\n"
+        );
     }
 
     #[test]

@@ -1,0 +1,3 @@
+* dial-me-spinner/detent-stepper "step_emf" test circuit: each phase's EMF into 1 Mohm.
+R1 outa 0 1Meg
+R2 outb 0 1Meg
