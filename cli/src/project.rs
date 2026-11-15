@@ -621,7 +621,7 @@ impl Bench {
         let t = toml::parse(text).map_err(|e| e.to_string())?;
         let mut o = Obj::new("", &t);
         let schema = o.str_req("schema")?;
-        Registry::current().check("bb-bench", &schema)?;
+        let version = Registry::current().check("bb-bench", &schema)?;
         let major = bbpkg::schema::SchemaId::parse(&schema)?.major;
         let mut b = Bench {
             major,
@@ -630,6 +630,15 @@ impl Bench {
             options: bbpkg::optsets::DEFAULT.into(),
             ..Bench::default()
         };
+        // Reading the previous major prints the migration hint (spec/package.md
+        // section 10).
+        if let bbpkg::schema::Version::Previous { .. } = version {
+            b.warnings.push(format!(
+                "{schema} is the previous major: bb reads it, but run `bb pkg migrate --bench \
+                 <file>` to rewrite it as {}",
+                Registry::current().current_id("bb-bench")
+            ));
+        }
         if major >= 1 {
             for (k, what) in LATER_TOP {
                 if o.has(k) {

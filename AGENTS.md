@@ -50,7 +50,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense`, the E3 cases `typ` and `step` of `make dms-home` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 5 min alone, most of it the E3 homing: 305 s in the M10 review, 450 s in M10 beside other gates). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, from B1 `bench-test`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -117,6 +117,8 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make worktree-test` | H0 gate (not in `make test`; four release builds of `bb`): two throwaway worktrees build `bb` at the same time, and their crate hashes are compared (bbcore's rlib differs by a marker only A has; bbpkg's rlib and each `bb` carry their own package path, never the other's); negative control: built one after the other into one shared target directory, B's `make bb` compiles nothing and leaves B a binary with A's code and package path (cargo names sources by their workspace-relative path) (`scripts/worktree_test.sh`) |
 | `make measure-lock-test` | H0 gate (in `make test`, a few seconds): on a private lock file, every target of `MEASURE_TARGETS` refuses while a probe holds the measurement lock (the hold checked from outside), before building anything; the probe runs before and after (`scripts/measure_lock_test.sh`) |
 | `make baseline` | H0: the runtime baseline. `make check` (`BASELINE_ARGS`) `BASELINE_N` = 3 times after one uncounted warm-up, on an idle ext4 worktree, under the measurement lock; wall times, load before each run and `make test`'s per-step times (`out/test-timing.tsv`, written by every `make test`) in `out/baseline` (`scripts/baseline.sh`). Its result is the table in "Gate budgets" |
+| `make bench-test` / `make bench-gate` | Phase 2 B1 (ADR-010 D1-D4, Amendment 1): `bb-bench/1` and the bench engine on `examples/bench` (a synthetic STM32F103 project with examples/feedback's firmware; a copy in `$(BB_SCRATCH)/bb-bench`, `scripts/bench_gate.sh`). `bench-test` (in `make test`): seven cases at bb's defaults through `scripts/check_bench.py` (the switch view's analytic RC settling and open-state divider, G8; the current profile; the analog playback equal to its CSV; the faults; the seeded bounce; the sets; the triggers' times; a digital playback into U1.PB0 with the edge times of an equivalent `[[pwl]]` gives the same edges to the fs and the same response, applied at `ceil_L`), the committed one-cell reference hashes (`tests/golden/bench`), G2 (a 601-point playback equals the same points as an inline `[[pwl]]`), eight refusals, and G1 (the Phase 1 benches as `bb-bench/0` and `/1` build byte-identical decks; `bb pkg migrate --bench`). `bench-gate`: that, plus every case at `--max-quantum` 10 µs, 1 ms and 10 ms and `--engine-order analog-first`, and determinism (about 6.5 min). `make bench-update` rewrites the goldens from one-cell references |
+| `make bench-perf` | Phase 2 B1 cost gate (measurement lock; idle host): `bench/playback-long.toml` (1 s, 100 001 points every 10 µs) against `bench/playback-base.toml` (AIN on a constant supply), interleaved, N = `BENCH_PERF_N` (5), medians: the playback adds at most 2.0 s of wall time |
 
 `make firmware` builds the firmware ELFs (spike, feedback, ADC and the Renode
 lookahead gate firmware in `engines/cpu-renode/tests/firmware`, and the
@@ -260,7 +262,11 @@ bbdev/                  the Phase 1 device API (ADR-006 D7, Amendment 6): `Devic
                         `Rng`, `DeviceEngine` (engine.rs; t_safe MAX, quiet_until = the earliest
                         timer, advance_until), the device table `DEVICES` and dms_mechanism.rs
                         (the detent mechanism and DRV5032, `dms/mechanism@1`); tests/scheduler.rs (G6)
-engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
+bbbench/                Phase 2 B1 (ADR-010 D3, D4): the canonical bench CSV (csv.rs) and the bench
+                        engine (engine.rs: digital outputs into MCU pins and triggered actions;
+                        t_safe MAX, exact quiet_until, advance_until; identity bench@1)
+engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0); bench tables (TableSource:
+                        EXTERNAL V/I sources from a table with a cursor) and Drive::Timed (B1)
                         examples/deck_run.rs: a SPICE body through NgspiceEngine with digital-glue edges (S1)
 engines/cpu-renode/     Renode engine over the External Control API; platforms/: the plugin
                         assembly's sources (bb_lookahead.cs, the lookahead block, ADR-003 D5;
@@ -329,6 +335,11 @@ tests/golden/adc-kicad/ one-cell reference hashes of the examples/adc/kicad proj
 tests/golden/dms-rail/  one-cell reference hashes of E1's four cases and VLED snapshots (Phase 1 M6)
 tests/golden/dms-vsense/ every-lattice-point reference hashes of E2's seven cases (Phase 1 M8)
 tests/golden/dms-home/  one-cell reference hashes of E3's four cases (Phase 1 M10)
+examples/bench/         Phase 2 B1: a synthetic STM32F103 project (bench.net by make_netlist.py;
+                        examples/feedback's firmware), local switch packages (example/pushbutton,
+                        example/switch-1k), bench/*.toml (every bb-bench/1 stimulus), data/ (CSVs
+                        by make_data.py; data/btn.csv from the [[pwl]] run)
+tests/golden/bench/     one-cell reference hashes of examples/bench's seven cases (Phase 2 B1)
 tests/device-smoke/     the device route's smoke board (board.cir, bb.lock; make device-smoke)
 tests/fixtures/kicad/   the synthetic two-board system of ADR-007 gate M4b (cli/tests/kicad_import.rs)
 spec/                   normative protocol and schema docs (package.md and schema/*.schema.json: ADR-006;
@@ -358,7 +369,7 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         jit_profile_stress.sh, gdb_gate.py, dms_system.sh, check_nrf_pwm.py,
                         dms_home.sh (+ dms_home_boards.py, check_dms_home.py); Phase 2 H0:
                         worktree.sh (+ worktree_test.sh), measure_lock.sh (+ measure_lock_test.sh),
-                        baseline.sh, step_time.sh
+                        baseline.sh, step_time.sh; B1: bench_gate.sh (+ check_bench.py)
 .github/actions/bb-setup/ make setup with the Renode tarball and the apt packages cached (Phase 2 H0)
 ```
 
@@ -552,6 +563,13 @@ feedback board).
   the server's receive thread sleeps in `accept`
   (`ec_server_accepting`); keep it that way.
 - **Parsing KiCad files with regex.** Use a real S-expression parser.
+- **Feeding recorded data through a `[[pwl]]`.** An inline PWL card is
+  O(n²) in ngspice (100 000 points took 103 s); `bb run` warns above 1 000
+  points and refuses above 10 000. A `[[playback]]` (a bench table served
+  with a cursor, ADR-010 D3) is the route, and its CSV is the only runtime
+  format: never read a capture format in a run. A table never crosses the
+  kernel boundary per solver point; only a triggered action's change does,
+  as one `Drive::Timed` transition (ADR-010 Amendment 1).
 - **A branch-current unknown in series with a milliohm path in an analog
   view.** Under `phase0` (`ABSTOL=1e-13`) ngspice converges every branch
   current to 1e-13 A + 1e-5·|i|. That includes 0 V ammeters, CCVS and CCCS
