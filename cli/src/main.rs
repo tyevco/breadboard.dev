@@ -70,7 +70,7 @@ use std::time::Instant;
 
 use bb_analog_ngspice::{
     AdcOutputBinding, AdcPush, DigitalOutputBinding, Drive, InputBinding, NgspiceConfig,
-    NgspiceEngine, OutputBinding,
+    NgspiceEngine, OutputBinding, Watchdog,
 };
 use bb_cpu_renode::{
     find_renode, LookaheadCfg, PinCnfAudit, PinCnfExpect, PinDirection, PinSpec, Platform,
@@ -91,6 +91,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
               [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
               [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
+              [--ngspice-watchdog 200000,10000]
        bb pool run|start|stop|status ...   (bb pool --help)
        bb open [<dir>|<.kicad_pro>|<.net>|<board.cir>] [--check] [--update-lock]   (bb open --help)
        bb flash --target <instance> <file.elf> [--kind elf] [--project <dir>]
@@ -193,7 +194,15 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
   --gdb-wait     on (default): the CPU waits at reset until a debugger has
                  attached and continued (or detached), like QEMU's -S; off:
                  the run starts at once and a debugger may attach at any
-                 time (the CPU halts at its next slice boundary)";
+                 time (the CPU halts at its next slice boundary)
+  --ngspice-watchdog
+                 <points per cell>,<points without progress> (default
+                 200000,10000): ngspice's progress watchdog (ADR-015 D1). A
+                 lattice cell that takes more accepted solver points, or more
+                 consecutive points that do not advance the time by a whole
+                 fs, fails the run with NoProgress:ngspice instead of hanging.
+                 Counts, not wall time, so the failure is deterministic; a
+                 board that needs more says so here (recorded in run.json)";
 
 struct RunArgs {
     /// `--netlist`: a Phase 0 board file; `None`: a project.
@@ -231,6 +240,26 @@ struct RunArgs {
     gdb: Option<u16>,
     /// `--gdb-wait on` (true, the default) or `off`.
     gdb_wait: bool,
+    /// `--ngspice-watchdog` (ADR-015 D1).
+    watchdog: Watchdog,
+}
+
+/// `--ngspice-watchdog <points per cell>,<points without progress>`.
+fn parse_watchdog(s: &str) -> Result<Watchdog, String> {
+    let (a, b) = s
+        .split_once(',')
+        .ok_or_else(|| format!("{s:?}: expected <points per cell>,<points without progress>"))?;
+    let n = |x: &str| {
+        x.trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|&v| v > 0)
+            .ok_or_else(|| format!("{s:?}: {x:?} is not a positive integer"))
+    };
+    Ok(Watchdog {
+        max_points_per_cell: n(a)?,
+        max_points_without_progress: n(b)?,
+    })
 }
 
 fn parse_adc_push(s: &str) -> Result<AdcPush, String> {
@@ -361,6 +390,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut renode_pool = true;
     let mut gdb = None;
     let mut gdb_wait = None;
+    let mut watchdog = Watchdog::default();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -448,6 +478,10 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             }
             "--gdb-wait" => {
                 gdb_wait = Some(parse_on_off(&val(a)?).map_err(|e| format!("--gdb-wait: {e}"))?)
+            }
+            "--ngspice-watchdog" => {
+                watchdog =
+                    parse_watchdog(&val(a)?).map_err(|e| format!("--ngspice-watchdog: {e}"))?
             }
             "--renode-pool" => {
                 renode_pool = match val(a)?.as_str() {
@@ -538,6 +572,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         uart_log,
         gdb,
         gdb_wait: gdb_wait.unwrap_or(true),
+        watchdog,
     })
 }
 
@@ -1061,6 +1096,15 @@ fn run(a: RunArgs) -> Result<(), String> {
         netlist.push('\n');
         netlist.push_str(&load_deck(&board, &loads)?);
     }
+    // ADR-015 D3: the deck's B/E/G expressions against ngspice 42's function
+    // table before ngspice reads them (a three-argument min() segfaults it).
+    let lint = bbpkg::bexpr::check(&netlist);
+    if !lint.is_empty() {
+        return Err(format!(
+            "the deck's expressions (ADR-015 D3):\n  {}",
+            lint.join("\n  ")
+        ));
+    }
     let mut ncfg = NgspiceConfig::new(netlist, a.duration, a.renode_quantum);
     ncfg.lattice = Some(a.renode_quantum);
     for l in &loads {
@@ -1148,6 +1192,7 @@ fn run(a: RunArgs) -> Result<(), String> {
         }
     }
     ncfg.adc_push = a.adc_push;
+    ncfg.watchdog = a.watchdog;
     // An analog probe: its name in the outputs (a Phase 0 node name, or a
     // project net's display name) and its ngspice node (ADR-007 D6).
     let analog_probes: Vec<(&String, String)> = probes
@@ -1187,7 +1232,15 @@ fn run(a: RunArgs) -> Result<(), String> {
     } else {
         format!("started fresh (pid {})", cpu.renode_pid())
     };
-    let analog = NgspiceEngine::new(ncfg).map_err(|e| format!("start ngspice: {e}"))?;
+    let deck_text = ncfg.netlist.clone();
+    let analog = NgspiceEngine::new(ncfg).map_err(|e| match &e {
+        // ADR-015 D4: name the views on the nodes ngspice names.
+        bbcore::EngineError::OperatingPoint { nodes, .. } => format!(
+            "start ngspice: {e}{}",
+            op_views(&deck_text, nodes, &board.packages)
+        ),
+        _ => format!("start ngspice: {e}"),
+    })?;
     let analog_name = analog.name().to_string();
     let startup_s = wall.elapsed().as_secs_f64();
 
@@ -1409,6 +1462,21 @@ fn run(a: RunArgs) -> Result<(), String> {
                 ),
             ),
             (
+                "ngspice_watchdog",
+                bbcore::cjson::Json::obj([
+                    (
+                        "max_points_per_cell",
+                        bbcore::cjson::Json::Int(i128::from(a.watchdog.max_points_per_cell)),
+                    ),
+                    (
+                        "max_points_without_progress",
+                        bbcore::cjson::Json::Int(i128::from(
+                            a.watchdog.max_points_without_progress,
+                        )),
+                    ),
+                ]),
+            ),
+            (
                 "probes",
                 bbcore::cjson::Json::Arr(
                     probes
@@ -1492,7 +1560,91 @@ fn run(a: RunArgs) -> Result<(), String> {
         "bb run: wall time {total_s:.2} s total ({startup_s:.2} s engine startup, {run_s:.2} s simulation); outputs in {}",
         a.out.display()
     );
+    // ADR-015 G2: bb's own peak memory (ngspice runs in this process;
+    // Renode is a separate one). A report, never part of the outputs.
+    if let Some(kb) = peak_rss_kb() {
+        let _ = writeln!(so, "bb run: peak RSS {kb} kB (bb's VmHWM)");
+    }
     Ok(())
+}
+
+/// ADR-015 D4: the views on the nodes an operating-point failure names.
+/// A subcircuit-internal node (`xu1.n2`) belongs to its instance's view; a
+/// top-level node to every instance connected to it. Each instance is named
+/// with its subckt and, where a package provides that subckt, the package
+/// and view. Empty when no instance is found.
+fn op_views(deck: &str, nodes: &[String], packages: &[bbpkg::package::Package]) -> String {
+    let mut by_subckt: std::collections::BTreeMap<String, String> = Default::default();
+    for p in packages {
+        for v in &p.part.analog {
+            by_subckt
+                .entry(v.subckt.to_ascii_lowercase())
+                .or_insert_with(|| format!("{} view {}", p.part.id, v.name));
+        }
+    }
+    // Instances: name -> (nodes, subckt), from the logical lines.
+    let mut logical: Vec<String> = Vec::new();
+    for raw in deck.lines() {
+        let l = raw.trim();
+        if l.starts_with('*') || l.is_empty() {
+            continue;
+        }
+        match l.strip_prefix('+') {
+            Some(rest) if !logical.is_empty() => {
+                let last = logical.last_mut().expect("non-empty");
+                last.push(' ');
+                last.push_str(rest);
+            }
+            _ => logical.push(l.to_string()),
+        }
+    }
+    let mut inst: Vec<(String, Vec<String>, String)> = Vec::new();
+    for l in &logical {
+        let toks: Vec<&str> = l
+            .split_whitespace()
+            .take_while(|t| !t.eq_ignore_ascii_case("params:") && !t.contains('='))
+            .collect();
+        if toks.len() >= 2 && toks[0].starts_with(['x', 'X']) {
+            let sub = toks[toks.len() - 1].to_ascii_lowercase();
+            let ns = toks[1..toks.len() - 1]
+                .iter()
+                .map(|n| n.to_ascii_lowercase())
+                .collect();
+            inst.push((toks[0].to_ascii_lowercase(), ns, sub));
+        }
+    }
+    let label = |(name, _, sub): &(String, Vec<String>, String)| match by_subckt.get(sub) {
+        Some(v) => format!("{name} (.subckt {sub}: {v})"),
+        None => format!("{name} (.subckt {sub})"),
+    };
+    let mut parts = Vec::new();
+    for n in nodes {
+        let on: Vec<String> = match n.split_once('.') {
+            Some((head, _)) => inst.iter().filter(|i| i.0 == head).map(label).collect(),
+            None => inst
+                .iter()
+                .filter(|i| i.1.iter().any(|x| x == n))
+                .map(label)
+                .collect(),
+        };
+        if !on.is_empty() {
+            parts.push(format!("{n}: {}", on.join(", ")));
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("; the views on those nodes: {}", parts.join("; "))
+    }
+}
+
+/// This process's peak resident set size (`VmHWM` of `/proc/self/status`,
+/// kB), where the platform has one.
+fn peak_rss_kb() -> Option<u64> {
+    let s = fs::read_to_string("/proc/self/status").ok()?;
+    s.lines()
+        .find_map(|l| l.strip_prefix("VmHWM:"))
+        .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
 }
 
 /// What one run executes, from either front end (ADR-007 D9).
@@ -1595,12 +1747,23 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("run") => match parse_args(&args[1..]).and_then(run) {
-            Ok(()) => ExitCode::SUCCESS,
+        Some("run") => match parse_args(&args[1..]) {
             Err(e) => {
                 eprintln!("bb: {e}");
                 ExitCode::FAILURE
             }
+            Ok(a) => match run(a) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("bb: {e}");
+                    // A failed run's memory too (ADR-015 G1: the stall
+                    // repro ends in bounded memory).
+                    if let Some(kb) = peak_rss_kb() {
+                        eprintln!("bb run: peak RSS {kb} kB (bb's VmHWM)");
+                    }
+                    ExitCode::FAILURE
+                }
+            },
         },
         Some("pool") => pool::main(&args[1..]),
         Some("open") => open::main(&args[1..]),
@@ -1621,6 +1784,33 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watchdog_option_and_op_views() {
+        // ADR-015 D1: --ngspice-watchdog <per cell>,<without progress>.
+        let w = parse_watchdog("5000,300").unwrap();
+        assert_eq!(
+            (w.max_points_per_cell, w.max_points_without_progress),
+            (5000, 300)
+        );
+        assert!(parse_watchdog("5000").is_err());
+        assert!(parse_watchdog("0,10").is_err());
+        // ADR-015 D4: an operating-point failure's nodes name the instances on
+        // them: an internal node its instance, a top-level node every
+        // instance connected to it.
+        let deck = "* board\nXU1 VIN OUT GND lsw params: ron=1\nXU2 OUT\n+ 0 load\nR1 OUT 0 1k\n";
+        let v = op_views(
+            deck,
+            &["xu1.ct".into(), "out".into(), "nowhere".into()],
+            &[],
+        );
+        assert_eq!(
+            v,
+            "; the views on those nodes: xu1.ct: xu1 (.subckt lsw); out: xu1 (.subckt lsw), xu2 \
+             (.subckt load)"
+        );
+        assert_eq!(op_views(deck, &["vin2".into()], &[]), "");
+    }
 
     #[test]
     fn rates_are_exact() {

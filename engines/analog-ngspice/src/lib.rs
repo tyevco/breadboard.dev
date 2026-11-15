@@ -238,6 +238,35 @@ pub struct NgspiceConfig {
     /// grant partition, so its points do not depend on it. `None`: no
     /// lattice clamp, breakpoints released at once (the Phase 0 behaviour).
     pub lattice: Option<Time>,
+    /// The progress watchdog (ADR-015 D1).
+    pub watchdog: Watchdog,
+}
+
+/// The engine's deterministic progress watchdog (ADR-015 D1,
+/// `spec/time-grant.md` "What engines MUST NOT do"). Counts of accepted
+/// solver points, never wall time: a run either completes identically or
+/// fails identically, with [`EngineError::NoProgress`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Watchdog {
+    /// At most this many accepted points in one lattice cell `((k-1)L, kL]`
+    /// (needs [`NgspiceConfig::lattice`]; without a lattice only
+    /// `max_points_without_progress` applies). E3's PWM case takes about 60
+    /// per edge and at most a few thousand per cell (ADR-015 D1).
+    pub max_points_per_cell: u64,
+    /// At most this many consecutive accepted points whose time, rounded to
+    /// whole fs, does not advance.
+    pub max_points_without_progress: u64,
+}
+
+impl Default for Watchdog {
+    /// ADR-015's defaults: 200 000 points per cell, 10 000 points without
+    /// progress.
+    fn default() -> Watchdog {
+        Watchdog {
+            max_points_per_cell: 200_000,
+            max_points_without_progress: 10_000,
+        }
+    }
 }
 
 impl NgspiceConfig {
@@ -257,6 +286,7 @@ impl NgspiceConfig {
             probes: Vec::new(),
             handoff_spin: Duration::ZERO,
             lattice: None,
+            watchdog: Watchdog::default(),
         }
     }
 }
@@ -394,6 +424,102 @@ struct State {
     error: Option<String>,
     /// [`NgspiceConfig::handoff_spin`].
     handoff_spin: Duration,
+    /// The progress watchdog's counters (ADR-015 D1).
+    wd: WatchCount,
+    /// The watchdog tripped: the accepted point's time (fs) and the detail.
+    stall: Option<(u64, String)>,
+}
+
+/// The progress watchdog's limits and counters (ADR-015 D1). Updated at
+/// every accepted solver point on the solver thread; a pure function of the
+/// sequence of accepted points.
+struct WatchCount {
+    max_cell: u64,
+    max_flat: u64,
+    /// The lattice cell of the last point (`ceil(point / L)`; 0 without a
+    /// lattice).
+    cell: u64,
+    /// Accepted points in that cell so far.
+    cell_points: u64,
+    /// The last point's time rounded to fs, and how many consecutive points
+    /// since did not advance it.
+    last_fs: u64,
+    flat: u64,
+}
+
+impl WatchCount {
+    const fn new(w: Watchdog) -> WatchCount {
+        WatchCount {
+            max_cell: w.max_points_per_cell,
+            max_flat: w.max_points_without_progress,
+            cell: u64::MAX,
+            cell_points: 0,
+            last_fs: 0,
+            flat: 0,
+        }
+    }
+
+    /// Count the point just accepted at `time` (s). `Some(detail)` when a
+    /// limit is exceeded.
+    fn accept(&mut self, time: f64, lattice_fs: u64) -> Option<String> {
+        let fs = point_fs(time, lattice_fs);
+        let rounded = secs_to_fs(time);
+        if self.cell == u64::MAX || rounded > self.last_fs {
+            self.flat = 0;
+        } else {
+            self.flat += 1;
+        }
+        self.last_fs = self.last_fs.max(rounded);
+        if self.flat >= self.max_flat {
+            return Some(format!(
+                "{} consecutive accepted solver points did not advance past {} (the watchdog \
+                 allows {})",
+                self.flat,
+                Time::from_fs(self.last_fs),
+                self.max_flat
+            ));
+        }
+        if lattice_fs == 0 {
+            self.cell = 0;
+            return None;
+        }
+        let cell = fs.div_ceil(lattice_fs);
+        if cell != self.cell {
+            self.cell = cell;
+            self.cell_points = 0;
+        }
+        self.cell_points += 1;
+        if self.cell_points > self.max_cell {
+            let hi = cell * lattice_fs;
+            return Some(format!(
+                "{} accepted solver points in the lattice cell ({}, {}] (the watchdog allows {} \
+                 per cell)",
+                self.cell_points,
+                Time::from_fs(hi.saturating_sub(lattice_fs)),
+                Time::from_fs(hi),
+                self.max_cell
+            ));
+        }
+        None
+    }
+}
+
+/// `x` as C's `%.5e` prints it (`7.74300e-02`): ngspice's "Reference value"
+/// line, computed from the solver time rather than read from ngspice's log
+/// (ngspice prints that line on a CPU-clock timer, so its presence is not
+/// deterministic).
+fn c_exp5(x: f64) -> String {
+    let s = format!("{x:.5e}");
+    match s.split_once('e') {
+        Some((m, e)) => {
+            let (sign, digits) = match e.strip_prefix('-') {
+                Some(d) => ('-', d),
+                None => ('+', e),
+            };
+            format!("{m}e{sign}{digits:0>2}")
+        }
+        None => s,
+    }
 }
 
 /// The early-stop watch of an `advance_until` grant (ADR-003 D5). The solver
@@ -580,6 +706,11 @@ impl State {
             until: None,
             error: None,
             handoff_spin: Duration::ZERO,
+            wd: WatchCount::new(Watchdog {
+                max_points_per_cell: 200_000,
+                max_points_without_progress: 10_000,
+            }),
+            stall: None,
         }
     }
 
@@ -833,8 +964,59 @@ unsafe extern "C" fn cb_get_sync(
     if st.abort {
         return 0;
     }
+    if st.parked.is_none() && st.seq == 0 {
+        // Before the first park: ngspice 42's transient-op fallback
+        // (`optran`, after gmin and source stepping fail) runs a transient of
+        // its own and calls this callback with its own time, while the
+        // transient's vectors are still empty. Those are not points of the
+        // run: let them pass untouched. If the fallback converges, the
+        // transient's first point follows; if not, the transient fails at
+        // its initial point and the operating-point error names the nodes
+        // (ADR-015 D4). A converged operating point never gets here with
+        // empty vectors.
+        drop(st);
+        let empty = time_vector_len().is_none_or(|n| n == 0);
+        st = state();
+        if empty {
+            return 0;
+        }
+    }
     if loc == 0 {
         // `time` is the point just accepted and dumped to the vectors.
+        // The progress watchdog (ADR-015 D1): a count of accepted points,
+        // so whether and where it trips is a pure function of the run. On a
+        // trip the solver parks here for good (no more points, no more
+        // memory) until the engine is dropped.
+        let lattice_fs = st.lattice_fs;
+        if let Some(why) = st.wd.accept(time, lattice_fs) {
+            let at = point_fs(time, lattice_fs);
+            let near = lattice_point_of(time, lattice_fs).map_or_else(
+                || {
+                    if lattice_fs == 0 {
+                        String::new()
+                    } else {
+                        format!(
+                            ", in the cell ending at the lattice point {}",
+                            Time::from_fs(at.div_ceil(lattice_fs) * lattice_fs)
+                        )
+                    }
+                },
+                |lp| format!(", on the lattice point {}", Time::from_fs(lp)),
+            );
+            let detail = format!(
+                "{why}; the solver is at {time:.17e} s{near} (ngspice's \"Reference value : {}\"), \
+                 in the grant to {}",
+                c_exp5(time),
+                Time::from_fs(st.target_fs)
+            );
+            st.stall = Some((at, detail.clone()));
+            st.fail(format!("NoProgress: {detail}"));
+            WAKE.notify_all();
+            while !st.abort {
+                st = WAKE.wait(st).unwrap_or_else(|e| e.into_inner());
+            }
+            return 0;
+        }
         // Early stop (ADR-003 D5): threshold the watched nodes at this point
         // and, at the first level change, end the grant at ceil_L(t_x).
         if st.parked != Some(st.seq) && st.until.as_ref().is_some_and(|u| u.stop_fs.is_none()) {
@@ -927,6 +1109,26 @@ unsafe extern "C" fn cb_get_sync(
         st.clamp(time, delta);
     }
     0
+}
+
+/// The length of the current plot's `time` vector (`None` if it has none).
+/// Runs on the solver thread between steps.
+fn time_vector_len() -> Option<usize> {
+    let lib = ffi::lib(|_| Ok(())).ok()?;
+    // SAFETY: returns a pointer to the current plot's type name.
+    let plot = cstr_lossy(unsafe { (lib.cur_plot)() });
+    let full = CString::new(format!("{plot}.time")).ok()?;
+    // SAFETY: as in `read_vectors`.
+    let info = unsafe { (lib.get_vec_info)(full.as_ptr().cast_mut()) };
+    if info.is_null() {
+        return None;
+    }
+    // SAFETY: non-null pointer to ngspice's vector_info.
+    let info = unsafe { &*info };
+    if info.v_realdata.is_null() {
+        return Some(0);
+    }
+    Some(usize::try_from(info.v_length).unwrap_or(0))
 }
 
 /// Copy the samples `[from..]` of the `time` vector and of every watched node
@@ -1064,6 +1266,64 @@ fn failure_detail() -> String {
     }
 }
 
+/// The nodes an operating-point failure names (ADR-015 D4), in the order
+/// ngspice prints them, each once, lower case: `trouble with node "x"`,
+/// `singular matrix:  check node x` / `check nodes x and y`, and the rows of
+/// the "Last Node Voltages" table marked `*` (not converged). Branch
+/// unknowns (`v1#branch`) are not nodes and are left out.
+pub fn op_failure_nodes(log: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |n: &str| {
+        let n = n.trim().trim_matches('"').to_ascii_lowercase();
+        if !n.is_empty() && !n.contains('#') && !out.contains(&n) {
+            out.push(n);
+        }
+    };
+    let mut table = false;
+    for l in log {
+        let body = l
+            .strip_prefix("stdout ")
+            .or_else(|| l.strip_prefix("stderr "))
+            .unwrap_or(l);
+        if let Some(i) = body.find("trouble with node \"") {
+            let rest = &body[i + "trouble with node \"".len()..];
+            if let Some(j) = rest.find('"') {
+                add(&rest[..j]);
+            }
+        }
+        if let Some(i) = body.find("check nodes ") {
+            let rest = &body[i + "check nodes ".len()..];
+            if let Some((a, b)) = rest.split_once(" and ") {
+                add(a);
+                add(b.split_whitespace().next().unwrap_or_default());
+            }
+        } else if let Some(i) = body.find("check node ") {
+            add(body[i + "check node ".len()..]
+                .split_whitespace()
+                .next()
+                .unwrap_or_default());
+        }
+        if body.trim_start().starts_with("Last Node Voltages") {
+            table = true;
+            continue;
+        }
+        if table {
+            let toks: Vec<&str> = body.split_whitespace().collect();
+            if toks.is_empty() || toks[0].starts_with("--") || toks[0] == "Node" {
+                continue;
+            }
+            if toks.len() < 3 || toks[1].parse::<f64>().is_err() {
+                table = false;
+                continue;
+            }
+            if toks.last() == Some(&"*") {
+                add(toks[0]);
+            }
+        }
+    }
+    out
+}
+
 fn other(msg: impl Into<String>) -> EngineError {
     EngineError::Other(msg.into())
 }
@@ -1143,25 +1403,70 @@ pub struct NgspiceEngine {
     /// Number of solver points accepted so far (including t = 0).
     solver_points: usize,
     failed: bool,
+    /// [`NgspiceEngine::deck`].
+    deck: String,
 }
 
-impl NgspiceEngine {
-    /// Load the circuit, start the transient, and park the solver at t = 0
-    /// (after the DC operating point).
-    pub fn new(cfg: NgspiceConfig) -> Result<NgspiceEngine, EngineError> {
-        if cfg.t_stop.is_zero() || cfg.t_max.is_zero() {
-            return Err(other("t_stop and t_max must be > 0"));
-        }
-        if let Some(l) = cfg.lattice {
-            if l.is_zero() || !l.as_fs().is_multiple_of(cfg.t_max.as_fs()) {
-                return Err(other(format!(
-                    "TMAX {} must divide the grant lattice {l} (ADR-003 D2)",
-                    cfg.t_max
-                )));
+/// A configuration checked and turned into its pins and its deck (without
+/// the analysis card): what [`NgspiceEngine::new`] and [`operating_point`]
+/// share.
+struct Prepared {
+    inputs: BTreeMap<String, InputPin>,
+    outputs: BTreeMap<String, String>,
+    digital: BTreeMap<String, DigitalOutput>,
+    adc: BTreeMap<String, AdcOutput>,
+    watch: Vec<String>,
+    sources: BTreeMap<String, Wave>,
+    /// Title, circuit body, glue and the `.save` lines.
+    lines: Vec<String>,
+}
+
+/// The vectors the engine reads (ADR-015 D2): every watched node (the
+/// analog outputs, the probes, the thresholded `digital_in` nodes and the
+/// `adc_in` nodes, which `read_vectors` and the early-stop watch copy) and
+/// every input glue node. Lower case, in first-use order; `time`, the scale,
+/// is saved by ngspice without being named.
+fn save_list(watch: &[String], inputs: &[InputBinding]) -> Vec<String> {
+    let mut save: Vec<String> = watch.to_vec();
+    for b in inputs {
+        if let Some(n) = &b.glue_node {
+            let n = n.to_ascii_lowercase();
+            if !save.contains(&n) {
+                save.push(n);
             }
         }
-        let lib = init_lib().map_err(other)?;
+    }
+    #[cfg(test)]
+    if let Some(omit) = tests::SAVE_OMIT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_deref()
+    {
+        save.retain(|s| s != omit);
+    }
+    save
+}
 
+/// The `.save` cards of `save` (eight vectors per card).
+fn save_cards(save: &[String]) -> Vec<String> {
+    save.chunks(8)
+        .map(|c| format!(".save {}", c.join(" ")))
+        .collect()
+}
+
+fn prepare(cfg: &NgspiceConfig) -> Result<Prepared, EngineError> {
+    if cfg.t_stop.is_zero() || cfg.t_max.is_zero() {
+        return Err(other("t_stop and t_max must be > 0"));
+    }
+    if let Some(l) = cfg.lattice {
+        if l.is_zero() || !l.as_fs().is_multiple_of(cfg.t_max.as_fs()) {
+            return Err(other(format!(
+                "TMAX {} must divide the grant lattice {l} (ADR-003 D2)",
+                cfg.t_max
+            )));
+        }
+    }
+    {
         // Inputs, sources and glue.
         let mut inputs = BTreeMap::new();
         let mut sources = BTreeMap::new();
@@ -1318,6 +1623,8 @@ impl NgspiceEngine {
                 break;
             }
             if lower.starts_with(".tran")
+                || lower == ".op"
+                || lower.starts_with(".op ")
                 || lower.starts_with(".control")
                 || lower.starts_with(".endc")
             {
@@ -1325,9 +1632,152 @@ impl NgspiceEngine {
                     "netlist must not contain `{l}`: the engine owns the analysis"
                 )));
             }
+            // ADR-015 D2: the engine saves exactly the vectors it reads.
+            if lower.starts_with(".save") {
+                return Err(other(format!(
+                    "netlist must not contain `{l}`: the engine owns the deck's .save \
+                     (ADR-015 D2)"
+                )));
+            }
             lines.push(raw.to_string());
         }
         lines.extend(glue);
+        lines.extend(save_cards(&save_list(&watch, &cfg.inputs)));
+        Ok(Prepared {
+            inputs,
+            outputs,
+            digital,
+            adc,
+            watch,
+            sources,
+            lines,
+        })
+    }
+}
+
+/// Claim the ngspice singleton for a new engine (or an operating-point
+/// check) and reset the shared state.
+fn claim(
+    cfg: &NgspiceConfig,
+    watch: &[String],
+    sources: BTreeMap<String, Wave>,
+) -> Result<(), EngineError> {
+    let mut st = state();
+    if st.active {
+        return Err(other(
+            "another NgspiceEngine is alive in this process (ngspice is a singleton)",
+        ));
+    }
+    reset_state(&mut st);
+    st.active = true;
+    st.watch = watch.to_vec();
+    st.sources = sources;
+    st.handoff_spin = cfg.handoff_spin;
+    st.lattice_fs = cfg.lattice.map_or(0, Time::as_fs);
+    st.wd = WatchCount::new(cfg.watchdog);
+    Ok(())
+}
+
+/// Load `lines` into ngspice (a NULL-terminated array of lines; ngspice
+/// copies them). Errors with ngspice's error lines if it rejects them.
+fn load_circuit(lib: &ffi::Lib, lines: &[String]) -> Result<(), EngineError> {
+    log().clear();
+    let owned: Vec<CString> = lines
+        .iter()
+        .map(|l| CString::new(l.as_str()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| other(e.to_string()))?;
+    let mut ptrs: Vec<*mut c_char> = owned.iter().map(|c| c.as_ptr().cast_mut()).collect();
+    ptrs.push(std::ptr::null_mut());
+    // SAFETY: NULL-terminated array of NUL-terminated lines; ngspice copies.
+    let rc = unsafe { (lib.circ)(ptrs.as_mut_ptr()) };
+    let errs = logged_errors();
+    if rc != 0 || !errs.is_empty() {
+        return Err(other(format!(
+            "ngspice rejected the netlist (rc {rc}): {}",
+            errs.join(" | ")
+        )));
+    }
+    Ok(())
+}
+
+/// `optran` with a zero step size: no transient-op fallback (ngspice 42
+/// `src/spicelib/analysis/optran.c`: "optran deselected by setting
+/// opstepsize to 0"); the other five values as the default.
+const OPTRAN_OFF: &str = "optran 1 1 1 0 10u 0";
+/// ngspice 42's built-in `optran` default (`src/frontend/init.c`).
+const OPTRAN_DEFAULT: &str = "optran 1 1 1 100n 10u 0";
+
+/// ADR-015 D4: solve the DC operating point of `cfg`'s deck alone (an `.op`
+/// analysis, run to completion on the calling thread, with the deck's own
+/// `.options`, so the option set's iteration limits apply: Newton, gmin
+/// stepping and source stepping, without the transient-op fallback), every
+/// input at its initial value. `Ok` when it converges; otherwise
+/// [`EngineError::OperatingPoint`] with the nodes ngspice names, in the time
+/// ngspice's DC iteration takes, never after a transient. Needs the ngspice
+/// singleton, like [`NgspiceEngine::new`], and releases it.
+pub fn operating_point(cfg: &NgspiceConfig) -> Result<(), EngineError> {
+    let p = prepare(cfg)?;
+    let lib = init_lib().map_err(other)?;
+    let mut lines = p.lines;
+    lines.push(".op".to_string());
+    lines.push(".end".to_string());
+    claim(cfg, &p.watch, p.sources)?;
+    let r = (|| {
+        load_circuit(lib, &lines)?;
+        // No transient-op fallback: ngspice 42 makes `optran` its standard
+        // (`src/frontend/init.c`: "1 1 1 100n 10u 0"), a 10 us transient
+        // after gmin and source stepping fail, which is where a large deck
+        // spends its time before it gives up (and, in an `.op` analysis of
+        // the shared library, it fails on a missing `time` vector and does
+        // not return). A step size of 0 deselects it for this circuit only;
+        // the default is restored below before the circuit is removed, so a
+        // later transient keeps it.
+        command(lib, OPTRAN_OFF).map_err(other)?;
+        // `run` executes the deck's analysis synchronously (no sync
+        // callbacks: those belong to a transient).
+        let ran = command(lib, "run");
+        let log = log();
+        let failed = ran.is_err()
+            || log.iter().any(|l| {
+                l.contains("could not be simulated")
+                    || l.contains("simulation(s) aborted")
+                    || l.starts_with("stderr Error")
+            });
+        if failed {
+            let lines = failure_lines(&log);
+            return Err(EngineError::OperatingPoint {
+                nodes: op_failure_nodes(&log),
+                detail: if lines.is_empty() {
+                    "(ngspice printed no error or warning)".into()
+                } else {
+                    lines.join(" | ")
+                },
+            });
+        }
+        Ok(())
+    })();
+    let _ = command(lib, OPTRAN_DEFAULT);
+    let _ = command(lib, "remcirc");
+    let _ = command(lib, "destroy all");
+    reset_state(&mut state());
+    r
+}
+
+impl NgspiceEngine {
+    /// Load the circuit, start the transient, and park the solver at t = 0
+    /// (after the DC operating point).
+    pub fn new(cfg: NgspiceConfig) -> Result<NgspiceEngine, EngineError> {
+        let Prepared {
+            inputs,
+            outputs,
+            digital,
+            adc,
+            watch,
+            sources,
+            mut lines,
+        } = prepare(&cfg)?;
+        let lib = init_lib().map_err(other)?;
         // The analysis runs one TMAX past t_stop: ngspice finishes (without a
         // sync callback) on the point at its final time, so a grant that ends
         // exactly at t_stop must still be a point where the solver can park.
@@ -1338,22 +1788,7 @@ impl NgspiceEngine {
             spice_time(cfg.t_max)
         ));
         lines.push(".end".to_string());
-
-        // Claim the singleton and reset the shared state.
-        {
-            let mut st = state();
-            if st.active {
-                return Err(other(
-                    "another NgspiceEngine is alive in this process (ngspice is a singleton)",
-                ));
-            }
-            reset_state(&mut st);
-            st.active = true;
-            st.watch = watch.clone();
-            st.sources = sources;
-            st.handoff_spin = cfg.handoff_spin;
-            st.lattice_fs = cfg.lattice.map_or(0, Time::as_fs);
-        }
+        claim(&cfg, &watch, sources)?;
         let mut engine = NgspiceEngine {
             name: cfg.name.clone(),
             lib,
@@ -1376,30 +1811,22 @@ impl NgspiceEngine {
             lattice: cfg.lattice,
             solver_points: 0,
             failed: false,
+            deck: lines.join("\n") + "\n",
         };
         // From here on, Drop releases the singleton.
         engine.start(&lines)?;
         Ok(engine)
     }
 
+    /// The deck the engine handed to ngspice: the title, the circuit body,
+    /// the glue, the engine's `.save` cards (ADR-015 D2), `.tran` and
+    /// `.end`, one line each.
+    pub fn deck(&self) -> &str {
+        &self.deck
+    }
+
     fn start(&mut self, lines: &[String]) -> Result<(), EngineError> {
-        log().clear();
-        let owned: Vec<CString> = lines
-            .iter()
-            .map(|l| CString::new(l.as_str()))
-            .collect::<Result<_, _>>()
-            .map_err(|e| other(e.to_string()))?;
-        let mut ptrs: Vec<*mut c_char> = owned.iter().map(|c| c.as_ptr().cast_mut()).collect();
-        ptrs.push(std::ptr::null_mut());
-        // SAFETY: NULL-terminated array of NUL-terminated lines; ngspice copies.
-        let rc = unsafe { (self.lib.circ)(ptrs.as_mut_ptr()) };
-        let errs = logged_errors();
-        if rc != 0 || !errs.is_empty() {
-            return Err(other(format!(
-                "ngspice rejected the netlist (rc {rc}): {}",
-                errs.join(" | ")
-            )));
-        }
+        load_circuit(self.lib, lines)?;
         command(self.lib, "bg_run").map_err(other)?;
         // Wait for the solver to park at t = 0.
         let deadline = Instant::now() + THREAD_TIMEOUT;
@@ -1472,6 +1899,14 @@ impl NgspiceEngine {
     /// After the solver parked at `t`: check errors, take the new samples.
     fn take_boundary(&mut self, t: Time) -> Result<(), EngineError> {
         let mut st = state();
+        if let Some((at, detail)) = st.stall.clone() {
+            drop(st);
+            self.failed = true;
+            return Err(EngineError::NoProgress {
+                at: Time::from_fs(at),
+                detail,
+            });
+        }
         if let Some(e) = st.error.clone() {
             drop(st);
             self.failed = true;
@@ -1480,6 +1915,20 @@ impl NgspiceEngine {
         if st.parked != Some(st.seq) {
             drop(st);
             self.failed = true;
+            if t.is_zero() {
+                // The transient's first point is its operating point
+                // (ADR-015 D4): name the nodes ngspice names.
+                let log = log();
+                let lines = failure_lines(&log);
+                return Err(EngineError::OperatingPoint {
+                    nodes: op_failure_nodes(&log),
+                    detail: if lines.is_empty() {
+                        "(ngspice printed no error or warning)".into()
+                    } else {
+                        lines.join(" | ")
+                    },
+                });
+            }
             return Err(other(format!(
                 "ngspice stopped before reaching {t}: {}",
                 failure_detail()
@@ -2060,6 +2509,232 @@ impl Drop for NgspiceEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A vector to leave out of the engine's `.save` list (the G2 negative
+    /// control of ADR-015 D2).
+    pub(super) static SAVE_OMIT: Mutex<Option<String>> = Mutex::new(None);
+    /// ngspice is a process-wide singleton: the tests that start it run one
+    /// at a time.
+    static NGSPICE: Mutex<()> = Mutex::new(());
+
+    fn ngspice() -> MutexGuard<'static, ()> {
+        NGSPICE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// An RC driven by a digital input, read as an analog output and
+    /// through a `digital_in` threshold, on a 10 us lattice.
+    fn rc(t_stop: Time) -> NgspiceConfig {
+        let mut cfg =
+            NgspiceConfig::new("R1 in out 1k\nC1 out 0 100n\n", t_stop, Time::from_us(10));
+        cfg.lattice = Some(Time::from_us(10));
+        cfg.inputs.push(InputBinding {
+            pin: "IN".into(),
+            source: "V_IN".into(),
+            drive: Drive::Digital {
+                model: DigitalOut {
+                    vol: 0.0,
+                    voh: 3.3,
+                    rise: Time::from_ns(5),
+                    fall: Time::from_ns(5),
+                    zout: 25.0,
+                },
+                initial: Level::Low,
+            },
+            glue_node: Some("in".into()),
+        });
+        cfg.outputs.push(OutputBinding {
+            pin: "OUT".into(),
+            node: "out".into(),
+        });
+        cfg.digital_outputs.push(DigitalOutputBinding {
+            pin: "SENSE".into(),
+            node: "out".into(),
+            model: DigitalIn {
+                vih: 2.0,
+                vil: 1.0,
+                cin: 5e-12,
+            },
+        });
+        cfg
+    }
+
+    /// Run `cfg` in grants of 100 us, the input rising at 50 us; returns
+    /// the boundary values of OUT, or the first error.
+    fn drive(cfg: NgspiceConfig) -> Result<Vec<u64>, EngineError> {
+        let stop = cfg.t_stop;
+        let mut e = NgspiceEngine::new(cfg)?;
+        let mut out = Vec::new();
+        let mut t = Time::ZERO;
+        while t < stop {
+            if t == Time::ZERO {
+                e.push_edge("IN", Level::High, Time::from_us(50))?;
+            }
+            t = t + Time::from_us(100);
+            e.advance_to(t)?;
+            out.push(e.voltage("out")?.to_bits());
+        }
+        Ok(out)
+    }
+
+    #[test]
+    fn the_engine_saves_exactly_what_it_reads() {
+        let _g = ngspice();
+        // ADR-015 D2: the deck carries one .save of the read vectors (the
+        // watched node, the input's glue node), and nothing else.
+        let e = NgspiceEngine::new(rc(Time::from_us(500))).expect("start");
+        let saves: Vec<&str> = e
+            .deck()
+            .lines()
+            .filter(|l| l.starts_with(".save"))
+            .collect();
+        assert_eq!(saves, vec![".save out in"]);
+        for w in &e.watch {
+            assert!(saves[0].split_whitespace().any(|s| s == w), "{w} not saved");
+        }
+        drop(e);
+        let full = drive(rc(Time::from_us(500))).expect("run");
+        // The negative control: without the watched node in the list, the
+        // engine cannot read it, and the run fails rather than reading
+        // something else.
+        *SAVE_OMIT.lock().unwrap() = Some("out".into());
+        let r = drive(rc(Time::from_us(500)));
+        *SAVE_OMIT.lock().unwrap() = None;
+        let err = r.expect_err("a run without its read vector must fail");
+        assert!(err.to_string().contains("out"), "{err}");
+        // A deck with its own .save is refused: the engine owns it.
+        let mut cfg = rc(Time::from_us(500));
+        cfg.netlist.push_str(".save all\n");
+        let err = NgspiceEngine::new(cfg).err().expect("refused");
+        assert!(err.to_string().contains(".save"), "{err}");
+        // And the run is repeatable.
+        assert_eq!(drive(rc(Time::from_us(500))).expect("run"), full);
+    }
+
+    #[test]
+    fn the_watchdog_fails_a_cell_with_too_many_points_identically() {
+        let _g = ngspice();
+        // A limit of 2 accepted points per 10 us cell: ngspice's first steps
+        // after t = 0 are short, so the first cell trips, at the same point
+        // in every run; the engine then fails every later call.
+        let run = || {
+            let mut cfg = rc(Time::from_us(500));
+            cfg.watchdog.max_points_per_cell = 2;
+            drive(cfg).expect_err("the watchdog trips")
+        };
+        let (a, b) = (run(), run());
+        let EngineError::NoProgress { at, detail } = &a else {
+            panic!("expected NoProgress, got {a}");
+        };
+        assert!(*at > Time::ZERO && *at <= Time::from_us(10), "{at}");
+        assert!(
+            detail.contains("accepted solver points in the lattice cell"),
+            "{detail}"
+        );
+        assert!(detail.contains("Reference value : "), "{detail}");
+        assert_eq!(a.to_string(), b.to_string(), "deterministic");
+        // The default limits pass the same run.
+        drive(rc(Time::from_us(500))).expect("default watchdog");
+    }
+
+    #[test]
+    fn an_operating_point_failure_names_its_nodes() {
+        let _g = ngspice();
+        // A regulator whose B source has no conductance above regulation
+        // (ADR-009 D2's flat region): the DC operating point fails.
+        let mut cfg = NgspiceConfig::new(
+            "V1 in 0 5\nB1 in out I = 10*max(0, min(1, (3.3-V(out))/0.01))\nR1 out 0 1Meg\n",
+            Time::from_us(100),
+            Time::from_us(10),
+        );
+        cfg.outputs.push(OutputBinding {
+            pin: "OUT".into(),
+            node: "out".into(),
+        });
+        // The transient's own operating point fails, at t = 0.
+        let tran = || {
+            NgspiceEngine::new(cfg.clone())
+                .err()
+                .expect("fails at t = 0")
+        };
+        let err = tran();
+        assert!(
+            matches!(&err, EngineError::OperatingPoint { nodes, .. } if nodes.contains(&"out".to_string())),
+            "{err}"
+        );
+        let first = err.to_string();
+        let t0 = Instant::now();
+        let err = operating_point(&cfg).expect_err("flat region");
+        let EngineError::OperatingPoint { nodes, .. } = &err else {
+            panic!("expected OperatingPoint, got {err}");
+        };
+        assert!(nodes.contains(&"out".to_string()), "{err}");
+        assert!(t0.elapsed() < Duration::from_secs(10), "fail fast");
+        // The check leaves the transient's own fallback as it was.
+        assert_eq!(tran().to_string(), first);
+        // A regulator written with a slope everywhere (ADR-009 D2) converges,
+        // and the singleton is free again afterwards.
+        cfg.netlist = "V1 in 0 5\nB1 in out I = 1m*(3.3-V(out))/0.01\nR1 out 0 1Meg\n".into();
+        operating_point(&cfg).expect("converges");
+        operating_point(&rc(Time::from_us(100))).expect("rc converges");
+        drop(NgspiceEngine::new(rc(Time::from_us(100))).expect("singleton released"));
+    }
+
+    #[test]
+    fn watch_count_limits() {
+        let l = 10_000_000_000; // 10 us
+        let mut w = WatchCount::new(Watchdog {
+            max_points_per_cell: 3,
+            max_points_without_progress: 4,
+        });
+        // Three points in (0, 10us], the fourth trips.
+        assert_eq!(w.accept(0.0, l), None);
+        assert_eq!(w.accept(2e-6, l), None);
+        assert_eq!(w.accept(4e-6, l), None);
+        assert_eq!(w.accept(6e-6, l), None);
+        let e = w.accept(8e-6, l).expect("fourth point of the cell");
+        assert!(e.contains("(0s, 10us]"), "{e}");
+        // Points that do not advance the fs time: the fourth repeat trips.
+        let mut w = WatchCount::new(Watchdog {
+            max_points_per_cell: 1000,
+            max_points_without_progress: 4,
+        });
+        let t = 77.43e-3;
+        assert_eq!(w.accept(t, l), None);
+        for _ in 0..3 {
+            assert_eq!(w.accept(t + 1e-19, l), None);
+        }
+        let e = w.accept(t, l).expect("no progress");
+        assert!(e.contains("did not advance past 77430us"), "{e}");
+        // Progress resets the count; without a lattice only that rule.
+        let mut w = WatchCount::new(Watchdog {
+            max_points_per_cell: 1,
+            max_points_without_progress: 2,
+        });
+        for k in 0..100 {
+            assert_eq!(w.accept(f64::from(k) * 1e-9, 0), None);
+        }
+        assert_eq!(c_exp5(7.743e-2), "7.74300e-02");
+        assert_eq!(c_exp5(1.5), "1.50000e+00");
+        assert_eq!(c_exp5(2.5e-120), "2.50000e-120");
+    }
+
+    #[test]
+    fn op_failure_nodes_are_parsed_from_the_log() {
+        let s = |x: &str| x.to_string();
+        let log = vec![
+            s("stderr Warning: singular matrix:  check node xu1.n2"),
+            s("stderr Warning: singular matrix:  check nodes a and b"),
+            s("stdout Last Node Voltages"),
+            s("stdout ------------------"),
+            s("stdout Node                                   Last Voltage        Previous Iter"),
+            s("stdout ----                                   ------------        -------------"),
+            s("stdout in                                                5                    5"),
+            s("stdout out                                               0          9.99999e+06 *"),
+            s("stdout v1#branch                                         0                  -10 *"),
+            s("stderr doAnalyses: TRAN:  Timestep too small; initial timepoint: trouble with node \"OUT\""),
+        ];
+        assert_eq!(op_failure_nodes(&log), vec!["xu1.n2", "a", "b", "out"]);
+    }
 
     #[test]
     fn a_stop_without_an_error_line_reports_the_warnings() {

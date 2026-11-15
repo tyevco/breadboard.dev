@@ -4,6 +4,7 @@
 //! hint, an explicit binding that differs from the package, a conflict
 //! between views). Lint never changes a file.
 
+use crate::bexpr;
 use crate::optsets;
 use crate::package::{
     module_pinmap, param_set, pin_model_params, Package, Param, Port, LOCAL_ONLY,
@@ -482,6 +483,11 @@ fn lint_views(pkg: &Package, o: &mut Out) {
                 }
                 for g in spice::gnd_violations(&defs) {
                     o.e(format!("{at}: {}: {g}", v.file));
+                }
+                // ADR-015 D3: every B/E/G expression and .func body against
+                // ngspice 42's function table and arity.
+                for e in bexpr::check(&text) {
+                    o.e(format!("{at}: {}: {e}", v.file));
                 }
                 // A bare M in any number of the file is not checked here:
                 // view files are SPICE, where M is milli by definition; the

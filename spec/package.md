@@ -362,6 +362,17 @@ vector file name, lattice, option set, partition, every measured value in
 µV or fs, and the sha256 of every sample's `f64` bits), so two packages'
 results compare byte for byte (ADR-006 gate G8).
 
+Before the transient, the runner **lints the deck's expressions** (section
+11) and **solves the vector's DC operating point** under the run's option
+set (ADR-015 D4): an `.op` analysis with the option set's card, so its
+iteration limits apply (Newton, gmin stepping, source stepping), without
+ngspice's transient-op fallback (`optran`, which ngspice 42 makes its
+default and which a large deck can spend tens of seconds in before it gives
+up). A failure is reported at once, naming the nodes ngspice names. Every
+pair a vector runs under (its own and every recorded qualification) gets
+this check. The engine's own `.save` (ADR-015 D2) is part of every deck:
+a circuit or view with a `.save` card of its own is refused.
+
 **Qualification.** A view is lattice-qualified for (`L`, option set) when
 all its vectors pass under that pair. `bb pkg test` runs each view under
 every vector's own pair and every recorded `[[analog.qualified]]` pair; a
@@ -493,6 +504,19 @@ Errors:
 - view files: top-level content (section 3), the subckt exists, the `gnd`
   rule (section 5), and the package's own views define no top-level name
   differently;
+- **expressions** (ADR-015 D3; `bbpkg::bexpr`): every function call in a
+  B source's `V=`/`I=` expression, an E or G source's `value=`, `vol=` or
+  `cur=` expression and a `.func` body is checked against ngspice 42's own
+  tables, taken from its sources: the B-expression parser's
+  (`src/spicelib/parser/inpptree.c`: one argument, except `pow`, `pwr`,
+  `min` and `max` with exactly two, `ternary_fcn` with three, `pwl` with an
+  input and `x, y` pairs; `v()` one or two nodes, `i()` one source) and,
+  inside `{...}`, numparam's (`src/frontend/numparam/xpressn.c`). An
+  unknown function (not in the table and not a `.func`), a wrong arity and a
+  `.func` called with the wrong number of arguments are errors. A
+  three-argument `min()` segfaults libngspice 42; in numparam it is
+  silently `min(a, c)`. `bb run` and `bb pkg test` run the same check on
+  the whole deck before ngspice reads it;
 - test vectors parse and name existing views and their ports.
 
 Warnings: a previous-major file (the migration hint), a parameter set for a

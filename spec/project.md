@@ -266,7 +266,10 @@ under the bound pin, `kind = "pin_load"`; an explicit `load = "none"` on
 an `adc_in` binding is recorded the same way, with `view = "none"` and only
 `ref`, `package`, `version` and `kind`); `out_of_scope` and `not_simulated` (with
 reasons); `packages` and `platforms` (the locked hashes); `deck_sha256`;
-`options` (every run option that can change results, the probes; with
+`options` (every run option that can change results, the probes, and
+`ngspice_watchdog`: `max_points_per_cell` and
+`max_points_without_progress`, the progress watchdog's limits, which decide
+whether a run completes or fails with `NoProgress`, ADR-015 D1; with
 `--gdb` also `gdb` and `gdb_wait`); `debug`, `true` for a run with a
 debugger attached (`bb run --gdb`, ADR-008 D10 and Amendment 7) and
 absent otherwise: a debug run is never compared against a reference; and
