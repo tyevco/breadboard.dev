@@ -1,0 +1,28 @@
+# examples/bench/bench/digital-playback.toml: U1.PB0 driven by the bench engine from
+# data/btn.csv (ADR-010 D3: a digital stream into an MCU pin, applied at ceil_L like any edge).
+# data/btn.csv holds the edge times that bench/digital-pwl.toml's [[pwl]] gives at PB0's thresholds
+# (scripts/bench_gate.sh measures them and requires the committed file); BTN itself is left to R1
+# and C1, which PB0 no longer reads.
+schema = "bb-bench/1"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "1"
+
+[[supply]]
+net = "VSW"
+volts = "3.3V"
+rs = "10m"
+
+# AIN has no playback here: 0 V keeps R3 and C2 at a DC operating point.
+[[supply]]
+net = "AIN"
+volts = "0V"
+
+[[playback]]
+net = "U1.PB0"
+file = "../data/btn.csv"
+
+[options]
+set = "phase0"

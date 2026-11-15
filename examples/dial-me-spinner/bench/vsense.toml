@@ -18,7 +18,7 @@
 #
 # The analog scope is E1's (bench/cold.toml), so the project's probes resolve; with VSYS 3.0 V the
 # firmware's VBAT_est (2.94 V) is below 3.53 V and the LEDs stay off.
-schema = "bb-bench/0"
+schema = "bb-bench/1"
 temp_c = "25"
 
 [[supply]]

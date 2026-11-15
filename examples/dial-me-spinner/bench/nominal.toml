@@ -16,7 +16,7 @@
 # C101-C148), the 48 WS2812C supply loads with the data chain R40/R41/R43 into D101's input clamp
 # and the LED_D1..LED_D48 chain nets (D102-D148's inputs), R3 on LED_PWR_EN, the VSYS
 # capacitors and the VSYS_SENSE divider (R1, R2, C5), and the +3V3 decoupling capacitors.
-schema = "bb-bench/0"
+schema = "bb-bench/1"
 temp_c = "25"
 
 [[supply]]

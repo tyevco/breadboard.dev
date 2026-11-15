@@ -107,16 +107,41 @@ Phase 1 implements three layers.
   | Key | Meaning |
   | --- | --- |
   | `name` | unique in the package |
-  | `kind` | `circuit` (default) or `pin_load` |
+  | `kind` | `circuit` (default), `pin_load` or (`bb-part/1`) `switch` |
   | `purpose` | text |
   | `fidelity` | the rungs it is valid for (`fast`, `pi`, `si`, `em`; at least one) |
   | `default_for` | the rungs it is the default for; a subset of `fidelity`; at most one view per package may name a rung |
-  | `file` | the view file (SPICE), relative to the package |
-  | `subckt` | the subcircuit the file defines |
-  | `ports` | `circuit`: the subckt's ports in order, as pin names; `pin_load`: typed ports (section 4) |
+  | `file` | the view file (SPICE), relative to the package (none for `switch`) |
+  | `subckt` | the subcircuit the file defines (none for `switch`) |
+  | `ports` | `circuit`: the subckt's ports in order, as pin names; `pin_load`: typed ports (section 4); `switch`: its two contacts, `{ role = "pin", pin = "<name>" }` |
   | `params` | `{ name = "<value>" }` defaults, in the value grammar (section 6) |
   | `[[analog.qualified]]` | `{ lattice, options }` pairs the view is qualified for, written by `bb pkg test --record` (section 8) |
   | `provenance` | section 2 |
+
+**The `switch` view kind** (`bb-part/1`, ADR-010 D2). A contact that a
+bench `[[action]] press` closes (`spec/project.md` section 3). `bb`
+generates its element, so the view has no `file` or `subckt`:
+
+- every switch instance is `X<ref> <contact 1> <contact 2> bb_ctl_<ref>
+  bb_switch ron=<ron> roff=<roff>`, and the definition, emitted once with
+  the other view definitions, is one B conductance with no branch-current
+  unknown:
+
+  ```spice
+  .subckt bb_switch a b ctl ron=0.05 roff=1e8
+  B1 a b I = (V(a) - V(b)) * (1 / {roff} + V(ctl) * (1 / {ron} - 1 / {roff}))
+  .ends bb_switch
+  ```
+
+- `bb_ctl_<ref>` is the control node: 0 V open, 1 V closed. Its source
+  `V_bb_ctl_<ref>` is `DC 0` (open) when no action presses the instance,
+  else an `EXTERNAL` source the bench drives;
+- `params`: `ron` and `roff` (resistances, defaults `50m` and `100Meg`, so
+  both states keep a DC conductance; `0 < ron < roff`) and an optional
+  `bounce_max` (a time: the longest bounce a press of it may ask for);
+- a test vector maps the two contacts and `ctl` (the control node, driven
+  by an `[[edge]]` of 0 V / 1 V) to nodes, and qualifies the view like any
+  other (section 8).
 
 **Selection, with the ladder** `fast < pi < si < em`. For a run at fidelity
 `F` an instance uses: the view named by the project's per-instance override;
@@ -472,7 +497,15 @@ Applies to `bb-part`, `bb-pins`, `bb-pkgtest`, `bb-lock`, `bb-project`,
   a newer major is refused with "upgrade bb"; an older one is refused.
 - `bb pkg migrate` rewrites a package (its `part.toml`, `pins.toml` and test
   vectors) in place to the current majors, mechanically. First-party
-  packages are migrated in the same commit as the schema change.
+  packages are migrated in the same commit as the schema change. `bb pkg
+  migrate --bench <file>...` rewrites bench files (ADR-010 D1).
+- **Current majors** (the Phase 2 schema epoch, ADR-009..013, lands every
+  schema's next major in milestone S; milestone B1 carries its part of
+  it): `bb-part/1` (every `/0` key keeps its meaning; adds the `switch`
+  view kind, section 3; the other `bb-part/1` keys stay reserved until S)
+  and `bb-bench/1` (ADR-010 D1; `spec/project.md` section 3). Both
+  migrations from `/0` rewrite the `schema` line only. Every other schema
+  is at major 0.
 - **Package semver:** a change to a view's results (a vector's measured
   value) is at least a minor bump; a changed port list, pin list or
   parameter-set name is a major bump; a provenance-only edit is a patch.

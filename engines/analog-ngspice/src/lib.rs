@@ -97,6 +97,62 @@ pub enum Drive {
         /// Ramp duration for a value change.
         slew: Time,
     },
+    /// A bench output (ADR-010 D4): an analog value (volts, or the 0/1 of a
+    /// switch's control) that changes at the time of its trace entry (never
+    /// before the engine's `now`), by a ramp of [`TIMED_RAMP`] with a corner
+    /// and a breakpoint at its end. Unlike [`Drive::Analog`], a value
+    /// delivered in a trace before this engine advances takes effect at its
+    /// own time, not at the boundary. (A trigger's time is often an MCU edge
+    /// at a lattice point plus 1 fs, closer to the lattice point than the
+    /// solver resolves a corner; the ramp's end is resolved.)
+    Timed {
+        /// Value before the first exchange.
+        initial: f64,
+    },
+}
+
+/// The ramp of a [`Drive::Timed`] change (ADR-010 D4), as the 1 ns edges of
+/// a package test vector's control.
+pub const TIMED_RAMP: Time = Time::from_ns(1);
+
+/// How a [`TableSource`] interpolates between its points (ADR-010 D3).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Interp {
+    /// A straight line between neighbouring points (as a PWL source).
+    Linear,
+    /// Each point's value holds until the next point (a step there).
+    Hold,
+}
+
+/// The longest linear [`TableSource`] whose points are all ngspice
+/// breakpoints (ADR-010 Amendment 1): the `[[pwl]]` limit below which a
+/// bench warns, so a playback of at most this many points gives the result
+/// of the same points as an inline PWL card (which sets a breakpoint at
+/// every point, ADR-010 G2). A longer linear table's points are corners the
+/// steps are clamped to, without breakpoints: a breakpoint restarts the
+/// integration with steps of a tenth of the gap, which for data on every
+/// lattice point multiplies the solver points by about four (measured on
+/// examples/bench: 1 s at 100 ksps added 3.2 s with them, 0.4 s without).
+pub const TABLE_BREAKPOINTS_MAX: usize = 1_000;
+
+/// A bench table (ADR-010 D3, D4): the value of an `EXTERNAL` voltage or
+/// current source of the netlist (`V<name> n+ n- dc 0 external`, `I<name>
+/// n+ n- dc 0 external`) as a function of time, served by the engine's
+/// callbacks from the table with a cursor (O(1) per solver point), never
+/// by a PWL card. Before the first point the first value holds, after the
+/// last the last. Every point after `t = 0` is a corner: the solver steps
+/// are clamped to land on it. The points of a hold table and of a table of
+/// at most [`TABLE_BREAKPOINTS_MAX`] points also become ngspice breakpoints,
+/// each at the accepted point that opens the lattice cell before the one
+/// holding it (a pure function of the solver points, so of no grant
+/// partition).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableSource {
+    /// The element name (`V...` or `I...`; case-insensitive).
+    pub source: String,
+    /// `(t, value)`, strictly increasing in `t`; value in V or A.
+    pub points: Vec<(Time, f64)>,
+    pub interp: Interp,
 }
 
 /// Binds a kernel input pin to an `EXTERNAL` voltage source.
@@ -240,6 +296,10 @@ pub struct NgspiceConfig {
     pub lattice: Option<Time>,
     /// The progress watchdog (ADR-015 D1).
     pub watchdog: Watchdog,
+    /// Bench tables (ADR-010 D3, D4): `EXTERNAL` sources whose values come
+    /// from a table handed over once, so no analog value crosses the kernel
+    /// boundary per solver point.
+    pub tables: Vec<TableSource>,
 }
 
 /// The engine's deterministic progress watchdog (ADR-015 D1,
@@ -287,6 +347,7 @@ impl NgspiceConfig {
             handoff_spin: Duration::ZERO,
             lattice: None,
             watchdog: Watchdog::default(),
+            tables: Vec::new(),
         }
     }
 }
@@ -370,6 +431,121 @@ impl Wave {
     }
 }
 
+/// A [`TableSource`] as the callbacks serve it (ADR-010 D3, D4).
+#[derive(Clone, Debug)]
+struct Table {
+    t_s: Vec<f64>,
+    v: Vec<f64>,
+    hold: bool,
+    /// Per point, when its breakpoint is released: the first accepted
+    /// point at or after this time (s).
+    release_s: Vec<f64>,
+    /// The last point at or before the last accepted solver time.
+    cur: usize,
+    /// The next point whose breakpoint is not yet released.
+    next_bk: usize,
+}
+
+impl Table {
+    fn new(t: &TableSource, lattice_fs: u64) -> Table {
+        let t_s: Vec<f64> = t.points.iter().map(|(x, _)| x.as_secs_f64()).collect();
+        let release_s = t
+            .points
+            .iter()
+            .enumerate()
+            .map(|(k, (x, _))| {
+                let fs = x.as_fs();
+                if lattice_fs > 0 {
+                    // The lattice point opening the cell before the one
+                    // holding the point (so the breakpoint is in ngspice's
+                    // table before the step decision at the cell's start).
+                    let open = fs.div_ceil(lattice_fs).saturating_sub(2) * lattice_fs;
+                    Time::from_fs(open).as_secs_f64()
+                } else if k >= 2 {
+                    t.points[k - 2].0.as_secs_f64()
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        // Which points become breakpoints (ADR-010 Amendment 1): every one of
+        // a hold table (a step) or of a short table (as an inline PWL sets
+        // them, so a short table gives the PWL's result); none of a long
+        // linear table, whose corners the clamp lands on anyway.
+        let next_bk = if t.interp == Interp::Hold || t.points.len() <= TABLE_BREAKPOINTS_MAX {
+            t.points
+                .iter()
+                .position(|(x, _)| !x.is_zero())
+                .unwrap_or(t.points.len())
+        } else {
+            t.points.len()
+        };
+        Table {
+            t_s,
+            v: t.points.iter().map(|(_, v)| *v).collect(),
+            hold: t.interp == Interp::Hold,
+            release_s,
+            cur: 0,
+            next_bk,
+        }
+    }
+
+    /// The value at solver time `t` (s): a pure function of `t`; the cursor
+    /// only makes the search O(1) for the solver's forward times. A `hold`
+    /// step is left-continuous, as an input ramp is (`Seg::value_at`): at
+    /// its point the old value, after it the new one, so the step falls in
+    /// the solver's first (short) step after the breakpoint.
+    fn value_at(&self, t: f64) -> f64 {
+        let n = self.t_s.len();
+        if t < self.t_s[0] {
+            return self.v[0];
+        }
+        let mut i = if t >= self.t_s[self.cur] {
+            self.cur
+        } else {
+            self.t_s.partition_point(|&x| x <= t).saturating_sub(1)
+        };
+        while i + 1 < n && self.t_s[i + 1] <= t {
+            i += 1;
+        }
+        if self.hold {
+            // Left-continuous: at a later point (within the tolerance the
+            // lattice clamp and the park test use), the value before it.
+            if i > 0 && t - self.t_s[i] <= grant_tolerance_s(self.t_s[i]) {
+                return self.v[i - 1];
+            }
+            return self.v[i];
+        }
+        if i + 1 == n {
+            return self.v[i];
+        }
+        let x = (t - self.t_s[i]) / (self.t_s[i + 1] - self.t_s[i]);
+        self.v[i] + x * (self.v[i + 1] - self.v[i])
+    }
+
+    /// The solver accepted a point at `time`: move the cursor, and collect
+    /// the breakpoints due (released at or before `time`).
+    fn accept(&mut self, time: f64, tol: f64, due: &mut Vec<f64>) {
+        let n = self.t_s.len();
+        while self.cur + 1 < n && self.t_s[self.cur + 1] <= time {
+            self.cur += 1;
+        }
+        while self.next_bk < n && self.release_s[self.next_bk] <= time + tol {
+            due.push(self.t_s[self.next_bk]);
+            self.next_bk += 1;
+        }
+    }
+
+    /// The first corner after `time` (plus the minimum corner distance).
+    fn next_corner(&self, time: f64) -> Option<f64> {
+        let mut i = self.cur;
+        while i < self.t_s.len() && self.t_s[i] <= time + CORNER_MIN_S {
+            i += 1;
+        }
+        self.t_s.get(i).copied()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // State shared with the ngspice callbacks
 // ---------------------------------------------------------------------------
@@ -408,6 +584,8 @@ struct State {
     watch: Vec<String>,
     /// `EXTERNAL` sources by lower-case name.
     sources: BTreeMap<String, Wave>,
+    /// Bench tables (ADR-010 D3) by lower-case source name (`v...`, `i...`).
+    tables: BTreeMap<String, Table>,
     /// Upcoming ramp corners (s, sorted): solver steps are clamped to land on
     /// them.
     corners: Vec<f64>,
@@ -700,6 +878,7 @@ impl State {
             read_from: 0,
             watch: Vec::new(),
             sources: BTreeMap::new(),
+            tables: BTreeMap::new(),
             corners: Vec::new(),
             new_bkpts: Vec::new(),
             lattice_fs: 0,
@@ -729,6 +908,11 @@ impl State {
         }
         if let Some(&c) = self.corners.iter().find(|&&c| c > time + CORNER_MIN_S) {
             limit = limit.min(c);
+        }
+        for t in self.tables.values() {
+            if let Some(c) = t.next_corner(time) {
+                limit = limit.min(c);
+            }
         }
         if time + *delta > limit && limit > time {
             *delta = limit - time;
@@ -930,12 +1114,38 @@ unsafe extern "C" fn cb_get_vsrc(
 ) -> c_int {
     let name = cstr_lossy(name).to_ascii_lowercase();
     let mut st = state();
-    let v = match st.sources.get(&name) {
-        Some(w) => w.value_at(time),
-        None => {
+    let v = match (st.sources.get(&name), st.tables.get(&name)) {
+        (Some(w), _) => w.value_at(time),
+        (None, Some(t)) => t.value_at(time),
+        (None, None) => {
             st.fail(format!(
-                "EXTERNAL source {name} is not bound to an input pin"
+                "EXTERNAL source {name} is not bound to an input pin or a bench table"
             ));
+            0.0
+        }
+    };
+    if !value.is_null() {
+        // SAFETY: ngspice passes a valid out-pointer.
+        unsafe { *value = v };
+    }
+    0
+}
+
+/// `EXTERNAL` current sources: bench tables only (ADR-010 D3, a current
+/// profile).
+unsafe extern "C" fn cb_get_isrc(
+    value: *mut f64,
+    time: f64,
+    name: *mut c_char,
+    _id: c_int,
+    _u: *mut c_void,
+) -> c_int {
+    let name = cstr_lossy(name).to_ascii_lowercase();
+    let mut st = state();
+    let v = match st.tables.get(&name) {
+        Some(t) => t.value_at(time),
+        None => {
+            st.fail(format!("EXTERNAL current source {name} has no bench table"));
             0.0
         }
     };
@@ -1085,8 +1295,12 @@ unsafe extern "C" fn cb_get_sync(
         // the ramp start, which is where a one-cell run is parked when it
         // learns of the ramp. Without a lattice they are due at once.
         let rtol = grant_tolerance_s(time);
-        if st.new_bkpts.iter().any(|&(r, _)| r <= time + rtol) {
-            let mut due = Vec::new();
+        // Bench tables (ADR-010 D3): the cursor, and the corners due.
+        let mut due = Vec::new();
+        for t in st.tables.values_mut() {
+            t.accept(time, rtol, &mut due);
+        }
+        if !due.is_empty() || st.new_bkpts.iter().any(|&(r, _)| r <= time + rtol) {
             st.new_bkpts.retain(|&(r, b)| {
                 let now_due = r <= time + rtol;
                 if now_due {
@@ -1194,7 +1408,7 @@ fn init_lib() -> Result<&'static ffi::Lib, String> {
         let rc = unsafe {
             (l.init_sync)(
                 Some(cb_get_vsrc),
-                None,
+                Some(cb_get_isrc),
                 Some(cb_get_sync),
                 &mut ident,
                 std::ptr::null_mut(),
@@ -1417,6 +1631,8 @@ struct Prepared {
     adc: BTreeMap<String, AdcOutput>,
     watch: Vec<String>,
     sources: BTreeMap<String, Wave>,
+    /// Bench tables (ADR-010 D3) by lower-case source name.
+    tables: BTreeMap<String, Table>,
     /// Title, circuit body, glue and the `.save` lines.
     lines: Vec<String>,
 }
@@ -1474,7 +1690,7 @@ fn prepare(cfg: &NgspiceConfig) -> Result<Prepared, EngineError> {
         for b in &cfg.inputs {
             let (level, volts) = match &b.drive {
                 Drive::Digital { model, initial } => (*initial, model.level_volts(*initial)),
-                Drive::Analog { initial, .. } => (Level::Low, *initial),
+                Drive::Analog { initial, .. } | Drive::Timed { initial } => (Level::Low, *initial),
             };
             let key = b.source.to_ascii_lowercase();
             if !key.starts_with('v') {
@@ -1486,7 +1702,7 @@ fn prepare(cfg: &NgspiceConfig) -> Result<Prepared, EngineError> {
             if let Some(node) = &b.glue_node {
                 let zout = match &b.drive {
                     Drive::Digital { model, .. } => model.zout,
-                    Drive::Analog { .. } => 0.0,
+                    Drive::Analog { .. } | Drive::Timed { .. } => 0.0,
                 };
                 if zout > 0.0 {
                     let int = format!("{}_int", b.source);
@@ -1504,6 +1720,34 @@ fn prepare(cfg: &NgspiceConfig) -> Result<Prepared, EngineError> {
             };
             if inputs.insert(b.pin.clone(), pin).is_some() {
                 return Err(other(format!("input pin {} bound twice", b.pin)));
+            }
+        }
+        // Bench tables (ADR-010 D3, D4).
+        let lattice_fs = cfg.lattice.map_or(0, Time::as_fs);
+        let mut tables = BTreeMap::new();
+        for t in &cfg.tables {
+            let key = t.source.to_ascii_lowercase();
+            if !(key.starts_with('v') || key.starts_with('i')) {
+                return Err(other(format!(
+                    "table source {} must be a V or I element",
+                    t.source
+                )));
+            }
+            if t.points.is_empty() || t.points.windows(2).any(|w| w[1].0 <= w[0].0) {
+                return Err(other(format!(
+                    "table source {}: needs points, strictly increasing in time",
+                    t.source
+                )));
+            }
+            if t.points.iter().any(|(_, v)| !v.is_finite()) {
+                return Err(other(format!(
+                    "table source {}: a value is not finite",
+                    t.source
+                )));
+            }
+            if sources.contains_key(&key) || tables.insert(key, Table::new(t, lattice_fs)).is_some()
+            {
+                return Err(other(format!("source {} bound twice", t.source)));
             }
         }
         let mut outputs = BTreeMap::new();
@@ -1650,6 +1894,7 @@ fn prepare(cfg: &NgspiceConfig) -> Result<Prepared, EngineError> {
             adc,
             watch,
             sources,
+            tables,
             lines,
         })
     }
@@ -1661,6 +1906,7 @@ fn claim(
     cfg: &NgspiceConfig,
     watch: &[String],
     sources: BTreeMap<String, Wave>,
+    tables: BTreeMap<String, Table>,
 ) -> Result<(), EngineError> {
     let mut st = state();
     if st.active {
@@ -1672,6 +1918,7 @@ fn claim(
     st.active = true;
     st.watch = watch.to_vec();
     st.sources = sources;
+    st.tables = tables;
     st.handoff_spin = cfg.handoff_spin;
     st.lattice_fs = cfg.lattice.map_or(0, Time::as_fs);
     st.wd = WatchCount::new(cfg.watchdog);
@@ -1722,7 +1969,7 @@ pub fn operating_point(cfg: &NgspiceConfig) -> Result<(), EngineError> {
     let mut lines = p.lines;
     lines.push(".op".to_string());
     lines.push(".end".to_string());
-    claim(cfg, &p.watch, p.sources)?;
+    claim(cfg, &p.watch, p.sources, p.tables)?;
     let r = (|| {
         load_circuit(lib, &lines)?;
         // No transient-op fallback: ngspice 42 makes `optran` its standard
@@ -1775,6 +2022,7 @@ impl NgspiceEngine {
             adc,
             watch,
             sources,
+            tables,
             mut lines,
         } = prepare(&cfg)?;
         let lib = init_lib().map_err(other)?;
@@ -1788,7 +2036,7 @@ impl NgspiceEngine {
             spice_time(cfg.t_max)
         ));
         lines.push(".end".to_string());
-        claim(&cfg, &watch, sources)?;
+        claim(&cfg, &watch, sources, tables)?;
         let mut engine = NgspiceEngine {
             name: cfg.name.clone(),
             lib,
@@ -2259,8 +2507,13 @@ impl NgspiceEngine {
             .inputs
             .get_mut(pin)
             .ok_or_else(|| other(format!("unknown input pin {pin}")))?;
-        let Drive::Analog { slew, .. } = p.drive else {
-            return Err(other(format!("pin {pin} is digital; use push_edge")));
+        let slew = match p.drive {
+            Drive::Analog { slew, .. } => slew,
+            // A bench output (ADR-010 D4): a 1 ns ramp from its time.
+            Drive::Timed { .. } => TIMED_RAMP,
+            Drive::Digital { .. } => {
+                return Err(other(format!("pin {pin} is digital; use push_edge")))
+            }
         };
         if p.volts.to_bits() == volts.to_bits() {
             return Ok(());
@@ -2471,6 +2724,38 @@ impl Engine for NgspiceEngine {
                     self.push_edge(pin, level, edge_time.max(now))?
                 }
                 PinSignal::Analog { volts } => self.push_value(pin, volts, now)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// The default (each entry as a snapshot through `apply_inputs`), except
+    /// for a [`Drive::Timed`] pin (a bench output, ADR-010 D4): its value
+    /// steps at the entry's own time, never before `now`.
+    fn apply_input_trace(
+        &mut self,
+        base: &PinSignals,
+        trace: &[Transition],
+    ) -> Result<(), EngineError> {
+        let now = self.now;
+        let mut snapshot = base.clone();
+        for tr in trace {
+            snapshot.insert(tr.pin.clone(), tr.signal);
+            let timed = self
+                .inputs
+                .get(&tr.pin)
+                .is_some_and(|p| matches!(p.drive, Drive::Timed { .. }));
+            match (timed, tr.signal) {
+                (true, PinSignal::Analog { volts }) => {
+                    self.push_value(&tr.pin, volts, tr.t.max(now))?
+                }
+                (true, PinSignal::Digital { .. }) => {
+                    return Err(other(format!(
+                        "pin {}: a digital level on a bench (Timed) input",
+                        tr.pin
+                    )))
+                }
+                (false, _) => self.apply_inputs(&snapshot)?,
             }
         }
         Ok(())
@@ -2788,6 +3073,68 @@ mod tests {
         w2.prune(Time::from_us(3));
         assert_eq!(w2.segs.len(), 1);
         assert_eq!(w2.value_at(4e-6), 0.0);
+    }
+
+    #[test]
+    fn tables_interpolate_hold_and_release_breakpoints() {
+        // ADR-010 D3: linear between points, the first value before them and
+        // the last after; hold is left-continuous (the old value at a point).
+        let pts = vec![
+            (Time::ZERO, 0.0),
+            (Time::from_us(10), 1.0),
+            (Time::from_us(30), 3.0),
+        ];
+        let lin = Table::new(
+            &TableSource {
+                source: "V1".into(),
+                points: pts.clone(),
+                interp: Interp::Linear,
+            },
+            10_000_000_000,
+        );
+        assert_eq!(lin.value_at(-1.0), 0.0);
+        assert!((lin.value_at(5e-6) - 0.5).abs() < 1e-12);
+        assert!((lin.value_at(20e-6) - 2.0).abs() < 1e-12);
+        assert_eq!(lin.value_at(1.0), 3.0);
+        let mut hold = Table::new(
+            &TableSource {
+                source: "V1".into(),
+                points: pts,
+                interp: Interp::Hold,
+            },
+            10_000_000_000,
+        );
+        assert_eq!(hold.value_at(5e-6), 0.0);
+        assert_eq!(hold.value_at(Time::from_us(10).as_secs_f64()), 0.0);
+        assert_eq!(hold.value_at(10.000001e-6), 1.0);
+        assert_eq!(hold.value_at(29e-6), 1.0);
+        assert_eq!(hold.value_at(31e-6), 3.0);
+        // The corners and their release: a point is released at the lattice
+        // point opening the cell before its own (10 us -> 0, 30 us -> 10 us).
+        let mut due = Vec::new();
+        hold.accept(0.0, 0.5e-15, &mut due);
+        assert_eq!(due, vec![Time::from_us(10).as_secs_f64()]);
+        assert_eq!(hold.next_corner(0.0), Some(Time::from_us(10).as_secs_f64()));
+        due.clear();
+        hold.accept(Time::from_us(10).as_secs_f64(), 0.5e-15, &mut due);
+        assert_eq!(due, vec![Time::from_us(30).as_secs_f64()]);
+        assert_eq!(hold.cur, 1);
+        // A long linear table sets no breakpoints (ADR-010 Amendment 1).
+        let long: Vec<(Time, f64)> = (0..=TABLE_BREAKPOINTS_MAX as u64)
+            .map(|k| (Time::from_us(10 * k), k as f64))
+            .collect();
+        let mut t = Table::new(
+            &TableSource {
+                source: "V1".into(),
+                points: long,
+                interp: Interp::Linear,
+            },
+            10_000_000_000,
+        );
+        assert_eq!(t.next_corner(0.0), Some(Time::from_us(10).as_secs_f64()));
+        due.clear();
+        t.accept(1.0, 0.5e-15, &mut due);
+        assert!(due.is_empty());
     }
 
     #[test]

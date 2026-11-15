@@ -1,0 +1,35 @@
+# The contact open (roff), closed at 1 ms (ron) and open again at 3 ms (ADR-010 D2, gate G8's
+# shape): open, out divides 3.3 V by roff and the 1 Meg load; closed, out follows 3.3 V within
+# ron (tau = 50 ns); opened again, out discharges through 1 Meg || 100 Meg (tau = 0.990 s).
+schema = "bb-pkgtest/0"
+view = "contact"
+circuit = "contact.cir"
+stop = "4ms"
+
+[ports]
+1 = "in"
+2 = "out"
+ctl = "ctl"
+
+[[edge]]
+net = "ctl"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+at = [["1ms", "high"], ["3ms", "low"]]
+
+[[expect]]
+meas = { node = "out", at = "0.5ms" }
+value = "0.032673V"
+tol = "5uV"
+source = "analytic: open, 3.3 V x 1 Meg / (1 Meg + 100 Meg) = 32.6733 mV"
+
+[[expect]]
+meas = { node = "out", at = "2ms" }
+value = "3.3V"
+tol = "10uV"
+source = "analytic: closed, 3.3 V x 1 Meg / (1 Meg + 50 mOhm) = 3.2999998 V (tau 50 ns)"
+
+[[expect]]
+meas = { node = "out", at = "3.5ms" }
+value = "3.298350V"
+tol = "0.1mV"
+source = "analytic: opened at 3 ms + 0.5 ns, 32.673 mV + 3.267 V x exp(-0.5 ms / 0.990099 s)"

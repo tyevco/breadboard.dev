@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/bench.schema.json",
-  "title": "bb-bench/0: a Phase 1 bench (spec/project.md section 3, ADR-007 D5)",
+  "title": "bb-bench/0 and bb-bench/1: a bench (spec/project.md section 3; ADR-007 D5, ADR-010 D1-D3)",
+  "description": "The JSON form of a bench file (TOML converted to JSON as is). bb-bench/1 keeps every bb-bench/0 key and its meaning (ADR-010 D1) and adds seed, [[action]], [[playback]], [[fault]] and a [[load]] profile (milestone B1). The other bb-bench/1 keys of ADR-010 D2 (fidelity, corner, [[battery]], [[activity]], [[env]], [probes], a [[load]] replace) are described loosely here and refused by bb until their milestone implements them. A bb-bench/0 file has none of the bb-bench/1 keys.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema"],
   "properties": {
-    "schema": { "const": "bb-bench/0" },
+    "schema": { "enum": ["bb-bench/0", "bb-bench/1"] },
     "temp_c": { "type": "string" },
     "supply": {
       "type": "array",
@@ -32,8 +33,18 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["net", "amps"],
-        "properties": { "net": { "type": "string" }, "amps": { "type": "string" } }
+        "required": ["net"],
+        "properties": {
+          "net": { "type": "string" },
+          "amps": { "type": "string" },
+          "profile": { "type": "string", "description": "bb-bench/1: a CSV t,amps (ADR-010 D2, D3)" },
+          "interp": { "$ref": "#/$defs/interp" },
+          "replace": { "type": "string", "description": "bb-bench/1: static-load mode (ADR-009 D4, milestone P3; refused until then)" }
+        },
+        "oneOf": [
+          { "required": ["amps"], "not": { "anyOf": [{ "required": ["profile"] }, { "required": ["interp"] }] } },
+          { "required": ["profile"], "not": { "required": ["amps"] } }
+        ]
       }
     },
     "nominal": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -49,6 +60,7 @@
           "points": {
             "type": "array",
             "minItems": 1,
+            "maxItems": 10000,
             "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 }
           }
         }
@@ -67,6 +79,94 @@
       "additionalProperties": false,
       "required": ["set"],
       "properties": { "set": { "type": "string" } }
+    },
+    "seed": { "type": "integer", "minimum": 0, "description": "bb-bench/1: the seed of the declared random elements (contact bounce); 1 when not given" },
+    "action": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "press": { "type": "string", "description": "an instance with a switch view" },
+          "set": { "type": "string", "description": "a [[supply]]'s net, or a bound MCU digital_in pin" },
+          "to": { "type": "string" },
+          "at": { "type": "string" },
+          "after": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["edge", "level"],
+            "properties": {
+              "edge": { "type": "string", "description": "an MCU pin bound as digital_out" },
+              "level": { "enum": [0, 1] },
+              "delay": { "type": "string" }
+            }
+          },
+          "for": { "type": "string" },
+          "bounce": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["count"],
+            "properties": { "count": { "type": "integer", "minimum": 1, "maximum": 64 }, "max": { "type": "string" } }
+          }
+        },
+        "allOf": [
+          { "oneOf": [{ "required": ["press"], "not": { "anyOf": [{ "required": ["set"] }, { "required": ["to"] }] } },
+                      { "required": ["set", "to"], "not": { "anyOf": [{ "required": ["press"] }, { "required": ["bounce"] }] } }] },
+          { "oneOf": [{ "required": ["at"], "not": { "required": ["after"] } }, { "required": ["after"], "not": { "required": ["at"] } }] }
+        ]
+      }
+    },
+    "playback": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["net", "file"],
+        "properties": {
+          "net": { "type": "string", "description": "an analog net, or a bound MCU digital_in pin (a digital stream)" },
+          "file": { "type": "string", "description": "a canonical CSV t,<name> (ADR-010 D3), relative to the bench" },
+          "rs": { "type": "string" },
+          "interp": { "$ref": "#/$defs/interp" }
+        }
+      }
+    },
+    "fault": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "net", "at"],
+        "properties": {
+          "kind": { "enum": ["open", "short"] },
+          "net": { "type": "string" },
+          "pin": { "type": "string", "description": "open: the instance pin that leaves the net (main:C8.1)" },
+          "at": { "type": "string" },
+          "for": { "type": "string" }
+        },
+        "if": { "properties": { "kind": { "const": "open" } } },
+        "then": { "required": ["pin"] },
+        "else": { "not": { "required": ["pin"] } }
+      }
+    },
+    "fidelity": { "type": "string", "description": "bb-bench/1, ADR-009 D1 (milestone P1; refused until then)" },
+    "corner": { "type": "string", "description": "bb-bench/1, ADR-009 D8 (milestone P1; refused until then)" },
+    "battery": { "type": "array", "items": { "type": "object" }, "description": "bb-bench/1, ADR-010 D2 (milestones P1, R2; refused until then)" },
+    "activity": { "type": "array", "items": { "type": "object" }, "description": "bb-bench/1, ADR-009 D4 (milestone P3; refused until then)" },
+    "env": { "type": "array", "items": { "type": "object" }, "description": "bb-bench/1, ADR-010 D2 (a later milestone; refused until then)" },
+    "probes": { "type": "object", "description": "bb-bench/1, ADR-010 D2 per-probe rates (a later milestone; refused until then)" }
+  },
+  "if": { "properties": { "schema": { "const": "bb-bench/0" } } },
+  "then": {
+    "not": {
+      "anyOf": [
+        { "required": ["seed"] }, { "required": ["action"] }, { "required": ["playback"] }, { "required": ["fault"] },
+        { "required": ["fidelity"] }, { "required": ["corner"] }, { "required": ["battery"] }, { "required": ["activity"] },
+        { "required": ["env"] }, { "required": ["probes"] },
+        { "required": ["load"], "properties": { "load": { "contains": { "anyOf": [{ "not": { "required": ["amps"] } }, { "required": ["replace"] }] } } } }
+      ]
     }
+  },
+  "$defs": {
+    "interp": { "enum": ["linear", "hold"] }
   }
 }

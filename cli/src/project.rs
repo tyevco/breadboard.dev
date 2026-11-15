@@ -433,8 +433,11 @@ pub struct Supply {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Load {
     pub net: String,
-    /// pA.
+    /// pA (a DC sink); 0 with a profile.
     pub amps_pa: i128,
+    /// `bb-bench/1`: a current profile (`t,amps`, ADR-010 D2), its file
+    /// (relative to the bench) and interpolation.
+    pub profile: Option<(String, Interp)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -445,9 +448,86 @@ pub struct Pwl {
     pub rs_uohm: i128,
 }
 
-/// A bench (`bb-bench/0`).
+/// How a playback or a profile interpolates (ADR-010 D2).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Interp {
+    Linear,
+    Hold,
+}
+
+/// `[[playback]]` (ADR-010 D2, D3): an analog net (an `EXTERNAL` source,
+/// ideal or behind `rs`), or a bound MCU `digital_in` pin (a digital stream,
+/// applied at `ceil_L`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Playback {
+    /// A net, or `<instance>.<pin>`.
+    pub net: String,
+    pub file: String,
+    pub rs_uohm: i128,
+    pub interp: Interp,
+}
+
+/// What an `[[action]]` does (ADR-010 D2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ActionKind {
+    /// Close a `switch` instance (while pressed).
+    Press(String),
+    /// Drive a bench source (a `[[supply]]`'s net, or a bound MCU
+    /// `digital_in` pin) to a new value (`to`, as written).
+    Set { target: String, to: String },
+}
+
+/// `after = { edge, level, delay }`: a relative trigger.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Trigger {
+    /// An MCU output pin (`<instance>.<pin>`).
+    pub edge: String,
+    pub level: bool,
+    /// fs.
+    pub delay: i128,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Action {
+    /// `[[action]][k]`, for messages.
+    pub path: String,
+    pub kind: ActionKind,
+    /// fs: exactly one of `at` and `after`.
+    pub at: Option<i128>,
+    pub after: Option<Trigger>,
+    /// fs: the press (or the set) ends `for` after it starts.
+    pub for_fs: Option<i128>,
+    /// `bounce = { count, max }` (a press): `max` in fs, if given.
+    pub bounce: Option<(u32, Option<i128>)>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FaultKind {
+    /// A pin of an instance leaves its net.
+    Open,
+    /// The net shorts to the board's ground.
+    Short,
+}
+
+/// `[[fault]]` (ADR-010 D2): a B conductance switched by an `EXTERNAL`
+/// source at `at` (and back after `for`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fault {
+    pub path: String,
+    pub kind: FaultKind,
+    pub net: String,
+    /// `open`: the instance pin (`main:C8.1`).
+    pub pin: Option<String>,
+    /// fs.
+    pub at: i128,
+    pub for_fs: Option<i128>,
+}
+
+/// A bench (`bb-bench/0` or `bb-bench/1`).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Bench {
+    /// The schema major the file declares.
+    pub major: u32,
     /// m°C.
     pub temp_mc: Option<i128>,
     pub supplies: Vec<Supply>,
@@ -461,23 +541,76 @@ pub struct Bench {
     pub options: String,
     /// The file text (copied into run.json).
     pub text: String,
+    /// `bb-bench/1` (ADR-010 D2): the seed of the declared random elements
+    /// (contact bounce); 1 when not given.
+    pub seed: u64,
+    pub actions: Vec<Action>,
+    pub playback: Vec<Playback>,
+    pub faults: Vec<Fault>,
+    /// The CSV files the bench names, by file name as written: their text
+    /// (read by [`Bench::read`], relative to the bench file).
+    pub data: BTreeMap<String, String>,
+    /// Parse warnings (a long `[[pwl]]`).
+    pub warnings: Vec<String>,
 }
 
 fn q(text: &str, dim: bbpkg::value::Dim, at: &str) -> Result<i128, String> {
     bbpkg::value::parse_quantity(text, dim).map_err(|e| format!("{at}: {e}"))
 }
 
+/// The `bb-bench/1` keys of ADR-010 D2 that another milestone implements:
+/// refused, never ignored (a bench that names one would not run as written).
+const LATER_TOP: &[(&str, &str)] = &[
+    ("fidelity", "the fidelity dial (ADR-009 D1, milestone P1)"),
+    ("corner", "corners (ADR-009 D8, milestone P1)"),
+    (
+        "battery",
+        "the battery element (ADR-009, milestones P1 and R2)",
+    ),
+    (
+        "activity",
+        "bench-scheduled internal states (ADR-009 D4, milestone P3)",
+    ),
+    ("env", "environment signals (a later milestone)"),
+    ("probes", "per-probe rates (a later milestone)"),
+];
+
 impl Bench {
     pub fn read(path: &Path) -> Result<Bench, String> {
         let text =
             std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        Bench::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
+        let mut b = Bench::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        // The CSV files (ADR-010 D3), relative to the bench file; only CSV
+        // reaches a run.
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let files: Vec<String> = b
+            .playback
+            .iter()
+            .map(|p| p.file.clone())
+            .chain(
+                b.loads
+                    .iter()
+                    .filter_map(|l| l.profile.as_ref().map(|p| p.0.clone())),
+            )
+            .collect();
+        for f in files {
+            if b.data.contains_key(&f) {
+                continue;
+            }
+            let p = dir.join(&f);
+            let t = std::fs::read_to_string(&p)
+                .map_err(|e| format!("{}: read {}: {e}", path.display(), p.display()))?;
+            b.data.insert(f, t);
+        }
+        Ok(b)
     }
 
     /// The bench used when `bb run` has no `--bench`: no sources, every
     /// net in scope, the default option set.
     pub fn empty() -> Bench {
         Bench {
+            major: 1,
+            seed: 1,
             options: bbpkg::optsets::DEFAULT.into(),
             ..Bench::default()
         }
@@ -488,12 +621,40 @@ impl Bench {
         let t = toml::parse(text).map_err(|e| e.to_string())?;
         let mut o = Obj::new("", &t);
         let schema = o.str_req("schema")?;
-        Registry::current().check("bb-bench", &schema)?;
+        let version = Registry::current().check("bb-bench", &schema)?;
+        let major = bbpkg::schema::SchemaId::parse(&schema)?.major;
         let mut b = Bench {
+            major,
+            seed: 1,
             text: text.to_string(),
             options: bbpkg::optsets::DEFAULT.into(),
             ..Bench::default()
         };
+        // Reading the previous major prints the migration hint (spec/package.md
+        // section 10).
+        if let bbpkg::schema::Version::Previous { .. } = version {
+            b.warnings.push(format!(
+                "{schema} is the previous major: bb reads it, but run `bb pkg migrate --bench \
+                 <file>` to rewrite it as {}",
+                Registry::current().current_id("bb-bench")
+            ));
+        }
+        if major >= 1 {
+            for (k, what) in LATER_TOP {
+                if o.has(k) {
+                    return Err(format!(
+                        "{k}: a bb-bench/1 key for {what} (ADR-010 D2), not implemented in this \
+                         build; a bench that names it would not run as written"
+                    ));
+                }
+            }
+            if let Some(s) = o.get("seed") {
+                b.seed = match s {
+                    Value::Integer(n) if *n >= 0 => *n as u64,
+                    _ => return Err("seed: expected a non-negative integer".into()),
+                };
+            }
+        }
         if let Some(tc) = o.str_opt("temp_c")? {
             let mc = bbpkg::value::parse_number(&tc)
                 .map_err(|e| format!("temp_c: {e}"))?
@@ -536,9 +697,39 @@ impl Bench {
         for mut l in o.tables("load")? {
             let at = l.path.clone();
             let net = l.str_req("net")?;
-            let amps_pa = q(&l.str_req("amps")?, Dim::Current, &format!("{at}.amps"))?;
+            if major >= 1 && l.has("replace") {
+                return Err(format!(
+                    "{at}.replace: static-load mode (ADR-009 D4, milestone P3), not implemented \
+                     in this build"
+                ));
+            }
+            let (amps_pa, profile) = if major >= 1 {
+                match (l.str_opt("amps")?, l.str_opt("profile")?) {
+                    (Some(a), None) => {
+                        if l.has("interp") {
+                            return Err(format!("{at}.interp: only with a profile"));
+                        }
+                        (q(&a, Dim::Current, &format!("{at}.amps"))?, None)
+                    }
+                    (None, Some(f)) => (0, Some((f, interp(&mut l, &at)?))),
+                    _ => {
+                        return Err(format!(
+                            "{at}: give exactly one of amps = \"<I>\" or profile = \"<file.csv>\""
+                        ))
+                    }
+                }
+            } else {
+                (
+                    q(&l.str_req("amps")?, Dim::Current, &format!("{at}.amps"))?,
+                    None,
+                )
+            };
             l.done()?;
-            b.loads.push(Load { net, amps_pa });
+            b.loads.push(Load {
+                net,
+                amps_pa,
+                profile,
+            });
         }
         if let Some(Value::Table(nt)) = o.get("nominal") {
             for (k, v) in nt {
@@ -581,6 +772,22 @@ impl Bench {
                 ));
             }
             p.done()?;
+            // ADR-010 D2: [[pwl]] is for short tables (an inline PWL card is
+            // O(n^2) in ngspice); [[playback]] is the route for long ones.
+            if points.len() > PWL_REFUSE {
+                return Err(format!(
+                    "{at}.points: {} points; [[pwl]] takes at most {PWL_REFUSE} (an inline PWL \
+                     is O(n^2) in ngspice): use [[playback]] with a CSV (ADR-010 D2)",
+                    points.len()
+                ));
+            }
+            if points.len() > PWL_WARN {
+                b.warnings.push(format!(
+                    "{at}.points: {} points; [[pwl]] is for short tables (above {PWL_WARN}, use \
+                     [[playback]], ADR-010 D2)",
+                    points.len()
+                ));
+            }
             b.pwl.push(Pwl {
                 net,
                 points,
@@ -605,8 +812,188 @@ impl Bench {
                 bbpkg::optsets::names().join(", ")
             ));
         }
+        if major >= 1 {
+            b.parse_v1(&mut o)?;
+        }
         o.done()?;
         Ok(b)
+    }
+
+    /// The `bb-bench/1` sections of milestone B1 (ADR-010 D2): `[[action]]`,
+    /// `[[playback]]` and `[[fault]]` (`seed` and `[[load]] profile` are
+    /// read with the `/0` keys).
+    fn parse_v1(&mut self, o: &mut Obj) -> Result<(), String> {
+        use bbpkg::value::Dim;
+        let time = |text: &str, at: &str| -> Result<i128, String> {
+            let t = q(text, Dim::Time, at)?;
+            if t < 0 {
+                return Err(format!("{at}: a negative time"));
+            }
+            Ok(t)
+        };
+        for mut a in o.tables("action")? {
+            let at = a.path.clone();
+            let kind = match (a.str_opt("press")?, a.str_opt("set")?) {
+                (Some(p), None) => {
+                    if a.has("to") {
+                        return Err(format!("{at}.to: a press takes no value"));
+                    }
+                    ActionKind::Press(p)
+                }
+                (None, Some(s)) => ActionKind::Set {
+                    target: s,
+                    to: a
+                        .str_opt("to")?
+                        .ok_or_else(|| format!("{at}.to: required with set"))?,
+                },
+                _ => {
+                    return Err(format!(
+                        "{at}: give exactly one of press = \"<instance>\" or set = \"<net or pin>\""
+                    ))
+                }
+            };
+            let at_t = a
+                .str_opt("at")?
+                .map(|s| time(&s, &format!("{at}.at")))
+                .transpose()?;
+            let after = match a.table_opt("after")? {
+                Some(mut t) => {
+                    let edge = t.str_req("edge")?;
+                    let level = match t.get("level") {
+                        Some(Value::Integer(0)) => false,
+                        Some(Value::Integer(1)) => true,
+                        _ => return Err(format!("{at}.after.level: 0 or 1 (an integer)")),
+                    };
+                    let delay = match t.str_opt("delay")? {
+                        Some(d) => time(&d, &format!("{at}.after.delay"))?,
+                        None => 0,
+                    };
+                    if t.has("log") {
+                        return Err(format!(
+                            "{at}.after.log: a log trigger is not implemented in this build \
+                             (milestone B1 triggers on edges; ADR-010 Amendment 1)"
+                        ));
+                    }
+                    t.done()?;
+                    Some(Trigger { edge, level, delay })
+                }
+                None => None,
+            };
+            if at_t.is_some() == after.is_some() {
+                return Err(format!(
+                    "{at}: give exactly one of at = \"<t>\" or after = {{ edge, level, delay }}"
+                ));
+            }
+            let for_fs = a
+                .str_opt("for")?
+                .map(|s| time(&s, &format!("{at}.for")))
+                .transpose()?;
+            if for_fs == Some(0) {
+                return Err(format!("{at}.for: must be > 0"));
+            }
+            let bounce = match a.table_opt("bounce")? {
+                Some(mut t) => {
+                    if !matches!(kind, ActionKind::Press(_)) {
+                        return Err(format!("{at}.bounce: only a press bounces"));
+                    }
+                    let count = match t.get("count") {
+                        Some(Value::Integer(n)) if (1..=64).contains(n) => *n as u32,
+                        _ => return Err(format!("{at}.bounce.count: an integer from 1 to 64")),
+                    };
+                    let max = t
+                        .str_opt("max")?
+                        .map(|s| time(&s, &format!("{at}.bounce.max")))
+                        .transpose()?;
+                    t.done()?;
+                    Some((count, max))
+                }
+                None => None,
+            };
+            a.done()?;
+            self.actions.push(Action {
+                path: at,
+                kind,
+                at: at_t,
+                after,
+                for_fs,
+                bounce,
+            });
+        }
+        for mut p in o.tables("playback")? {
+            let at = p.path.clone();
+            let net = p.str_req("net")?;
+            let file = p.str_req("file")?;
+            let rs_uohm = match p.str_opt("rs")? {
+                Some(r) => q(&r, Dim::Resistance, &format!("{at}.rs"))?,
+                None => 0,
+            };
+            if rs_uohm < 0 {
+                return Err(format!("{at}.rs: must be >= 0"));
+            }
+            let interp = interp(&mut p, &at)?;
+            p.done()?;
+            self.playback.push(Playback {
+                net,
+                file,
+                rs_uohm,
+                interp,
+            });
+        }
+        for mut f in o.tables("fault")? {
+            let at = f.path.clone();
+            let kind = match f.str_req("kind")?.as_str() {
+                "open" => FaultKind::Open,
+                "short" => FaultKind::Short,
+                k => return Err(format!("{at}.kind {k:?}: open or short")),
+            };
+            let net = f.str_req("net")?;
+            let pin = f.str_opt("pin")?;
+            match (kind, &pin) {
+                (FaultKind::Open, None) => {
+                    return Err(format!(
+                        "{at}.pin: an open fault names the instance pin that leaves the net \
+                         (\"main:C8.1\")"
+                    ))
+                }
+                (FaultKind::Short, Some(_)) => {
+                    return Err(format!(
+                        "{at}.pin: a short is between the net and the ground; it names no pin"
+                    ))
+                }
+                _ => {}
+            }
+            let t = time(&f.str_req("at")?, &format!("{at}.at"))?;
+            let for_fs = f
+                .str_opt("for")?
+                .map(|s| time(&s, &format!("{at}.for")))
+                .transpose()?;
+            if for_fs == Some(0) {
+                return Err(format!("{at}.for: must be > 0"));
+            }
+            f.done()?;
+            self.faults.push(Fault {
+                path: at,
+                kind,
+                net,
+                pin,
+                at: t,
+                for_fs,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// `[[pwl]]` (ADR-010 D2): a warning above this many points, refused above
+/// [`PWL_REFUSE`].
+pub const PWL_WARN: usize = 1_000;
+pub const PWL_REFUSE: usize = 10_000;
+
+fn interp(o: &mut Obj, at: &str) -> Result<Interp, String> {
+    match o.str_opt("interp")?.as_deref() {
+        None | Some("linear") => Ok(Interp::Linear),
+        Some("hold") => Ok(Interp::Hold),
+        Some(x) => Err(format!("{at}.interp {x:?}: linear or hold")),
     }
 }
 
@@ -737,6 +1124,120 @@ set = "phase0"
         assert_eq!(b.supplies[1].track, Some(("VSYS".into(), 44_200)));
         assert_eq!(b.loads[0].amps_pa, 50_000_000_000);
         assert_eq!(b.pwl[0].points[1], (1_000_000_000_000, 3_300_000));
+        assert_eq!(b.major, 0);
         assert!(Bench::parse("schema = \"bb-bench/0\"\n[options]\nset = \"loose\"\n").is_err());
+    }
+
+    const V1: &str = r#"
+schema = "bb-bench/1"
+seed = 3
+[[supply]]
+net = "VSW"
+volts = "3.3V"
+[[load]]
+net = "VSW"
+profile = "i.csv"
+interp = "hold"
+[[playback]]
+net = "AIN"
+file = "a.csv"
+rs = "100"
+[[playback]]
+net = "U1.PB0"
+file = "b.csv"
+[[action]]
+press = "SW1"
+at = "2ms"
+for = "50ms"
+bounce = { count = 3, max = "1ms" }
+[[action]]
+set = "VSW"
+to = "2.5V"
+after = { edge = "U1.PA5", level = 1, delay = "1ms" }
+[[fault]]
+kind = "open"
+net = "BTN"
+pin = "main:C1.1"
+at = "50ms"
+[[fault]]
+kind = "short"
+net = "AFILT"
+at = "60ms"
+for = "1ms"
+"#;
+
+    const BENCH0: &str =
+        "schema = \"bb-bench/0\"\n[[supply]]\nnet = \"VSYS\"\nvolts = \"3.0V\"\nrs = \"0.569\"\n";
+
+    #[test]
+    fn parses_bench_v1() {
+        // ADR-010 D1-D2 (milestone B1): the /0 keys keep their meaning, and
+        // seed, profiles, playback, actions and faults are read.
+        let b = Bench::parse(V1).unwrap();
+        assert_eq!((b.major, b.seed), (1, 3));
+        assert_eq!(b.loads[0].profile, Some(("i.csv".into(), Interp::Hold)));
+        assert_eq!(b.playback[0].rs_uohm, 100_000_000);
+        assert_eq!(b.playback[1].interp, Interp::Linear);
+        assert_eq!(b.actions[0].kind, ActionKind::Press("SW1".into()));
+        assert_eq!(b.actions[0].bounce, Some((3, Some(1_000_000_000_000))));
+        assert_eq!(b.actions[0].for_fs, Some(50_000_000_000_000));
+        assert_eq!(
+            b.actions[1].after,
+            Some(Trigger {
+                edge: "U1.PA5".into(),
+                level: true,
+                delay: 1_000_000_000_000
+            })
+        );
+        assert_eq!(b.faults[0].kind, FaultKind::Open);
+        assert_eq!(b.faults[1].for_fs, Some(1_000_000_000_000));
+        // A /0 bench migrated is the same bench.
+        let v1 = Bench::parse(&BENCH0.replace("bb-bench/0", "bb-bench/1")).unwrap();
+        assert_eq!(v1.supplies, Bench::parse(BENCH0).unwrap().supplies);
+        // Refusals.
+        let err = |s: String| Bench::parse(&s).unwrap_err();
+        assert!(err(V1.replace("bb-bench/1", "bb-bench/0")).contains("amps: required"));
+        assert!(err(format!(
+            "{BENCH0}[[action]]\npress = \"SW1\"\nat = \"1ms\"\n"
+        ))
+        .contains("action: unknown key"));
+        assert!(err(format!("{BENCH0}seed = 1\n")).contains("seed: unknown key"));
+        assert!(err(format!("{V1}[[battery]]\nnet = \"VSW\"\n")).contains("battery"));
+        assert!(err(V1.replace(
+            "at = \"2ms\"",
+            "at = \"2ms\"\nafter = { edge = \"X\", level = 1 }"
+        ))
+        .contains("exactly one of at"));
+        assert!(
+            err(V1.replace("press = \"SW1\"", "press = \"SW1\"\nset = \"X\""))
+                .contains("exactly one of press")
+        );
+        assert!(err(V1.replace("level = 1", "level = 2")).contains("0 or 1"));
+        assert!(
+            err(V1.replace("kind = \"short\"", "kind = \"short\"\npin = \"C1.1\""))
+                .contains("names no pin")
+        );
+        assert!(err(V1.replace("pin = \"main:C1.1\"\n", "")).contains("instance pin"));
+        assert!(
+            err(V1.replace("interp = \"hold\"", "interp = \"cubic\"")).contains("linear or hold")
+        );
+        assert!(
+            err(V1.replace("profile = \"i.csv\"", "profile = \"i.csv\"\namps = \"1A\""))
+                .contains("exactly one of amps")
+        );
+        assert!(err(V1.replace("count = 3", "count = 0")).contains("1 to 64"));
+        assert!(err(V1.replace("for = \"50ms\"", "for = \"0s\"")).contains("> 0"));
+        assert!(err(V1.replace("seed = 3", "seed = -1")).contains("seed"));
+        let long: String = (0..=PWL_REFUSE)
+            .map(|k| format!("[\"{k}us\", \"1V\"], "))
+            .collect();
+        assert!(
+            err(format!("{V1}[[pwl]]\nnet = \"X\"\npoints = [{long}]\n")).contains("at most 10000")
+        );
+        let mid: String = (0..=PWL_WARN)
+            .map(|k| format!("[\"{k}us\", \"1V\"], "))
+            .collect();
+        let w = Bench::parse(&format!("{V1}[[pwl]]\nnet = \"X\"\npoints = [{mid}]\n")).unwrap();
+        assert!(w.warnings[0].contains("short tables"), "{:?}", w.warnings);
     }
 }

@@ -13,7 +13,7 @@
 # has a fixed or tracking voltage only.
 # Not reproduced (plan section 2): the BQ25180 power path, the base-board VSYS capacitance, the
 # cell's own dynamics (a linear OCV ramp stands in for the discharge), tolerances.
-schema = "bb-bench/0"
+schema = "bb-bench/1"
 temp_c = "25"
 
 [[pwl]]

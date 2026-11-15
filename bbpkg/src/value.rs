@@ -376,6 +376,54 @@ pub fn parse_quantity(text: &str, dim: Dim) -> Result<i128, ValueError> {
     })
 }
 
+/// Parse a quantity of dimension `dim` (package grammar) into its exact
+/// decimal in base units, at any precision (no whole-sub-unit rule): the
+/// values of a bench CSV (ADR-010 D3), which become `f64` once
+/// ([`Decimal::to_f64`], correctly rounded).
+pub fn parse_decimal(text: &str, dim: Dim) -> Result<Decimal, ValueError> {
+    parse_si(text, dim.units()).map(|(d, _)| d)
+}
+
+/// A plain decimal number of seconds (`0.00001`, `1e-5`, `2.5`; no prefix,
+/// no unit) as whole femtoseconds, exactly, rounded half up (ADR-010 D3: the
+/// `t` column of a bench CSV). Negative times and values past `u64` are
+/// errors.
+pub fn seconds_to_fs_half_up(text: &str) -> Result<u64, ValueError> {
+    let t = text.trim();
+    let (d, rest) = split_decimal(t)
+        .ok_or_else(|| ValueError(format!("{text:?}: expected a number of seconds")))?;
+    if !rest.is_empty() {
+        return err(format!(
+            "{text:?}: a time in seconds is a plain decimal number (no prefix or unit)"
+        ));
+    }
+    if d.mant < 0 {
+        return err(format!("{text:?}: a negative time"));
+    }
+    // fs = mant * 10^(exp + 15), rounded half up.
+    let e = d.exp + 15;
+    let fs: i128 = if e >= 0 {
+        10i128
+            .checked_pow(u32::try_from(e).map_err(|_| ValueError(format!("{text:?}: too large")))?)
+            .and_then(|p| d.mant.checked_mul(p))
+            .ok_or_else(|| ValueError(format!("{text:?}: too large")))?
+    } else {
+        match 10i128.checked_pow(u32::try_from(-e).unwrap_or(u32::MAX)) {
+            Some(p) => {
+                let (q, r) = (d.mant / p, d.mant % p);
+                if 2 * r >= p {
+                    q + 1
+                } else {
+                    q
+                }
+            }
+            // Far below one fs: rounds to zero.
+            None => 0,
+        }
+    };
+    u64::try_from(fs).map_err(|_| ValueError(format!("{text:?}: too large")))
+}
+
 /// Parse a dimensionless view parameter (`params` of an analog view): a
 /// number with an optional prefix and any unit (units are not checked:
 /// a view does not declare its parameters' dimensions). Returns the exact
@@ -784,5 +832,37 @@ mod tests {
             };
             assert!(parse_kicad_value(bad, kind).is_err(), "{bad:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod bench_csv_tests {
+    use super::*;
+
+    #[test]
+    fn csv_times_and_values() {
+        // ADR-010 D3: seconds to whole fs exactly, rounded half up.
+        assert_eq!(seconds_to_fs_half_up("0"), Ok(0));
+        assert_eq!(seconds_to_fs_half_up("0.00001"), Ok(10_000_000_000));
+        assert_eq!(seconds_to_fs_half_up("1e-5"), Ok(10_000_000_000));
+        assert_eq!(seconds_to_fs_half_up("2.5"), Ok(2_500_000_000_000_000));
+        assert_eq!(seconds_to_fs_half_up("1.5e-15"), Ok(2));
+        assert_eq!(seconds_to_fs_half_up("1.49e-15"), Ok(1));
+        assert_eq!(seconds_to_fs_half_up("2.5e-15"), Ok(3));
+        assert_eq!(seconds_to_fs_half_up("1e-40"), Ok(0));
+        assert_eq!(
+            seconds_to_fs_half_up("0.012346357575758"),
+            Ok(12_346_357_575_758)
+        );
+        assert!(seconds_to_fs_half_up("1ms").is_err());
+        assert!(seconds_to_fs_half_up("-1").is_err());
+        assert!(seconds_to_fs_half_up("x").is_err());
+        // Values: any precision, the unit checked.
+        assert_eq!(
+            parse_decimal("1.2345678V", Dim::Voltage).unwrap().to_f64(),
+            1.2345678
+        );
+        assert_eq!(parse_decimal("50mA", Dim::Current).unwrap().to_f64(), 0.05);
+        assert!(parse_decimal("1A", Dim::Voltage).is_err());
     }
 }

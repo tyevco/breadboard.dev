@@ -1,0 +1,4 @@
+* example/switch-1k test circuit: 3.3 V on contact 1; contact 2 (out) loaded by 1 Meg and 1 uF.
+V1 in 0 DC 3.3
+R1 out 0 1Meg
+C1 out 0 1u

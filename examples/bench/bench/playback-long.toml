@@ -1,0 +1,24 @@
+# examples/bench/bench/playback-long.toml: the playback cost gate of milestone B1 (plan section 4:
+# 1 s at 100 ksps in at most 2 s of added wall time; an inline PWL of 100k points took 103 s).
+# long.csv (100 001 points every 10 us, the 0-2 V triangle of data/ain.csv) is not committed:
+# `python3 make_data.py --long <dir>` writes it, and scripts/bench_gate.sh writes it next to this
+# file in its copy of the project. bench/playback-base.toml is the same bench with AIN on a
+# constant supply.
+schema = "bb-bench/1"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "1"
+
+[[supply]]
+net = "VSW"
+volts = "3.3V"
+rs = "10m"
+
+[[playback]]
+net = "AIN"
+file = "long.csv"
+
+[options]
+set = "phase0"

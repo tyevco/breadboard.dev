@@ -286,13 +286,18 @@ pub fn load_vectors(pkg: &Package, dir: &Path, reg: &Registry) -> Result<Vec<Vec
             .iter()
             .find(|x| x.name == v.view)
             .ok_or_else(|| format!("{name}: view {:?} is not in part.toml", v.view))?;
-        if view.kind != "circuit" && view.kind != "pin_load" {
+        if !matches!(view.kind.as_str(), "circuit" | "pin_load" | "switch") {
             return Err(format!(
-                "{name}: view {} is a {} view; vectors test circuit and pin_load views",
+                "{name}: view {} is a {} view; vectors test circuit, pin_load and switch views",
                 view.name, view.kind
             ));
         }
-        let keys: Vec<&str> = view.ports.iter().map(port_key).collect();
+        let mut keys: Vec<&str> = view.ports.iter().map(port_key).collect();
+        // A switch view's control (ADR-010 D2): the `ctl` port, 0 V open
+        // and 1 V closed, driven by an [[edge]].
+        if view.kind == "switch" {
+            keys.push(SWITCH_CTL);
+        }
         for n in &keys {
             if !v.ports.contains_key(*n) {
                 return Err(format!(
@@ -316,9 +321,14 @@ pub fn load_vectors(pkg: &Package, dir: &Path, reg: &Registry) -> Result<Vec<Vec
     Ok(out)
 }
 
+/// The key of a `switch` view's control node in a vector's `[ports]`
+/// (ADR-010 D2).
+pub const SWITCH_CTL: &str = "ctl";
+
 /// A port's key in a vector's `[ports]`: a circuit view's pin name; a
 /// `pin_load` view's typed port by its role (`pad`), its signal (`smp`,
-/// `hold`) or the pin it names (`VDD`) (ADR-006 D4, ADR-008 Amendment 5).
+/// `hold`) or the pin it names (`VDD`) (ADR-006 D4, ADR-008 Amendment 5);
+/// a `switch` view's contact by its pin.
 fn port_key(p: &Port) -> &str {
     match p {
         Port::Pin(n) => n,
@@ -331,17 +341,24 @@ fn port_key(p: &Port) -> &str {
 /// The deck body for a vector: the view's definitions, `X1`, the test
 /// circuit and the option set's card.
 pub fn deck(pkg: &Package, view: &View, v: &Vector, options: &str) -> Result<String, String> {
-    let file = pkg.dir.join(&view.file);
-    let text =
-        std::fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
+    let switch = view.kind == "switch";
+    let text = if switch {
+        crate::package::switch_definition()
+    } else {
+        let file = pkg.dir.join(&view.file);
+        std::fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?
+    };
     let defs = spice::assemble(&[(format!("view {}", view.name), text)])?;
     let mut params: BTreeMap<String, String> = view.params.iter().cloned().collect();
     for (k, val) in &v.params {
         params.insert(k.clone(), val.clone());
     }
     let mut x1 = String::from("X1");
-    for p in &view.ports {
-        let n = port_key(p);
+    let mut keys: Vec<&str> = view.ports.iter().map(port_key).collect();
+    if switch {
+        keys.push(SWITCH_CTL);
+    }
+    for n in keys {
         x1.push(' ');
         x1.push_str(
             v.ports
@@ -351,6 +368,22 @@ pub fn deck(pkg: &Package, view: &View, v: &Vector, options: &str) -> Result<Str
     }
     x1.push(' ');
     x1.push_str(&view.subckt);
+    if switch {
+        // ron and roff (the view's or the defaults); bounce_max is the
+        // bench's, not the element's.
+        params.remove("bounce_max");
+        let mut sv = view.clone();
+        sv.params = params.clone().into_iter().collect();
+        let (ron, roff) = crate::package::switch_params(&sv)?;
+        params.insert(
+            "ron".into(),
+            spice_number(crate::value::to_decimal(ron, Dim::Resistance)),
+        );
+        params.insert(
+            "roff".into(),
+            spice_number(crate::value::to_decimal(roff, Dim::Resistance)),
+        );
+    }
     for (k, val) in &params {
         let d = parse_number(val).map_err(|e| format!("params.{k}: {e}"))?;
         x1.push_str(&format!(" {k}={}", spice_number(d)));
