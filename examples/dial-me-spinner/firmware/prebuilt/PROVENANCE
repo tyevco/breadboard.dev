@@ -6,4 +6,4 @@ cmsis 512cc7e895e8491696b61f7ba8066b4a182569b8
 cmsis_6 1c1840af7a7e757d6e2fec3ddb0e5ce0dfcc93c8
 sdk zephyr-sdk 1.0.1 (arm-zephyr-eabi-gcc (Zephyr SDK 1.0.1) 14.3.0)
 west 1.5.0
-sources edf3f056a0c475d3ad06c9bee4d4647013835a07abf82987bd32ac1bea1462f6
+sources c9ce0bb7d2069e15a739a5d501352edf31ca838190bd6dffcc8206a1c57c9211

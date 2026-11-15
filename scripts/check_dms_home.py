@@ -21,6 +21,13 @@ Two kinds of run:
       the device's field crossing BOP (its `field above BOP` record, the first since HOME_N last rose) to the
       HOME_N fall, within 75 ms (typ) or the suite's 97.4 ms window (worst); for --start park also the
       release (BRP) latency of H1. The sample phase (seeded) and both latencies are printed.
+      Since the M10 review (ADR-008 Amendment 12): the step rate of every phase, from the PWM edges (the
+      run lengths of PWM periods per microstep must be firmware.md 5.3/5.4's schedule exactly: the device
+      has no pull-out, so it would follow any rate); no park-stop contact before H4; H3's end 20-108 steps
+      from the stop (the device's position at the BOP crossing less the microsteps played since); the
+      overdrive counted from H4's microsteps after the contact; and the latency gate as a worst-phase
+      bound: the device's start record must give the DRV5032FA's tS at the corner (50 or 75 ms), and
+      tS + tACTIVE must be within the limit, besides the run's own (one seeded phase) latency.
 
 Prints one `check_dms_home:` line per check and a JSON summary line; exit status 1 on a failure.
 """
@@ -104,6 +111,11 @@ def check_step(a, ck):
     ck(amp == min(640, want_amp), f"MD-3 duty d = 160 mA x {r_uohm / 1e6} Ohm / {vsys_uv / 1e6} V = "
        f"{amp}/640 (expected {want_amp})")
     d_peak = amp / 640
+    runs, err = pwm_runs(edges)
+    ck(runs is not None, f"the PWM edges on the PWM grid {err}".rstrip())
+    check_schedule(runs, schedule(0, 0, step_test=True), ck,
+                   "step rate from the PWM edges: the H0 hold 10.24 ms, one full step at 446.4 PPS (8 microsteps "
+                   "of 7 periods, the last one with SETTLE 20.16 ms), the brake 3.12 ms")
     # The step: its microstep 1 begins at the first falling edge of MOT_B_IN2 after the hold (coil B is
     # braked at microstep 0 and gets its first drive part there); microstep 0 is the 280 us before.
     b2 = edges.get("U10.P0.11", [])
@@ -162,6 +174,83 @@ def check_step(a, ck):
                                                           "vsys_max_v": su_vmax}}
 
 
+PERIOD = 40_000_000_000                # one PWM period: COUNTERTOP 640 at 16 MHz (25 kHz)
+TICK = 62_500_000                      # one PWM clock tick (16 MHz)
+IN_PINS = ("U10.P0.26", "U10.P0.05", "U10.P0.07", "U10.P0.11")   # MOT_A_IN1, A_IN2, B_IN1, B_IN2
+PERIODS = {"H1": 10, "H2a": 10, "H2": 7, "H3": 7, "H4": 39, "back": 10}  # REFRESH + 1 (firmware.md 5.3)
+PPS = {k: 25_000 / (8 * v) for k, v in PERIODS.items()}  # 312.5, 446.4, 80.1 PPS
+HOLD_H0, SETTLE, BRAKE = 8 * 32, 8 * 63, 7 * 11 + 1      # periods: 10.24 ms, 20.16 ms, 3.12 ms
+
+
+def pwm_runs(edges):
+    """The PWM0 schedule from the four IN pins' pin_edge records: (t_start_fs, periods, duties) for each
+    run of PWM periods with the same high time on every channel (one microstep, or a hold), from the
+    first edge (the first period's start: a COMP 0 channel rises there) to the last fall (STOP returns
+    the pins to their GPIO level, low). Every edge must lie on the PWM grid (a period start, or a whole
+    number of 16 MHz ticks after it, + 1 fs for the lattice rule), or the result is None."""
+    chans = [edges.get(n, []) for n in IN_PINS]
+    ts = [t for ch in chans for t, _ in ch]
+    if not ts:
+        return None, "no PWM edges"
+    t0 = min(ts)
+    t_stop = max(t for ch in chans for t, lv in ch if lv == 0)
+    n = -(-(t_stop - t0) // PERIOD)
+    high = [[0] * n for _ in chans]
+    for c, ch in enumerate(chans):
+        lv, since = 0, t0
+        for t, l in ch + [(t_stop, 0)]:
+            off = (t - t0) % PERIOD % TICK
+            if t < t_stop and off > 1 and TICK - off > 1:
+                return None, f"{IN_PINS[c]} edge at {t} fs is off the PWM grid"
+            if lv == 1:
+                a = since
+                while a < t:
+                    k = (a - t0) // PERIOD
+                    b = min(t, t0 + (k + 1) * PERIOD)
+                    high[c][k] += b - a
+                    a = b
+            lv, since = l, t
+    runs = []
+    for k in range(n):
+        d = tuple(round(high[c][k] / TICK) for c in range(len(chans)))
+        if runs and runs[-1][2] == d:
+            runs[-1][1] += 1
+        else:
+            runs.append([t0 + k * PERIOD, 1, d])
+    return runs, ""
+
+
+def schedule(n1, n2, step_test=False):
+    """firmware.md 5.4's schedule in PWM periods per run, and each run's phase: the H0 hold, H1 (313
+    PPS), H2 (4 steps at 313 PPS, then 446), H3 (199 steps at 446), H4 (128 steps at 80), the back-off
+    (4 steps at 313), SETTLE (at the back-off's last microstep, so one run with it), the brake."""
+    if step_test:
+        return [(HOLD_H0, "H0")] + [(7, "step")] * 7 + [(7 + SETTLE, "SETTLE")] + [(BRAKE, "brake")]
+    s = [(HOLD_H0, "H0")] + [(PERIODS["H1"], "H1")] * (8 * n1)
+    s += [(PERIODS["H2a"], "H2")] * (8 * min(4, n2)) + [(PERIODS["H2"], "H2")] * (8 * max(0, n2 - 4))
+    s += [(PERIODS["H3"], "H3")] * (8 * 199) + [(PERIODS["H4"], "H4")] * (8 * 128)
+    s += [(PERIODS["back"], "back")] * (8 * 4 - 1) + [(PERIODS["back"] + SETTLE, "SETTLE"), (BRAKE, "brake")]
+    return s
+
+
+def check_schedule(runs, want, ck, what):
+    """The run lengths equal the schedule; returns {phase: (t_start, t_end)} of the measured runs."""
+    got = [r[1] for r in runs] if runs else []
+    bad = next((k for k in range(max(len(got), len(want)))
+                if k >= len(got) or k >= len(want) or got[k] != want[k][0]), None)
+    spans = {}
+    for r, (_, ph) in zip(runs or [], want):
+        a, b = spans.get(ph, (r[0], 0))
+        spans[ph] = (a, r[0] + r[1] * PERIOD)
+    if bad is None:
+        ck(True, f"{what}: {len(got)} PWM runs exactly as firmware.md 5.3/5.4 schedules them")
+    else:
+        g = f"{got[bad]} periods ({25_000 / (8 * got[bad]):.1f} PPS) at {runs[bad][0] * FS:.6f} s"             if bad < len(got) else "no run"
+        w = f"{want[bad][0]} periods ({want[bad][1]})" if bad < len(want) else "no run"
+        ck(False, f"{what}: PWM run {bad} of {len(got)} (schedule {len(want)}) is {g}, the schedule has {w}")
+    return spans, bad is None
+
+
 def level_at(edges, t):
     lv = None
     for te, l in edges:
@@ -212,20 +301,44 @@ def check_home(a, ck):
     ck(u_end == 8 * (n1 - n2 - 199 - 128 + 4), f"the firmware's final microstep u={u_end} = 8 x (H1 {n1} - H2 {n2} "
        f"- H3 199 - H4 128 + 4)")
     home = edges.get("M1.HOME_N", [])
-    t_h3, t_h5 = at.get(get("homing: H3 done")), at.get(get("homing: H5 confirm"))
+    t_h5 = at.get(get("homing: H5 confirm"))
     t_idle = at.get(get("homing: IDLE"))
     ck(t_h5 is not None and level_at(home, t_h5) == 0, "HOME asserted after H4 (M1.HOME_N low when H5 reads it)")
-    stops = [(t, m) for t, m in dev if m == "M1: carriage at the park stop"]
-    t_stop = next((t for t, _ in stops if t_h3 and t > t_h3), None)
-    over = (t_h5 - t_stop) * FS * 80.0 if t_stop and t_h5 else 0
-    slips = sum(1 for t, m in dev if m.startswith("M1: carriage left the park stop") and t_stop and t_stop < t < t_h5)
+    # The step rate of every phase, from the PWM edges (the device has no pull-out or maximum speed, a
+    # stated limit of dms/mechanism@1, so a wrong rate would move the rotor all the same: the check, not
+    # the device, has to catch it; ADR-008 Amendment 12).
+    runs, err = pwm_runs(edges)
+    ck(runs is not None, f"the PWM edges on the PWM grid {err}".rstrip())
+    spans, _ = check_schedule(runs, schedule(n1, max(n2, 0)), ck,
+                              "step rate from the PWM edges: H0 hold 10.24 ms, " + ("H1 at 312.5 PPS, " if park else "")
+                              + "H2 4 steps at 312.5 PPS then 446.4, H3 199 at 446.4, H4 128 at 80.1, back-off 4 at "
+                              "312.5, SETTLE 20.16 ms, brake 3.12 ms")
+    t_h4, t_h4_end = spans.get("H4", (None, None))
+    stops = [t for t, m in dev if m == "M1: carriage at the park stop"]
+    early = [t for t in stops if t_h4 is None or t < t_h4]
+    ck(t_h4 is not None and not early, f"no park-stop contact before H4 (H4 from {(t_h4 or 0) * FS:.6f} s; first contact "
+       f"at {(stops[0] if stops else 0) * FS:.6f} s)")
+    # H3's end, 20-108 steps from the stop (firmware.md 5.4): the device's position at the BOP crossing that
+    # ended H2, less the microsteps the PWM played between it and H4's first one (the rotor follows the field
+    # while the carriage is off the stops).
+    t_cross, t_edge = latency(dev, home, at.get(get("homing: H1 done" if park else "homing: H1 skipped")) or 0,
+                              t_idle or 0, up=False)
+    rec = next((m for t, m in dev if t == t_cross and m.startswith("M1: field above BOP")), "")
+    ms = re.search(r"at s=(-?[0-9.]+)", rec)
+    n_after = sum(1 for r in runs or [] if t_cross is not None and t_h4 is not None and t_cross < r[0] < t_h4)
+    s_h3 = float(ms.group(1)) - n_after / 8 if ms and t_h4 is not None else float("nan")
+    ck(20 <= s_h3 <= 108, f"H3 ends {s_h3:.3f} steps from the park stop (20-108, firmware.md 5.4: the BOP crossing "
+       f"at s={ms.group(1) if ms else '?'} less {n_after} microsteps)")
+    t_stop = next((t for t in stops if t_h4 is not None and t >= t_h4), None)
+    over = sum(1 for r in runs or [] if t_stop and t_h4 <= r[0] < t_h4_end and r[0] >= t_stop) / 8
+    slips = sum(1 for t, m in dev if m.startswith("M1: carriage left the park stop") and t_stop and t_stop < t < t_h4_end)
     ck(t_stop is not None and over >= 20, f"H4 reaches the park stop at {(t_stop or 0) * FS:.4f} s and overdrives "
-       f"{over:.1f} steps (>= 20) at 80 PPS; the rotor slips {slips} times")
+       f"{over:.3f} steps (>= 20; H4's microsteps from the PWM edges after the contact); the rotor slips {slips} times")
     sl = [(t, m) for t, m in dev if m.startswith("M1: nSLEEP low at s=")]
     s_end = float(re.search(r"s=(-?[0-9.]+)", sl[-1][1]).group(1)) if sl else -1
     ck(2.0 <= s_end <= 6.0, f"final position s={s_end:.3f} steps from the park stop (x_park = stop - 4 steps, "
        f"+-2: firmware.md 5.4)")
-    ins = [edges.get(n, []) for n in ("U10.P0.26", "U10.P0.05", "U10.P0.07", "U10.P0.11")]
+    ins = [edges.get(n, []) for n in IN_PINS]
     ns = edges.get("U10.P1.15", [])
     t_sleep = next((t for t, lv in reversed(ns) if lv == 0), None)
     t_brake = max((max((t for t, lv in e if lv == 1), default=0) for e in ins), default=0)
@@ -234,19 +347,25 @@ def check_home(a, ck):
        and (t_low - t_brake) * FS >= 3e-3,
        f"brake {(t_low - t_brake) * FS * 1e3:.2f} ms (>= 3 ms, IN1 = IN2 = 1), then coast and nSLEEP low at "
        f"{(t_sleep or 0) * FS:.4f} s")
+    # The HOME_N latency gate (ADR-008 Amendments 10 and 12): the device must be the DRV5032FA at the
+    # corner (its start record's tS: 50 ms typical, 75 ms the Table 6.5 maximum), the worst sample phase's
+    # latency tS + tACTIVE must be within the limit, and so must the run's own latency (one sample phase).
     start = next((m for _, m in dev if m.startswith("M1: DRV5032 tS")), "")
     mp = re.search(r"first window at (\d+) fs", start)
     phase_fs = int(mp.group(1)) if mp else None
-    t_cross, t_edge = latency(dev, home, at.get(get("homing: H1 done" if park else "homing: H1 skipped")) or 0,
-                              t_idle or 0, up=False)
+    mt = re.search(r"tS ([0-9.]+) ms, tactive ([0-9.]+) us, BOP ([0-9.]+) mT, BRP ([0-9.]+) mT, die ([0-9.]+) mm", start)
+    ts_dev, tact = (float(mt.group(1)) * 1e-3, float(mt.group(2)) * 1e-6) if mt else (float("nan"), float("nan"))
     lim = LATENCY_LIMIT[a.corner]
     lat = (t_edge - t_cross) * FS if t_cross and t_edge else None
-    bound = TS[a.corner] + 40e-6
-    ck(lat is not None and 0 <= lat <= bound + 1e-12 and lat <= lim,
+    bound = ts_dev + tact
+    ck(mt is not None and abs(ts_dev - TS[a.corner]) < 1e-9 and bound <= lim and lat is not None
+       and 0 <= lat <= bound + 1e-12 and lat <= lim,
        f"HOME_N assert latency {lat * 1e3 if lat is not None else float('nan'):.3f} ms (field above BOP at "
-       f"{(t_cross or 0) * FS:.6f} s, HOME_N low at {(t_edge or 0) * FS:.6f} s) <= {lim * 1e3:.1f} ms "
-       f"({a.corner} corner, tS {TS[a.corner] * 1e3:.0f} ms; tS + tACTIVE = {bound * 1e3:.2f} ms); "
-       f"sample phase {phase_fs} fs")
+       f"{(t_cross or 0) * FS:.6f} s, HOME_N low at {(t_edge or 0) * FS:.6f} s) <= {lim * 1e3:.1f} ms, and the "
+       f"worst phase's tS + tACTIVE = {bound * 1e3:.2f} ms <= {lim * 1e3:.1f} ms; the device's tS "
+       f"{ts_dev * 1e3:.0f} ms = the DRV5032FA's at the {a.corner} corner, {TS[a.corner] * 1e3:.0f} ms; "
+       f"sample phase {phase_fs} fs; BOP {mt.group(3) if mt else '?'} mT, BRP {mt.group(4) if mt else '?'} mT, "
+       f"die {mt.group(5) if mt else '?'} mm")
     rel_lat = None
     if park:
         t_c2, t_e2 = latency(dev, home, at.get(get("homing: H0 energise")) or 0,
@@ -256,7 +375,7 @@ def check_home(a, ck):
            f"HOME_N release latency {rel_lat * 1e3 if rel_lat is not None else float('nan'):.3f} ms in H1 (field "
            f"below BRP at {(t_c2 or 0) * FS:.6f} s) <= {lim * 1e3:.1f} ms")
     ck.summary = {"case": f"home-{a.corner}-{a.start}", "h1_steps": n1, "h2_steps": n2, "u_end": u_end,
-                  "s_end": s_end, "overdrive_steps": over, "slips": slips, "sample_phase_fs": phase_fs,
+                  "s_end": s_end, "s_h3_end": s_h3, "overdrive_steps": over, "ts_s": ts_dev, "slips": slips, "sample_phase_fs": phase_fs,
                   "assert_latency_s": lat, "release_latency_s": rel_lat, "limit_s": lim,
                   "idle_s": (t_idle or 0) * FS}
 

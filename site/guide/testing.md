@@ -36,17 +36,31 @@ make test        # the exit gate alone
 7. **`adc`**, **`adc-order`**, **`adc-stock`**, **`adc-model`**: the STM32F072
    ADC board on Breadboard's ADC model and on Renode's stock one, and the
    Renode-only tests of the ADC model.
-8. **`adc-kicad`**: the ADC board drawn in KiCad, run as a `bb.toml` project.
-9. **`dms-rail-test`**: the E1 runs (see [the demo](./demo#how-it-is-gated)).
-10. **`ec-reconnect`**: the one-cell references with the Renode engine
+8. **`nrf-saadc-model`**, **`nrf-pwm-model`**: the Renode-only tests of
+   Breadboard's nRF52840 SAADC and PWM (with the TEMP and NVMC stand-ins),
+   then their boards through `bb run` (`examples/nrf-saadc`,
+   `examples/nrf-pwm`): the SAADC's charge transfers and codes, and every
+   PWM edge at its exact instant, at one cell, with lookahead and in the
+   other engine order.
+9. **`device-smoke`**: a device part in a loop with the CPU.
+10. **`adc-kicad`**: the ADC board drawn in KiCad, run as a `bb.toml` project.
+11. **`dms-rail-test`**: the E1 runs (see [the demo](./demo#how-it-is-gated)).
+12. **`dms-vsense-test`**: the E2 runs at 50 ms and with C5 at 10 nF, with
+    their `load = "none"` twins (see [the E2 demo](./demo-e2)).
+13. **`dms-home-test`**: E3's one full step at 446 PPS on dial-me-spinner's
+    detent sheet against the suite (see [the E3 demo](./demo-e3)).
+14. **`ec-reconnect`**: the one-cell references with the Renode engine
     replacing its External Control connection every 2 000 messages.
-11. **`packages`**: every package file, lockfile, project, bench and
+15. **`packages`**: every package file, lockfile, project, bench and
     `board.bbm` against `spec/schema`, `bb pkg lint`, `bb pkg test`, current
     `bb.lock` files, and that nothing local-only is committed.
-12. **`gdb-test`**: GDB in batch mode against `bb run --gdb` on the spike and
+16. **`gdb-test`**: GDB in batch mode against `bb run --gdb` on the spike and
     E1. Attach and detach without a stop give the committed hashes; a
     breakpoint marks the run (see [Debugging with GDB](./debugging)). The
     full gate is `make gdb` (CI job `dms-rail`).
+17. **`dms-system`**: the dial-me-spinner system import (main and base boards
+    and the link harness): the committed `board.bbm` from a fresh import,
+    the mated pins, and E1's deck from the system equal to E1's own.
 
 ## Pooled or fresh: `POOL=0`
 
@@ -78,11 +92,12 @@ non-grant records of `events.jsonl` against the one-cell reference
 | `make adc-equiv` | The ADC board's one-cell, lookahead and open-loop runs equal the every-lattice-point references. |
 | `make pool-equiv` | Every pooled run is leased and byte-identical to its fresh run and to the committed hashes. |
 
-The figures on the [E1](./demo), [E2](./demo-e2) and
+The figures on the [E1](./demo), [E2](./demo-e2), [E3](./demo-e3) and
 [introduction](./introduction) pages come from real runs too. `make
 docs-plots` reruns make demo's E1 runs, the E2 cases `sag`, `rec`, `s50` and
-`s50-none` and the spike, and draws `site/public/plots/<name>.{light,dark}.svg`
-from their outputs (about 1 min 45 s). The SVGs are a pure function of the
+`s50-none`, E3's `typ` (the homing) and `step` (one full step) and the
+spike, and draws `site/public/plots/<name>.{light,dark}.svg` from their
+outputs (about 5 minutes, most of it E3's homing). The SVGs are a pure function of the
 runs, so `make docs-plots-check` (CI job `dms-rail`) regenerates them and
 requires the committed files byte for byte; after a change to results, run
 `make docs-plots` and commit the figures.

@@ -2565,7 +2565,11 @@ lookahead path itself is gated on `examples/nrf-pwm` (above).
 
 #### The gate (`make dms-home`; `make dms-home-test` in `make test`)
 
-`scripts/dms_home.sh` and `scripts/check_dms_home.py`:
+`scripts/dms_home.sh` and `scripts/check_dms_home.py` (as committed in
+this step; Amendment 12 adds the step-rate, stop-contact and H3 checks,
+the worst-phase latency bound and three negative controls, moves `worst`
+and `park` to the suite's BOP/BRP corner, and restates the equivalence
+item below):
 
 - **`step`, against `test_firmware_microstep_pwm[VBAT3.7-25C]`** over the
   suite's window (the step's microstep 0 to the end of its microstep 8),
@@ -2612,6 +2616,10 @@ lookahead path itself is gated on `examples/nrf-pwm` (above).
   references equal `tests/golden/dms-home/<case>/outputs.sha256`;
   `--engine-order analog-first` is byte-identical and `--max-quantum 1ms`
   equal except grants (`typ`, `step`); `typ` is identical over 10 runs.
+  Since no quiet grant forms (Finding 3), the defaults, the reference and
+  `--max-quantum 1ms` are one partition (identical grant records), so
+  that equality is a consistency check, not a partition-equivalence gate
+  (Amendment 12 item 4).
 - **`pool-equiv`** has `dms-home-step` and `dms-home` (typ), and the cost
   table a `dms-home` row (`make cost-table-dms-home`).
 
@@ -2657,3 +2665,163 @@ each run; the runs overlapped as noted.
   pool (startup 0.08 s and 0.10 s, all 6 runs leased); every B run
   identical to A except grant records. In the README's table.
 - No committed golden of E1, E2 or Phase 0 changed.
+
+### Amendment 12: the M10 review (2026-11-14)
+
+A review of M10 (Amendments 9-11) found that two wrong builds passed
+every E3 check, that E3's "worst" corner was not the suite's, and that the
+gate list presented one-partition comparisons as equivalence gates. This
+amendment records the fixes. It changes no `spec/` file, no schema, no
+event format, no kernel rule and no model: `dms/mechanism@1`,
+`nrf52840-bb@3` and every lock are unchanged, and so are the committed
+hashes of `step` and `typ` (and of E1, E2 and Phase 0). The `worst` and
+`park` boards changed (item 3), so their goldens did.
+
+1. **The step rate is gated on the PWM edges** (finding: a firmware with
+   the 446 PPS phases at REFRESH 0, 3125 PPS, passed every check, because
+   `dms/mechanism@1` has no pull-out or maximum speed, a stated limit:
+   the rotor follows the field at any rate, and the carriage stalled at
+   the park stop already in H3 without a failed check). The device stays
+   as it is (thrust and pull-out are MD-4's work, not E3's), so the check
+   has to catch a wrong rate. `check_dms_home.py` now:
+   - rebuilds PWM0's schedule from the four IN pins' `pin_edge` records:
+     each 40 us period's high time on every channel (every edge must lie
+     on the period grid, a whole number of 16 MHz ticks after a period
+     start, + 1 fs for the lattice rule), and the runs of periods with
+     the same four duties (one microstep, or a hold). The run lengths must
+     equal firmware.md §5.3/5.4's schedule exactly: the H0 hold (256
+     periods), H1 at 313 PPS (10 periods per microstep), H2's first 4
+     steps at 313 PPS and the rest at 446 PPS (7), H3's 199 steps at 446,
+     H4's 128 at 80 PPS (39), the 4-step back-off at 313, SETTLE (merged
+     with the back-off's last microstep, which has the same duties: 514)
+     and the brake (78). On `step` the same: the hold, one full step at
+     446 PPS, SETTLE, the brake;
+   - requires no `carriage at the park stop` record before H4's first
+     microstep (from that schedule), and H3's end 20-108 steps from the
+     stop (firmware.md §5.4): the device's position at the BOP crossing
+     that ended H2 (its record's `s=`) less the microsteps the PWM played
+     between it and H4, over 8;
+   - counts the overdrive as H4's microsteps after the first stop
+     contact, over 8, where it used to multiply a UART line's time by an
+     assumed 80 PPS.
+   - **Negative control** (in `make dms-home`): `homing_fast.elf`, a new
+     prebuilt image (`CONFIG_HOMING_NEG_FAST`, `homing/fast.conf`: only
+     `R_446` becomes 0; image hash `75897d5a...` in `SHA256SUMS`, built by
+     `make fw-rebuild` with the others; the six other image hashes are
+     unchanged) on `board.cir` must fail exactly three checks: the step
+     rate, the stop contact before H4 and H3's end. Measured: H2 370
+     steps, the stop reached at 0.1839 s (in H3), H3's end at -68.5 steps.
+2. **The HOME_N latency gate is a worst-phase bound** (finding: the
+   DRV5032FB, tS 200 ms, passed the typical-corner gate, because the
+   latency was measured at one seeded sample phase, and the seeded phase
+   for 200 ms is congruent with the 50 ms one, so HOME_N fell at the FA
+   run's instant; the suite's `test_fault_wrong_hall_variant_is_detected`
+   catches that substitution). The check now parses the device's start
+   record (`DRV5032 tS ... ms, tactive ... us, BOP ..., BRP ..., die ...`)
+   and requires, in the one latency check: the device's tS equal to the
+   DRV5032FA's at the corner (50 ms typical, 75 ms worst: Table 6.5);
+   tS + tACTIVE, the latency of the worst sample phase, within the limit
+   (75 ms, 97.4 ms), as the suite's worst-case record does; and the run's
+   own latency within both. **Negative controls** (in `make dms-home`):
+   `board.cir` with M1 at `ts=200ms` and at `ts=286ms` (the FB's typical
+   and maximum) must fail exactly the latency check. Measured: 44.30 ms
+   at 200 ms (the FA's instant) and 108.30 ms at 286 ms, both failing on
+   the device's tS.
+3. **The worst corner is the suite's** (finding: `board-ts75.cir` set tS
+   75 ms only, with BOP/BRP typical; the suite's latency runs use
+   `HALL["FA"]`: BOP 4.8 mT max and BRP 0.5 mT min, "the corners that
+   assert last / release last"). Now:
+   - `board-ts75.cir`: tS 75 ms, BOP 4.8 mT, BRP 0.5 mT, and the worst
+     sample phase recomputed for the crossing at BOP 4.8 mT (552.2216 ms
+     in H2; the window ends 10 us before it: `phase=27171562500ps`, the
+     window at phase + 7 tS). Latency 74.990 ms (the bound 75.04 ms); H2
+     274 steps; H3 ends 27.0 steps from the stop (the later assert costs
+     margin, and item 1's check bounds it).
+   - `board-park.cir`: tS 50 ms (typical) with BOP 4.8 mT and BRP 0.5 mT,
+     so H1 runs longest (198 steps against the limit 377; 167 at
+     3/1.5 mT). Assert latency 46.29 ms, release 48.56 ms. Its run is now
+     3 200 ms (the homing ends at 2.975 s).
+   - `board.cir` (`typ`) keeps the typical BOP/BRP (3/1.5 mT): with
+     `worst` and `park` at the extremes, both threshold corners run.
+   - The die height stays at the device's 2.6 mm on every board. The
+     suite's latency runs do not vary it; it moves the BOP crossing's
+     position as BOP does, and H3's 20-108 window (item 1) now bounds the
+     resulting margin on every run.
+4. **What E3's equivalence runs show** (findings: they were listed as
+   equivalence gates, but no quiet grant forms on E3's boards, Amendment
+   11 Finding 3, so bb's defaults, `--lookahead off` and `--max-quantum
+   1ms` build the same partition: 270 000 grants on `typ`, 4 500 on
+   `step`, grant records byte-identical). The gate keeps them, and the
+   gate list (Amendment 11, "The gate"), `scripts/dms_home.sh`, the
+   Makefile, the plan, README and the site now say what they are: a
+   consistency check of one partition. The script prints it when the
+   grant records agree. Partition independence of a device is gated by
+   `bbdev/tests/scheduler.rs` (G6) and `make device-smoke` (20 000 against
+   37 grants); `--engine-order analog-first` and the 10-run determinism
+   remain E3's own information-carrying comparisons. An E3 variant on
+   which quiet grants form (only the device feeding the CPU) would need a
+   firmware without the SAADC reading; it is not added.
+5. **`nrf-gates` with a PWM board** (Amendment 9's engine-path step):
+   not done as written. `examples/nrf-pwm` in `make nrf-pwm-model`
+   (Amendment 11) replaces it: the PWM board through `bb run` at one cell,
+   with lookahead (239 quiet grants), at `--max-quantum 1ms` and in the
+   other engine order, every edge against the computed duty table. `make
+   nrf-gates` stays the D1-D4 and D6 gate it was.
+6. **`examples/nrf-pwm` is a test board** (a recorded deviation from
+   AGENTS.md's "a new board gets an equivalence gate, a cost-table row and
+   a `pool-equiv` entry", as ADR-006 Amendment 6 records for
+   `tests/device-smoke`): it runs fresh (`--renode-pool off`), is checked
+   against the computed duty table (`scripts/check_nrf_pwm.py`, every edge
+   to the femtosecond) rather than committed hashes, and has its
+   equivalence comparisons inside `make nrf-pwm-model`. It has no
+   cost-table row and no `pool-equiv` entry: it never runs on the pool,
+   and E3 (`dms-home-step` and `dms-home` in `pool-equiv`, the
+   `cost-table-dms-home` row) runs the PWM path on the pool.
+7. **D9's "each its own step, each bumps the major"**: PWM, TEMP and
+   NVMC shipped in one step under one bump (`nrf52840-bb@3`, Amendment 9).
+   A recorded deviation: TEMP and NVMC are stand-ins with no input from a
+   net, so they have no board-level equivalence gate of their own; they
+   are covered by `bb_pwm_test.py`'s Renode-only groups, and TEMP by E3,
+   whose firmware reads it.
+8. **Text.** The E3 board headers said P0.02 was "the loading SAADC input
+   of E2" while binding it with `load=none`; the generator's line now says
+   `load=none` (the boards regenerate; comments only, so the `step` and
+   `typ` hashes are unchanged). AGENTS.md's `pool-equiv`, `docs-plots` and
+   `make test` rows, the Makefile's `docs-plots` comment, the site's
+   testing page, platform table (`nrf52840-bb@3`) and device-part
+   section, and README's `make test` list are brought up to date.
+
+#### Gate runs of this amendment (2026-11-14)
+
+On `5f6989b` plus this change, 2026-11-14. Load is `/proc/loadavg` at the
+start; the runs overlapped as noted.
+
+- **`make dms-home`: gate PASS** on the pool (5 jobs, 55 min 36 s, load
+  0.31 at the start; `make check` and `make check POOL=0` ran beside it
+  for 39 minutes): every case's checks of items 1-3 (`typ`: H2 236, H3's
+  end 65.06 steps, overdrive 62.9 steps, latency 44.302 ms; `worst`: H2
+  274, H3's end 27.05, latency 74.990 ms at the bound 75.04 ms; `park`: H1
+  198, H2 110, H3's end 39.05, assert 46.294 ms, release 48.564 ms; `step`
+  as Amendment 11's table), each default equal to its reference in every
+  record (grants included: one partition), the references equal to the
+  committed hashes (`worst` and `park` new, `typ` and `step` unchanged),
+  analog-first byte-identical, `--max-quantum 1ms` equal (the script
+  reports the same 270 000 and 4 500 grants), 0 promises broken, `typ`
+  identical over 10 runs (`events.jsonl` `f76a5871bd762008...`, as in
+  Amendment 11), and the three negative controls failing exactly their
+  checks (`neg-fast`: 3, `neg-fb200`: 1, `neg-fb286`: 1).
+- **`make check` on the pool: green** (20 min 31 s beside `make
+  dms-home`, load 7.5 at the start; 243 cargo tests, `system` with the new
+  cases; `dms-home-test`, `dms-system` PASS; 95 leases).
+- **`make check POOL=0`: green** (18 min 44 s, beside the end of `make
+  dms-home`; 243 cargo tests).
+- **`make fw-rebuild`: PASS** (4 min 11 s): a fresh workspace gives all
+  seven committed image hashes, `homing_fast.elf` included; the six
+  others are unchanged.
+- **`make dms-system`: PASS.**
+- **`make docs-plots-check`: PASS** (5 min 5 s): the committed figures are
+  unchanged (`typ` and `step` are).
+- The site builds (VitePress 1.6.4, from a Linux-filesystem copy).
+- `make pool-equiv` was not rerun: its E3 entries are `typ` and `step`,
+  whose results and hashes are unchanged, and no pool, engine or platform
+  code changed.

@@ -34,20 +34,25 @@ T_S0_FS = 11_972_875_000_000
 T_USTEP_FS = 280_000_000_000          # 7 PWM periods of 40 us
 STEP_EMF = dict(ke=1.37, pps=446, delta=1.5707963267949, t0=T_S0_FS, tstop=T_S0_FS + 9 * T_USTEP_FS)
 
-# The worst corner's sample phase (ADR-008 Amendment 10: "tS max", and the suite's "worst phase"): the
-# DRV5032's sampling window that ends 10 us before the device's field first passes BOP in H2 (at
-# 497 316 750 000 000 fs in homing.elf's run; the window starts tACTIVE = 40 us earlier, at phase + 6 tS),
-# so HOME_N falls one full tS later, as late as the switch allows. scripts/check_dms_home.py prints the
-# latency; a firmware change that moves the crossing moves it and the gate still bounds it.
-WORST_PHASE_NS = 47_266_750
+# The worst corner (ADR-008 Amendments 10 and 12): the dial-me-spinner suite's HALL["FA"] corner of
+# test_home_n_levels_and_latency, tS 75 ms (Table 6.5 max) with BOP 4.8 mT max and BRP 0.5 mT min
+# (Table 6.6: "the corners that assert last / release last"), at its worst sample phase: the DRV5032's
+# sampling window that ends 10 us before the device's field first passes BOP in H2 (at
+# 552 221 562 500 000 fs in homing.elf's run at BOP 4.8 mT; the window starts tACTIVE = 40 us earlier, at
+# phase + 7 tS), so HOME_N falls one full tS later, as late as the switch allows. scripts/check_dms_home.py
+# prints the latency; a firmware change that moves the crossing moves it and the gate still bounds it.
+WORST_PHASE_PS = 27_171_562_500
+FA_LAST = "bop=4.8 brp=0.5"
 
 CASES = {
     # name: (title, M1 parameters, back-EMF of the full analog sheet, or None: the homing boards)
     "board.cir": ("homing from the click end, DRV5032FA typical corner (tS 50 ms)", "s0=500 ts=50ms", None),
-    "board-ts75.cir": ("homing from the click end, DRV5032FA worst corner (tS 75 ms, Table 6.5 max) at its "
-                       "worst sample phase", f"s0=500 ts=75ms phase={WORST_PHASE_NS}ns", None),
-    "board-park.cir": ("homing from inside the park zone (s0 = 150 steps: H1 runs), typical corner",
-                       "s0=150 ts=50ms", None),
+    "board-ts75.cir": ("homing from the click end, DRV5032FA worst corner (tS 75 ms, Table 6.5 max; BOP 4.8 mT "
+                       "max, BRP 0.5 mT min, Table 6.6: the suite's HALL['FA']) at its worst sample phase",
+                       f"s0=500 ts=75ms {FA_LAST} phase={WORST_PHASE_PS}ps", None),
+    "board-park.cir": ("homing from inside the park zone (s0 = 150 steps: H1 runs), typical tS 50 ms, BOP/BRP "
+                       "4.8/0.5 mT (the corner that asserts and releases last: H1 longest)",
+                       f"s0=150 ts=50ms {FA_LAST}", None),
     "board-step.cir": ("one full step at 446 PPS (homing_step.elf), mid-stroke, with the bridges, the coils "
                        "and the suite's back-EMF", "s0=400 ts=50ms", STEP_EMF),
 }
@@ -65,15 +70,15 @@ HEADER = """\
 *   P0.26 MOT_A_IN1, P0.05 MOT_A_IN2, P0.07 MOT_B_IN1, P0.11 MOT_B_IN2  PWM0 channels 0-3 (digital_out,
 *         the suite's S0S1 bound: 800 Ohm; the PWM model's edges at their exact instants, ADR-008 D9)
 *   P1.15 MOT_NSLEEP (digital_out), P1.14 HOME_N (digital_in, reads M1.HOME_N directly)
-*   P0.02 VSYS_SENSE (adc_in, the loading SAADC input of E2; R1 2.2 MOhm, R2 1 MOhm, C5 100 nF)
+*   P0.02 VSYS_SENSE (adc_in, load=none: E2's SAADC channel, below; R1 2.2 MOhm, R2 1 MOhm, C5 100 nF)
 *   VDD   +3V3 (adc_in: the SAADC's VDD input and VPRE of the pin_load view)
 * U10 is the Raytac module's chip, bound directly (nordic/nrf52840-qiaa, as examples/nrf-saadc): a module
 * pad has no VDD adc_in in a board file.
 *
 * M1 (dms/detent-mechanism, device dms/mechanism@1) is the lead screw, carriage, magnet and U42
 * DRV5032FA as one device: it reads the five driver commands and drives HOME_N (push-pull, low = magnet
-* present). Its parameters here: {params} (the rest at their defaults: die 2.6 mm, BOP/BRP 3/1.5 mT,
-* phase seeded from the run seed and "M1").
+* present). Its parameters here: {params} (the rest at their defaults: die 2.6 mm, BOP/BRP 3/1.5 mT
+* unless set, phase seeded from the run seed and "M1").
 *
 {analog_text}
 *

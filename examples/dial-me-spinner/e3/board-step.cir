@@ -10,15 +10,15 @@
 *   P0.26 MOT_A_IN1, P0.05 MOT_A_IN2, P0.07 MOT_B_IN1, P0.11 MOT_B_IN2  PWM0 channels 0-3 (digital_out,
 *         the suite's S0S1 bound: 800 Ohm; the PWM model's edges at their exact instants, ADR-008 D9)
 *   P1.15 MOT_NSLEEP (digital_out), P1.14 HOME_N (digital_in, reads M1.HOME_N directly)
-*   P0.02 VSYS_SENSE (adc_in, the loading SAADC input of E2; R1 2.2 MOhm, R2 1 MOhm, C5 100 nF)
+*   P0.02 VSYS_SENSE (adc_in, load=none: E2's SAADC channel, below; R1 2.2 MOhm, R2 1 MOhm, C5 100 nF)
 *   VDD   +3V3 (adc_in: the SAADC's VDD input and VPRE of the pin_load view)
 * U10 is the Raytac module's chip, bound directly (nordic/nrf52840-qiaa, as examples/nrf-saadc): a module
 * pad has no VDD adc_in in a board file.
 *
 * M1 (dms/detent-mechanism, device dms/mechanism@1) is the lead screw, carriage, magnet and U42
 * DRV5032FA as one device: it reads the five driver commands and drives HOME_N (push-pull, low = magnet
-* present). Its parameters here: s0=400 ts=50ms (the rest at their defaults: die 2.6 mm, BOP/BRP 3/1.5 mT,
-* phase seeded from the run seed and "M1").
+* present). Its parameters here: s0=400 ts=50ms (the rest at their defaults: die 2.6 mm, BOP/BRP 3/1.5 mT
+* unless set, phase seeded from the run seed and "M1").
 *
 * The analog side of this board is the whole detent sheet: U40 and U41 as the package view
 * ti/drv8837:bridge (ideal switches, rDS(on) 0.33 Ohm, the suite's RDS_MAX; twake 30 us), fed by the PWM

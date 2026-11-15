@@ -77,8 +77,8 @@ chain (PWM edges, bridge, coil, back-EMF) is within 0.25 % of the suite.
 **The homing procedure** from the click end. H2 approaches at 446 PPS
 until HOME asserts (236 steps). H3 runs in 199 steps. H4 stalls into the
 park stop at 80 PPS and half current for 128 steps: the carriage reaches
-the stop after about 66 of them, and the rotor slips 15 times over the
-remaining 62 steps of overdrive. H5 reads HOME asserted and backs off 4 steps. The
+the stop after about 65 of them, and the rotor slips 16 times over the
+remaining 63 steps of overdrive. H5 reads HOME asserted and backs off 4 steps. The
 carriage ends 5 steps from the stop, within the ±1–2 steps that
 `firmware.md` gives for the stall. The bridges brake for 3.12 ms before
 they sleep. A third board starts inside the park zone, so that H1 (the
@@ -90,8 +90,22 @@ passing BOP to the HOME_N edge:
 | Corner | Sample phase | Latency | Gate |
 | --- | --- | --- | --- |
 | Typical, tS 50 ms | seeded (41.58 ms) | 44.30 ms | ≤ 75 ms |
-| Worst, tS 75 ms | the worst phase (a sample ends 10 µs before the crossing) | 74.99 ms | ≤ 97.4 ms (the suite's edge window) |
-| Typical, from the park zone | seeded | 19.84 ms (and 7.92 ms on release in H1) | ≤ 75 ms |
+| Worst: tS 75 ms, BOP 4.8 mT, BRP 0.5 mT (the suite's DRV5032FA corner) | the worst phase (a sample ends 10 µs before the crossing) | 74.99 ms | ≤ 97.4 ms (the suite's edge window) |
+| Typical tS, from the park zone, BOP/BRP 4.8/0.5 mT | seeded | 46.29 ms (and 48.56 ms on release in H1) | ≤ 75 ms |
+
+The gate also reads the device's own tS from its start record: it must be
+the DRV5032FA's at the corner, and tS + tACTIVE (the latency of the worst
+sample phase) must be within the limit, so the bound does not rest on the
+one seeded phase a run uses. A DRV5032FB (tS 200 ms) fails it even though
+its seeded phase puts HOME_N at the same instant as the FA's.
+
+**The step rate** of every phase is measured on the PWM edges: the run
+lengths of PWM periods per microstep must be exactly what firmware.md
+schedules (7 periods at 446 PPS, 10 at 313, 39 at 80). The device has no
+pull-out, so a firmware that stepped seven times too fast would still
+"home" on it; the gate's negative control, `homing_fast.elf`, does exactly
+that and fails the step-rate check, the "no park-stop contact before H4"
+check and the "H3 ends 20-108 steps from the stop" check.
 
 ![The homing timeline: nSLEEP high from 1 ms to 2.62 s, HOME_N falling at 0.54 s during H2, the park stop reached at 1.80 s in H4; below, a zoom on the HOME_N latency of 44.30 ms from the field passing BOP at 497.317 ms to HOME_N falling at 541.618 ms](/plots/e3-homing.light.svg){.plot-light}
 ![The homing timeline: nSLEEP high from 1 ms to 2.62 s, HOME_N falling at 0.54 s during H2, the park stop reached at 1.80 s in H4; below, a zoom on the HOME_N latency of 44.30 ms from the field passing BOP at 497.317 ms to HOME_N falling at 541.618 ms](/plots/e3-homing.dark.svg){.plot-dark}
@@ -103,11 +117,14 @@ crossing and the park stop are the device's own log records. Drawn by
 
 **Equivalence and determinism.** Each case gives the same `nets.csv`,
 `nets.vcd` and event records as its one-cell reference
-(`--lookahead off`), at `--max-quantum 1ms` and with the other engine
-order, and the typical homing is identical over 10 runs. These boards have
-two engines feeding the CPU (the device's HOME_N and ngspice's VSYS
-reading), and the kernel's lookahead allows one producer, so every E3 run
-uses one-cell grants: about 270 000 grants and 4.5 minutes for a homing.
+(`--lookahead off`) and with the other engine order, and the typical
+homing is identical over 10 runs. These boards have two engines feeding
+the CPU (the device's HOME_N and ngspice's VSYS reading), and the kernel's
+lookahead allows one producer, so every E3 run uses one-cell grants: about
+270 000 grants and 4.5 minutes for a homing. bb's defaults, `--lookahead
+off` and `--max-quantum 1ms` therefore build the same partition here, and
+their equality says nothing about partition independence; that is gated
+for devices by `bbdev`'s scheduler tests and `make device-smoke`.
 
 ## Simplifications
 

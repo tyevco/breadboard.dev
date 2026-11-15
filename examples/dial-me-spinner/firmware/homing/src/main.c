@@ -48,6 +48,11 @@
  * homing_step.elf (CONFIG_HOMING_STEP_TEST): H0, then one full step toward click at 446 PPS, then
  * SETTLE, brake and sleep: the drive of the suite's test_firmware_microstep_pwm.
  *
+ * homing_fast.elf (CONFIG_HOMING_NEG_FAST): a negative control of make dms-home, not a firmware: the
+ * 446 PPS phases at REFRESH 0 (3125 PPS, 7x firmware.md 5.3's loaded-zone maximum). The mechanism
+ * device has no pull-out, so the homing still "succeeds" on it; check_dms_home.py must fail it from the
+ * PWM edges (ADR-008 Amendment 12).
+ *
  * Every phase prints one line on UARTE0 (a log record, ADR-008 D8), "homing: ...". Timing is
  * k_sleep and the PWM (never a busy-wait: ADR-008 D1).
  */
@@ -75,7 +80,11 @@
 #define PIN_B_IN2 NRF_GPIO_PIN_MAP(0, 11)
 
 #define TOP 640u                       /* 16 MHz / 640 = 25 kHz */
+#ifdef CONFIG_HOMING_NEG_FAST
+#define R_446 0u                       /* the negative control: 25000 / 8 = 3125 PPS (Kconfig) */
+#else
 #define R_446 6u                       /* REFRESH: 25000 / (8 x 7) = 446 PPS */
+#endif
 #define R_313 9u                       /* 25000 / (8 x 10) = 313 PPS */
 #define R_80 38u                       /* 25000 / (8 x 39) = 80 PPS */
 #define R_H0 31u                       /* 8 x 32 periods = 10.24 ms */

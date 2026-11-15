@@ -411,7 +411,7 @@ These are AGENTS.md rules and they hold here unchanged.
 | M7 | Definition of done, packaged: README quickstart (clone URL as a marked placeholder), `make demo`, cost-table row. **Not published** (approver decision B): the stranger test runs from a local clone and stops; the human decides publication | §5, measured in a clean Ubuntu 24.04 container and on a clean WSL distro, cloning from a local path or `file://` URL | — |
 | M8 | E2: `BbNrf52Saadc` model with BURST, loading `adc_in`, per-sample trace, UART-to-`log` records, VDD channel | `make nrf-saadc-model` (register and timing tests, the ADR-005 test-plan shape, including an 8× burst with one charge transfer per acquisition). `make dms-vsense`: the analog-side check against the `load = "none"` reference run (356 µV at 1 s and 761 µV at 50 ms, tolerance set from M8's measurement), the firmware-visible checks (codes, C5 ÷ 10 fault, LED shed timing). Equivalence with the every-lattice-point reference; no `stop:ngspice` | 008 D7–D8 |
 | M9 | GDB passthrough (`bb run --gdb <port>`) | Prototype first (ADR-008 D10). Then a run with GDB attached, one breakpoint hit and continued, gives `nets.csv`, `nets.vcd` and non-grant records identical to the run without GDB. If that cannot hold, the mode is marked debug-only and its outputs carry a `debug` flag. **Done (2026-11-13) through the fallback:** a breakpoint stop cuts Renode's time slice and changes results (measured), so `--gdb` runs carry a debug mark at the first operation that can change results (a `warn` record; `run.json` `debug: true`). A session with no such operation is byte-identical to the run without GDB, on the spike and on E1. `make gdb-test` (in `make test`), `make gdb` (CI job `dms-rail`); ADR-008 Amendment 7 | 008 D10 |
-| M10 | Stretch E3: PWM model, TEMP and NVMC stand-ins, the averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device | One full step at 446 PPS against `test_firmware_microstep_pwm`. HOME_N latency within 75 ms at the typical tS, within 97.4 ms at the worst (approver decision 3, 2026-11-14; ADR-008 Amendment 10). Equivalence and determinism. **Done (2026-11-14):** the PWM, TEMP and NVMC models (`nrf52840-bb@3`, ADR-008 Amendment 9) and the PWM engine path (`make nrf-pwm-model`); the device route (device parts in board files, `bbdev`, `DeviceEngine`, `dms/mechanism@1`, `make device-smoke`; ADR-006 Amendments 6-7); the ideal-switch `ti/drv8837` bridge view in place of the averaged one (no duty crosses the pin boundary); the Zephyr homing firmware (`homing.elf`, `homing_step.elf`, `make fw-rebuild`); E3 on the board files of `examples/dial-me-spinner/e3`, `make dms-home` (the one-step comparison within 2.5 %, HOME_N 44.30 ms at the typical corner and 74.99 ms at the worst, H0-H5, equivalence, 10-run determinism) and `make dms-home-test` (in `make test`); ADR-008 Amendment 11 (the homing boards leave the bridges' power stage out of ngspice; no quiet grant with two producers) | 006 D7, 008 D9 |
+| M10 | Stretch E3: PWM model, TEMP and NVMC stand-ins, the averaged DRV8837 view, the Rust device API, the mechanism and DRV5032 device | One full step at 446 PPS against `test_firmware_microstep_pwm`. HOME_N latency within 75 ms at the typical tS, within 97.4 ms at the worst (approver decision 3, 2026-11-14; ADR-008 Amendment 10). Equivalence and determinism. **Done (2026-11-14):** the PWM, TEMP and NVMC models (`nrf52840-bb@3`, ADR-008 Amendment 9) and the PWM engine path (`make nrf-pwm-model`); the device route (device parts in board files, `bbdev`, `DeviceEngine`, `dms/mechanism@1`, `make device-smoke`; ADR-006 Amendments 6-7); the ideal-switch `ti/drv8837` bridge view in place of the averaged one (no duty crosses the pin boundary); the Zephyr homing firmware (`homing.elf`, `homing_step.elf`, `make fw-rebuild`); E3 on the board files of `examples/dial-me-spinner/e3`, `make dms-home` (the one-step comparison within 2.5 %, HOME_N 44.30 ms at the typical corner and 74.99 ms at the suite's worst DRV5032FA corner as a worst-phase bound, H0-H5 with every phase's step rate from the PWM edges, three negative controls, analog-first, 10-run determinism; bb's defaults and the one-cell reference build one partition on E3, so their equality is a consistency check and partition independence rests on `bbdev`'s G6 and `make device-smoke`) and `make dms-home-test` (in `make test`); ADR-008 Amendments 11-12 (the homing boards leave the bridges' power stage out of ngspice; no quiet grant with two producers; the M10 review) | 006 D7, 008 D9 |
 | M11 | Systems: base board import, `[[connection]]`, the harness view | Base board: 21 parts, 17 nets. The mated system with the shared refs U1, U2, J1 and TP1 all resolved by qualified name; a bare shared ref is an error. **Done (2026-11-14):** `examples/dial-me-spinner/system` (main + base, main J1 to base J3 through the harness view `dial-me-spinner/link-harness:wires`), `make dms-system` (in `make test`) and `cli/tests/system.rs`; no schema change; ADR-007 Amendment 5 | 007 D5 |
 
 Dependencies:
@@ -1393,8 +1393,9 @@ E1 and E2 project and every committed golden are unchanged.
     `bb flash --target` and a bench's `[analog] exclude`
     (`cli/tests/system.rs`).
   - **Byte-identical re-imports.** A fresh import gives the committed
-    `board.bbm` (sha256 `8f1d752e86308597…`), and two imports agree in
-    `board.bbm`, `bb.lock`, `.bb/resolution.json` and
+    `board.bbm` (sha256 `8f1d752e86308597…` at M11; M10's `make locks`
+    changed it to `642a400cc96097e5…`, ADR-007 Amendment 6), and two
+    imports agree in `board.bbm`, `bb.lock`, `.bb/resolution.json` and
     `.bb/unresolved.toml`. The `kicad =` route (`kicad-cli` 10.0.8, both
     boards) gives the same `board.bbm` and leaves the sources unchanged.
   - **Secondary:** `dc96515`'s KiCad 9.0.9 base netlist differs exactly in
@@ -1490,7 +1491,10 @@ golden of E1, E2 and Phase 0 is unchanged.
   - **Equivalence and determinism:** every case equals its one-cell
     reference and the committed hashes, `--max-quantum 1ms` and
     `--engine-order analog-first` agree, and the typical homing is
-    identical over 10 runs.
+    identical over 10 runs. (The M10 review: on E3 the defaults, the
+    one-cell reference and `--max-quantum 1ms` are one partition, so only
+    analog-first and determinism carry information there; ADR-008
+    Amendment 12 item 4.)
 - **What changed from the plan and from Amendment 9** (all in Amendment 11):
   - No averaged DRV8837 view: the edges cross the pin boundary (D9), the
     ideal-switch view takes them, and a homing with the full sheet would
@@ -1510,3 +1514,37 @@ golden of E1, E2 and Phase 0 is unchanged.
   with `POOL=0` (832 s), `make pool-equiv` PASS (25 configurations),
   `make docs-plots-check` PASS, the site builds, and the cost-table row
   (README). Details, loads and overlaps: ADR-008 Amendment 11.
+
+## Review notes: the M10 review (2026-11-14)
+
+A review of M10 found that a firmware stepping seven times too fast and a
+DRV5032FB in place of the FA both passed every E3 check, that E3's worst
+corner left BOP/BRP typical, that E3's equivalence runs share one
+partition, two `[[connection]]` checks missing in M11, and stale text.
+ADR-008 Amendment 12 and ADR-007 Amendment 6 record each fix; no `spec/`
+file, schema, event format, kernel rule, model or lock changed.
+
+- **E3's check** (`scripts/check_dms_home.py`): every phase's step rate
+  from the PWM edges (the schedule of PWM periods per microstep, exactly);
+  no park-stop contact before H4; H3's end 20-108 steps from the stop;
+  the overdrive counted from the PWM; the HOME_N gate as a worst-phase
+  bound (the device's tS must be the FA's at the corner, and tS + tACTIVE
+  within the limit).
+- **Negative controls in `make dms-home`:** `homing_fast.elf` (a new
+  prebuilt image, `make fw-rebuild` builds it) fails exactly the step rate,
+  the stop contact and H3's end; the DRV5032FB at 200 ms and 286 ms fails
+  exactly the latency check.
+- **The worst corner is the suite's** (tS 75 ms, BOP 4.8 mT, BRP 0.5 mT,
+  its worst sample phase recomputed: 74.99 ms), and `park` runs at BOP/BRP
+  4.8/0.5 mT (H1 198 steps). Their goldens changed; `step` and `typ`
+  did not.
+- **Equivalence wording:** E3's defaults, one-cell and 1 ms runs are one
+  partition; the gate says so.
+- **Systems:** `pins = []` and a pin mated by two connections are errors
+  (`cli/tests/system.rs`); the system project's base probes are
+  import-only.
+- **Recorded deviations:** `examples/nrf-pwm` is a fresh-only test board
+  without goldens, a cost-table row or a `pool-equiv` entry; it replaces
+  Amendment 9's "`nrf-gates` with a PWM board"; PWM, TEMP and NVMC shared
+  one step and one platform bump.
+- **Gate runs:** ADR-008 Amendment 12.

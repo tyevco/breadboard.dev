@@ -9,22 +9,36 @@
 #   step   homing_step.elf on board-step.cir, 45 ms: one full step at 446 PPS through the bridges and coils,
 #          against the suite's test_firmware_microstep_pwm[VBAT3.7-25C] (1 MHz samples of the coils)
 #   typ    homing.elf on board.cir, 2700 ms: homing from the click end, DRV5032FA typical tS 50 ms
-#   worst  homing.elf on board-ts75.cir, 2800 ms: the same at tS 75 ms and its worst sample phase
-#   park   homing.elf on board-park.cir, 3000 ms: from inside the park zone (H1 runs), typical tS
+#   worst  homing.elf on board-ts75.cir, 2800 ms: the suite's DRV5032FA worst corner (tS 75 ms, BOP
+#          4.8 mT, BRP 0.5 mT) at its worst sample phase
+#   park   homing.elf on board-park.cir, 3200 ms: from inside the park zone (H1 runs), typical tS 50 ms,
+#          BOP/BRP 4.8/0.5 mT (H1 longest)
 # The boards are cyclic (U10 -> M1 -> U10, and ngspice -> U10 through VSYS_SENSE), so bb loads the
 # lookahead plugin and runs lookahead by default; the kernel finds no quiet grant on them (two producers
 # feed U10, ADR-003 D5 allows one; ADR-008 Amendment 11), so bb's defaults are one-cell grants too. The
-# one-cell reference is --lookahead off.
+# one-cell reference is --lookahead off. bb's defaults, --lookahead off and --max-quantum 1ms therefore
+# build the SAME partition here (every grant record identical): their equality is a consistency check,
+# not a partition-equivalence gate. The device's partition independence is gated by bbdev's G6
+# (bbdev/tests/scheduler.rs) and make device-smoke (ADR-008 Amendment 12).
+#
+# Negative controls (make dms-home; ADR-008 Amendment 12): check_dms_home.py must FAIL
+#   neg-fast   homing_fast.elf (the 446 PPS phases at 3125 PPS) on board.cir: exactly the step rate
+#              measured on the PWM edges, the park-stop contact before H4 and H3's end 20-108 steps from
+#              the stop (the device has no pull-out, so the homing itself "succeeds")
+#   neg-fb200  board.cir with M1 at tS 200 ms (the DRV5032FB, typical): exactly the HOME_N latency check
+#              (its seeded phase gives the FA run's HOME_N instant, so only the device's tS shows it)
+#   neg-fb286  the same at tS 286 ms (the FB's maximum): exactly the HOME_N latency check
 #
 #   scripts/dms_home.sh test <bb> <out>   the part in `make test`: the boards are the generator's output,
 #                                         step at bb's defaults and with --engine-order analog-first,
 #                                         check_dms_home.py --step, the committed one-cell hashes
 #   scripts/dms_home.sh gate <bb> <out>   the M10 gate (make dms-home): every case at bb's defaults and as
 #                                         its one-cell reference, check_dms_home.py on each, the defaults
-#                                         equal to the references (every record, grants included), the
-#                                         references equal to tests/golden/dms-home, --engine-order
-#                                         analog-first byte-identical and --max-quantum 1ms equal except
-#                                         grants (typ, step), and 10-run determinism (typ)
+#                                         equal to the references (every record, grants included: one
+#                                         partition), the references equal to tests/golden/dms-home,
+#                                         --engine-order analog-first byte-identical, --max-quantum 1ms
+#                                         equal (typ, step), 10-run determinism (typ), and the three
+#                                         negative controls
 #   scripts/dms_home.sh ref <bb> <out>    the one-cell references only (for golden-update)
 #   scripts/dms_home.sh update <out>      write tests/golden/dms-home from <out>'s references
 #   scripts/dms_home.sh run <bb> <out> <cases...>   only run the named cases at bb's defaults, no checks
@@ -42,6 +56,8 @@ JOBS=${DMS_HOME_JOBS:-5}
 DET_RUNS=${DET_RUNS:-10}
 PY=${PYTHON:-python3}
 CASES=(step typ worst park)
+NEGS=(neg-fast neg-fb200 neg-fb286)
+NEG=
 status=0
 pass() { echo "dms-home: PASS: $*"; }
 fail() { echo "dms-home: FAIL: $*"; status=1; }
@@ -55,7 +71,10 @@ args_of() { # <case>: bb run arguments
 --probe net:NB_VSYS --sample-rate 1MHz" ;;
     typ) echo "--netlist $E3/board.cir --firmware $FWD/homing.elf --target U10 --for 2700ms $PINS --sample-rate 10kHz" ;;
     worst) echo "--netlist $E3/board-ts75.cir --firmware $FWD/homing.elf --target U10 --for 2800ms $PINS --sample-rate 10kHz" ;;
-    park) echo "--netlist $E3/board-park.cir --firmware $FWD/homing.elf --target U10 --for 3000ms $PINS --sample-rate 10kHz" ;;
+    park) echo "--netlist $E3/board-park.cir --firmware $FWD/homing.elf --target U10 --for 3200ms $PINS --sample-rate 10kHz" ;;
+    neg-fast) echo "--netlist $E3/board.cir --firmware $FWD/homing_fast.elf --target U10 --for 2700ms $PINS --sample-rate 10kHz" ;;
+    neg-fb200) echo "--netlist $NEG/fb200.cir --firmware $FWD/homing.elf --target U10 --for 2700ms $PINS --sample-rate 10kHz" ;;
+    neg-fb286) echo "--netlist $NEG/fb286.cir --firmware $FWD/homing.elf --target U10 --for 2800ms $PINS --sample-rate 10kHz" ;;
   esac
 }
 check_args() { # <case>
@@ -125,6 +144,34 @@ check() { # <dir> <case>
   grep -v '^check_dms_home: ok' "$1.check.txt" | sed 's/^/    /'
 }
 
+# The negative controls' boards: board.cir with M1 as the DRV5032FB (tS 200 ms typical, 286 ms max).
+neg_boards() { # <dir>
+  mkdir -p "$1"
+  cp "$E3/bb.lock" "$1/bb.lock"
+  local ts m1="*bb part M1 package=dms/detent-mechanism s0=500"
+  for ts in 200 286; do
+    sed "s|^\\${m1} ts=50ms\$|${m1} ts=${ts}ms|" "$E3/board.cir" > "$1/fb$ts.cir"
+    grep -qxF "${m1} ts=${ts}ms" "$1/fb$ts.cir" \
+      || fail "neg-fb$ts: board.cir's M1 line is not the one the control edits"
+  done
+}
+
+# A negative control: check_dms_home.py --corner typ must fail exactly the checks <patterns> name
+# (grep -E, one failed check each), as E1's FW-6.4 controls fail exactly FW-6.4.
+negcheck() { # <dir> <patterns...>
+  local d=$1 p ok=1 fails
+  shift
+  if "$PY" "$ROOT/scripts/check_dms_home.py" "$d" --corner typ > "$d.check.txt"; then
+    fail "$(basename "$d"): check_dms_home.py passed a negative control"; return 0
+  fi
+  fails=$(grep '^check_dms_home: FAIL ' "$d.check.txt" | grep -v '^check_dms_home: FAIL (' || true)
+  for p in "$@"; do grep -qE "$p" <<< "$fails" || { ok=0; echo "    missing failure: $p"; }; done
+  [[ $(grep -c . <<< "$fails") == "$#" ]] || ok=0
+  sed 's/^/    /' <<< "$fails" | cut -c1-260
+  if [[ $ok == 1 ]]; then pass "$(basename "$d"): check_dms_home.py fails exactly $# check(s): $*"
+  else fail "$(basename "$d"): the negative control does not fail exactly: $*"; fi
+}
+
 boards() {
   if "$PY" "$ROOT/scripts/dms_home_boards.py" --check; then pass "the E3 board files are the generator's output"
   else fail "the E3 board files differ from scripts/dms_home_boards.py's output"; fi
@@ -149,7 +196,10 @@ do_ref() { # <bb> <out> <cases...>
 do_gate() { # <bb> <out>
   local bb=$1 out=$2 c k jobs=()
   boards
+  NEG=$out/neg-boards
+  neg_boards "$NEG"
   for c in "${CASES[@]}"; do jobs+=("$out/$c|$c|" "$out/$c-ref|$c|--lookahead off"); done
+  for c in "${NEGS[@]}"; do jobs+=("$out/$c|$c|"); done
   for c in typ step; do
     jobs+=("$out/$c-order|$c|--engine-order analog-first" "$out/$c-q1ms|$c|--max-quantum 1ms")
   done
@@ -168,7 +218,14 @@ do_gate() { # <bb> <out>
   for c in typ step; do
     same "$out/$c" "$out/$c-order" "$c: --engine-order analog-first byte-identical" nets.csv events.jsonl nets.vcd
     hashes "$out/$c-q1ms" "$c" nongrant
+    # One partition (ADR-008 Amendment 12): say so instead of calling it partition equivalence.
+    if cmp -s <(grep '"type":"grant"' "$out/$c/events.jsonl") <(grep '"type":"grant"' "$out/$c-q1ms/events.jsonl"); then
+      echo "dms-home:   $c: --max-quantum 1ms builds the same partition as the defaults ($(grep -c '"type":"grant"' "$out/$c/events.jsonl") grants, no quiet grant)"
+    fi
   done
+  negcheck "$out/neg-fast" "step rate from the PWM edges" "no park-stop contact before H4" "H3 ends"
+  negcheck "$out/neg-fb200" "HOME_N assert latency"
+  negcheck "$out/neg-fb286" "HOME_N assert latency"
   local ok=1 n=1
   for k in $(seq -w 2 "$DET_RUNS"); do
     [[ -d $out/typ-det-$k ]] || { ok=0; continue; }
@@ -199,7 +256,7 @@ case $MODE in
   gate) do_gate "$BB" "$OUT" ;;
   ref) boards; do_ref "$BB" "$OUT" "${CASES[@]}" ;;
   run) shift 2; jobs=(); for c in "$@"; do jobs+=("$OUT/$c|$c|"); done; run_jobs "$BB" "${jobs[@]}" ;;
-  *) sed -n '2,35p' "$0"; exit 2 ;;
+  *) sed -n '2,/^set -euo/{/^set -euo/!p}' "$0"; exit 2 ;;
 esac
 if [[ $status == 0 ]]; then echo "dms-home: $MODE PASS"; else echo "dms-home: $MODE FAIL"; fi
 exit $status

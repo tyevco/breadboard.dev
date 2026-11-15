@@ -161,11 +161,44 @@ every pin parameter out:
 *bb pin U1.PA6 net=PA6 model=digital_out zout=50       # overrides the set (lint warning)
 ```
 
-The engine and platform come from the package's `[behavioral]` layer. Its
-search path is the first-party directory alone, and it needs a current
-`bb.lock` next to it (`bb open <board.cir>`). The Phase 0 form, with
-`engine=renode platform=...` and every parameter written out, still works and
-needs no lock.
+The engine and platform come from the package's `[behavioral]` layer, which
+is `renode` on a platform `bb` provides or `device` on a device `bb`
+provides. A board has exactly one `renode` part (its CPU) and any number of
+device parts. Its search path is the first-party directory alone, and it
+needs a current `bb.lock` next to it (`bb open <board.cir>`). The Phase 0
+form, with `engine=renode platform=...` and every parameter written out,
+still works and needs no lock.
+
+### Device parts
+
+A device part is a behavioural model in Breadboard's own engine (`bbdev`):
+a piece of the board that is neither the CPU nor the analog netlist, such as
+E3's lead screw, carriage, magnet and DRV5032 home switch:
+
+```text
+*bb part M1 package=dms/detent-mechanism ts=75ms s0=500
+*bb pin M1.NSLEEP net=MOT_NSLEEP model=digital_in
+*bb pin M1.HOME_N net=HOME_N model=digital_out
+```
+
+- The other keys on the part's line are the device's parameters, in the
+  value grammar. Each device states its keys, their dimensions and their
+  defaults; an unknown key or a value of the wrong dimension is an error.
+- A device pin is `digital_in` or `digital_out`; `adc_in` is refused.
+- **Routing.** A device `digital_out` drives its kernel net `<ref>.<pin>`.
+  ngspice gets it as `digital_out` glue on `net=`, and every `digital_in` on
+  that net (the CPU's or another device's) reads the kernel net itself,
+  with no threshold. A device `digital_in` on a net that the CPU's or
+  another device's `digital_out` drives reads that kernel net too; on any
+  other net, ngspice thresholds the node with the pin's `digital_in`
+  parameters.
+- The lock records a device as `device:<id>@<major>` with its content
+  hash.
+- A device part exists only in a board file. A `[[device]]` entry for
+  projects (`bb.toml`) is a Phase 2 item.
+
+The normative text is `spec/package.md` section 12 (ADR-006 D7 and
+Amendment 6).
 
 ## Engine platforms
 
@@ -175,7 +208,7 @@ The Renode platforms `bb` provides (`cli/src/platforms.rs`):
 | --- | --- | --- |
 | `stm32f103-offline@1` | `engines/cpu-renode/platforms/stm32f103-offline.repl` | `stm32f103` |
 | `stm32f072-bb@1` | `engines/cpu-renode/platforms/stm32f072-bb.repl` | `stm32f072` |
-| `nrf52840-bb@1` | `engines/cpu-renode/platforms/nrf52840-bb.repl` | `nrf52840` |
+| `nrf52840-bb@3` | `engines/cpu-renode/platforms/nrf52840-bb.repl` | `nrf52840` |
 
 A behaviour change bumps the major and changes the content hash. The lock
 records Renode's version (1.17.0) with each Renode platform.

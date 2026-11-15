@@ -10,4 +10,15 @@ config HOMING_STEP_TEST
 	  dial-me-spinner suite's test_firmware_microstep_pwm, which E3's
 	  analog check compares against (Phase 1 plan M10).
 
+config HOMING_NEG_FAST
+	bool "Negative control: the 446 PPS phases at REFRESH 0 (3125 PPS)"
+	help
+	  homing_fast.elf, a negative control of make dms-home (ADR-008
+	  Amendment 12), not a firmware: homing.elf with the 446 PPS
+	  phases (H2 after its first 4 steps, H3) at REFRESH 0, 3125 PPS,
+	  seven times firmware.md section 5.3's loaded-zone maximum. The
+	  mechanism device has no pull-out or maximum speed (a stated
+	  limit), so scripts/check_dms_home.py must fail it from the step
+	  rate it measures on the PWM edges.
+
 source "Kconfig.zephyr"

@@ -1074,12 +1074,15 @@ DMS_HOME_STEP_ARGS = --netlist $(DMS_HOME_E3)/board-step.cir --firmware $(DMS_HO
 pooled-dms-home-test: bb
 	bash scripts/dms_home.sh test $(BB) $(DMS_HOME_OUT)-test
 
-# The plan's M10 gate (E3, about 45 minutes on 5 jobs): step, typ (tS 50 ms), worst (tS 75 ms at its
-# worst sample phase) and park (H1) at bb's defaults and as their one-cell references
-# (--lookahead off), check_dms_home.py on each (H0-H5, step counts, the park stall, the HOME_N latency
-# gate of ADR-008 Amendment 10), defaults equal to the references, the references equal to
-# tests/golden/dms-home, analog-first byte-identical and --max-quantum 1ms equal except grants (typ,
-# step), 10-run determinism (typ). make pool-equiv has step and typ.
+# The plan's M10 gate (E3, about 55 minutes on 5 jobs): step, typ (tS 50 ms), worst (the suite's
+# DRV5032FA corner: tS 75 ms, BOP 4.8 mT, BRP 0.5 mT, at its worst sample phase) and park (H1) at bb's
+# defaults and as their one-cell references (--lookahead off), check_dms_home.py on each (H0-H5, step
+# counts, every phase's step rate from the PWM edges, the park stall, the HOME_N latency gate of
+# ADR-008 Amendments 10 and 12), defaults equal to the references, the references equal to
+# tests/golden/dms-home, analog-first byte-identical and --max-quantum 1ms equal (typ, step; on E3 the
+# defaults, the reference and 1 ms are one partition: a consistency check), 10-run determinism (typ),
+# and three negative controls (homing_fast.elf; M1 as the DRV5032FB at 200 and 286 ms) that must fail
+# exactly their checks (ADR-008 Amendment 12). make pool-equiv has step and typ.
 pooled-dms-home: bb
 	bash scripts/dms_home.sh gate $(BB) $(DMS_HOME_OUT)
 
@@ -1137,8 +1140,9 @@ stranger-test-wsl:
 
 # The docs site's waveform plots (site/public/plots, committed: the Pages build has no Renode).
 # `make docs-plots` runs make demo's E1 runs, the E2 cases sag, rec, s50 and s50-none of make
-# dms-vsense and the spike, every Renode fresh, then draws <name>.{light,dark}.svg from their
-# outputs with plain Python (scripts/docs_plots.sh, scripts/docs_plots.py; about 2.5 min).
+# dms-vsense, the E3 cases typ and step of make dms-home and the spike, every Renode fresh, then
+# draws <name>.{light,dark}.svg from their outputs with plain Python (scripts/docs_plots.sh,
+# scripts/docs_plots.py; about 5 min alone, most of it the E3 homing).
 # `make docs-plots-check` does the same into $(DOCS_PLOTS_OUT)/svg and requires the committed
 # files byte for byte (CI job dms-rail).
 .PHONY: docs-plots docs-plots-check

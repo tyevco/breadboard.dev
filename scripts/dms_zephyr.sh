@@ -34,11 +34,13 @@ BB=${BB:-${CARGO_TARGET_DIR:-$HOME/.cache/bb-target}/release/bb}
 BOARD=dial_me_spinner/nrf52840
 # The images: E1 (led_rail, and led_rail_wrong_order with its one Kconfig switch) and E2 (vsense,
 # and vsense_50ms with its one Kconfig switch, the reading period) and E3 (homing, and homing_step
-# with its one Kconfig switch, the one-step test). image -> application and extra
+# with its one Kconfig switch, the one-step test; homing_fast, make dms-home's negative control: the
+# 446 PPS phases at 3125 PPS, ADR-008 Amendment 12). image -> application and extra
 # Kconfig fragment in app_of / conf_of (ADR-008 D5).
-IMAGES=(led_rail led_rail_wrong_order vsense vsense_50ms homing homing_step)
+IMAGES=(led_rail led_rail_wrong_order vsense vsense_50ms homing homing_step homing_fast)
 app_of() { case $1 in led_rail*) echo led_rail ;; vsense*) echo vsense ;; homing*) echo homing ;; esac; }
-conf_of() { case $1 in led_rail_wrong_order) echo wrong_order.conf ;; vsense_50ms) echo fast.conf ;; homing_step) echo step.conf ;; esac; }
+conf_of() { case $1 in led_rail_wrong_order) echo wrong_order.conf ;; vsense_50ms) echo fast.conf ;; homing_step) echo step.conf ;;
+  homing_fast) echo fast.conf ;; esac; }
 
 log() { printf '==> %s\n' "$*" >&2; }
 

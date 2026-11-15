@@ -259,21 +259,36 @@ What the gate checks (`scripts/dms_home.sh`, `scripts/check_dms_home.py`):
   with its own VSYS reading (3.645 V under load, where the suite assumes
   3.7 V); per unit of duty the drive chain is within 0.25 % of the suite.
 - **The homing procedure** (`homing.elf`): H0-H5 in order with their step
-  counts, HOME asserted after the stall, the carriage at the park stop with
-  at least 20 steps of overdrive, the final position 4 ± 2 steps from the
-  stop, and the brake before sleep. From the click end it takes 2.62 s.
-- **The HOME_N latency** (ADR-008 Amendment 10), from the device's field
-  passing BOP to the HOME_N edge: 44.30 ms at the typical tS of 50 ms (gate
-  75 ms), and 74.99 ms at tS 75 ms with the worst sample phase (gate: the
-  suite's 97.4 ms window).
+  counts; every phase's step rate measured on the PWM edges (313, 446 and
+  80 PPS exactly as firmware.md schedules them: the device has no pull-out,
+  so it would follow any rate); no park-stop contact before H4, and H3
+  ending 20-108 steps from the stop; HOME asserted after the stall, the
+  carriage at the park stop with at least 20 steps of overdrive, the final
+  position 4 ± 2 steps from the stop, and the brake before sleep. From the
+  click end it takes 2.62 s.
+- **The HOME_N latency** (ADR-008 Amendments 10 and 12), from the device's
+  field passing BOP to the HOME_N edge: 44.30 ms at the typical tS of 50 ms
+  (gate 75 ms), and 74.99 ms at the suite's worst DRV5032FA corner (tS
+  75 ms, BOP 4.8 mT, BRP 0.5 mT) with the worst sample phase (gate: the
+  suite's 97.4 ms window). The device must be the DRV5032FA (its tS) and
+  tS + tACTIVE must be within the gate, so the bound holds for every sample
+  phase, not just the run's.
+- **Negative controls:** `homing_fast.elf` (the 446 PPS phases at
+  3125 PPS) fails exactly the step-rate, stop-contact and H3 checks, and
+  the DRV5032FB (tS 200 ms and 286 ms) fails exactly the latency check.
 - **Equivalence and determinism.** Each case equals its one-cell reference
-  (`--lookahead off`) and the committed hashes in `tests/golden/dms-home/`;
-  `--max-quantum 1ms` and the other engine order are identical too, and the
-  typical homing is identical over 10 runs.
+  (`--lookahead off`) and the committed hashes in `tests/golden/dms-home/`,
+  and the other engine order is identical too. On these boards bb's
+  defaults, `--lookahead off` and `--max-quantum 1ms` build the same
+  one-cell partition (no quiet grant forms), so that equality is a
+  consistency check; the device's partition independence is gated by
+  `bbdev`'s tests and `make device-smoke`. The typical homing is identical
+  over 10 runs.
 
 The firmware is in `examples/dial-me-spinner/firmware/homing/`; both images
-are prebuilt, and `make fw-rebuild` reproduces them. Details are in ADR-008
-Amendments 9-11 and ADR-006 Amendments 6-7.
+are prebuilt (with the negative control `homing_fast.elf`), and `make
+fw-rebuild` reproduces them. Details are in ADR-008 Amendments 9-12 and
+ADR-006 Amendments 6-7.
 
 ## Debugging firmware with GDB
 
@@ -423,7 +438,9 @@ The run writes these files to `out/spike/`:
    `tests/golden/feedback/` and the one-cell reference hashes (lookahead
    changes only `grant` records).
 6. `make feedback-order`: the same run with the engines registered in the
-   other order must be byte-identical.
+   other order must be byte-identical. `make nrf-feedback` (Phase 1 M2):
+   the feedback circuit on the nRF52840, lookahead on at 1 ms and 10 ms
+   against its one-cell reference, and in the other engine order.
 7. `make adc`: 300 ms of `examples/adc`, an STM32F072 that reads back
    through its ADC the divider it drives (below), then `scripts/check_adc.py`
    and the hashes of the one-cell reference that pushes the ADC value at
@@ -450,6 +467,15 @@ The run writes these files to `out/spike/`:
    dial-me-spinner at 50 ms and with C5 fitted at 10 nF, each against its
    `load = "none"` run, with `scripts/check_dms_vsense.py` and the committed
    hashes (below, "E2").
+   `make adc-kicad` (Phase 1 M4): the ADC board drawn in KiCad, imported
+   and run as a `bb.toml` project, against its one-cell reference and
+   board.cir's records. `make dms-rail-test` (Phase 1 M6, E1): the four
+   LED-rail runs with `scripts/check_dms_rail.py`, the committed hashes,
+   one analog-first run and the FW-6.4 negative controls (below, "E1").
+   `make ec-reconnect` (ADR-004 Amendment 8): the one-cell references of
+   the ADC and feedback boards with the Renode engine replacing its
+   External Control connection every 2 000 messages, against their
+   committed hashes.
 8. `make packages` (ADR-006): the package files and lockfiles against
    `spec/schema`, `bb pkg lint`, `bb pkg test` (each view's test vectors
    through the ngspice engine at two grant partitions) and the examples'
