@@ -243,7 +243,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             };
             let text = format!(
                 "# bb.toml: a Breadboard project (ADR-007 D5, spec/project.md), created by `bb open {file}`.\n\
-                 schema = \"bb-project/0\"\n\n[[board]]\nid = \"main\"\n{key} = {}\nground = \"GND\"\n",
+                 schema = \"bb-project/1\"\n\n[[board]]\nid = \"main\"\n{key} = {}\nground = \"GND\"\n",
                 bbpkg::toml::quote(&file)
             );
             std::fs::write(&toml_path, text)
@@ -336,6 +336,9 @@ fn write_if_changed(path: &Path, text: &str) -> Result<bool, String> {
 fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, String> {
     use std::io::Write;
     let p = Project::read(dir)?;
+    if let Some(h) = &p.schema_hint {
+        eprintln!("bb open: warning: {h}");
+    }
     let imp = import::import(&p, import::Mode::Open)?;
     let mut out = std::io::stdout().lock();
     for w in &imp.warnings {
@@ -383,7 +386,38 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
         }
     }
     // Bindings, probes and targets must name resolved instances (D7).
-    let problems = crate::elab::check_names(&p, &imp.board);
+    let mut problems = crate::elab::check_names(&p, &imp.board);
+    // Devices (ADR-013 D1): parameters, pins and models, as bb run builds them.
+    let mut dev_warnings = Vec::new();
+    match crate::elab::plan_devices(&p, &imp, &mut dev_warnings) {
+        Ok(devs) => {
+            for d in &devs {
+                let _ = writeln!(
+                    out,
+                    "bb open: device {}:{} -> {} ({}{}), {} pin{} bound",
+                    d.board,
+                    d.part.reference,
+                    d.package.part.id,
+                    d.part.platform,
+                    if imp
+                        .board
+                        .instance(&d.board, &d.part.reference)
+                        .is_some_and(|i| i.is_virtual)
+                    {
+                        ", virtual"
+                    } else {
+                        ""
+                    },
+                    d.pins.len(),
+                    if d.pins.len() == 1 { "" } else { "s" }
+                );
+            }
+        }
+        Err(e) => problems.push(e),
+    }
+    for w in &dev_warnings {
+        eprintln!("bb open: warning: {w}");
+    }
     let bbm_text = imp.board.to_text();
     let bbm_path = dir.join(import::BOARD_FILE);
     let lp = dir.join("bb.lock");

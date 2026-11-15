@@ -6,15 +6,19 @@
 //! "upgrade bb". `bb pkg migrate` rewrites a package to the current major.
 //!
 //! The Phase 2 schema epoch (milestone S, ADR-009..013) moves every schema
-//! to its next major in one commit. Milestone B1 (ADR-010) develops against
-//! the epoch's draft and carries its own two pieces of it here:
+//! to its next major in one commit. Milestones B1 (ADR-010) and R1
+//! (ADR-013) develop against the epoch's draft and carry their pieces of it
+//! here:
 //!
 //! - `bb-bench/1` (ADR-010 D1): every `/0` key keeps its meaning, so the
 //!   migration rewrites the `schema` line only, and a migrated bench builds
 //!   a byte-identical deck (gate G1);
 //! - `bb-part/1`, for the `switch` view kind (ADR-010 D2): every `/0` key
 //!   keeps its meaning, so the migration rewrites the `schema` line only.
-//!   The other `bb-part/1` keys (ADR-009, ADR-012) stay reserved until S.
+//!   The other `bb-part/1` keys (ADR-009, ADR-012) stay reserved until S;
+//! - `bb-project/1` and `bb-board/1` (ADR-013 D1, R1: `[[device]]` and
+//!   virtual instances): their `/0` files are read and migrated, the schema
+//!   line only.
 //!
 //! The machinery is also exercised by a synthetic bump in the tests (gate
 //! G9 of ADR-006).
@@ -97,15 +101,29 @@ fn bench_0_to_1(t: &str) -> Result<String, String> {
 
 impl Registry {
     /// The registry of this build: `bb-part` and `bb-bench` at major 1
-    /// (ADR-010, the B1 draft of the schema epoch), every other schema at
-    /// major 0.
+    /// (ADR-010, the B1 draft of the schema epoch), `bb-project` and
+    /// `bb-board` at major 1 (ADR-013, R1), every other schema at major 0.
     pub fn current() -> Registry {
+        fn project_0_to_1(t: &str) -> Result<String, String> {
+            rewrite_schema_line(t, "bb-project/1")
+        }
+        // board.bbm is canonical JSON with one `"schema":"bb-board/0"` member;
+        // `bb open` rewrites it whole anyway.
+        fn board_0_to_1(t: &str) -> Result<String, String> {
+            let from = "\"schema\":\"bb-board/0\"";
+            if t.matches(from).count() != 1 {
+                return Err("board.bbm: no single schema member".into());
+            }
+            Ok(t.replacen(from, "\"schema\":\"bb-board/1\"", 1))
+        }
         Registry {
             entries: SCHEMAS
                 .iter()
                 .map(|s| match *s {
                     "bb-part" => (*s, 1, vec![part_0_to_1 as Migration]),
                     "bb-bench" => (*s, 1, vec![bench_0_to_1 as Migration]),
+                    "bb-project" => (*s, 1, vec![project_0_to_1 as Migration]),
+                    "bb-board" => (*s, 1, vec![board_0_to_1 as Migration]),
                     _ => (*s, 0, Vec::new()),
                 })
                 .collect(),
@@ -253,6 +271,33 @@ mod tests {
                 .unwrap_err()
                 .contains("upgrade bb"));
         }
+    }
+
+    #[test]
+    fn project_and_board_are_at_major_1() {
+        // ADR-013 (Phase 2 R1): bb-project/1 and bb-board/1; /0 is read and
+        // migrated, the schema line only.
+        let r = Registry::current();
+        assert_eq!(r.current_id("bb-project"), "bb-project/1");
+        assert_eq!(r.current_id("bb-board"), "bb-board/1");
+        assert!(matches!(
+            r.check("bb-project", "bb-project/0"),
+            Ok(Version::Previous { .. })
+        ));
+        assert!(r
+            .check("bb-project", "bb-project/2")
+            .unwrap_err()
+            .contains("upgrade bb"));
+        let t = "# p\nschema = \"bb-project/0\"\n[[board]]\nid = \"main\"\n";
+        assert_eq!(
+            r.migrate("bb-project", "bb-project/0", t).unwrap().unwrap(),
+            "# p\nschema = \"bb-project/1\"\n[[board]]\nid = \"main\"\n"
+        );
+        let b = "{\"boards\":[],\"schema\":\"bb-board/0\"}\n";
+        assert_eq!(
+            r.migrate("bb-board", "bb-board/0", b).unwrap().unwrap(),
+            "{\"boards\":[],\"schema\":\"bb-board/1\"}\n"
+        );
     }
 
     #[test]

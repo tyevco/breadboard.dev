@@ -680,6 +680,7 @@ fn engine_binds(
     loads: &[LoadGlue],
     direct: &std::collections::BTreeMap<String, String>,
     stim: &elab::Stimulus,
+    digital_only: &std::collections::BTreeSet<String>,
 ) -> Vec<devices::Bind> {
     use devices::{Bind, ANALOG, BENCH, CPU, DEVICES};
     let bench_mcu = stim.mcu_pins();
@@ -689,10 +690,16 @@ fn engine_binds(
         net: net.to_string(),
         dir,
     };
+    // An output on a digital-only net (ADR-014 D4) has no glue: the analog
+    // engine does not consume it.
+    let glued = |k: &PinKind| !matches!(k, PinKind::Out { net, .. } if digital_only.contains(net));
     let mut out = Vec::new();
     for p in mcu_pins {
         let k = p.kernel_net();
         match p.kind {
+            PinKind::Out { .. } if !glued(&p.kind) => {
+                out.push(b(CPU, &p.pin, &k, Direction::Output));
+            }
             PinKind::Out { .. } => {
                 out.push(b(CPU, &p.pin, &k, Direction::Output));
                 out.push(b(ANALOG, &k, &k, Direction::Input));
@@ -733,6 +740,9 @@ fn engine_binds(
     for p in dev_pins {
         let k = p.kernel_net();
         match p.kind {
+            PinKind::Out { .. } if !glued(&p.kind) => {
+                out.push(b(DEVICES, &k, &k, Direction::Output));
+            }
             PinKind::Out { .. } => {
                 out.push(b(DEVICES, &k, &k, Direction::Output));
                 out.push(b(ANALOG, &k, &k, Direction::Input));
@@ -1049,7 +1059,14 @@ fn run(a: RunArgs) -> Result<(), String> {
     // the CPU is in a loop.
     let stim = &fe.stimulus;
     let bench_mcu = stim.mcu_pins();
-    let binds = engine_binds(&mcu_pins, &dev_pins, &loads, &direct, stim);
+    let binds = engine_binds(
+        &mcu_pins,
+        &dev_pins,
+        &loads,
+        &direct,
+        stim,
+        &board.digital_only,
+    );
     let (cyclic, in_cycle) = devices::cycles(devices::ENGINES, &binds);
     let plugin = match a.plugin {
         PluginMode::Auto => in_cycle[devices::CPU],
@@ -1142,6 +1159,8 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
     for p in &mcu_pins {
         match &p.kind {
+            // An output on a digital-only net (ADR-014 D4): no glue.
+            PinKind::Out { net, .. } if board.digital_only.contains(net) => {}
             // An MCU output into the circuit: EXTERNAL source + zout glue.
             PinKind::Out { net, model } => ncfg.inputs.push(InputBinding {
                 pin: p.kernel_net(),
@@ -1189,6 +1208,7 @@ fn run(a: RunArgs) -> Result<(), String> {
     // routed directly is thresholded like an MCU input.
     for p in &dev_pins {
         match &p.kind {
+            PinKind::Out { net, .. } if board.digital_only.contains(net) => {}
             PinKind::Out { net, model } => ncfg.inputs.push(InputBinding {
                 pin: p.kernel_net(),
                 source: format!("V_bb_{}", spice_name(&p.kernel_net())),
@@ -1760,6 +1780,9 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
     // `bb open` would write now.
     let dir = import::project_dir(a.project.as_deref())?;
     let p = project::Project::read(&dir)?;
+    if let Some(h) = &p.schema_hint {
+        eprintln!("bb run: warning: {h}");
+    }
     let imp = import::import(&p, import::Mode::Run)?;
     for w in &imp.warnings {
         eprintln!("bb run: warning: {w}");

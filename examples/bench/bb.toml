@@ -7,7 +7,7 @@
 # a copy of this directory (bb run never writes into a project). The benches in bench/ drive it
 # with every B1 stimulus: playback, current profiles, presses (with bounce and with a trigger),
 # set actions and faults.
-schema = "bb-project/0"
+schema = "bb-project/1"
 
 [project]
 name = "examples/bench: the bench engine's board (milestone B1)"

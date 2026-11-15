@@ -253,7 +253,7 @@ fn a_minimal_bb_toml_is_written_for_a_net() {
     assert!(o.status.success(), "{}", text(&o));
     let t = std::fs::read_to_string(sub.join("bb.toml")).unwrap();
     assert!(
-        t.contains("netlist = \"b.net\"") && t.contains("schema = \"bb-project/0\""),
+        t.contains("netlist = \"b.net\"") && t.contains("schema = \"bb-project/1\""),
         "{t}"
     );
     assert!(sub.join("board.bbm").is_file());
@@ -432,6 +432,227 @@ fn a_bench_elaborates_into_the_deck() {
     );
     assert!(
         !o.status.success() && text(&o).contains("run `bb open`"),
+        "{}",
+        text(&o)
+    );
+}
+
+/// examples/adc/kicad with a `[[device]]` (bb-project/1, ADR-013 D1).
+const DEVICE: &str =
+    "\n[[device]]\nref = \"M1\"\npackage = \"dms/detent-mechanism\"\nvirtual = true\n\
+params = { ts = \"75ms\", s0 = \"250\" }\n\
+[[device.bind]]\npin = \"IN_A1\"\nnet = \"DRIVE\"\nmodel = \"digital_in\"\n\
+[[device.bind]]\npin = \"HOME_N\"\nnet = \"LED\"\nmodel = \"digital_out\"\n";
+
+fn device_project(name: &str, extra: &str) -> (Tmp, PathBuf) {
+    let d = std::env::temp_dir().join(format!("bb-kicad-device-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    copy_dir(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/adc/kicad"),
+        &d,
+    );
+    let _ = std::fs::remove_dir_all(d.join(".bb"));
+    std::fs::write(d.join("fw.elf"), tiny_elf()).unwrap();
+    let toml = d.join("bb.toml");
+    let s = std::fs::read_to_string(&toml).unwrap() + extra;
+    std::fs::write(&toml, s).unwrap();
+    std::fs::create_dir_all(d.join("bench")).unwrap();
+    // DRIVE outside the analog scope: a digital-only net (ADR-014 D4).
+    std::fs::write(
+        d.join("bench/digital.toml"),
+        "schema = \"bb-bench/0\"\n[analog]\nnets = [\"ADC_IN\", \"GND\", \"LED\", \"ALARM\"]\n",
+    )
+    .unwrap();
+    (Tmp(d.clone()), d)
+}
+
+fn elaborate(d: &Path, bench: &str, out: &str, extra: &[&str]) -> Output {
+    let mut args = vec!["run", "--for", "1ms", "--elaborate-only", "--out", out];
+    if !bench.is_empty() {
+        args.extend(["--bench", bench]);
+    }
+    args.extend(extra);
+    run(&args, d)
+}
+
+#[test]
+fn a_virtual_device_is_board_content_and_runs_beside_the_mcu() {
+    let (_t, d) = device_project("ok", DEVICE);
+    let o = run(&["open", "."], &d);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(
+        text(&o)
+            .contains("device main:M1 -> dms/detent-mechanism (dms/mechanism@1, virtual), 2 pins"),
+        "{}",
+        text(&o)
+    );
+    let bbm = std::fs::read_to_string(d.join("board.bbm")).unwrap();
+    // bb-board/1: the virtual instance, its pins on the bound nets (the
+    // binding is board content), and the device identity as a platform.
+    for s in [
+        "\"schema\":\"bb-board/1\"",
+        "\"ref\":\"M1\",\"resolution\":{\"key\":\"dms/detent-mechanism\",\"stage\":\"override\"}",
+        "\"status\":\"ok\",\"value_text\":\"\",\"virtual\":true",
+        "{\"name\":\"IN_A1\",\"net\":\"DRIVE\",\"number\":\"1\"}",
+        "{\"name\":\"HOME_N\",\"net\":\"LED\",\"number\":\"6\"}",
+        "{\"name\":\"NSLEEP\",\"number\":\"5\"}",
+        "{\"pin\":\"1\",\"ref\":\"M1\"}",
+        "\"id\":\"device:dms/mechanism@1\"",
+    ] {
+        assert!(bbm.contains(s), "{s} not in {bbm}");
+    }
+    let lock = std::fs::read_to_string(d.join("bb.lock")).unwrap();
+    assert!(lock.contains("id = \"device:dms/mechanism@1\""), "{lock}");
+    assert!(lock.contains("id = \"dms/detent-mechanism\""), "{lock}");
+    assert!(run(&["open", ".", "--check"], &d).status.success());
+    assert!(run(&["flash", "--target", "U1", "fw.elf"], &d)
+        .status
+        .success());
+    // Every net in scope (no bench): DRIVE keeps its glue, and run.json
+    // records the device but no digital-only net.
+    let o = elaborate(&d, "", "out", &["--probe", "net:M1.HOME_N"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let rj = std::fs::read_to_string(d.join("out/run.json")).unwrap();
+    assert!(
+        rj.contains(
+            "\"devices\":[{\"device\":\"dms/mechanism@1\",\"package\":\"dms/detent-mechanism\",\
+             \"params\":{\"s0\":\"250\",\"ts\":\"75ms\"},\"ref\":\"main:M1\",\"version\":\"0.1.0\",\
+             \"virtual\":true}]"
+        ),
+        "{rj}"
+    );
+    assert!(!rj.contains("digital_only"), "{rj}");
+    assert!(!std::fs::read_to_string(d.join("out/deck.cir"))
+        .unwrap()
+        .contains("XM1"));
+    // DRIVE outside [analog] nets: digital-only, R1 out of the deck, and a
+    // probe of DRIVE by net name is refused with its driver's pin.
+    let o = elaborate(&d, "bench/digital.toml", "out-d", &[]);
+    assert!(o.status.success(), "{}", text(&o));
+    let rj = std::fs::read_to_string(d.join("out-d/run.json")).unwrap();
+    assert!(rj.contains("\"digital_only\":[\"DRIVE\"]"), "{rj}");
+    assert!(!std::fs::read_to_string(d.join("out-d/deck.cir"))
+        .unwrap()
+        .contains("XR1 "));
+    let o = elaborate(&d, "bench/digital.toml", "out-p", &["--probe", "net:DRIVE"]);
+    assert!(
+        !o.status.success()
+            && text(&o).contains("digital-only net (ADR-014 D4); probe its driver's pin U1.PA4"),
+        "{}",
+        text(&o)
+    );
+}
+
+#[test]
+fn a_device_binding_is_refused_when_it_cannot_be_honoured() {
+    let refused = |name: &str, extra: &str, want: &str| {
+        let (_t, d) = device_project(name, extra);
+        let o = run(&["open", "."], &d);
+        assert!(!o.status.success(), "{name}: {}", text(&o));
+        assert!(
+            text(&o).contains(want),
+            "{name}: {want:?} not in {}",
+            text(&o)
+        );
+    };
+    // A virtual reference must not collide with a symbol's; a non-virtual
+    // device needs its symbol, resolved to the device package.
+    refused(
+        "collide",
+        &DEVICE.replace("ref = \"M1\"", "ref = \"R1\""),
+        "main:R1 is already an instance of the board",
+    );
+    refused(
+        "nosym",
+        &DEVICE.replace("virtual = true\n", ""),
+        "no instance main:M1 on the schematic",
+    );
+    refused(
+        "wrongpkg",
+        &DEVICE
+            .replace("virtual = true\n", "")
+            .replace("ref = \"M1\"", "ref = \"R1\""),
+        "main:R1 resolves to generic/resistor (ok), not dms/detent-mechanism",
+    );
+    // spec/package.md section 12: adc_in, unknown pins and parameters, a
+    // model against the pin's direction, a package that is not a device.
+    refused(
+        "adc",
+        &DEVICE.replace("model = \"digital_in\"", "model = \"adc_in\""),
+        "a device pin is digital_in or digital_out",
+    );
+    refused(
+        "pin",
+        &DEVICE.replace("pin = \"IN_A1\"", "pin = \"FOO\""),
+        "has no pin FOO",
+    );
+    refused(
+        "param",
+        &DEVICE.replace("ts = \"75ms\"", "nope = \"1\""),
+        "unknown parameter \"nope\"",
+    );
+    refused(
+        "dir",
+        &DEVICE.replace("model = \"digital_out\"", "model = \"digital_in\""),
+        "HOME_N is an output of device",
+    );
+    refused(
+        "notdev",
+        &DEVICE.replace("dms/detent-mechanism", "generic/resistor"),
+        "package generic/resistor is not a device",
+    );
+    refused(
+        "net",
+        &DEVICE.replace("net = \"LED\"", "net = \"NOPE\""),
+        "NOPE",
+    );
+    // [[device]] is a bb-project/1 key.
+    let (_t, d) = device_project("v0", DEVICE);
+    let toml = d.join("bb.toml");
+    let s = std::fs::read_to_string(&toml)
+        .unwrap()
+        .replace("bb-project/1", "bb-project/0");
+    std::fs::write(&toml, s).unwrap();
+    let o = run(&["open", "."], &d);
+    assert!(
+        !o.status.success() && text(&o).contains("[[device]] is a bb-project/1 key"),
+        "{}",
+        text(&o)
+    );
+    // bb run: one driver per net (ALARM is U1.PA5's), and a device input on
+    // a digital-only net that no digital output drives.
+    let (_t, d) = device_project(
+        "drivers",
+        &DEVICE.replace("net = \"LED\"", "net = \"ALARM\""),
+    );
+    assert!(run(&["open", "."], &d).status.success());
+    assert!(run(&["flash", "--target", "U1", "fw.elf"], &d)
+        .status
+        .success());
+    let o = elaborate(&d, "", "out", &[]);
+    assert!(
+        !o.status.success() && text(&o).contains("net ALARM is already driven by another pin"),
+        "{}",
+        text(&o)
+    );
+    let (_t, d) = device_project(
+        "undriven",
+        &DEVICE.replace("net = \"DRIVE\"", "net = \"ADC_IN\""),
+    );
+    assert!(run(&["open", "."], &d).status.success());
+    assert!(run(&["flash", "--target", "U1", "fw.elf"], &d)
+        .status
+        .success());
+    std::fs::write(
+        d.join("bench/digital.toml"),
+        "schema = \"bb-bench/0\"\n[analog]\nnets = [\"DRIVE\", \"GND\", \"LED\", \"ALARM\"]\n",
+    )
+    .unwrap();
+    let o = elaborate(&d, "bench/digital.toml", "out", &[]);
+    assert!(
+        !o.status.success()
+            && text(&o)
+                .contains("M1.IN_A1: it reads ADC_IN, which is outside the bench's [analog] nets"),
         "{}",
         text(&o)
     );

@@ -17,7 +17,7 @@
 # are unqualified. A `bb run` here would simulate main only, with the base
 # side of J1 a bench port (ADR-007 D5), and needs [probes] without the base
 # board's nets (below).
-schema = "bb-project/0"
+schema = "bb-project/1"
 
 [project]
 name = "dial-me-spinner rev A (main + base)"

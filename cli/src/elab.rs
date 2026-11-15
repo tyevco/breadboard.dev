@@ -266,10 +266,13 @@ pub fn check_names(p: &Project, board: &Board) -> Vec<String> {
             Ok(ProbeTarget::Pin(b, r, pin)) => {
                 let bound = p.binds.iter().any(|x| {
                     insts.resolve_pin(&x.pin).ok() == Some((b.clone(), r.clone(), pin.clone()))
+                }) || p.devices.iter().any(|d| {
+                    device_ref(p, &d.reference).ok() == Some((b.clone(), r.clone()))
+                        && d.binds.iter().any(|x| x.pin == pin)
                 });
                 if !bound {
                     out.push(format!(
-                        "[probes] {pr}: pin {b}:{r}.{pin} has no [[bind]] (only bound MCU pins are probed by pin name)"
+                        "[probes] {pr}: pin {b}:{r}.{pin} has no [[bind]] (only bound MCU and device pins are probed by pin name)"
                     ));
                 }
             }
@@ -277,6 +280,151 @@ pub fn check_names(p: &Project, board: &Board) -> Vec<String> {
         }
     }
     out
+}
+
+/// A `[[device]]` reference (ADR-013 D1): `<board>:<ref>`, or a bare `<ref>`
+/// in a one-board project. Returns `(board, ref)`.
+pub fn device_ref(p: &Project, reference: &str) -> Result<(String, String), String> {
+    match reference.split_once(':') {
+        Some((b, r)) => Ok((b.to_string(), r.to_string())),
+        None if p.boards.len() == 1 => Ok((p.boards[0].id.clone(), reference.to_string())),
+        None => Err(format!(
+            "[[device]] {reference}: qualify the reference as <board>:{reference} (ADR-007 D7)"
+        )),
+    }
+}
+
+/// One `[[device]]` of a run (ADR-013 D1): its part for the device engine,
+/// its pin bindings (built from the device package's `pins.toml`, as a board
+/// file's device part's are) and its `run.json` record.
+pub struct DevicePlan {
+    pub board: String,
+    pub part: Part,
+    pub pins: Vec<PinBinding>,
+    pub package: Package,
+    pub json: Json,
+}
+
+/// The project's devices: each one's parameters checked against the device
+/// (unknown keys, dimensions, ranges), each binding's pin and model against
+/// the device's pins (spec/package.md section 12), each pin built with the
+/// package's parameter set. `bb open` calls it to report problems; `bb run`
+/// to run them. `import` has already checked the packages, the pins' names
+/// and the nets.
+pub fn plan_devices(
+    p: &Project,
+    imp: &Imported,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<DevicePlan>, String> {
+    let board = &imp.board;
+    let mut out = Vec::new();
+    for d in &p.devices {
+        let ctx = format!("bb.toml [[device]] {}", d.reference);
+        let (db, dr) = device_ref(p, &d.reference)?;
+        let inst = board
+            .instance(&db, &dr)
+            .ok_or_else(|| format!("{ctx}: {db}:{dr} is not in board.bbm (run `bb open`)"))?;
+        let pr = inst
+            .package
+            .as_ref()
+            .ok_or_else(|| format!("{ctx}: {db}:{dr} has no package"))?;
+        let pkg = imp
+            .packages
+            .get(&pr.id)
+            .ok_or_else(|| format!("{ctx}: package {} is not resolved", pr.id))?;
+        let did = pkg
+            .part
+            .behavioral
+            .as_ref()
+            .filter(|b| b.engine == "device")
+            .and_then(|b| b.device.as_deref())
+            .ok_or_else(|| format!("{ctx}: package {} is not a device", pkg.part.id))?;
+        let def = bbdev::find(did)
+            .ok_or_else(|| format!("{ctx}: device {did} is not one this bb provides"))?;
+        let kv: BTreeMap<&str, &str> = d
+            .params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let params = board::device_params(def, &kv).map_err(|e| format!("{ctx}: {e}"))?;
+        let part = Part {
+            reference: dr.clone(),
+            engine: "device".into(),
+            platform: def.id.to_string(),
+            package: Some(pkg.part.id.clone()),
+            params,
+        };
+        let mut pins = Vec::new();
+        for b in &d.binds {
+            let bctx = format!("{ctx} [[device.bind]] {}", b.pin);
+            board::device_pin(&part, &b.pin, &b.model).map_err(|e| format!("{bctx}: {e}"))?;
+            let number = pkg
+                .pins
+                .by_name(&b.pin)
+                .map(|x| x.number.clone())
+                .ok_or_else(|| format!("{bctx}: {} has no pin {}", pkg.part.id, b.pin))?;
+            let net = inst
+                .pins
+                .iter()
+                .find(|x| x.number == number)
+                .and_then(|x| x.net.clone())
+                .ok_or_else(|| format!("{bctx}: the pin is on no net (run `bb open`)"))?;
+            let n = board.net(&net).expect("net");
+            if n.unconnected {
+                return Err(format!("{bctx}: {net} is an unconnected net"));
+            }
+            let explicit: Vec<(&str, &str)> = b
+                .params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let name = format!("{dr}.{}", b.pin);
+            let kind = build_pin(
+                &PinReq {
+                    ctx: &bctx,
+                    name: &name,
+                    part: &part,
+                    pkg: Some(pkg),
+                    pin: &b.pin,
+                    model: &b.model,
+                    set: b.set.as_deref(),
+                    net: Some(n.spice.clone()),
+                    explicit: &explicit,
+                    supply: None,
+                },
+                warnings,
+            )?;
+            pins.push(PinBinding {
+                part: dr.clone(),
+                pin: b.pin.clone(),
+                kind,
+            });
+        }
+        let json = Json::obj([
+            ("ref", Json::str(format!("{db}:{dr}"))),
+            ("package", Json::str(&pr.id)),
+            ("version", Json::str(&pr.version)),
+            ("device", Json::str(did)),
+            ("virtual", Json::Bool(inst.is_virtual)),
+            (
+                "params",
+                Json::Obj(
+                    d.params
+                        .iter()
+                        .map(|(k, v)| (k.clone(), Json::str(v)))
+                        .collect(),
+                ),
+            ),
+        ]);
+        out.push(DevicePlan {
+            board: db,
+            part,
+            pins,
+            package: pkg.clone(),
+            json,
+        });
+    }
+    Ok(out)
 }
 
 /// Select an instance's analog view at fidelity `f` (ADR-006 D3): the
@@ -639,6 +787,42 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         pins.push(pb);
     }
 
+    // --- Devices (`[[device]]`, bb-project/1; ADR-013 D1): the device
+    // engine's parts and pins, routed as a board file's device parts are
+    // (spec/package.md section 12).
+    let devs = plan_devices(p, a.imp, &mut warnings)?;
+    let mut dev_pins: Vec<PinBinding> = Vec::new();
+    // (ref, pin) -> kernel net, for probes by pin name.
+    let mut dev_bound: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut dev_refs: BTreeSet<(String, String)> = BTreeSet::new();
+    for d in &devs {
+        let ctx = format!("bb.toml [[device]] {}:{}", d.board, d.part.reference);
+        if d.board != sim {
+            return Err(format!(
+                "{ctx}: board {} is not simulated (a run simulates the devices of {sim})",
+                d.board
+            ));
+        }
+        if d.part.reference == tref {
+            return Err(format!("{ctx}: the reference is the target MCU's"));
+        }
+        dev_refs.insert((d.board.clone(), d.part.reference.clone()));
+        for pb in &d.pins {
+            if let PinKind::Out { net, .. } = &pb.kind {
+                if pins.iter().chain(dev_pins.iter()).any(
+                    |x| matches!(&x.kind, PinKind::Out { net: n, .. } if n.eq_ignore_ascii_case(net)),
+                ) {
+                    return Err(format!(
+                        "{ctx}: {}: net {net} is already driven by another pin",
+                        pb.pin
+                    ));
+                }
+            }
+            dev_bound.insert((pb.part.clone(), pb.pin.clone()), pb.kernel_net());
+            dev_pins.push(pb.clone());
+        }
+    }
+
     // --- Analog scope.
     let in_scope: Option<BTreeSet<String>> = match &a.bench.analog_nets {
         Some(list) => Some(
@@ -655,6 +839,62 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         }
     };
     let scoped = |d: &str| in_scope.as_ref().is_none_or(|s| s.contains(d));
+
+    // --- Digital-only nets (ADR-014 D4, ADR-013 D1): a bound digital net
+    // outside `[analog] nets` gets no glue. Its MCU and device pins are
+    // routed through the kernel net only (a device's direct routing,
+    // spec/package.md section 12), so every input on it must read a digital
+    // output that a device drives or that a device reads. Without `[analog]
+    // nets` every net is in scope and nothing changes.
+    let display_of: BTreeMap<&str, &str> = board
+        .nets
+        .iter()
+        .filter(|n| n.board == sim)
+        .map(|n| (n.spice.as_str(), n.name.as_str()))
+        .collect();
+    let mut digital_only: BTreeSet<String> = BTreeSet::new();
+    let mut digital_only_names: BTreeSet<String> = BTreeSet::new();
+    for pb in pins.iter().chain(dev_pins.iter()) {
+        let (PinKind::Out { net, .. } | PinKind::In { net, .. }) = &pb.kind else {
+            continue;
+        };
+        let d = display_of
+            .get(net.as_str())
+            .copied()
+            .unwrap_or(net.as_str());
+        if !scoped(d) {
+            digital_only.insert(net.clone());
+            digital_only_names.insert(d.to_string());
+        }
+    }
+    {
+        let is_dev = |part: &str| dev_pins.iter().any(|x| x.part == part);
+        for r in pins.iter().chain(dev_pins.iter()) {
+            let PinKind::In { net, .. } = &r.kind else {
+                continue;
+            };
+            if !digital_only.contains(net) {
+                continue;
+            }
+            let routed = pins.iter().chain(dev_pins.iter()).any(|o| {
+                o.part != r.part
+                    && (is_dev(&o.part) || is_dev(&r.part))
+                    && matches!(&o.kind, PinKind::Out { net: n, .. } if n.eq_ignore_ascii_case(net))
+            });
+            if !routed {
+                return Err(format!(
+                    "{}: it reads {}, which is outside the bench's [analog] nets (a digital-only \
+                     net, ADR-014 D4), and no device output drives it for a device or the MCU to \
+                     read directly; put the net in [analog] nets",
+                    r.kernel_net(),
+                    display_of
+                        .get(net.as_str())
+                        .copied()
+                        .unwrap_or(net.as_str())
+                ));
+            }
+        }
+    }
 
     // --- The PIN_CNF audit list (ADR-008 D4): every bound pin, and every
     // unbound GPIO (a chip pin of role `io`) whose net is in the analog scope.
@@ -777,6 +1017,11 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         let q = format!("{}:{}", i.board, i.reference);
         let skip = |why: &str| Json::obj([("ref", Json::str(&q)), ("reason", Json::str(why))]);
         if i.reference == tref {
+            continue;
+        }
+        // A device (ADR-013 D1) runs in the device engine (run.json
+        // `devices`); a virtual instance is never in the deck.
+        if i.is_virtual || dev_refs.contains(&(i.board.clone(), i.reference.clone())) {
             continue;
         }
         if i.status != "ok" {
@@ -1681,8 +1926,9 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             ));
         }
     }
-    for pb in &pins {
+    for pb in pins.iter().chain(dev_pins.iter()) {
         match &pb.kind {
+            PinKind::Out { net, .. } | PinKind::In { net, .. } if digital_only.contains(net) => {}
             PinKind::Out { net, .. } | PinKind::In { net, .. } | PinKind::Adc { net, .. } => {
                 nodes_used.insert(net.clone());
             }
@@ -1730,8 +1976,16 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 let k = (b == tb && r == tref)
                     .then(|| bound.get(&pin).cloned())
                     .flatten()
+                    .or_else(|| {
+                        (b == sim)
+                            .then(|| dev_bound.get(&(r.clone(), pin.clone())).cloned())
+                            .flatten()
+                    })
                     .ok_or_else(|| {
-                        format!("probe {n}: pin {b}:{r}.{pin} has no [[bind]] on the target MCU")
+                        format!(
+                            "probe {n}: pin {b}:{r}.{pin} has no [[bind]] on the target MCU or \
+                             [[device.bind]]"
+                        )
                     })?;
                 ProbeSpec {
                     name: k,
@@ -1742,6 +1996,18 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 let node = node_of(&d);
                 if node == "0" {
                     return Err(format!("probe {n}: {d} is the ground (node 0)"));
+                }
+                if digital_only_names.contains(&d) {
+                    let drv = pins
+                        .iter()
+                        .chain(dev_pins.iter())
+                        .find(|x| matches!(&x.kind, PinKind::Out { net, .. } if *net == node))
+                        .map(|x| x.kernel_net())
+                        .unwrap_or_default();
+                    return Err(format!(
+                        "probe {n}: {d} is outside the bench's [analog] nets, a digital-only net \
+                         (ADR-014 D4); probe its driver's pin {drv}"
+                    ));
                 }
                 if !nodes_used.contains(&node) {
                     return Err(format!(
@@ -1882,15 +2148,41 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         ),
         ("deck_sha256".to_string(), Json::str(sha(deck.as_bytes()))),
     ];
+    let mut run_json = run_json;
+    // ADR-013 D1: the devices and the digital-only nets, recorded only when a
+    // project has them (so no Phase 1 run.json changes).
+    if !devs.is_empty() {
+        run_json.push((
+            "devices".to_string(),
+            Json::Arr(devs.iter().map(|d| d.json.clone()).collect()),
+        ));
+    }
+    if !digital_only_names.is_empty() {
+        run_json.push((
+            "digital_only".to_string(),
+            Json::Arr(digital_only_names.iter().map(Json::str).collect()),
+        ));
+    }
+    let mut parts = vec![part];
+    let mut packages = vec![chip.clone()];
+    for d in &devs {
+        parts.push(d.part.clone());
+        if !packages.iter().any(|x| x.part.id == d.package.part.id) {
+            packages.push(d.package.clone());
+        }
+    }
+    let mut all_pins = pins;
+    all_pins.extend(dev_pins);
 
     Ok(RunPlan {
         board: board::Board {
-            parts: vec![part],
-            pins,
+            parts,
+            pins: all_pins,
             spice: deck,
-            packages: vec![chip.clone()],
+            packages,
             warnings: Vec::new(),
             audit: Some(audit),
+            digital_only,
         },
         target: tref,
         firmware,

@@ -98,7 +98,7 @@ WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
                   nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test \
-                  bench-test bench-gate
+                  bench-test bench-gate dms-home-project
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -413,6 +413,8 @@ cost-table-runs:
 	    - - - -- $(DMS_VSENSE_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-home $(PERF_N) "--lookahead off" "" - - - \
 	    -- $(DMS_HOME_TYP_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-home-project $(PERF_N) "--lookahead off" "" - - - \
+	    -- $(DMS_HOME_PSTEP_ARGS)
 
 # The Phase 1 M8 row alone (examples/nrf-saadc, the loading adc_in): lookahead off (one cell) vs
 # bb's defaults, fresh and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
@@ -537,7 +539,9 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare be
 	    "dms-vsense;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;nongrant;$(DMS_VSENSE_ARGS)" \
 	    "dms-vsense-ref;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;all;$(DMS_VSENSE_ARGS) --lookahead off --adc-push every" \
 	    "dms-home-step;$(DMS_HOME_GOLD)/step/outputs.sha256;all;$(DMS_HOME_STEP_ARGS)" \
-	    "dms-home;$(DMS_HOME_GOLD)/typ/outputs.sha256;all;$(DMS_HOME_TYP_ARGS)"
+	    "dms-home;$(DMS_HOME_GOLD)/typ/outputs.sha256;all;$(DMS_HOME_TYP_ARGS)" \
+	    "dms-home-project-step;$(DMS_HOME_GOLD)/project-step/outputs.sha256;all;$(DMS_HOME_PSTEP_ARGS)" \
+	    "dms-home-project;$(DMS_HOME_GOLD)/project-typ/outputs.sha256;all;$(DMS_HOME_PTYP_ARGS)"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -923,10 +927,11 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir \
               examples/adc/kicad examples/dial-me-spinner examples/nrf-saadc/board.cir \
               examples/dial-me-spinner/system tests/device-smoke/board.cir \
-              examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir examples/bench
+              examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir examples/bench \
+              examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages \
-             examples/bench/packages
+             examples/bench/packages examples/dial-me-spinner/e3/packages
 
 # --- Phase 2 B1: bb-bench/1 and the bench engine (ADR-010 D1-D4) -----------
 # examples/bench, a synthetic STM32F103 board running examples/feedback's firmware, with every B1
@@ -1101,7 +1106,8 @@ measured-cost-table-dms-vsense: firmware bb dms-vsense-prepare
 # carrying the main board's detent sheet, the nRF52840 (PWM0, TEMP, SAADC) and the mechanism and
 # DRV5032 device M1 (dms/mechanism@1), with firmware/prebuilt/homing.elf (the procedure) and
 # homing_step.elf (one full step at 446 PPS). scripts/dms_home.sh; ADR-008 Amendments 9-11.
-.PHONY: pooled-dms-home pooled-dms-home-test dms-home-ref dms-home-update cost-table-dms-home dms-home-rss
+.PHONY: pooled-dms-home pooled-dms-home-test pooled-dms-home-project dms-home-ref dms-home-update \
+        cost-table-dms-home cost-table-dms-home-project dms-home-rss
 DMS_HOME_OUT  ?= out/dms-home
 DMS_HOME_GOLD := tests/golden/dms-home
 DMS_HOME_E3   := examples/dial-me-spinner/e3
@@ -1115,12 +1121,31 @@ DMS_HOME_STEP_ARGS = --netlist $(DMS_HOME_E3)/board-step.cir --firmware $(DMS_HO
                      --target U10 --for 45ms $(DMS_HOME_PINS) --probe net:MOT_A_OUT1 --probe net:COILA_L \
                      --probe net:MOT_B_OUT1 --probe net:COILB_L --probe net:NB_VBAT --probe net:NB_VSYS \
                      --sample-rate 1MHz
+# Phase 2 R1 (ADR-013 D1): the same two cases on the project route, examples/dial-me-spinner/e3/home
+# (typ) and e3/step: the imported main board with M1 as a virtual [[device]] (their probes are the
+# projects' [probes]).
+DMS_HOME_PSTEP_ARGS = --project $(DMS_HOME_E3)/step --bench $(DMS_HOME_E3)/step/bench.toml --for 45ms \
+                      --sample-rate 1MHz
+DMS_HOME_PTYP_ARGS  = --project $(DMS_HOME_E3)/home --bench $(DMS_HOME_E3)/home/bench.toml --for 2700ms \
+                      --sample-rate 10kHz
 
 # In `make test` (about 40 s): the E3 boards are the generator's output, the step case at bb's
 # defaults and with --engine-order analog-first (byte-identical), check_dms_home.py --step (one full
-# step at 446 PPS against the suite's test_firmware_microstep_pwm), its committed one-cell hashes.
+# step at 446 PPS against the suite's test_firmware_microstep_pwm), its committed one-cell hashes;
+# beside them (Phase 2 R1) the step case on the project route, e3/step: its committed one-cell
+# hashes, and scripts/compare_project_run.py against the board file's run (non-grant records and
+# digital columns byte-identical after the name mapping).
 pooled-dms-home-test: bb
 	bash scripts/dms_home.sh test $(BB) $(DMS_HOME_OUT)-test
+
+# The Phase 2 R1 gate (ADR-013 D1, gate G1; about 5 minutes): E3's step and typ on the project route
+# (e3/step, e3/home) at bb's defaults and as their one-cell references (--lookahead off; equal: one
+# partition, a consistency check), the references against tests/golden/dms-home/project-*,
+# check_dms_home.py on project-typ, compare_project_run.py against the board files' step and typ (run
+# beside them, and equal to their own goldens), analog-first on project-step, and project-typ's
+# digital-only MOT nets and grant count reported (ADR-014's long grants, H5).
+pooled-dms-home-project: bb
+	bash scripts/dms_home.sh project $(BB) $(DMS_HOME_OUT)-project
 
 # The plan's M10 gate (E3, about 55 minutes on 5 jobs): step, typ (tS 50 ms), worst (the suite's
 # DRV5032FA corner: tS 75 ms, BOP 4.8 mT, BRP 0.5 mT, at its worst sample phase) and park (H1) at bb's
@@ -1147,6 +1172,15 @@ measured-cost-table-dms-home: firmware bb
 	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
 	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-home $(PERF_N) \
 	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
+
+# The Phase 2 R1 row (the project route, e3/step: homing_step.elf, 45 ms): the one-cell reference vs
+# bb's defaults (one partition on E3), fresh and on a 1-slot pool, with the protocol. Run it on an
+# otherwise idle host.
+measured-cost-table-dms-home-project: firmware bb
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-home-project $(PERF_N) \
+	    "--lookahead off" "" - - - -- $(DMS_HOME_PSTEP_ARGS)
+	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-home-project $(PERF_N) \
+	    "--lookahead off" "" - - - -- $(DMS_HOME_PSTEP_ARGS)
 
 # --- Phase 2 H1: ngspice robustness (ADR-015 D1-D4) --------------------------------------------
 # ADR-015 G1, the progress watchdog (D1): the SAADC stall repro (e3/board.cir with P0.02 on the
@@ -1273,7 +1307,8 @@ worktree-test:
 # list. make measure-lock-test (in make test): on a private lock, every member refuses while a
 # probe holds it (scripts/measure_lock_test.sh).
 MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-table-dms-rail \
-                   cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home adc-startup adc-speed \
+                   cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home cost-table-dms-home-project \
+                   adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
                    setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \
                    ngspice-stall bench-perf

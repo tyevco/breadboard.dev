@@ -12,7 +12,7 @@
 # The firmware target is not committed: the ELF is built by `make firmware`,
 # and `make adc-kicad` records it with `bb flash` in a copy of this
 # directory (bb run never writes into a project).
-schema = "bb-project/0"
+schema = "bb-project/1"
 
 [project]
 name = "examples/adc, drawn in KiCad"

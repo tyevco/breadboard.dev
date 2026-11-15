@@ -63,10 +63,12 @@ def self_test():
         ("pins", {"schema": "bb-pins/0", "pin": [{"number": "1", "name": "A", "role": "io"}], "defaults": {"digital_out": {"default": {"voh": "3.3V"}}}}),
         ("lock", {"schema": "bb-lock/0", "package": [{"id": "x/y", "version": "1.0.0", "path": ".", "tree": "sha256:00"}]}),
         ("pkgtest", {"schema": "bb-pkgtest/0", "view": "v", "circuit": "c.cir", "stop": "1ms", "ports": {}, "expect": []}),
-        ("project", {"schema": "bb-project/0", "board": [{"id": "main", "netlist": "a.net", "kicad": "a.kicad_pro"}]}),
-        ("project", {"schema": "bb-project/0", "board": [{"id": "main", "netlist": "a.net"}], "instances": {"J1": {"package": "none"}}}),
+        ("project", {"schema": "bb-project/1", "board": [{"id": "main", "netlist": "a.net", "kicad": "a.kicad_pro"}]}),
+        ("project", {"schema": "bb-project/1", "board": [{"id": "main", "netlist": "a.net"}], "instances": {"J1": {"package": "none"}}}),
+        ("project", {"schema": "bb-project/1", "board": [{"id": "main", "netlist": "a.net"}], "device": [{"ref": "M1", "package": "x/y", "bind": [{"pin": "A", "net": "N", "model": "adc_in"}]}]}),
+        ("project", {"schema": "bb-project/0", "board": [{"id": "main", "netlist": "a.net"}]}),
         ("bench", {"schema": "bb-bench/0", "supply": [{"net": "VSYS"}]}),
-        ("board-bbm", {"schema": "bb-board/0", "boards": [{"id": "m", "ground": "GND"}], "nets": [{"name": "A", "board": "m", "spice": "a b", "nodes": []}], "instances": [], "platforms": [], "probes": []}),
+        ("board-bbm", {"schema": "bb-board/1", "boards": [{"id": "m", "ground": "GND"}], "nets": [{"name": "A", "board": "m", "spice": "a b", "nodes": []}], "instances": [], "platforms": [], "probes": []}),
     ]
     good = [
         ("part", {"schema": "bb-part/0", "part": {"id": "x/y", "version": "1.0.0", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"}}),

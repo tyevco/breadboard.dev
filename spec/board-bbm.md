@@ -1,8 +1,9 @@
-# The elaborated board (`board.bbm`, `bb-board/0`)
+# The elaborated board (`board.bbm`, `bb-board/1`)
 
 Status: normative. Decided by ADR-007 D3, D4 and D6 (accepted 2026-11-09;
 implemented in Phase 1 M4, ADR-007 Amendment 1; connections resolved in
-M11, Amendment 5). Implementation:
+M11, Amendment 5; virtual instances in Phase 2 R1, ADR-013 D1 and
+Amendment 1). Implementation:
 `bbcore::board` (types, reading and writing), `importers/kicad` (the
 netlist reader and the version gates) and `cli/src/import.rs` (resolution).
 JSON Schema: `spec/schema/board-bbm.schema.json`. **Changing this file
@@ -20,8 +21,12 @@ when a schematic changes. It is [canonical JSON](canonical-json.md).
   schematics, KiCad 9 and 10, Linux and Windows `kicad-cli` give the same
   bytes);
 - `bb.toml`'s `[[board]]` ids and grounds, `[instances]` overrides,
-  `[packages]` search path, `[import] fields` and `[[connection]]` (not
-  whether a board is `netlist =` or `kicad =`);
+  `[packages]` search path, `[import] fields`, `[[connection]]` and the
+  `[[device]]` entries' references, packages, `virtual` flags and
+  bindings (`ref`, `package`, `virtual`, each `[[device.bind]]`'s pin and
+  net; not a device's `params` or a binding's model and parameters, which
+  are run configuration in `run.json`) (not whether a board is `netlist =`
+  or `kicad =`);
 - the packages found on the search path, with their versions and tree
   hashes, and the content hashes of their platforms.
 
@@ -34,11 +39,11 @@ canonical and not compared. Firmware, the bench and run options are in
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `schema` | string | `bb-board/0` |
+| `schema` | string | `bb-board/1`. `bb-board/0`, the previous major (no `virtual` key), is read (ADR-006 D11); `bb open` rewrites it, and `bb run` refuses it as not current |
 | `boards` | array | `{id, ground}` per `[[board]]`, sorted by `id`. `ground` is the ground net's display name |
 | `nets` | array | every net of every board, sorted by `name` (section 4) |
 | `instances` | array | every component, sorted by `board` then `ref` (section 3) |
-| `platforms` | array | `{id, content}` of every engine platform a resolved package names (`renode:stm32f072-bb@1`), sorted by `id` |
+| `platforms` | array | `{id, content}` of every engine platform a resolved package names (`renode:stm32f072-bb@1`) and every device identity a resolved device package names (`device:dms/mechanism@1`, ADR-013 D1), sorted by `id` |
 | `probes` | array | `{alias, net}`: test points as probe aliases, sorted by `alias` |
 | `connections` | array, optional | `{a, b, model?, pins}` per `[[connection]]`, sorted by `a` then `b` (systems; ADR-007 Amendment 5): `a`, `b` the qualified instances; `model` the harness view resolved to `<package id>@<version>:<view>`; `pins` every mated pair `[a pin, b pin]`, sorted bytewise (`spec/project.md` section 1) |
 | `spice_body` | string, optional | a hand-written board's verbatim SPICE (ADR-007 D9); an imported board has none |
@@ -62,6 +67,7 @@ All sorting is bytewise on UTF-8.
 | `status` | string | `ok` (has a package), `no_model` (needs none), `excluded` (an override `package = "none"`, `dnp` or `exclude_from_sim`), `unmodelled` (unresolved) |
 | `reason` | string, optional | why it is excluded |
 | `pins` | array | `{number, name, net?}`, sorted by `number`: every pin of the symbol's `libpart` (`~` read as an empty name) and the net it is on |
+| `virtual` | `true`, optional | a virtual instance (ADR-013 D1): a `[[device]]` of `bb.toml` with `virtual = true`, a device with no schematic symbol. Its `value_text`, `footprint`, `lib`, `part` and `sheet` are empty; `package` is the device package; `resolution` is `{stage: "override", key: <the [[device]] package as written>}`; `status` is `ok`; `pins` are the device package's `pins.toml` pins, each on the net its `[[device.bind]]` names (none when unbound). Its bound pins are also in those nets' `nodes` |
 
 Quantities are integers in the units of ADR-007 D6: voltage µV, time fs,
 resistance µΩ, capacitance aF, inductance fH, current pA, temperature

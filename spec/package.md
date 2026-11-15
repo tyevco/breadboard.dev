@@ -613,9 +613,9 @@ others in `alt`).
   rule 2).
 - A device's id and content hash are locked as `device:<id>@<major>`
   (section 9).
-- A device part exists only in a board file. A `[[device]]` entry for
-  projects (`bb.toml`) is a Phase 2 item (approver decision 2,
-  2026-11-14).
+- A device part exists in a board file, or in a project's `[[device]]`
+  (`spec/project.md` section 1; ADR-013 D1, Phase 2 R1). The rules above
+  apply to both.
 
 ## 13. Examples
 
