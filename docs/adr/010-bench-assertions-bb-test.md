@@ -454,7 +454,9 @@ pull in different directions:
   the gap, so a breakpoint on every lattice point makes about four solver
   points per cell instead of one. Measured on `examples/bench` (interleaved,
   N = 3, medians; the host was shared with other tracks, load 14): 3.22 s
-  added with breakpoints, 0.36 s without.
+  added with breakpoints, 0.36 s without. With the rule below, `make
+  bench-perf` on the idle host (N = 5, load 0.7): base 3.08 s, playback
+  3.07 s total, so the playback adds nothing measurable (−0.01 s).
 
 The rule: the points of a `hold` table (a step, which needs the
 breakpoint) and of a table of at most 1 000 points (the `[[pwl]]` warning
@@ -542,9 +544,12 @@ order).
   inert instead; this ADR prefers the refusal.
 
 **A1.8 Gates as run.** G1: the five Phase 1 benches elaborate to
-byte-identical decks as `/0` and `/1` (`bb run --elaborate-only`), and
-`dms-rail-test` and `dms-vsense-test` give their committed hashes on the
-migrated files. G2: the playback cost and the short-table identity (A1.2).
+byte-identical decks as `/0` and `/1` (`bb run --elaborate-only`), and every
+case that runs them gives its committed hashes on the migrated files:
+`dms-rail-test` (E1's four cases), `dms-vsense-test` (s50, c5 and their
+twins) and, run once outside `make test`, E2's sag, rec, s1 and s1-none
+(`tests/golden/dms-vsense`). `make pool-equiv` with three `examples/bench`
+entries passes (28 configurations, one Renode process). G2: the playback cost and the short-table identity (A1.2).
 The plan's digital-playback gate: a digital playback into U1.PB0 with the
 edge times that an ideal `[[pwl]]` on its net gives at PB0's thresholds
 (`data/btn.csv`, checked against the `[[pwl]]` run) gives the same eight
