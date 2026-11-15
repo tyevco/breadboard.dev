@@ -95,12 +95,24 @@ apt_retry() {
   apt_hint
   return 1
 }
+# BB_APT_ARCHIVES=<dir> (CI, Phase 2 H0): apt keeps the .deb files it installs in <dir>, and
+# installs from there what is already in it, so a CI cache of <dir> saves the downloads. The
+# directory is handed back to the calling user so the cache can save it.
+APT_ARCHIVE_OPTS=()
+if [[ -n ${BB_APT_ARCHIVES:-} ]]; then
+  mkdir -p "${BB_APT_ARCHIVES}/partial"
+  APT_ARCHIVE_OPTS=(-o "Dir::Cache::Archives=${BB_APT_ARCHIVES}/" -o APT::Keep-Downloaded-Packages=true)
+fi
 if ((${#missing[@]})); then
   log "apt: installing ${missing[*]}"
   apt_t0=$(date +%s)
   apt_retry "${SUDO[@]}" apt-get -o Acquire::Retries=3 update
-  apt_retry "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y \
-    --no-install-recommends "${missing[@]}"
+  apt_retry "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 "${APT_ARCHIVE_OPTS[@]}" \
+    install -y --no-install-recommends "${missing[@]}"
+  if [[ -n ${BB_APT_ARCHIVES:-} ]]; then
+    "${SUDO[@]}" chown -R "$(id -u):$(id -g)" "${BB_APT_ARCHIVES}"
+    log "apt: $(find "${BB_APT_ARCHIVES}" -maxdepth 1 -name '*.deb' | wc -l) packages kept in ${BB_APT_ARCHIVES}"
+  fi
   apt_s=$(($(date +%s) - apt_t0))
   if [ "$apt_s" -gt 300 ]; then log "apt: took $apt_s s"; apt_hint; fi
 else
@@ -135,15 +147,24 @@ if [ "${MODE}" != demo ]; then
 fi
 
 # ---- Renode (portable) -----------------------------------------------------
+# BB_DOWNLOAD_CACHE=<dir> (CI, Phase 2 H0): the Renode tarball is kept in <dir> and used from
+# there when its sha256 matches, so a CI cache of <dir> saves the download.
 RENODE_DIR="${PREFIX_OPT}/renode-${RENODE_VERSION}"
 if [ ! -x "${RENODE_DIR}/renode" ]; then
   log "renode: installing ${RENODE_VERSION} from ${RENODE_URL}"
   tmp="$(mktemp -d)"
   trap 'rm -rf "${tmp}"' EXIT
-  curl -fL --retry 3 -o "${tmp}/${RENODE_TARBALL}" "${RENODE_URL}"
-  echo "${RENODE_SHA256}  ${tmp}/${RENODE_TARBALL}" | sha256sum -c -
+  dl="${BB_DOWNLOAD_CACHE:-${tmp}}"
+  mkdir -p "${dl}"
+  if [[ -n ${BB_DOWNLOAD_CACHE:-} ]] && echo "${RENODE_SHA256}  ${dl}/${RENODE_TARBALL}" | sha256sum -c --status - 2>/dev/null; then
+    log "renode: using the cached ${dl}/${RENODE_TARBALL}"
+  else
+    curl -fL --retry 3 -o "${dl}/${RENODE_TARBALL}.part" "${RENODE_URL}"
+    mv "${dl}/${RENODE_TARBALL}.part" "${dl}/${RENODE_TARBALL}"
+  fi
+  echo "${RENODE_SHA256}  ${dl}/${RENODE_TARBALL}" | sha256sum -c -
   mkdir -p "${tmp}/x"
-  tar -xzf "${tmp}/${RENODE_TARBALL}" -C "${tmp}/x"
+  tar -xzf "${dl}/${RENODE_TARBALL}" -C "${tmp}/x"
   src="$(find "${tmp}/x" -mindepth 1 -maxdepth 1 -type d | head -n1)"
   rm -rf "${RENODE_DIR}"
   mv "${src}" "${RENODE_DIR}"

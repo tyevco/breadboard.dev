@@ -21,7 +21,7 @@ BB=$(realpath "${1:?usage: dms_crosscheck.sh <bb>}")
 REPO=${DMS_REPO:-$ROOT/../dial-me-spinner}
 COMMIT=6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a
 LOCAL=${DMS_LOCAL_PACKAGES:-$ROOT/local-packages}
-XC=${DMS_XC_DIR:-$HOME/.cache/bb-dms-crosscheck}
+XC=${DMS_XC_DIR:-${BB_SCRATCH:-$HOME/.cache}/bb-dms-crosscheck}
 PROJ=$ROOT/examples/dial-me-spinner
 LIMIT_MV=${DMS_XC_LIMIT_MV:-5}
 SUM=$ROOT/out/dms-crosscheck/summary.jsonl
@@ -30,7 +30,7 @@ SUM=$ROOT/out/dms-crosscheck/summary.jsonl
 VENDOR=$LOCAL/ti/tps22917
 grep -q 'LicenseRef-local-only' "$VENDOR/part.toml" 2>/dev/null \
   || { echo "dms-crosscheck: no LOCAL-ONLY ti/tps22917 at $VENDOR (make dms-local-packages)" >&2; exit 1; }
-SRC=${DMS_PKG_DIR:-$HOME/.cache/bb-dms-packages}/src-${COMMIT:0:12}
+SRC=${DMS_PKG_DIR:-${BB_SCRATCH:-$HOME/.cache}/bb-dms-packages}/src-${COMMIT:0:12}
 if [[ ! -f $SRC/.complete ]]; then
   rm -rf "$SRC" && mkdir -p "$SRC"
   git -C "$REPO" archive "$COMMIT" | tar -x -C "$SRC"

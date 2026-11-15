@@ -48,7 +48,7 @@ shift
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PROJ=$ROOT/examples/dial-me-spinner
 GOLD=$ROOT/tests/golden/dms-vsense
-WORK=${DMS_VSENSE_WORK:-$HOME/.cache/bb-dms-vsense}
+WORK=${DMS_VSENSE_WORK:-${BB_SCRATCH:-$HOME/.cache}/bb-dms-vsense}
 DET_RUNS=${DET_RUNS:-10}
 DET_JOBS=${DET_JOBS:-5}
 PY=${PYTHON:-python3}

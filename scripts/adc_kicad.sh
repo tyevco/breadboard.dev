@@ -37,7 +37,7 @@ BB=$(realpath "$1")
 OUT=${2:-}
 shift $(( PREPARE ? 1 : 2 ))
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-WORK=${ADC_KICAD_WORK:-$HOME/.cache/bb-adc-kicad}
+WORK=${ADC_KICAD_WORK:-${BB_SCRATCH:-$HOME/.cache}/bb-adc-kicad}
 ELF=$ROOT/examples/adc/firmware/build/adc_board.elf
 HASHES=$ROOT/tests/golden/adc/outputs.sha256
 OWN=$ROOT/tests/golden/adc-kicad/outputs.sha256

@@ -19,7 +19,7 @@ BB=$(realpath "$1")
 OUT=$2
 SVG=$3
 PY=${PYTHON:-python3}
-WORK=${DOCS_PLOTS_WORK:-$HOME/.cache/bb-docs-plots}
+WORK=${DOCS_PLOTS_WORK:-${BB_SCRATCH:-$HOME/.cache}/bb-docs-plots}
 unset BB_RENODE_POOL
 [[ -n ${SPIKE_ARGS:-} ]] || { echo "docs-plots: SPIKE_ARGS (the bb run arguments of make spike) not set; run make docs-plots" >&2; exit 2; }
 

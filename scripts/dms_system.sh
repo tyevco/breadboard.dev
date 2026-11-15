@@ -33,7 +33,7 @@ BB=$(realpath "$1")
 OUT=$(mkdir -p "$2" && realpath "$2")
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DMS=$ROOT/examples/dial-me-spinner
-W=${DMS_SYSTEM_WORK:-$HOME/.cache/bb-dms-system}
+W=${DMS_SYSTEM_WORK:-${BB_SCRATCH:-$HOME/.cache}/bb-dms-system}
 KICAD=${KICAD:-1}
 SUMMARY=$OUT/summary.txt
 rm -rf "$W"

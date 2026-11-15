@@ -18,3 +18,5 @@ __pycache__/
 # LOCAL-ONLY packages (LicenseRef-local-only, Phase 1 plan approver decision A3; ADR-006 D9 rule 4):
 # `make dms-local-packages` builds the vendor-derived TPS22917 here. Never commit them.
 /local-packages/
+# A track worktree's own build and scratch directories (make worktree, Phase 2 H0). Never committed.
+/local.mk

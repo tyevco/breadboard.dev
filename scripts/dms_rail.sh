@@ -32,7 +32,7 @@ shift
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PROJ=$ROOT/examples/dial-me-spinner
 GOLD=$ROOT/tests/golden/dms-rail
-WORK=${DMS_RAIL_WORK:-$HOME/.cache/bb-dms-rail}
+WORK=${DMS_RAIL_WORK:-${BB_SCRATCH:-$HOME/.cache}/bb-dms-rail}
 FOR=${DMS_RAIL_FOR:-120ms}
 MAX_WALL=${DMS_RAIL_MAX_WALL:-30}
 DET_RUNS=${DET_RUNS:-10}

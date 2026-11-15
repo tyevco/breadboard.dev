@@ -24,8 +24,10 @@ jobs:
             .cache/bb-target
           key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
 
+      # Phase 2 H0: make setup with the Renode tarball and the apt packages cached
+      # (.github/actions/bb-setup).
       - name: Setup toolchain (make setup)
-        run: make setup
+        uses: ./.github/actions/bb-setup
 
       - name: Doctor
         run: make doctor
@@ -64,8 +66,10 @@ jobs:
             .cache/bb-target
           key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
 
+      # Phase 2 H0: make setup with the Renode tarball and the apt packages cached
+      # (.github/actions/bb-setup).
       - name: Setup toolchain (make setup)
-        run: make setup
+        uses: ./.github/actions/bb-setup
 
       - name: Test, every Renode fresh (POOL=0)
         run: make test POOL=0
@@ -89,8 +93,10 @@ jobs:
             .cache/bb-target
           key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
 
+      # Phase 2 H0: make setup with the Renode tarball and the apt packages cached
+      # (.github/actions/bb-setup).
       - name: Setup toolchain (make setup)
-        run: make setup
+        uses: ./.github/actions/bb-setup
 
       - name: Spike with --verify every
         run: make spike-verify-every
@@ -114,8 +120,10 @@ jobs:
             .cache/bb-target
           key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
 
+      # Phase 2 H0: make setup with the Renode tarball and the apt packages cached
+      # (.github/actions/bb-setup).
       - name: Setup toolchain (make setup)
-        run: make setup
+        uses: ./.github/actions/bb-setup
 
       - name: Partition equivalence
         run: make partition
@@ -140,8 +148,10 @@ jobs:
             .cache/bb-target
           key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
 
+      # Phase 2 H0: make setup with the Renode tarball and the apt packages cached
+      # (.github/actions/bb-setup).
       - name: Setup toolchain (make setup)
-        run: make setup
+        uses: ./.github/actions/bb-setup
 
       - name: Feedback determinism (10 runs)
         run: make feedback-determinism
@@ -181,8 +191,10 @@ jobs:
             .cache/bb-target
           key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
 
+      # Phase 2 H0: make setup with the Renode tarball and the apt packages cached
+      # (.github/actions/bb-setup).
       - name: Setup toolchain (make setup)
-        run: make setup
+        uses: ./.github/actions/bb-setup
 
       - name: ADC equivalence (Part A, Part B, open board)
         run: make adc-equiv
@@ -213,8 +225,10 @@ jobs:
             .cache/bb-target
           key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
 
+      # Phase 2 H0: make setup with the Renode tarball and the apt packages cached
+      # (.github/actions/bb-setup).
       - name: Setup toolchain (make setup)
-        run: make setup
+        uses: ./.github/actions/bb-setup
 
       - name: E1 gate
         run: make dms-rail
@@ -241,8 +255,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Phase 2 H0: the Zephyr SDK tarballs (scripts/dms_zephyr.sh checks their pinned sha256s)
+      # are cached like the Renode tarball; the west workspace is still made fresh.
+      - name: Cache the Zephyr SDK tarballs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bb-zephyr/dl
+          key: zephyr-sdk-${{ runner.os }}-${{ hashFiles('scripts/dms_zephyr.sh') }}
+          restore-keys: |
+            zephyr-sdk-${{ runner.os }}-
+
       - name: Setup toolchain and the Zephyr SDK (make setup SETUP=zephyr)
-        run: make setup SETUP=zephyr
+        uses: ./.github/actions/bb-setup
+        with:
+          mode: zephyr
 
       - name: Rebuild the E1 firmware in a fresh workspace
         run: make fw-rebuild

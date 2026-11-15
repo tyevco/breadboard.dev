@@ -1,0 +1,31 @@
+# Phase 2 H0: `make setup` with the Renode tarball and the apt packages cached between runs.
+# scripts/setup.sh keeps the .deb files it installs in BB_APT_ARCHIVES and the Renode tarball in
+# BB_DOWNLOAD_CACHE, and uses them when present (the tarball only when its pinned sha256 matches;
+# apt checks every .deb against the archive's index), so a cache hit saves the downloads and
+# nothing else changes. The key follows scripts/setup.sh, where the package list and the pinned
+# versions live; an older cache is restored as a starting point and saved again under the new key.
+name: bb setup
+description: make setup, with the Renode tarball and the apt packages cached
+inputs:
+  mode:
+    description: The make setup mode (full, demo or zephyr)
+    required: false
+    default: full
+runs:
+  using: composite
+  steps:
+    - name: Cache the Renode tarball and the apt packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/bb-ci-downloads
+          ~/.cache/bb-ci-apt
+        key: bb-setup-${{ runner.os }}-${{ inputs.mode }}-${{ hashFiles('scripts/setup.sh') }}
+        restore-keys: |
+          bb-setup-${{ runner.os }}-${{ inputs.mode }}-
+
+    - name: make setup SETUP=${{ inputs.mode }}
+      shell: bash
+      run: |
+        BB_DOWNLOAD_CACHE="$HOME/.cache/bb-ci-downloads" BB_APT_ARCHIVES="$HOME/.cache/bb-ci-apt" \
+          make setup SETUP=${{ inputs.mode }}

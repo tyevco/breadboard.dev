@@ -22,7 +22,7 @@ ws=${ZEPHYR_WS:-$HOME/zephyrproject}
 repo=$(cd "$(dirname "$0")/.." && pwd)
 app=$repo/engines/cpu-renode/tests/firmware/nrf52840/zephyr
 pre=$app/prebuilt
-build=${NRF_ZEPHYR_BUILD:-$HOME/.cache/bb-nrf-zephyr-gate}
+build=${NRF_ZEPHYR_BUILD:-${BB_SCRATCH:-$HOME/.cache}/bb-nrf-zephyr-gate}
 sdk=$(ls -d "$ws"/zephyr-sdk-* | head -1)
 
 # shellcheck disable=SC1091

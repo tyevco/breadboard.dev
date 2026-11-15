@@ -28,7 +28,7 @@ BB=$(cd "$(dirname "$BB")" && pwd)/$(basename "$BB")
 PY=${PYTHON:-python3}
 SRC=$ROOT/examples/dial-me-spinner
 GOLD=$ROOT/tests/golden/dms-rail
-WORK=${DEMO_WORK:-$HOME/.cache/bb-demo}
+WORK=${DEMO_WORK:-${BB_SCRATCH:-$HOME/.cache}/bb-demo}
 OUT=${DEMO_OUT:-$ROOT/out/demo}
 unset BB_RENODE_POOL
 

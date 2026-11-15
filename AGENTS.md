@@ -50,7 +50,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense`, the E3 cases `typ` and `step` of `make dms-home` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 5 min alone, most of it the E3 homing: 305 s in the M10 review, 450 s in M10 beside other gates). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -113,6 +113,10 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
+| `make worktree TRACK=<name>` | Phase 2 H0 (plan section 7 rule 1): the track's git worktree `~/src/bb-<name>` (`WORKTREE_ROOT`) on the branch `p2/<name>`, from `main` when the branch is new, locked against a `git worktree prune` from Windows, with its own git-ignored `local.mk` (included first by the Makefile): `CARGO_TARGET_DIR` `~/.cache/bb-target-wt-<name>`, `BB_SCRATCH` `~/.cache/bb-wt-<name>` (the gates' project copies and work directories) and `DMS_REPO`. Idempotent; `make worktree-remove TRACK=<name>` removes it and keeps the branch (`scripts/worktree.sh`) |
+| `make worktree-test` | H0 gate (not in `make test`; four release builds of `bb`): two throwaway worktrees build `bb` at the same time, and their crate hashes are compared (bbcore's rlib differs by a marker only A has; bbpkg's rlib and each `bb` carry their own package path, never the other's); negative control: the same builds into one shared target directory leave B's binary at A's `$(BB)` (`scripts/worktree_test.sh`) |
+| `make measure-lock-test` | H0 gate (in `make test`, a few seconds): on a private lock file, every target of `MEASURE_TARGETS` refuses while a probe holds the measurement lock (the hold checked from outside), before building anything; the probe runs before and after (`scripts/measure_lock_test.sh`) |
+| `make baseline` | H0: the runtime baseline. `make check` (`BASELINE_ARGS`) `BASELINE_N` = 3 times after one uncounted warm-up, on an idle ext4 worktree, under the measurement lock; wall times, load before each run and `make test`'s per-step times (`out/test-timing.tsv`, written by every `make test`) in `out/baseline` (`scripts/baseline.sh`). Its result is the table in "Gate budgets" |
 
 `make firmware` builds the firmware ELFs (spike, feedback, ADC and the Renode
 lookahead gate firmware in `engines/cpu-renode/tests/firmware`, and the
@@ -122,6 +126,95 @@ The nRF52840's Zephyr gate image is committed prebuilt
 (`nrf52840/zephyr/prebuilt/`, stripped of debug information);
 `scripts/nrf_zephyr_gate.sh` rebuilds it where a Zephyr workspace exists and
 checks the loadable image is unchanged.
+
+## Gate budgets
+
+Phase 2 plan section 7 rule 2 and ADR-015 D11. There are two tiers:
+
+- The **PR tier** is `make check` and the CI jobs on a pull request.
+  - `make check` on an idle ext4 worktree: at most **the baseline below
+    + 4 minutes**.
+  - The slowest CI PR job: at most **15 minutes**.
+- The **nightly tier** (H6) takes, by name, the `fresh` job (`make test
+  POOL=0`), `make ec-long`, `make dms-home`, the full `make dms-vsense`,
+  and any later gate over its budget.
+
+How the budgets are kept:
+
+- A milestone records its measured `make test` addition and its full
+  gate's wall time in the milestone table below, in the commit that adds
+  the gate.
+- A gate over its budget moves to the nightly tier; the target does not
+  move.
+- An overrun of more than 25 % is a review finding.
+- Savings (H6) are measured against this baseline with `make baseline`,
+  under the measurement lock.
+
+**Runtime baseline (H0).** `make baseline` measures `make check` N = 3
+times on an idle ext4 worktree, after one uncounted warm-up. The local
+table below is filled from that run. The CI numbers are the wall times
+of each job in the last three CI runs on `main`. They come from GitHub
+Actions' job records (read-only), on three consecutive commits: fd63d3a
+(Phase 1 M10, run 43683405952), f1f0abb (run 43611129210) and faaf816
+(run 42905856531). They are not three runs of one commit, because
+re-running CI would act on GitHub. faaf816 predates the GDB step of
+`dms-rail`.
+
+| Local (idle ext4 worktree) | Median | Runs |
+| --- | --- | --- |
+| `make check` | (pending: H0 baseline run) | |
+
+| CI job (ubuntu-24.04) | Median | Runs (fd63d3a, f1f0abb, faaf816) | Its `make setup` step (median) |
+| --- | --- | --- | --- |
+| `fresh` (`make test POOL=0`) | **11:30** | 13:58, 10:31, 11:30 | 0:53 |
+| `test` (setup, fmt, clippy, packages, `make test`) | 8:51 | 8:51, 6:51, 9:25 | 0:50 |
+| `dms-rail` (E1 gate, GDB gate, docs plots) | 7:39 | 7:48, 7:39, 5:21 | 0:49 |
+| `adc` | 3:58 | 3:58, 3:29, 3:59 | 0:53 |
+| `feedback` | 3:08 | 3:08, 3:12, 2:35 | 0:53 |
+| `fw-rebuild` | 2:53 | 3:05, 2:53, 2:39 | 1:12 (with the SDK) |
+| `partition` | 1:37 | 1:37, 1:37, 1:44 | 0:56 |
+| `verify-every` | 1:14 | 1:22, 1:14, 1:06 | 0:52 |
+
+The jobs run in parallel, so a CI run's wall time is its slowest job:
+`fresh`, which H6 moves to the nightly tier. H0 caches the Renode tarball
+and the apt packages (`.github/actions/bb-setup`). Checked locally in a
+clean container: the second `make setup SETUP=demo` downloaded no `.deb`
+and not the Renode tarball. Its saving on CI is measured in H6, because
+CI only runs on a push.
+
+**Milestone budgets** (plan section 4). The budget is the most a
+milestone may add to `make test` (wall time, on the baseline host). The
+"measured" columns are filled by the milestone's commit.
+
+| Milestone | `make test` budget | Measured `make test` addition | Full gate (measured) |
+| --- | --- | --- | --- |
+| H0 | — (`measure-lock-test`, a few seconds) | | |
+| H1 | +30 s | | |
+| H2 | — | | |
+| H3 | +10 s | | |
+| H4 | — | | |
+| H5 | +30 s (`multi-producer`) | | |
+| H6 | — (removes: `fresh` to nightly, `adc-stock`, split `cargo-test`) | | |
+| S | — | | |
+| B1 | +40 s | | |
+| B2 | +20 s | | |
+| B3 | +0 s (replaces scripts) | | |
+| R1 | +15 s | | |
+| R2 | +30 s | | |
+| P0 | — (spike) | | |
+| P1 | +30 s | | |
+| P2 | +15 s | | |
+| P3 | +30 s | | |
+| W-fw | — | | |
+| P4 | +40 s | | |
+| P5 | +40 s | | |
+| E1 | +20 s (local registry fixture) | | |
+| E4 | — | | |
+
+This build adds at most 350 s to `make test` (plan section 8, without
+R3's 10 s; B4, R3, P6, E2, E3 and E5 are not in this build). Section 5
+item 5's target, the baseline + 4 minutes (240 s), therefore needs H6's
+named savings.
 
 ## Repo map
 
@@ -240,7 +333,10 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py), demo.sh,
                         stranger_test.sh, docs_plots.sh (+ docs_plots.py),
                         jit_profile_stress.sh, gdb_gate.py, dms_system.sh, check_nrf_pwm.py,
-                        dms_home.sh (+ dms_home_boards.py, check_dms_home.py)
+                        dms_home.sh (+ dms_home_boards.py, check_dms_home.py); Phase 2 H0:
+                        worktree.sh (+ worktree_test.sh), measure_lock.sh (+ measure_lock_test.sh),
+                        baseline.sh, step_time.sh
+.github/actions/bb-setup/ make setup with the Renode tarball and the apt packages cached (Phase 2 H0)
 ```
 
 ## The three invariants
@@ -298,6 +394,16 @@ feedback board).
   one-cell reference before it is on by default, and its cost-table row is
   measured with `make cost-table` (the ADR-003 measurement protocol), never
   from one run.
+- **Measurements hold the host lock** (Phase 2 plan section 7 rule 3).
+  Every perf, cost, startup and timing target is in the Makefile's
+  `MEASURE_TARGETS`: it takes `~/.cache/bb/measure.lock` before anything
+  else and refuses to run while another measurement holds it, from any
+  checkout or worktree. A new such target joins the list; a measurement
+  is never started by hand around the lock.
+- **Gate budgets** (section "Gate budgets"). Every milestone states and
+  records the wall time of its `make test` additions and of its full gate.
+  A gate over its budget goes to the nightly tier (ADR-015 D11), not into
+  `make test`; an overrun of more than 25 % is a review finding.
 - **The Renode pool is not an engine** (ADR-004 Part B). It holds no
   simulated time and, between leases, no machine. A lease runs the same
   `session.resc` a fresh run does, and nothing about a run's results may
@@ -465,6 +571,15 @@ feedback board).
   Cargo names workspace-member artifacts by their workspace-relative path,
   so two checkouts sharing `~/.cache/bb-target` overwrite each other's
   crates and a build can silently link the other checkout's code.
+  `make worktree TRACK=<name>` sets that up (and a scratch directory of
+  its own for the gates' project copies); `make worktree-test` shows it.
+- **Phase 2 tracks work in their own worktree on ext4** (plan section 7
+  rule 1): `~/src/bb-<track>` on the branch `p2/<track>`, made by `make
+  worktree TRACK=<track>`, never in the Windows checkout, which only the
+  merger edits. Before each milestone a track merges `main` into its
+  branch; it commits only on its branch. Its gates run there (`/mnt/c`
+  multiplies file-heavy steps 30-300 times), and so does every
+  measurement, under the lock.
 - Breadboard's Renode plugins (the lookahead block, `BbStm32Timer`,
   `BbStm32F0Adc` and its host port, `BbNrf52Saadc`, its host port,
   `BbUartLog`, and `BbNrf52Pwm`, `BbNrf52Temp`, `BbNrf52Nvmc` with their

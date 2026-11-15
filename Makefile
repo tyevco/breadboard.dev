@@ -1,7 +1,12 @@
 # Breadboard — top-level build entry points. Run inside WSL / Linux.
 SHELL := /bin/bash
 
+# Phase 2 H0: a track worktree's own target and scratch directories (`make worktree TRACK=<name>`
+# writes its git-ignored local.mk; scripts/worktree.sh). The main checkout has none.
+-include local.mk
 export CARGO_TARGET_DIR ?= $(HOME)/.cache/bb-target
+# The parent of the gates' work directories (project copies a run rewrites: bb-dms-rail, ...).
+export BB_SCRATCH ?= $(HOME)/.cache
 export PATH := $(HOME)/.cargo/bin:$(HOME)/.local/bin:$(PATH)
 
 CARGO ?= cargo
@@ -96,6 +101,11 @@ POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert loo
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
+# Phase 2 H0: every step of `make test` appends its wall time to $(TEST_TIMING) (target, seconds,
+# exit status; scripts/step_time.sh), the per-gate breakdown of the runtime baseline.
+TEST_TIMING ?= out/test-timing.tsv
+STEP = bash scripts/step_time.sh $(TEST_TIMING) $(MAKE)
+
 # `make setup` installs the developer toolchain and bb (into ~/.local/bin);
 # `make setup SETUP=demo` skips the ARM toolchain and uv (Phase 1 plan M3,
 # R7). Root (a container) runs apt without sudo.
@@ -126,28 +136,30 @@ cargo-test:
 # The exit gate: unit/engine tests, then the end-to-end spike, 10-run
 # determinism and the golden-waveform diff (golden reuses the spike output).
 pooled-test:
-	$(MAKE) cargo-test
-	$(MAKE) spike
-	$(MAKE) determinism
-	$(MAKE) golden
-	$(MAKE) feedback
-	$(MAKE) feedback-order
-	$(MAKE) nrf-feedback
-	$(MAKE) adc
-	$(MAKE) adc-order
-	$(MAKE) adc-stock
-	$(MAKE) adc-model
-	$(MAKE) nrf-saadc-model
-	$(MAKE) nrf-pwm-model
-	$(MAKE) device-smoke
-	$(MAKE) adc-kicad
-	$(MAKE) dms-rail-test
-	$(MAKE) dms-vsense-test
-	$(MAKE) dms-home-test
-	$(MAKE) ec-reconnect
-	$(MAKE) packages
-	$(MAKE) gdb-test
-	$(MAKE) dms-system
+	@mkdir -p $(dir $(TEST_TIMING)) && : > $(TEST_TIMING)
+	+$(STEP) measure-lock-test
+	+$(STEP) cargo-test
+	+$(STEP) spike
+	+$(STEP) determinism
+	+$(STEP) golden
+	+$(STEP) feedback
+	+$(STEP) feedback-order
+	+$(STEP) nrf-feedback
+	+$(STEP) adc
+	+$(STEP) adc-order
+	+$(STEP) adc-stock
+	+$(STEP) adc-model
+	+$(STEP) nrf-saadc-model
+	+$(STEP) nrf-pwm-model
+	+$(STEP) device-smoke
+	+$(STEP) adc-kicad
+	+$(STEP) dms-rail-test
+	+$(STEP) dms-vsense-test
+	+$(STEP) dms-home-test
+	+$(STEP) ec-reconnect
+	+$(STEP) packages
+	+$(STEP) gdb-test
+	+$(STEP) dms-system
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -202,7 +214,7 @@ pooled-partition: firmware bb
 # exactly 50 grants, a median simulation time <= 2 s and be >= 15x faster.
 PERF_OUT ?= out/perf
 PERF_N   ?= 5
-perf: firmware bb
+measured-perf: firmware bb
 	bash scripts/perf.sh $(BB) $(PERF_OUT) $(PERF_N) 10us 10ms 50 2.0 15 -- $(SPIKE_ARGS)
 
 pooled-determinism: firmware bb
@@ -357,7 +369,7 @@ pooled-lookahead-equiv: firmware bb
 # Both also require identical outputs except grant records. Wall-clock: run
 # it on an otherwise idle host; not in CI (like `make perf`).
 LOOKAHEAD_PERF_OUT ?= out/lookahead-perf
-lookahead-perf: firmware bb
+measured-lookahead-perf: firmware bb
 	bash scripts/perf_ab.sh $(BB) $(LOOKAHEAD_PERF_OUT)/feedback $(PERF_N) \
 	    "--lookahead off --lookahead-plugin never" "" $(LOOKAHEAD_MAX_GRANTS) 10 - -- $(FEEDBACK_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(LOOKAHEAD_PERF_OUT)/poll $(PERF_N) \
@@ -374,7 +386,7 @@ lookahead-perf: firmware bb
 # and on a 1-slot warm pool ($(COST_OUT)/pool, every run leased), for the
 # startup columns.
 COST_OUT ?= out/cost-table
-cost-table: firmware bb
+measured-cost-table: firmware bb
 	env -u BB_RENODE_POOL $(MAKE) --no-print-directory cost-table-runs COST_RUN_OUT=$(COST_OUT)/fresh
 	$(BB) pool run --slots 1 -- $(MAKE) --no-print-directory cost-table-runs COST_RUN_OUT=$(COST_OUT)/pool
 cost-table-runs:
@@ -402,7 +414,7 @@ cost-table-runs:
 
 # The Phase 1 M8 row alone (examples/nrf-saadc, the loading adc_in): lookahead off (one cell) vs
 # bb's defaults, fresh and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
-cost-table-nrf-saadc: firmware bb
+measured-cost-table-nrf-saadc: firmware bb
 	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/nrf-saadc $(PERF_N) "--lookahead off" "" \
 	    - - - -- $(NRF_SAADC_ARGS)
 	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/nrf-saadc $(PERF_N) \
@@ -410,7 +422,7 @@ cost-table-nrf-saadc: firmware bb
 
 # The Phase 1 M6 row alone (E1, examples/dial-me-spinner, ok-cold): one-cell vs bb's defaults, fresh
 # and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
-cost-table-dms-rail: firmware bb dms-rail-prepare
+measured-cost-table-dms-rail: firmware bb dms-rail-prepare
 	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-rail $(PERF_N) "--max-quantum 10us" "" \
 	    - - - -- $(DMS_RAIL_ARGS)
 	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-rail $(PERF_N) \
@@ -419,7 +431,7 @@ cost-table-dms-rail: firmware bb dms-rail-prepare
 # The Phase 1 M4 rows alone: examples/adc on board.cir and as the KiCad
 # project, each with lookahead off vs on (the same protocol). Run it on an
 # otherwise idle host.
-cost-table-adc-kicad: firmware bb adc-kicad-prepare
+measured-cost-table-adc-kicad: firmware bb adc-kicad-prepare
 	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
 	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/adc-kicad $(PERF_N) "--lookahead off" "" - - - -- $(ADC_KICAD_ARGS)
 
@@ -437,12 +449,12 @@ cost-table-adc-kicad: firmware bb adc-kicad-prepare
 # (the plugin assembly compiled) within 3 s of a warm one. Run it on an
 # otherwise idle host.
 ADC_STARTUP_N ?= 5
-adc-startup: firmware bb
+measured-adc-startup: firmware bb
 	STOCK_FLAGS="$(ADC_STOCK_FLAGS)" bash scripts/plugin_startup.sh $(BB) out/adc-startup $(ADC_STARTUP_N) \
 	    0.3 3 -- $(ADC_ARGS) --for 20ms
 
 ADC_SPEED_OUT ?= out/adc-speed
-adc-speed: firmware bb
+measured-adc-speed: firmware bb
 	env -u BB_RENODE_POOL PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) $(ADC_SPEED_OUT) $(PERF_N) \
 	    "$(ADC_STOCK_FLAGS)" "" 2000 3 - -- $(ADC_ARGS)
 
@@ -450,7 +462,7 @@ adc-speed: firmware bb
 # startup is within 0.3 s of a start without it (interleaved, N =
 # BB_LA_STARTUP_N runs each, default 7, medians). Wall-clock: run it on an
 # otherwise idle host.
-lookahead-startup: firmware
+measured-lookahead-startup: firmware
 	BB_REQUIRE_RENODE=1 $(CARGO) test --release -p bb-cpu-renode --test lookahead -- \
 	    --ignored --nocapture --exact plugin_startup_overhead
 
@@ -466,7 +478,7 @@ STARTUP_N        ?= 7
 STARTUP_MIN_FRAC ?= 0.12
 STARTUP_MIN_S    ?= 0.3
 STARTUP_BASE     ?= stock
-startup-perf: firmware bb
+measured-startup-perf: firmware bb
 	bash scripts/startup_perf.sh $(BB) $(STARTUP_OUT)/spike $(STARTUP_N) $(STARTUP_MIN_FRAC) \
 	    $(STARTUP_MIN_S) $(STARTUP_BASE) -- $(SPIKE_ARGS)
 	bash scripts/startup_perf.sh $(BB) $(STARTUP_OUT)/feedback $(STARTUP_N) $(STARTUP_MIN_FRAC) \
@@ -482,7 +494,7 @@ startup-perf: firmware bb
 JIT_STRESS_ROUNDS ?= 4
 JIT_STRESS_PAR    ?= 8
 JIT_STRESS_LOAD   ?=
-jit-profile-stress: firmware bb
+measured-jit-profile-stress: firmware bb
 	bash scripts/jit_profile_stress.sh $(BB) $(JIT_STRESS_ROUNDS) $(JIT_STRESS_PAR) $(JIT_STRESS_LOAD)
 
 # --- ADR-004 Part B: the warm Renode pool ----------------------------------
@@ -529,7 +541,7 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare
 # leased. Wall-clock: run it on an otherwise idle host.
 POOL_PERF_OUT ?= out/pool-perf
 POOL_PERF_N   ?= 7
-pool-perf: firmware bb
+measured-pool-perf: firmware bb
 	$(BB) pool run --slots 1 -- bash scripts/pool_perf.sh $(BB) $(POOL_PERF_OUT) $(POOL_PERF_N) \
 	    0.5 0.30 1.2 -- "spike;$(SPIKE_ARGS)" "feedback;$(FEEDBACK_ARGS)" "adc;$(ADC_ARGS)"
 
@@ -590,7 +602,7 @@ nrf-feedback-ref: firmware bb
 # ADR-008 D1: fresh startup and per-grant cost of the nRF52840 blinky at 64
 # MIPS against the STM32F103 blinky (interleaved, N = BB_NRF_COST_N, default
 # 5, medians). Reports only. Run it on an otherwise idle host.
-nrf-costs: firmware
+measured-nrf-costs: firmware
 	BB_REQUIRE_RENODE=1 $(CARGO) test --release -p bb-cpu-renode --test nrf52840 -- \
 	    --ignored --nocapture --exact nrf_startup_and_grant_costs
 
@@ -845,14 +857,14 @@ dms-s1:
 # The S1 cost table (plan §8): DMS_S1_N interleaved rounds (default 5),
 # medians, load reported. Run it on an otherwise idle host.
 DMS_S1_N ?= 5
-dms-s1-cost:
+measured-dms-s1-cost:
 	DMS_REPO=$(DMS_REPO) bash scripts/dms_s1.sh cost $(DMS_S1_N)
 
 # --- Phase 1 M4: KiCad import, board.bbm, projects (ADR-007) ---------------
 # examples/adc drawn in KiCad (examples/adc/kicad), as a bb.toml project. Its
 # runs use a copy off /mnt/c with the firmware recorded by `bb flash`
 # ($(ADC_KICAD_WORK)/net; `make adc-kicad-prepare` makes it).
-ADC_KICAD_WORK ?= $(HOME)/.cache/bb-adc-kicad
+ADC_KICAD_WORK ?= $(BB_SCRATCH)/bb-adc-kicad
 ADC_KICAD_OUT  ?= out/adc-kicad
 ADC_KICAD_ARGS  = --project $(ADC_KICAD_WORK)/net --for $(ADC_FOR)
 ADC_KICAD_HASHES := tests/golden/adc-kicad/outputs.sha256
@@ -957,7 +969,7 @@ dms-m5b: dms-local-packages
 .PHONY: dms-rail dms-rail-test pooled-dms-rail pooled-dms-rail-test dms-rail-ref dms-rail-update \
         dms-rail-prepare dms-crosscheck fw-rebuild dms-firmware cost-table-dms-rail
 DMS_RAIL_OUT   ?= out/dms-rail
-DMS_RAIL_WORK  ?= $(HOME)/.cache/bb-dms-rail
+DMS_RAIL_WORK  ?= $(BB_SCRATCH)/bb-dms-rail
 export DMS_RAIL_WORK
 DMS_RAIL_GOLD  := tests/golden/dms-rail
 DMS_RAIL_ARGS   = --project $(DMS_RAIL_WORK)/proj-ok --bench $(DMS_RAIL_WORK)/proj-ok/bench/cold.toml --for 120ms
@@ -1011,7 +1023,7 @@ dms-firmware: bb
 .PHONY: pooled-dms-vsense pooled-dms-vsense-test dms-vsense-ref dms-vsense-update dms-vsense-prepare \
         cost-table-dms-vsense
 DMS_VSENSE_OUT  ?= out/dms-vsense
-DMS_VSENSE_WORK ?= $(HOME)/.cache/bb-dms-vsense
+DMS_VSENSE_WORK ?= $(BB_SCRATCH)/bb-dms-vsense
 DMS_VSENSE_GOLD := tests/golden/dms-vsense
 export DMS_VSENSE_WORK
 DMS_VSENSE_ARGS  = --project $(DMS_VSENSE_WORK)/proj-50ms --bench $(DMS_VSENSE_WORK)/proj-50ms/bench/vsense.toml \
@@ -1042,7 +1054,7 @@ dms-vsense-prepare: bb
 # The Phase 1 M8 E2 row alone (s50: vsense_50ms.elf, 650 ms, the loading adc_in on the imported
 # board): the every-lattice-point reference vs bb's defaults, fresh and on a 1-slot pool, with the
 # protocol. Run it on an otherwise idle host.
-cost-table-dms-vsense: firmware bb dms-vsense-prepare
+measured-cost-table-dms-vsense: firmware bb dms-vsense-prepare
 	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-vsense $(PERF_N) \
 	    "--lookahead off --adc-push every" "" - - - -- $(DMS_VSENSE_ARGS)
 	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-vsense $(PERF_N) \
@@ -1094,7 +1106,7 @@ dms-home-update: dms-home-ref
 # The Phase 1 M10 E3 row (typ: homing.elf, 2700 ms): the one-cell reference vs bb's defaults, fresh
 # and on a 1-slot pool, with the protocol. Run it on an otherwise idle host (about 50 minutes at
 # PERF_N = 5).
-cost-table-dms-home: firmware bb
+measured-cost-table-dms-home: firmware bb
 	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-home $(PERF_N) \
 	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
 	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-home $(PERF_N) \
@@ -1116,7 +1128,7 @@ dms-values: bb
 # ubuntu:24.04 container (podman or docker), from `git archive HEAD`
 # (SETUP_REV=<commit>, or SETUP_WORKTREE=1 for the working tree).
 SETUP_REV ?= HEAD
-setup-container:
+measured-setup-container:
 	bash scripts/setup_container_test.sh $(if $(SETUP_WORKTREE),--worktree,--rev $(SETUP_REV)) --out out/setup-container
 
 # Phase 1 plan M7 (section 5, the exit). `make demo`: the README's reference demo in one command
@@ -1130,12 +1142,12 @@ setup-container:
 # https://github.com/tyevco/breadboard.dev (scripts/stranger_test.sh; out/stranger/<mode>/timing.txt).
 .PHONY: demo stranger-test-container stranger-test-wsl
 DEMO_OUT  ?= out/demo
-DEMO_WORK ?= $(HOME)/.cache/bb-demo
+DEMO_WORK ?= $(BB_SCRATCH)/bb-demo
 demo: bb
 	DEMO_OUT=$(DEMO_OUT) DEMO_WORK=$(DEMO_WORK) bash scripts/demo.sh $(BB)
-stranger-test-container:
+measured-stranger-test-container:
 	bash scripts/stranger_test.sh container $(if $(STRANGER_URL),--url $(STRANGER_URL)) $(STRANGER_ARGS)
-stranger-test-wsl:
+measured-stranger-test-wsl:
 	bash scripts/stranger_test.sh wsl $(if $(STRANGER_URL),--url $(STRANGER_URL)) $(STRANGER_ARGS)
 
 # The docs site's waveform plots (site/public/plots, committed: the Pages build has no Renode).
@@ -1173,12 +1185,64 @@ docs-plots-check: firmware bb
 GDB      ?= $(shell command -v gdb-multiarch 2>/dev/null || command -v arm-none-eabi-gdb 2>/dev/null || \
               ls $(HOME)/.local/opt/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb 2>/dev/null)
 GDB_OUT  ?= out/gdb
-GDB_WORK ?= $(HOME)/.cache/bb-gdb-gate
+GDB_WORK ?= $(BB_SCRATCH)/bb-gdb-gate
 gdb gdb-test: firmware bb
 	@test -n "$(GDB)" || { echo "$@: no GDB found (make setup installs gdb-multiarch; or pass GDB=<path>)"; exit 1; }
 	DMS_RAIL_WORK=$(GDB_WORK) bash scripts/dms_rail.sh prepare $(BB)
 	$(PYTHON) scripts/gdb_gate.py $(if $(filter gdb,$@),gate,test) --bb $(BB) --gdb $(GDB) \
 	    --out $(GDB_OUT)/$(if $(filter gdb,$@),gate,test) --work $(GDB_WORK)
+
+# --- Phase 2 H0: track worktrees, the measurement lock, the runtime baseline ----------------------
+# make worktree TRACK=<name>: the git worktree ~/src/bb-<name> (WORKTREE_ROOT) on the branch
+# p2/<name>, from main for a new branch, locked against a prune from Windows, with its own
+# git-ignored local.mk: CARGO_TARGET_DIR ~/.cache/bb-target-wt-<name>, BB_SCRATCH
+# ~/.cache/bb-wt-<name> and DMS_REPO (scripts/worktree.sh). make worktree-remove TRACK=<name>
+# removes it (the branch stays). make worktree-test (H0 gate, several minutes): two throwaway
+# worktrees build bb at the same time without crossing artifacts, and one shared target
+# directory crosses them (the negative control; scripts/worktree_test.sh).
+.PHONY: worktree worktree-remove worktree-test measure-lock-test
+worktree:
+	@test -n "$(TRACK)" || { echo "usage: make worktree TRACK=<name>"; exit 2; }
+	bash scripts/worktree.sh $(TRACK)
+worktree-remove:
+	@test -n "$(TRACK)" || { echo "usage: make worktree-remove TRACK=<name>"; exit 2; }
+	bash scripts/worktree.sh --remove $(TRACK)
+worktree-test:
+	bash scripts/worktree_test.sh
+
+# The host measurement lock (plan section 7 rule 3): each target in MEASURE_TARGETS takes
+# ~/.cache/bb/measure.lock (BB_MEASURE_LOCK) before its recipe (measured-<target>) and its
+# prerequisites, and REFUSES (exit 75 from scripts/measure_lock.sh) while another measurement
+# holds it, from any checkout or worktree. A new perf, cost, startup or timing target joins the
+# list. make measure-lock-test (in make test): on a private lock, every member refuses while a
+# probe holds it (scripts/measure_lock_test.sh).
+MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-table-dms-rail \
+                   cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home adc-startup adc-speed \
+                   lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
+                   setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe
+.PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
+$(MEASURE_TARGETS):
+	@bash scripts/measure_lock.sh $@ $(MAKE) --no-print-directory measured-$@
+measure-lock-test:
+	bash scripts/measure_lock_test.sh
+measured-measure-lock-probe:
+	@echo "measure-lock-probe: ran"
+	@if [ -n "$(PROBE_HOLD)" ]; then while [ ! -e "$(PROBE_HOLD)" ]; do sleep 0.1; done; fi
+
+# The runtime baseline (plan H0; ADR-015 D11's PR-tier targets are relative to it): make check
+# (BASELINE_ARGS) BASELINE_N times after one uncounted warm-up, on an idle ext4 worktree, under the
+# measurement lock; wall times, load, and make test's per-step times in $(BASELINE_OUT)
+# (scripts/baseline.sh). The result goes into AGENTS.md's gate-budget table.
+BASELINE_OUT    ?= out/baseline
+BASELINE_N      ?= 3
+BASELINE_WARMUP ?= 1
+BASELINE_ARGS   ?= check
+measured-baseline:
+	bash scripts/baseline.sh $(BASELINE_OUT) $(BASELINE_N) $(BASELINE_WARMUP) -- $(BASELINE_ARGS)
+
+# make print-VAR: a variable's value (scripts use it, e.g. print-CARGO_TARGET_DIR).
+print-%:
+	@echo $($*)
 
 fmt:
 	$(CARGO) fmt --all

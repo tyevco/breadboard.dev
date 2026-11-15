@@ -27,7 +27,7 @@ REPO=${DMS_REPO:-$ROOT/../dial-me-spinner}
 COMMIT=6854d25e0fde9b5d60da07b2c2b6183fd36dfc5a
 LIB=hardware/sim/models/load_switches__tps22917.lib
 LIB_SHA256=b487750ff2434ed638e7bcb0f8d4d1ade73f7bb638b87354bf22873641af4e18
-WORK=${DMS_PKG_DIR:-$HOME/.cache/bb-dms-packages}
+WORK=${DMS_PKG_DIR:-${BB_SCRATCH:-$HOME/.cache}/bb-dms-packages}
 LOCAL=${DMS_LOCAL_PACKAGES:-$ROOT/local-packages}
 RESULTS=$ROOT/examples/dial-me-spinner/suite/results.json
 
