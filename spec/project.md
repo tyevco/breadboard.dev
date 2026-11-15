@@ -143,10 +143,17 @@ error that lists the candidates.
   (`U1.PA4`, whose digital level is the kernel net `U1.PA4`, as in Phase
   0).
 
-## 3. Benches (`bb-bench/0`)
+## 3. Benches (`bb-bench/1`, `bb-bench/0`)
+
+A bench is TOML (ADR-010 D1). `bb` reads `bb-bench/0` and `bb-bench/1` and
+writes `/1`; every `/0` key keeps its meaning in `/1`, so `bb pkg migrate
+--bench <file>` rewrites only the `schema` line and a migrated bench builds a
+byte-identical deck. A `/0` file has none of the `/1` keys.
+
+### 3.1 The `/0` keys
 
 ```toml
-schema = "bb-bench/0"
+schema = "bb-bench/1"                # or "bb-bench/0"
 temp_c = "-10"                       # ngspice .temp
 [[supply]]
 net = "VSYS"
@@ -181,8 +188,119 @@ set = "phase0"                       # a named option set (spec/package.md)
   `power_out` pin drives is an error unless that part is excluded.
 - `bb run` without `--bench` uses an empty bench: no sources, every net in
   scope, option set `phase0`.
-- Phase 2 defines the full bench (CSV playback, timed actions,
-  assertions) in its own ADR.
+- **`[[pwl]]` is for short tables** (an inline PWL card is O(n²) in
+  ngspice): `bb run` warns above 1 000 points and refuses above 10 000;
+  `[[playback]]` is the route for long ones.
+
+### 3.2 The `bb-bench/1` stimulus (ADR-010 D2-D4)
+
+```toml
+schema = "bb-bench/1"
+seed = 1                             # declared random elements (bounce); default 1
+
+[[load]]
+net = "+3V3"
+profile = "data/burst.csv"           # t,amps; instead of amps
+interp = "hold"                      # linear (default) | hold
+
+[[playback]]
+net = "AIN"                          # an analog net: an EXTERNAL source
+file = "data/ain.csv"                # t,volts (section 3.3)
+rs = "100"                           # optional; without it an ideal source
+interp = "linear"                    # linear (default) | hold
+[[playback]]
+net = "U1.PB0"                       # a bound digital_in pin: a digital stream (t,level)
+file = "data/btn.csv"
+
+[[action]]
+press = "SW1"                        # an instance with a switch view (spec/package.md section 3)
+at = "120ms"
+for = "60ms"                         # optional: released (or set back) after it
+bounce = { count = 3, max = "1ms" }  # a press only; max defaults to the view's bounce_max
+[[action]]
+set = "VSW"                          # a [[supply]]'s net (to: a voltage), or a bound
+to = "2.5V"                          #   digital_in pin (to: "0" or "1")
+after = { edge = "U1.PA5", level = 1, delay = "10ms" }   # a trigger instead of at
+
+[[fault]]
+kind = "open"                        # the instance pin leaves the net
+net = "BTN"
+pin = "C1.1"
+at = "150ms"
+for = "10ms"                         # optional: the fault ends after it
+[[fault]]
+kind = "short"                       # the net shorts to the board's ground
+net = "AFILT"
+at = "260ms"
+```
+
+- **Tables, handed over once.** Every change the bench knows before the
+  run (a profile, an analog playback, a timed press or set, a fault) is a
+  table of the analog engine's `EXTERNAL` sources, served by its callbacks
+  with a cursor (O(1) per solver point), never a PWL card. No analog value
+  crosses the kernel boundary per solver point.
+  - `linear` interpolates between points; `hold` keeps each point's value
+    until the next point, left-continuous (at its time the old value, after
+    it the new one). Before the first point the first value holds, after the
+    last the last.
+  - Every point after `t = 0` is a corner the solver's steps are clamped to
+    land on. The points of a `hold` table and of a table of at most 1 000
+    points are also ngspice breakpoints (so such a playback gives the result
+    of the same points as a `[[pwl]]`, ADR-010 G2); a longer linear table's
+    points are not, since a breakpoint restarts the integration with short
+    steps and the lattice clamp already puts a solver point on every
+    lattice point (ADR-010 Amendment 1). A breakpoint is released at the
+    accepted solver point that opens the lattice cell before the one
+    holding it, a pure function of the solver points.
+- **The bench engine** (`bench`, identity `bench@1`, ADR-010 D4) runs when
+  the bench drives an MCU pin (a digital playback or a `set` on a bound
+  `digital_in` pin) or has a triggered action. It is an ordinary engine:
+  `t_safe = Time::MAX` (every change is in its trace), an exact
+  `quiet_until` (its next scheduled change), an early stop on the lattice.
+  It is registered first, in both engine orders.
+  - Into an MCU pin it drives the pin's kernel net (`U1.PB0`) instead of
+    the analog engine's threshold: the MCU applies each edge at `ceil_L`,
+    like any edge, and the circuit net is not read. The pin starts low,
+    unless its playback has a point at `t = 0`.
+  - A triggered action (`after`) makes the bench a consumer of the MCU
+    output pin it names: it fires once, at the first change of the pin to
+    `level` after `t = 0`, at `t_edge + delay`. What it drives in the
+    circuit (a switch control, a supply's set source) is then the bench
+    engine's output, an analog input of the analog engine that changes at
+    its own time by a 1 ns ramp (`Drive::Timed`). Such a bench engine sits
+    between the MCU and the analog engine in a feedback loop, where the
+    kernel finds no quiet grant (ADR-003 D5), so the run's grants are one
+    lattice cell.
+- **Actions.** `press` closes a switch (control 1) at `at` (or its
+  trigger) and opens it after `for` (else it stays closed); a press on an
+  instance without a switch view in the deck is refused, naming its views.
+  `bounce = { count, max }`: `2 × count` seeded toggles inside `(0, max)`
+  after the press and after the release (ending in the new state), from
+  `seed`, the switch and the action; `max` at most the view's `bounce_max`
+  and shorter than `for`. `set` drives the supply to `to` (the supply's
+  voltage becomes the set source's node; an ideal fixed supply becomes the
+  source) or the pin to the level, and back to the bench's own value after
+  `for`. Timed actions on one target may not overlap.
+- **Faults** are the switch element (`bb_switch` at the default `ron` and
+  `roff`) switched by a table: `open` moves the instance pin to its own
+  node `bb_fault<k>`, connected to the net while closed (before `at`);
+  `short` connects the net to the ground from `at`. With `for`, the fault
+  ends after it.
+- **Refused, not ignored:** the `bb-bench/1` keys of ADR-010 D2 that later
+  milestones implement (`fidelity`, `corner`, `[[battery]]`,
+  `[[activity]]`, `[[env]]`, `[probes]`, a `[[load]]` `replace`), and an
+  `after` on a `log` record.
+
+### 3.3 The bench CSV (ADR-010 D3)
+
+One canonical format for a playback, a profile or a digital stream: a header
+`t,<name>`, then `<t>,<value>` rows. `t` is seconds as a plain decimal string
+(`0.00001`, `1e-5`; no prefix), converted to whole fs exactly (decimal
+arithmetic, rounded half up); times strictly increase after that. A value is
+in the value grammar or a plain number (volts, amps), or `0`/`1` for a
+digital stream. Lines starting with `#` and empty lines are ignored. Each
+value becomes an `f64` once, from its exact decimal. A bench reads only this
+CSV; capture formats never enter a run (`bb capture import`, ADR-010 D3).
 
 ## 4. The elaborated deck
 
@@ -206,7 +324,15 @@ packages; it contains no file paths:
    min(<volts>, V(<track>) - <drop>)`); with `rs` it is its Norton
    equivalent, one B conductance with no branch-current unknown
    (`B_bench_<net> 0 <net> I = (<volts or min(...)> - V(<net>)) / <rs>`;
-   ADR-007 Amendment 3);
+   ADR-007 Amendment 3). `bb-bench/1` (section 3.2): a supply a `set`
+   drives takes `V(bb_set_<net>)` for `<volts>`, with `V_bb_set_<net>
+   bb_set_<net> 0 dc 0 external` (an ideal fixed one is `V_bb_set_<net>
+   <net> 0 dc 0 external` itself); a profile load is `I_bench_load<k>_<net>
+   <net> 0 dc 0 external`; then the playback sources (`V_play_<net> <net> 0
+   dc 0 external`, or behind `rs` on `bb_play_<net>` with `R_play_<net>`),
+   the switch control sources (`V_bb_ctl_<ref>`) and the faults
+   (`X_bb_fault<k> <net> <node> bb_fault<k>_ctl bb_switch ...` with
+   `V_bb_fault<k>_ctl`);
 5. the option set's `.options` card.
 
 The pin-model glue (`spec/pin-model.md`) is added by the analog engine, as
@@ -257,7 +383,10 @@ its sha256 is in `run.json`.
 
 Canonical JSON, no absolute paths, no wall-clock times: `board_bbm` (the
 sha256 of `board.bbm`); `import` (`.bb/import.json`'s `boards`, without
-the host); `bench` (file name, text, sha256, option set and its card);
+the host); `bench` (file name, text, sha256, option set and its card;
+with `bb-bench/1` and only when used, `data`: each CSV file as named and
+its sha256; `seed` and `bounce`: each press's generated toggle offsets;
+`engine`: the bench engine's `id` and `content` hash, ADR-010 D4);
 `targets` (instance and image kinds and hashes); `analog` (per in-scope
 instance: package, version, view, requested fidelity, the rung it was
 chosen at, provenance `source` and `confidence`, its qualifications and

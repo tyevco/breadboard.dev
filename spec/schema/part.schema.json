@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/part.schema.json",
-  "title": "bb-part/0: a component package's part.toml (spec/package.md, ADR-006 D2-D4)",
-  "description": "The JSON form of part.toml (TOML converted to JSON as is). Unknown keys are an error; the keys reserved for bb-part/1 (layers, thermal, rtl, power; pins.ibis; behavioral.cpu, behavioral.svd; a view's rails) are not accepted in bb-part/0.",
+  "title": "bb-part/0 and bb-part/1: a component package's part.toml (spec/package.md, ADR-006 D2-D4, ADR-010 D2)",
+  "description": "The JSON form of part.toml (TOML converted to JSON as is). Unknown keys are an error; the keys reserved for bb-part/1 (layers, thermal, rtl, power; pins.ibis; behavioral.cpu, behavioral.svd; a view's rails) are not accepted. bb-part/1 keeps every bb-part/0 key and its meaning and adds the switch view kind (ADR-010 D2; milestone B1's part of the Phase 2 schema epoch, whose other bb-part/1 keys stay reserved until milestone S).",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "part", "pins"],
   "properties": {
-    "schema": { "const": "bb-part/0" },
+    "schema": { "enum": ["bb-part/0", "bb-part/1"] },
     "part": {
       "type": "object",
       "additionalProperties": false,
@@ -87,6 +87,10 @@
       "if": { "properties": { "part": { "properties": { "kind": { "const": "module" } } } } },
       "then": { "required": ["module"] },
       "else": { "not": { "required": ["module"] } }
+    },
+    {
+      "if": { "properties": { "schema": { "const": "bb-part/0" } } },
+      "then": { "properties": { "analog": { "items": { "properties": { "kind": { "enum": ["circuit", "pin_load"] } } } } } }
     }
   ],
   "$defs": {
@@ -131,10 +135,10 @@
     "view": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "fidelity", "file", "subckt", "ports"],
+      "required": ["name", "fidelity", "ports"],
       "properties": {
         "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
-        "kind": { "enum": ["circuit", "pin_load"] },
+        "kind": { "enum": ["circuit", "pin_load", "switch"] },
         "purpose": { "type": "string" },
         "fidelity": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rung" } },
         "default_for": { "type": "array", "items": { "$ref": "#/$defs/rung" } },
@@ -153,9 +157,36 @@
         },
         "provenance": { "$ref": "#/$defs/provenance" }
       },
-      "if": { "properties": { "kind": { "const": "pin_load" } }, "required": ["kind"] },
-      "then": { "properties": { "ports": { "items": { "$ref": "#/$defs/typed_port" } } } },
-      "else": { "properties": { "ports": { "items": { "type": "string" } } } }
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "pin_load" } }, "required": ["kind"] },
+          "then": { "required": ["file", "subckt"], "properties": { "ports": { "items": { "$ref": "#/$defs/typed_port" } } } }
+        },
+        {
+          "description": "ADR-010 D2: a switch view's element is generated (no file or subckt); two contacts as typed pin ports; params ron, roff, bounce_max.",
+          "if": { "properties": { "kind": { "const": "switch" } }, "required": ["kind"] },
+          "then": {
+            "not": { "anyOf": [{ "required": ["file"] }, { "required": ["subckt"] }] },
+            "properties": {
+              "ports": {
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["role", "pin"],
+                  "properties": { "role": { "const": "pin" }, "pin": { "type": "string" } }
+                }
+              },
+              "params": { "propertyNames": { "enum": ["ron", "roff", "bounce_max"] } }
+            }
+          }
+        },
+        {
+          "if": { "not": { "properties": { "kind": { "enum": ["pin_load", "switch"] } }, "required": ["kind"] } },
+          "then": { "required": ["file", "subckt"], "properties": { "ports": { "items": { "type": "string" } } } }
+        }
+      ]
     }
   }
 }

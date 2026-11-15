@@ -452,6 +452,16 @@ fn lint_views(pkg: &Package, o: &mut Out) {
                 }
             }
         }
+        // A switch view (ADR-010 D2): bb generates its element, so there is
+        // no file to check; its two contacts must be different pins.
+        if v.kind == "switch" {
+            if v.ports.first() == v.ports.get(1) {
+                o.e(format!("{at}: a switch's two contacts are the same pin"));
+            }
+            let def = crate::package::switch_definition();
+            texts.push((format!("view {}", v.name), def));
+            continue;
+        }
         // The file: definitions, the subckt and its port count, the gnd rule.
         let path = pkg.dir.join(&v.file);
         let text = match std::fs::read_to_string(&path) {

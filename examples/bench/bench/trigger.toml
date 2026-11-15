@@ -1,0 +1,49 @@
+# examples/bench/bench/trigger.toml: actions with a trigger (ADR-010 D2 `after`), which make the
+# bench engine a consumer of U1.PA5 (examples/feedback's firmware toggles it every 50 ms, first
+# rising at 50 ms). Run for 70 ms:
+# - SW1 is pressed 5 ms after PA5's first rise, for 3 ms: BTN falls, PB0 and PA6 follow, and BTN
+#   recovers through R1 and C1 (tau 1 ms) after the release;
+# - VSW is set to 2.0 V at PA5's first rise (no delay), for 10 ms, while SW2 is pressed (45-65 ms,
+#   a timed action), so RC_N follows VSW.
+# A triggered source is the bench engine's output (an analog engine input, Drive::Timed: a 1 ns
+# ramp from its time). The bench engine then sits between U1 and ngspice in the feedback loop, so
+# the kernel finds no quiet grant (ADR-003 D5: the one producer feeding U1 must come first) and
+# every grant is one lattice cell: the partition gates are consistency checks here.
+schema = "bb-bench/1"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "1"
+
+[[supply]]
+net = "VSW"
+volts = "3.3V"
+rs = "10m"
+
+# AIN has no playback here: 0 V keeps R3 and C2 at a DC operating point.
+[[supply]]
+net = "AIN"
+volts = "0V"
+
+[[action]]
+press = "SW1"
+after = { edge = "U1.PA5", level = 1, delay = "5ms" }
+for = "3ms"
+
+[[action]]
+set = "VSW"
+to = "2.0V"
+after = { edge = "U1.PA5", level = 1 }
+for = "10ms"
+
+[[action]]
+press = "SW2"
+at = "45ms"
+for = "20ms"
+
+[analog]
+nets = ["GND", "+3V3", "BTN", "TRIG", "LED_DRV", "AIN", "AFILT", "VSW", "RC_N"]
+
+[options]
+set = "phase0"

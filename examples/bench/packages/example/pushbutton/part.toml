@@ -1,0 +1,40 @@
+# example/pushbutton: a normally open tactile pushbutton, as a project-local package of
+# examples/bench (ADR-006 D1). It is the switch view kind of ADR-010 D2: bb generates one B
+# conductance between the two contacts, closed (ron) while a bench [[action]] presses it.
+schema = "bb-part/1"
+
+[part]
+id = "example/pushbutton"
+version = "0.1.0"
+kind = "mechanical"
+license = "Apache-2.0"
+description = "A normally open SPST pushbutton: the switch view kind (ADR-010 D2) at its defaults"
+
+[footprints]
+kicad = ["Button_Switch_SMD:SW_SPST_PTS645"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "contact"
+kind = "switch"
+purpose = "the contact as a switched conductance: 50 mOhm closed, 100 MOhm open, bounce up to 2 ms"
+fidelity = ["fast"]
+default_for = ["fast"]
+ports = [{ role = "pin", pin = "1" }, { role = "pin", pin = "2" }]
+params = { ron = "50m", roff = "100Meg", bounce_max = "2ms" }
+
+[analog.provenance]
+source = "estimated"
+base = "the switch view kind's defaults (ADR-010 D2); bounce_max is a typical tactile switch's"
+not_modelled = ["contact resistance spread and ageing", "the actuation force and travel", "the bounce waveform between its toggles (each toggle is a step)"]
+generated_by = "Claude (Phase 2 B1)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

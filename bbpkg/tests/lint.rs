@@ -354,7 +354,7 @@ fn findings(dir: &Path, chip: Option<&Path>) -> Vec<(Level, String)> {
         .collect()
 }
 
-const CHIP_PART: &str = r#"schema = "bb-part/0"
+const CHIP_PART: &str = r#"schema = "bb-part/1"
 [part]
 id = "test/chip"
 version = "0.1.0"
@@ -397,7 +397,7 @@ vil = "0.3*VDD"
 cin = "3p"
 "#;
 
-const MOD_PART: &str = r#"schema = "bb-part/0"
+const MOD_PART: &str = r#"schema = "bb-part/1"
 [part]
 id = "test/module"
 version = "0.1.0"

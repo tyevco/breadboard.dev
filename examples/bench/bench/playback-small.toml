@@ -1,0 +1,21 @@
+# examples/bench/bench/playback-small.toml: data/ain.csv (601 points) as a [[playback]] on AIN,
+# ideal and linear (ADR-010 D3). ADR-010 gate G2 compares it with bench/playback-pwl.toml, the same
+# points as an inline [[pwl]].
+schema = "bb-bench/1"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "1"
+
+[[supply]]
+net = "VSW"
+volts = "3.3V"
+rs = "10m"
+
+[[playback]]
+net = "AIN"
+file = "../data/ain.csv"
+
+[options]
+set = "phase0"

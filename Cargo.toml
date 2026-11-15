@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "bbcore",
+    "bbbench",
     "bbdev",
     "bbpkg",
     "engines/analog-ngspice",

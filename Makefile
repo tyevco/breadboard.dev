@@ -97,7 +97,8 @@ else
 WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
-                  nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test
+                  nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test \
+                  bench-test bench-gate
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -156,6 +157,7 @@ pooled-test:
 	+$(STEP) dms-rail-test
 	+$(STEP) dms-vsense-test
 	+$(STEP) dms-home-test
+	+$(STEP) bench-test
 	+$(STEP) ec-reconnect
 	+$(STEP) packages
 	+$(STEP) gdb-test
@@ -506,8 +508,11 @@ measured-jit-profile-stress: firmware bb
 # it uses the pool.
 POOL_EQUIV_OUT    ?= out/pool-equiv
 POOL_EQUIV_ROUNDS ?= 2
-pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare
+pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare bench-prepare
 	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
+	    "bench-stimulus;$(BENCH_GOLD)/stimulus.sha256;nongrant;$(BENCH_STIM_ARGS)" \
+	    "bench-trigger;$(BENCH_GOLD)/trigger.sha256;nongrant;$(BENCH_TRIG_ARGS)" \
+	    "bench-set;$(BENCH_GOLD)/set.sha256;nongrant;$(BENCH_SET_ARGS)" \
 	    "dms-rail;$(DMS_RAIL_GOLD)/ok-cold/outputs.sha256;nongrant;$(DMS_RAIL_ARGS)" \
 	    "dms-rail-ref;$(DMS_RAIL_GOLD)/ok-cold/outputs.sha256;all;$(DMS_RAIL_ARGS) --max-quantum 10us" \
 	    "dms-rail-wrong;$(DMS_RAIL_GOLD)/wrong-nominal/outputs.sha256;nongrant;$(DMS_RAIL_WRONG_ARGS)" \
@@ -918,9 +923,40 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir \
               examples/adc/kicad examples/dial-me-spinner examples/nrf-saadc/board.cir \
               examples/dial-me-spinner/system tests/device-smoke/board.cir \
-              examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir
+              examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir examples/bench
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
-PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages
+PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages \
+             examples/bench/packages
+
+# --- Phase 2 B1: bb-bench/1 and the bench engine (ADR-010 D1-D4) -----------
+# examples/bench, a synthetic STM32F103 board running examples/feedback's firmware, with every B1
+# stimulus (scripts/bench_gate.sh describes the cases and checks). bench-test (in make test):
+# check_bench.py on each case at bb's defaults (the switch view's analytic RC settling, G8; the
+# digital playback's edges equal an equivalent [[pwl]]'s and are applied at ceil_L), the
+# committed one-cell reference hashes, G2 (a playback against the same points as a [[pwl]]), the
+# refusals, and G1 on the Phase 1 benches (bb-bench/0 and /1 build byte-identical decks).
+# bench-gate: that, plus every case at --max-quantum 10us, 1ms and 10ms and analog-first, and
+# determinism. bench-perf (idle host, measurement lock): a 1 s, 100 ksps playback adds <= 2 s.
+# bench-update rewrites tests/golden/bench from fresh one-cell references (review the diff).
+.PHONY: bench-test bench-gate bench-perf bench-update bench-prepare pooled-bench-test pooled-bench-gate
+BENCH_OUT  ?= out/bench
+BENCH_WORK ?= $(BB_SCRATCH)/bb-bench
+export BENCH_WORK
+pooled-bench-test: bb
+	bash scripts/bench_gate.sh test $(BB) $(BENCH_OUT)-test
+pooled-bench-gate: bb
+	bash scripts/bench_gate.sh gate $(BB) $(BENCH_OUT)
+bench-update: firmware bb
+	bash scripts/bench_gate.sh update $(BB) $(BENCH_OUT)-ref
+bench-prepare: firmware bb
+	bash scripts/bench_gate.sh prepare $(BB)
+measured-bench-perf: firmware bb
+	env -u BB_RENODE_POOL bash scripts/bench_gate.sh perf $(BB) $(BENCH_OUT)-perf
+BENCH_ARGS = --project $(BENCH_WORK)/p --sample-rate 10kHz
+BENCH_STIM_ARGS = $(BENCH_ARGS) --bench $(BENCH_WORK)/p/bench/stimulus.toml --for 300ms
+BENCH_TRIG_ARGS = $(BENCH_ARGS) --bench $(BENCH_WORK)/p/bench/trigger.toml --for 70ms
+BENCH_SET_ARGS  = $(BENCH_ARGS) --bench $(BENCH_WORK)/p/bench/digital-set.toml --for 100ms
+BENCH_GOLD := tests/golden/bench
 
 # ADR-006 G1 and the package gates of `make test`: every part.toml, pins.toml,
 # test vector and bb.lock validates against spec/schema (python3-jsonschema);
@@ -1219,7 +1255,8 @@ worktree-test:
 MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-table-dms-rail \
                    cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
-                   setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe
+                   setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \
+                   bench-perf
 .PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
 $(MEASURE_TARGETS):
 	@bash scripts/measure_lock.sh $@ $(MAKE) --no-print-directory measured-$@

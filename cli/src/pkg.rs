@@ -10,7 +10,8 @@
 //!   (every measured value and a sha256 of every sample's bits), so two
 //!   packages' results can be compared byte for byte (ADR-006 G8).
 //! - `bb pkg migrate [<dir>...]`: rewrite packages to the current schema
-//!   majors (D11).
+//!   majors (D11); `bb pkg migrate --bench <file>...` rewrites bench files
+//!   (ADR-010 D1).
 //! - `bb pkg tree <dir>`: a package's tree hash (D8).
 //! - `bb pkg value [--kicad R|C|L] <text>...`: parse values (D5) and print
 //!   them in integer sub-units, one JSON object per line.
@@ -32,6 +33,7 @@ usage: bb pkg lint [<dir>...]                 lint packages (default: first-part
        bb pkg test [<dir>...] [--record] [--report <file>]
                                               run test vectors through NgspiceEngine (ADR-006 D6)
        bb pkg migrate [<dir>...]              rewrite packages to the current schema majors
+       bb pkg migrate --bench <file>...       rewrite bench files to the current bb-bench major
        bb pkg tree <package dir>              print a package's tree hash
        bb pkg value [--kicad R|C|L] [--dim voltage|time|resistance|capacitance|inductance|current|temperature|count|percent] <text>...";
 
@@ -535,6 +537,31 @@ fn canonical_time(p: &Pair) -> String {
 fn migrate_cmd(args: &[String]) -> Result<bool, String> {
     let reg = Registry::current();
     let mut changed = 0;
+    // ADR-010 D1: `bb-bench/0` -> `bb-bench/1`, the schema line only (every
+    // `/0` key keeps its meaning), so a migrated bench builds the same deck.
+    if args.first().map(String::as_str) == Some("--bench") {
+        if args.len() < 2 {
+            return Err("usage: bb pkg migrate --bench <file>...".into());
+        }
+        for f in &args[1..] {
+            let text = std::fs::read_to_string(f).map_err(|e| format!("read {f}: {e}"))?;
+            let t = bbpkg::toml::parse(&text).map_err(|e| format!("{f}: {e}"))?;
+            let id = t
+                .get("schema")
+                .and_then(|s| s.as_str())
+                .ok_or_else(|| format!("{f}: no schema"))?;
+            if let Some(new) = reg
+                .migrate("bb-bench", id, &text)
+                .map_err(|e| format!("{f}: {e}"))?
+            {
+                println!("migrate {f}: {id} -> {}", reg.current_id("bb-bench"));
+                std::fs::write(f, new).map_err(|e| format!("write {f}: {e}"))?;
+                changed += 1;
+            }
+        }
+        println!("bb pkg migrate: {changed} files rewritten");
+        return Ok(true);
+    }
     for dir in packages(args)? {
         let mut files = vec![(dir.join("part.toml"), "bb-part")];
         let part_text =

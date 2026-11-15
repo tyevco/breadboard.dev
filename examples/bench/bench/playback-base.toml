@@ -1,0 +1,21 @@
+# examples/bench/bench/playback-base.toml: bench/playback-long.toml with AIN on a constant 1 V
+# supply instead of the playback: the baseline of the playback cost gate (the added wall time is
+# the difference of the two runs' medians).
+schema = "bb-bench/1"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "1"
+
+[[supply]]
+net = "VSW"
+volts = "3.3V"
+rs = "10m"
+
+[[supply]]
+net = "AIN"
+volts = "1V"
+
+[options]
+set = "phase0"

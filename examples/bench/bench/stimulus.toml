@@ -1,0 +1,81 @@
+# examples/bench/bench/stimulus.toml: every stimulus of milestone B1 on one bench (ADR-010 D2-D4),
+# for 300 ms with examples/feedback's firmware (PA5 toggles every 50 ms; PB0 is copied to PA6).
+#
+# - +3V3: 3.3 V behind 1 Ohm, loaded by a current profile (data/burst.csv, hold: 20 mA for 5 ms
+#   every 40 ms from 30 ms), so V(+3V3) shows the profile as 20 mV dips.
+# - AIN: an ideal playback of data/ain.csv (a 0-2 V triangle with a 0.5 V step at 150 ms, linear),
+#   into R3/C2 (AFILT).
+# - SW1 (example/pushbutton, a switch view) on BTN: pressed 60-65 ms, and from 120 ms for 60 ms
+#   with 3 bounces at each edge (seeded, inside the view's bounce_max of 2 ms).
+# Every change is known before the run, so all of it is tables of the analog engine and there is
+# no bench engine (bench/trigger.toml has the triggered actions); lookahead serves the loop.
+# - SW2 (example/switch-1k) between VSW and RC_N: pressed 20-60 ms (ADR-010 gate G8: RC_N charges
+#   with tau = 0.999 ms) and 240-290 ms, while VSW is set to 2.5 V from 250 ms for 20 ms.
+# - Faults: C1 pin 1 opens from BTN at 150 ms (during the timed press, so the release at 180 ms is
+#   no longer filtered); AFILT shorts to ground from 260 ms for 10 ms.
+schema = "bb-bench/1"
+seed = 7
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "1"
+
+[[supply]]
+net = "VSW"
+volts = "3.3V"
+rs = "10m"
+
+[[load]]
+net = "+3V3"
+profile = "../data/burst.csv"
+interp = "hold"
+
+[[playback]]
+net = "AIN"
+file = "../data/ain.csv"
+
+[[action]]
+press = "SW1"
+at = "60ms"
+for = "5ms"
+
+[[action]]
+press = "SW1"
+at = "120ms"
+for = "60ms"
+bounce = { count = 3 }
+
+[[action]]
+press = "SW2"
+at = "20ms"
+for = "40ms"
+
+[[action]]
+press = "SW2"
+at = "240ms"
+for = "50ms"
+
+[[action]]
+set = "VSW"
+to = "2.5V"
+at = "250ms"
+for = "20ms"
+
+[[fault]]
+kind = "open"
+net = "BTN"
+pin = "C1.1"
+at = "150ms"
+
+[[fault]]
+kind = "short"
+net = "AFILT"
+at = "260ms"
+for = "10ms"
+
+[analog]
+nets = ["GND", "+3V3", "BTN", "TRIG", "LED_DRV", "AIN", "AFILT", "VSW", "RC_N"]
+
+[options]
+set = "phase0"

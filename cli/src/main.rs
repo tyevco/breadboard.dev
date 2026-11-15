@@ -644,8 +644,10 @@ fn engine_binds(
     dev_pins: &[&board::PinBinding],
     loads: &[LoadGlue],
     direct: &std::collections::BTreeMap<String, String>,
+    stim: &elab::Stimulus,
 ) -> Vec<devices::Bind> {
-    use devices::{Bind, ANALOG, CPU, DEVICES};
+    use devices::{Bind, ANALOG, BENCH, CPU, DEVICES};
+    let bench_mcu = stim.mcu_pins();
     let b = |engine, pin: &str, net: &str, dir| Bind {
         engine,
         pin: pin.to_string(),
@@ -664,10 +666,28 @@ fn engine_binds(
             PinKind::In { .. } if direct.contains_key(&k) => {
                 out.push(b(CPU, &p.pin, &direct[&k], Direction::Input));
             }
+            // A bench stimulus into the MCU (ADR-010 D4): the bench engine
+            // drives the pin's kernel net; the circuit net is not read.
+            PinKind::In { .. } if bench_mcu.contains(&k) => {
+                out.push(b(BENCH, &k, &k, Direction::Output));
+                out.push(b(CPU, &p.pin, &k, Direction::Input));
+            }
             PinKind::In { .. } | PinKind::Adc { .. } => {
                 out.push(b(ANALOG, &k, &k, Direction::Output));
                 out.push(b(CPU, &p.pin, &k, Direction::Input));
             }
+        }
+    }
+    // The bench engine's sources in the circuit (a triggered action, its
+    // `Drive::Timed` input of the analog engine) and its trigger inputs.
+    for s in &stim.analog {
+        out.push(b(BENCH, s, s, Direction::Output));
+        out.push(b(ANALOG, s, s, Direction::Input));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for t in &stim.triggers {
+        if seen.insert(t.input.clone()) {
+            out.push(b(BENCH, &t.input, &t.input, Direction::Input));
         }
     }
     for l in loads {
@@ -992,8 +1012,10 @@ fn run(a: RunArgs) -> Result<(), String> {
     // With device parts (ADR-006 D7, Amendment 6) the loop may be the CPU
     // and a device (E3: PWM edges in, HOME_N out); the plugin is loaded when
     // the CPU is in a loop.
-    let binds = engine_binds(&mcu_pins, &dev_pins, &loads, &direct);
-    let (cyclic, in_cycle) = devices::cycles(3, &binds);
+    let stim = &fe.stimulus;
+    let bench_mcu = stim.mcu_pins();
+    let binds = engine_binds(&mcu_pins, &dev_pins, &loads, &direct, stim);
+    let (cyclic, in_cycle) = devices::cycles(devices::ENGINES, &binds);
     let plugin = match a.plugin {
         PluginMode::Auto => in_cycle[devices::CPU],
         PluginMode::Always => true,
@@ -1090,6 +1112,9 @@ fn run(a: RunArgs) -> Result<(), String> {
             // An MCU input on a device's output reads the device's kernel
             // net directly (ADR-006 Amendment 6): no threshold, no cin.
             PinKind::In { .. } if direct.contains_key(&p.kernel_net()) => {}
+            // A bench stimulus into the MCU (ADR-010 D4): no threshold, no
+            // cin; the bench engine drives the kernel net.
+            PinKind::In { .. } if bench_mcu.contains(&p.kernel_net()) => {}
             // An MCU input: ngspice thresholds the node (ADR-003 D3) and
             // adds cin.
             PinKind::In { net, model } => ncfg.digital_outputs.push(DigitalOutputBinding {
@@ -1148,6 +1173,33 @@ fn run(a: RunArgs) -> Result<(), String> {
         }
     }
     ncfg.adc_push = a.adc_push;
+    // The bench (ADR-010 D3, D4): its tables, handed over once, and the
+    // sources a triggered action drives through the bench engine.
+    ncfg.tables = stim.tables.clone();
+    for o in stim.outputs.iter().filter(|o| stim.analog.contains(&o.pin)) {
+        let bbbench::Value::Volts(initial) = o.initial else {
+            return Err(format!("internal: bench source {} is not analog", o.pin));
+        };
+        ncfg.inputs.push(InputBinding {
+            pin: o.pin.clone(),
+            source: o.pin.clone(),
+            drive: Drive::Timed { initial },
+            glue_node: None,
+        });
+    }
+    let bench_engine = if stim.engine() {
+        Some(
+            bbbench::BenchEngine::new(bbbench::BenchConfig {
+                name: bbbench::ENGINE_NAME.into(),
+                stop_lattice: Some(a.renode_quantum),
+                outputs: stim.outputs.clone(),
+                triggers: stim.triggers.clone(),
+            })
+            .map_err(|e| format!("bench: {e}"))?,
+        )
+    } else {
+        None
+    };
     // An analog probe: its name in the outputs (a Phase 0 node name, or a
     // project net's display name) and its ngspice node (ADR-007 D6).
     let analog_probes: Vec<(&String, String)> = probes
@@ -1205,7 +1257,16 @@ fn run(a: RunArgs) -> Result<(), String> {
     // Registration order only breaks ties (plan order, record order); the
     // advance order comes from the bindings (ADR-003 D3).
     // The device engine is registered last in both orders (ADR-006
-    // Amendment 6).
+    // Amendment 6). The bench engine is registered first in both orders
+    // (ADR-010 Amendment 1): inside a feedback loop it then advances before
+    // the analog engine (the lattice-bound CPU goes first, ADR-003 D3), so a
+    // triggered source change reaches the analog engine before it advances,
+    // and its records sort before the others at equal times in either
+    // order.
+    let bench_id = match bench_engine {
+        Some(e) => Some(sched.add_engine(Box::new(e)).map_err(|e| e.to_string())?),
+        None => None,
+    };
     let (cpu_id, an_id) = match a.engine_order {
         EngineOrder::McuFirst => {
             let c = sched.add_engine(Box::new(cpu)).map_err(|e| e.to_string())?;
@@ -1235,6 +1296,7 @@ fn run(a: RunArgs) -> Result<(), String> {
         let id = match b.engine {
             devices::CPU => cpu_id,
             devices::ANALOG => an_id,
+            devices::BENCH => bench_id.ok_or("internal: a bench binding without a bench engine")?,
             _ => dev_id.ok_or("internal: a device binding without a device engine")?,
         };
         bind(&mut sched, id, &b.pin, &b.net, b.dir)?;
@@ -1330,6 +1392,8 @@ fn run(a: RunArgs) -> Result<(), String> {
                         part.reference.as_str()
                     } else if Some(i) == dev_id.map(|d| d.index()) {
                         "devices"
+                    } else if Some(i) == bench_id.map(|d| d.index()) {
+                        bbbench::ENGINE_NAME
                     } else {
                         analog_name.as_str()
                     }
@@ -1504,6 +1568,9 @@ struct FrontEnd {
     /// A project's run.json content (none for a Phase 0 board file).
     run_json: Option<Vec<(String, bbcore::cjson::Json)>>,
     flagged: Vec<String>,
+    /// What a project's bench drives (ADR-010 D3, D4); empty for a board
+    /// file.
+    stimulus: elab::Stimulus,
 }
 
 fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
@@ -1534,6 +1601,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
                 .collect(),
             run_json: None,
             flagged: Vec::new(),
+            stimulus: elab::Stimulus::default(),
         });
     }
     // A project: read-only (ADR-007 D7). board.bbm and bb.lock must be what
@@ -1589,6 +1657,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         probes: plan.probes,
         run_json: Some(plan.run_json),
         flagged: plan.flagged,
+        stimulus: plan.stimulus,
     })
 }
 
