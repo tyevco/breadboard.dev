@@ -221,7 +221,7 @@ milestone may add to `make test` (wall time, on the baseline host). The
 | H5 | +30 s (`multi-producer`) | | |
 | H6 | — (removes: `fresh` to nightly, `adc-stock`, split `cargo-test`) | | |
 | S | — | | |
-| B1 | +40 s | `bench-test` 10.6 s pooled, 15.2 s `POOL=0` (idle host, load 0.6-1.3); in a `make check` beside other tracks (load 4-26) 20.6 s and 27.1 s | `make bench-gate` 6.5 min (load 30-60); `make bench-perf` 31 s (idle: the 1 s, 100 ksps playback adds −0.01 s) |
+| B1 | +40 s | `bench-test` 5.0 s in an idle pooled `make check` (456 s in all, load 1.2-5.5); alone 10.6 s pooled (with the pool's start), 15.2 s `POOL=0`; in a `make check` beside other tracks (load 4-26) 20.6 s and 27.1 s | `make bench-gate` 6.5 min (load 30-60); `make bench-perf` 31 s (idle: the 1 s, 100 ksps playback adds −0.01 s) |
 | B2 | +20 s | | |
 | B3 | +0 s (replaces scripts) | | |
 | R1 | +15 s | | |
