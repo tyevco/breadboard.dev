@@ -58,7 +58,11 @@ make test        # the exit gate alone
     E1. Attach and detach without a stop give the committed hashes; a
     breakpoint marks the run (see [Debugging with GDB](./debugging)). The
     full gate is `make gdb` (CI job `dms-rail`).
-17. **`dms-system`**: the dial-me-spinner system import (main and base boards
+17. **`vscode-templates`**: the VS Code templates in `docs/templates/vscode`
+    have the settings cortex-debug needs against `bb run --gdb`, and their
+    `endsPattern` matches the line `bb` prints. The full check, in a real
+    VS Code, is `make vscode-test` (see [Viewers and VS Code](./viewing)).
+18. **`dms-system`**: the dial-me-spinner system import (main and base boards
     and the link harness): the committed `board.bbm` from a fresh import,
     the mated pins, and E1's deck from the system equal to E1's own.
 
@@ -100,7 +104,9 @@ spike, and draws `site/public/plots/<name>.{light,dark}.svg` from their
 outputs (about 5 minutes, most of it E3's homing). The SVGs are a pure function of the
 runs, so `make docs-plots-check` (CI job `dms-rail`) regenerates them and
 requires the committed files byte for byte; after a change to results, run
-`make docs-plots` and commit the figures.
+`make docs-plots` and commit the figures. `make vcd-check` (CI job
+`dms-rail`) loads make demo's VCDs and a committed fixture with wellen,
+Surfer's waveform library (see [Viewers and VS Code](./viewing)).
 
 `make golden-update` regenerates the snapshots and hashes from fresh, checked
 runs. A change to an equivalence reference is a change to results and needs a

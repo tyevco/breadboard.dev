@@ -1,0 +1,16 @@
+# Phase 2 E4 (ADR-016 D1, G1): loads bb's nets.vcd with wellen, the waveform
+# library of the Surfer viewer, to check that the docs page's viewers read it
+# as bb wrote it. Deliberately OUTSIDE the Cargo workspace (the empty
+# [workspace] below): wellen's dependencies never reach `cargo build
+# --workspace` or `bb`. Build: `make vcd-check` (its own target directory).
+[package]
+name = "vcd-check"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+wellen = "=0.25.7"

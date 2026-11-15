@@ -1,0 +1,44 @@
+// Breadboard: attach cortex-debug to `bb run --gdb` (ADR-016 D2).
+//
+// Needs the cortex-debug extension (marus25.cortex-debug) and an ARM-capable
+// GDB. Copy this file and tasks.json into your project's .vscode/. Start
+// "bb: attach (cortex-debug)" from the Run and Debug view: VS Code first runs
+// the task "bb: run --gdb" from tasks.json, then attaches.
+//
+// A session that only attaches, halts, reads registers, variables and RAM,
+// and detaches leaves the run's outputs byte-identical to a run without GDB.
+// A breakpoint stop, a step or a write marks the run as a debug run (see the
+// debugging guide).
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "bb: attach (cortex-debug)",
+      "type": "cortex-debug",
+      // Attach, never launch: bb has already loaded the firmware into the
+      // simulated MCU, so there is no `load` and no flashing.
+      "request": "attach",
+      // bb is the GDB server; cortex-debug starts none of its own.
+      "servertype": "external",
+      // The port of `bb run --gdb 3333` in tasks.json. bb listens on
+      // 127.0.0.1 only.
+      "gdbTarget": "localhost:3333",
+      // Any ARM-capable GDB: gdb-multiarch (`make setup` installs it),
+      // arm-none-eabi-gdb or the Zephyr SDK's arm-zephyr-eabi-gdb.
+      "gdbPath": "gdb-multiarch",
+      // The ELF the run executes, for its symbols: the image your bb.toml's
+      // target (or --firmware) names. This is the dial-me-spinner E1 image.
+      "executable": "${workspaceFolder}/firmware/prebuilt/led_rail.elf",
+      "cwd": "${workspaceFolder}",
+      // cortex-debug's default attach for an external server sends
+      // `monitor halt`, which bb refuses (`monitor` reaches Renode's own
+      // time control). The CPU is already halted at reset, or halts at its
+      // next slice boundary, when GDB attaches, so nothing is needed.
+      "overrideAttachCommands": [],
+      // No "svdFile": the peripheral view would read peripheral registers
+      // (0x40000000-0x5FFFFFFF). Some clear bits when read, so such a read
+      // marks the run as a debug run.
+      "preLaunchTask": "bb: run --gdb"
+    }
+  ]
+}
