@@ -159,6 +159,7 @@ pooled-test:
 	+$(STEP) ec-reconnect
 	+$(STEP) packages
 	+$(STEP) gdb-test
+	+$(STEP) vscode-templates
 	+$(STEP) dms-system
 
 bb:
@@ -1191,6 +1192,38 @@ gdb gdb-test: firmware bb
 	DMS_RAIL_WORK=$(GDB_WORK) bash scripts/dms_rail.sh prepare $(BB)
 	$(PYTHON) scripts/gdb_gate.py $(if $(filter gdb,$@),gate,test) --bb $(BB) --gdb $(GDB) \
 	    --out $(GDB_OUT)/$(if $(filter gdb,$@),gate,test) --work $(GDB_WORK)
+
+# --- Phase 2 E4: viewers and VS Code (ADR-016) ----------------------------------------------------
+# make vcd-check (G1; CI job dms-rail, about 30 s after the demo): tools/vcd-check (wellen 0.25.7,
+# Surfer's waveform library; its own crate OUTSIDE the workspace, built into its own target
+# directory) loads make demo's nets.vcd files and the committed fixture tests/fixtures/vcd/mixed.vcd:
+# timescale 1 fs, every $var present with its type (real as Real), every change, the $comment name
+# map, and every real net equal to the run's nets.csv at every row; then six negative controls on
+# copies of the fixture each fail with their own message (scripts/vcd_check.sh).
+# make vcd-check-fixture: the fixture and the controls only (no demo).
+# make vscode-templates (in make test, under 1 s): the static check of docs/templates/vscode.
+# make vscode-test (G2; local, not in make test or CI: it downloads a pinned VS Code and the pinned
+# cortex-debug VSIXs once into ~/.cache/bb/vscode-test, and needs xvfb and unprivileged user
+# namespaces; about 1 min): the templates, copied verbatim into a copy of the dial-me-spinner
+# project, attach cortex-debug to bb run --gdb inside a headless VS Code with no network; attach,
+# reads and detach give all four committed hashes of the run without GDB, and the negative control
+# (a breakpoint through cortex-debug) marks the run and changes its outputs (scripts/vscode_test.sh).
+.PHONY: vcd-check vcd-check-fixture vcd-check-tool vscode-templates vscode-test
+VCD_CHECK_DIR ?= $(CARGO_TARGET_DIR)/vcd-check
+VCD_CHECK     := $(VCD_CHECK_DIR)/release/vcd-check
+VCD_CHECK_OUT ?= out/vcd-check
+vcd-check-tool:
+	CARGO_TARGET_DIR=$(VCD_CHECK_DIR) $(CARGO) build --release --locked --manifest-path tools/vcd-check/Cargo.toml
+vcd-check: vcd-check-tool demo
+	bash scripts/vcd_check.sh $(VCD_CHECK) $(DEMO_OUT) $(VCD_CHECK_OUT)
+vcd-check-fixture: vcd-check-tool
+	bash scripts/vcd_check.sh $(VCD_CHECK) --fixture-only $(VCD_CHECK_OUT)
+vscode-templates:
+	PYTHON=$(PYTHON) bash scripts/vscode_test.sh --static
+VSCODE_OUT  ?= out/vscode
+VSCODE_WORK ?= $(BB_SCRATCH)/bb-vscode
+vscode-test: firmware bb
+	PYTHON=$(PYTHON) bash scripts/vscode_test.sh $(BB) $(VSCODE_OUT) $(VSCODE_WORK)
 
 # --- Phase 2 H0: track worktrees, the measurement lock, the runtime baseline ----------------------
 # make worktree TRACK=<name>: the git worktree ~/src/bb-<name> (WORKTREE_ROOT) on the branch

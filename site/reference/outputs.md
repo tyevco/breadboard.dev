@@ -66,7 +66,8 @@ transition, stamped at the edge time. Analog nets are `real`, written at the
 fixed sample instants and only when the µV-rounded value changes, so the file
 does not depend on the grant partition. In a project, analog nets use their
 SPICE names, and a `$comment` block maps each to its display name when they
-differ.
+differ. Which viewers read it (Surfer, Vaporview and GTKWave, not PulseView):
+see [Viewers and VS Code](../guide/viewing).
 
 ## `run.json` (`bb-run/0`)
 

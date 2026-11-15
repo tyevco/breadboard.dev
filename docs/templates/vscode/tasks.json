@@ -1,0 +1,51 @@
+// Breadboard: a VS Code task that starts `bb run --gdb` (ADR-016 D2).
+//
+// Copy this file and launch.json into your project's .vscode/ (see the docs
+// page "Viewing waveforms and debugging in VS Code"):
+//
+//   mkdir -p .vscode && cp <breadboard>/docs/templates/vscode/*.json .vscode/
+//
+// launch.json names this task as its preLaunchTask, so starting the debug
+// configuration first starts the run, waits until bb's GDB proxy listens,
+// and only then attaches cortex-debug.
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "bb: run --gdb",
+      "type": "process",
+      // `bb` from your PATH (`make setup` installs it into ~/.local/bin).
+      "command": "bb",
+      // The run to debug, from the project directory. Edit the bench, the
+      // duration and the output directory for your project; these are the
+      // dial-me-spinner E1 run of the debugging guide. Keep the port in step
+      // with gdbTarget in launch.json. bb listens on 127.0.0.1 only. By
+      // default the CPU waits at reset until the debugger attaches and
+      // continues; `--gdb-wait off` starts the run at once.
+      "args": ["run", "--gdb", "3333", "--bench", "bench/cold.toml", "--for", "120ms", "--out", "out/debug"],
+      "options": { "cwd": "${workspaceFolder}" },
+      // The run keeps going after the debugger attaches, so VS Code must
+      // not wait for it to exit: it is a background task, and the problem
+      // matcher below tells VS Code when the debugger may attach.
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "bb",
+        // VS Code needs a pattern with a file and a message. bb's errors
+        // (`bb: <message>`) name no file, so this one never matches: read
+        // them in the task's terminal.
+        "pattern": { "regexp": "^bb-task-no-problem-pattern (.*): (.*)$", "file": 1, "message": 2 },
+        "background": {
+          // The task is active from its start. VS Code needs a
+          // beginsPattern, but it does not test a line that matched
+          // beginsPattern against endsPattern, so this one matches none of
+          // bb's lines.
+          "activeOnStart": true,
+          "beginsPattern": "^bb-task-no-begins-pattern$",
+          // bb prints `bb run: GDB: listening on 127.0.0.1:<port>` once
+          // its proxy accepts a connection: the task is then "ready".
+          "endsPattern": "GDB: listening on"
+        }
+      }
+    }
+  ]
+}

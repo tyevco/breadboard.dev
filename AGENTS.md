@@ -50,7 +50,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense`, the E3 cases `typ` and `step` of `make dms-home` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 5 min alone, most of it the E3 homing: 305 s in the M10 review, 450 s in M10 beside other gates). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, from E4 `vscode-templates`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -117,6 +117,8 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make worktree-test` | H0 gate (not in `make test`; four release builds of `bb`): two throwaway worktrees build `bb` at the same time, and their crate hashes are compared (bbcore's rlib differs by a marker only A has; bbpkg's rlib and each `bb` carry their own package path, never the other's); negative control: built one after the other into one shared target directory, B's `make bb` compiles nothing and leaves B a binary with A's code and package path (cargo names sources by their workspace-relative path) (`scripts/worktree_test.sh`) |
 | `make measure-lock-test` | H0 gate (in `make test`, a few seconds): on a private lock file, every target of `MEASURE_TARGETS` refuses while a probe holds the measurement lock (the hold checked from outside), before building anything; the probe runs before and after (`scripts/measure_lock_test.sh`) |
 | `make baseline` | H0: the runtime baseline. `make check` (`BASELINE_ARGS`) `BASELINE_N` = 3 times after one uncounted warm-up, on an idle ext4 worktree, under the measurement lock; wall times, load before each run and `make test`'s per-step times (`out/test-timing.tsv`, written by every `make test`) in `out/baseline` (`scripts/baseline.sh`). Its result is the table in "Gate budgets" |
+| `make vcd-check` / `make vcd-check-fixture` | Phase 2 E4 gate G1 (ADR-016 D1, Amendment 1; CI job `dms-rail`, 16 s with the demo): `tools/vcd-check` (wellen 0.25.7, Surfer's waveform library, outside the workspace) loads `make demo`'s two `nets.vcd` and the committed fixture `tests/fixtures/vcd/mixed.vcd`: timescale 1 fs, every `$var` present with its type (`real` as Real, `wire 1` as a 1-bit Wire), every change, the `$comment` name map, and every real net equal to the run's `nets.csv` at every row; then six negative controls on edited copies of the fixture each fail with their own message (`scripts/vcd_check.sh`). `vcd-check-fixture` skips the demo. The docs page is `site/guide/viewing.md` |
+| `make vscode-templates` / `make vscode-test` | Phase 2 E4 gate G2 (ADR-016 D2, Amendment 1). `vscode-templates` (in `make test`, 0.1 s): `docs/templates/vscode/{tasks,launch}.json` statically against D2 (attach, `servertype: external`, `overrideAttachCommands: []`, no `svdFile`, the port, the `endsPattern` against bb's listening line in `cli/src/main.rs`, a `beginsPattern` that does not swallow it). `vscode-test` (local only: downloads a pinned VS Code 1.145.3 and cortex-debug 1.12.1 with its four dependencies from Open VSX once into `~/.cache/bb/vscode-test`, sha256-checked; needs `xvfb` and unprivileged user namespaces; about 2 min): the templates copied verbatim into a copy of the dial-me-spinner project, run in a headless VS Code in a network namespace with only loopback; attach, reads and stop give all four `tests/golden/dms-rail/ok-cold` hashes, and the negative control (a breakpoint through cortex-debug) marks the run and changes its outputs (`scripts/vscode_test.sh`) |
 
 `make firmware` builds the firmware ELFs (spike, feedback, ADC and the Renode
 lookahead gate firmware in `engines/cpu-renode/tests/firmware`, and the
@@ -232,7 +234,7 @@ milestone may add to `make test` (wall time, on the baseline host). The
 | P4 | +40 s | | |
 | P5 | +40 s | | |
 | E1 | +20 s (local registry fixture) | | |
-| E4 | — | | |
+| E4 | — (`vscode-templates`, under 1 s) | 0.1 s (`vscode-templates`) | `make vcd-check` 16 s with the demo (CI `dms-rail`); `make vscode-test` 116 s, local (ADR-016 Amendment 1) |
 
 This build adds at most 350 s to `make test` (plan section 8, without
 R3's 10 s; B4, R3, P6, E2, E3 and E5 are not in this build). Section 5
@@ -358,7 +360,14 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         jit_profile_stress.sh, gdb_gate.py, dms_system.sh, check_nrf_pwm.py,
                         dms_home.sh (+ dms_home_boards.py, check_dms_home.py); Phase 2 H0:
                         worktree.sh (+ worktree_test.sh), measure_lock.sh (+ measure_lock_test.sh),
-                        baseline.sh, step_time.sh
+                        baseline.sh, step_time.sh; Phase 2 E4: vcd_check.sh, vscode_test.sh
+                        (+ vscode_templates.py, vscode_test/: the extension test run inside VS Code)
+tools/vcd-check/        Phase 2 E4 (ADR-016 D1): the VCD loader of make vcd-check (wellen 0.25.7,
+                        Surfer's waveform library); its own crate and Cargo.lock, OUTSIDE the
+                        workspace (an empty [workspace]), built into $CARGO_TARGET_DIR/vcd-check
+docs/templates/vscode/  Phase 2 E4 (ADR-016 D2): tasks.json and launch.json, copied by hand into a
+                        project's .vscode/ (cortex-debug attached to bb run --gdb)
+tests/fixtures/vcd/     the viewer check's committed input (mixed.vcd, mixed.csv: a real E1 run)
 .github/actions/bb-setup/ make setup with the Renode tarball and the apt packages cached (Phase 2 H0)
 ```
 

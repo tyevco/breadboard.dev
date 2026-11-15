@@ -28,6 +28,10 @@ attach whenever you like: the CPU halts at its next slice boundary.
 `make setup` installs `gdb-multiarch`. Any ARM-capable GDB works, for
 example the Zephyr SDK's `arm-zephyr-eabi-gdb`.
 
+To debug from VS Code with cortex-debug, copy the templates in
+`docs/templates/vscode/` into your project's `.vscode/`. See
+[Viewers and VS Code](./viewing#debugging-from-vs-code).
+
 ## What a halt means for the circuit
 
 Virtual time stops while the CPU is halted. The MCU is in the middle of a
