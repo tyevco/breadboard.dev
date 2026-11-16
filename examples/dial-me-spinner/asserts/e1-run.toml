@@ -1,0 +1,40 @@
+# examples/dial-me-spinner/asserts/e1-run.toml: what make dms-rail-test checks on every E1 run
+# besides the four E1 checks (asserts/e1.toml), as assertions (milestone B3, ADR-010 D8, G9;
+# Amendment 5), for tests/e1.toml:
+#   - the PIN_CNF audit is clean (ADR-008 D4): scripts/dms_rail.sh's audit_clean required no log
+#     record at all, and an E1 run has none but the audit's (every finding is a "PIN_CNF audit:"
+#     or "PIN_CNF write:" warn record), so no record of either and no warn record;
+#   - the firmware drove LED_PWR_EN and LED_DIN_MCU: the event the wrong-order negative control is
+#     about occurred, so that control cannot pass (or fail) vacuously (ADR-010 G9).
+# Record-only kinds: `bb assert` gives them again on a finished run.
+schema = "bb-bench/1"
+
+[[assert]]
+name = "PIN_CNF-audit"
+kind = "log"
+match = "PIN_CNF"
+max = 0
+msg = "no PIN_CNF audit finding (ADR-008 D4)"
+
+[[assert]]
+name = "no-warn"
+kind = "event"
+event = "warn"
+max = 0
+msg = "no warn record"
+
+[[assert]]
+name = "EN-driven"
+kind = "count"
+net = "U10.P1.04"
+level = 1
+min = 1
+msg = "the firmware switched LED_PWR_EN on"
+
+[[assert]]
+name = "DIN-driven"
+kind = "count"
+net = "U10.P0.06"
+level = 1
+min = 1
+msg = "the firmware drove LED_DIN_MCU (a frame)"

@@ -1,0 +1,53 @@
+# examples/dial-me-spinner/tests/e1.toml: make dms-rail-test as a bb test file (Phase 2 B3, ADR-010
+# D8-D10, Amendment 5). E1, the LED rail sequencing (Phase 1 plan section 2 E1, M6): the correct-
+# order firmware (led_rail.elf) and the wrong-order one (led_rail_wrong_order.elf) at the nominal and
+# cold benches, 120 ms each, at bb's defaults (10 ms grants: E1 is acyclic), on the project itself
+# (each case's targets give its image; bb run is read-only on the project).
+#   - The four E1 checks (asserts/e1.toml: LED-DATA-V4, LSW-3, LSW-2, FW-6.4 as three) and the
+#     PIN_CNF audit and the firmware's drive (asserts/e1-run.toml). The correct order passes every
+#     one; the wrong order fails exactly LSW-3 (its negative control: expect, ADR-010 G9).
+#   - Each case's committed one-cell hashes (tests/golden/dms-rail: nets.csv, nets.vcd and the non-
+#     grant records without the assert records): the assertions are passive.
+#   - ok-cold with --engine-order analog-first byte-identical to ok-cold (ADR-003 D3).
+# scripts/dms_rail.sh test runs it (make dms-rail-test), then on the same outputs what is not a kind:
+# check_dms_rail.py (the ported checks' cross-check for one milestone, D10), the VLED snapshots, the
+# convergence wall time, and the FW-6.4 negative controls (pin_edge records moved: `bb assert`).
+schema = "bb-test/0"
+project = ".."
+
+[defaults]
+for = "120ms"
+assert_files = ["../asserts/e1.toml", "../asserts/e1-run.toml"]
+
+[[case]]
+name = "ok-nominal"
+bench = "../bench/nominal.toml"
+targets = { "main:U10" = "../firmware/prebuilt/led_rail.elf" }
+golden = "../../../tests/golden/dms-rail/ok-nominal/outputs.sha256"
+
+[[case]]
+name = "ok-cold"
+bench = "../bench/cold.toml"
+targets = { "main:U10" = "../firmware/prebuilt/led_rail.elf" }
+golden = "../../../tests/golden/dms-rail/ok-cold/outputs.sha256"
+
+[[case]]
+name = "wrong-nominal"
+bench = "../bench/nominal.toml"
+targets = { "main:U10" = "../firmware/prebuilt/led_rail_wrong_order.elf" }
+golden = "../../../tests/golden/dms-rail/wrong-nominal/outputs.sha256"
+expect = { "LSW-3" = "fail" }
+
+[[case]]
+name = "wrong-cold"
+bench = "../bench/cold.toml"
+targets = { "main:U10" = "../firmware/prebuilt/led_rail_wrong_order.elf" }
+golden = "../../../tests/golden/dms-rail/wrong-cold/outputs.sha256"
+expect = { "LSW-3" = "fail" }
+
+[[case]]
+name = "ok-cold-order"
+bench = "../bench/cold.toml"
+targets = { "main:U10" = "../firmware/prebuilt/led_rail.elf" }
+engine_order = "analog-first"
+same_as = "ok-cold"

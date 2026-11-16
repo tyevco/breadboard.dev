@@ -652,7 +652,8 @@ recorded path:
 ## 10. Schema versions and package versions
 
 Applies to `bb-part`, `bb-pins`, `bb-pkgtest`, `bb-lock`, `bb-project`,
-`bb-bench` and `bb-board`.
+`bb-bench`, `bb-board` and `bb-test` (`spec/test.md`; ADR-010 D8,
+milestone B3).
 
 - A schema id is `<name>/<major>`. Within a major, changes are additive
   only, and only through reserved keys becoming accepted. Anything else (a
@@ -676,8 +677,9 @@ Applies to `bb-part`, `bb-pins`, `bb-pkgtest`, `bb-lock`, `bb-project`,
   (`spec/project.md`, `spec/board-bbm.md`). Every `/0` key of `bb-part`,
   `bb-pins`, `bb-bench`, `bb-project` and `bb-board` keeps its meaning,
   so their migrations rewrite the `schema` line (member) only; `bb-lock`'s
-  renames two keys (section 9). `bb-pkgtest` stays at major 0. Every
-  committed file is at its current major.
+  renames two keys (section 9). `bb-pkgtest` stays at major 0, and
+  `bb-test` (milestone B3) starts at major 0. Every committed file is at its
+  current major.
 - **Package semver:** a change to a view's results (a vector's measured
   value) is at least a minor bump; a changed port list, pin list or
   parameter-set name is a major bump; a provenance-only edit is a patch.

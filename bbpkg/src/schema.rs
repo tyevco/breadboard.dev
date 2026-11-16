@@ -24,7 +24,8 @@
 //!   `bb` also writes a legacy platform hash as the scoped one (ADR-015
 //!   Amendment 3).
 //!
-//! `bb-pkgtest` stays at major 0 (no Phase 2 key). The machinery is also
+//! `bb-pkgtest` stays at major 0 (no Phase 2 key). `bb-test/0` (ADR-010
+//! D8, milestone B3) is new at major 0. The machinery is also
 //! exercised by a synthetic bump in the tests (gate G9 of ADR-006).
 
 use std::fmt;
@@ -38,6 +39,8 @@ pub const SCHEMAS: &[&str] = &[
     "bb-project",
     "bb-bench",
     "bb-board",
+    // ADR-010 D8 (milestone B3): `bb test` files.
+    "bb-test",
 ];
 
 /// A parsed schema id.

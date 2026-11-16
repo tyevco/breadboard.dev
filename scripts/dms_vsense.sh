@@ -20,14 +20,17 @@
 # adc_in: U10 -> ngspice -> U10), so bb's defaults run lookahead; the every-lattice-point reference
 # is --lookahead off --adc-push every (one cell, V(hold) pushed at every lattice point).
 #
-#   scripts/dms_vsense.sh test <bb> <out>   the part in `make test`: s50, s50-none, c5, c5-none at bb's
-#                                           defaults, check_dms_vsense.py on them, their committed
-#                                           one-cell hashes (non-grant records, nets.csv, nets.vcd), and
-#                                           run.json's record of each binding's load (view saadc_se,
-#                                           or "none" for an explicit load = "none"); and (milestone
-#                                           B2) E2's code assertions (asserts/e2/<case>.toml, record-
-#                                           only, so `bb assert` evaluates them on these runs) against
-#                                           check_dms_vsense.py's codes (scripts/check_asserts.py)
+#   scripts/dms_vsense.sh test <bb> <out>   the part in `make test` (since milestone B3 a bb test file,
+#                                           examples/dial-me-spinner/tests/e2.toml, ADR-010 D8): s50,
+#                                           s50-none, c5, c5-none at bb's defaults on the project and its
+#                                           committed variants e2/{none,c5,c5-none} (written by
+#                                           scripts/dms_e2_projects.py, --check here), with E2's code
+#                                           assertions in-run and their committed one-cell hashes (non-
+#                                           grant records, nets.csv, nets.vcd), all in bb test; test.json
+#                                           and junit.xml against the spec (scripts/check_bb_test.py);
+#                                           then on its outputs check_dms_vsense.py, the codes against
+#                                           it (scripts/check_asserts.py e2), and run.json's record of
+#                                           each binding's load (view saadc_se, or "none")
 #   scripts/dms_vsense.sh gate <bb> <out>   the M8 gate (make dms-vsense): every case at bb's defaults
 #                                           and as its one-cell reference, check_dms_vsense.py (the
 #                                           analog side against load = "none", the firmware-visible
@@ -202,7 +205,41 @@ checks() { # <out> <json> [--ref] [--cases ...]
   sed 's/^/    /' "$json.txt"
 }
 
+# make dms-vsense-test since milestone B3 (ADR-010 D8-D10): tests/e2.toml through bb test, then what is
+# not an assertion kind on its outputs. BB_TEST_JOBS (default 5) runs at a time; bb test uses the pool
+# in BB_RENODE_POOL when make provides one (POOL=0: every Renode fresh).
 do_test() { # <bb> <out>
+  local bb=$1 out=$2 c
+  if "$PY" "$ROOT/scripts/dms_e2_projects.py" --check > "$out/e2-projects.txt"; then
+    pass "the E2 variant projects (e2/none, e2/c5, e2/c5-none) are scripts/dms_e2_projects.py's output"
+  else
+    fail "the E2 variant projects differ from scripts/dms_e2_projects.py's output"; cat "$out/e2-projects.txt"
+  fi
+  if "$bb" test "$PROJ/tests/e2.toml" --out "$out" --jobs "${BB_TEST_JOBS:-5}" --pool env > "$out/bb-test.log" 2>&1; then
+    pass "bb test tests/e2.toml: every outcome as expected ($(grep -c '^bb test: PASS ' "$out/bb-test.log") cases: E2's codes in-run, the committed hashes)"
+  else
+    fail "bb test tests/e2.toml"
+  fi
+  grep '^bb test: \(PASS\|FAIL\)\|^bb test:   ' "$out/bb-test.log" | sed 's/^/    /'
+  if "$PY" "$ROOT/scripts/check_bb_test.py" "$out" > "$out/check_bb_test.txt"; then
+    pass "test.json and junit.xml against spec/test.md ($(grep -c '^check_bb_test: ok' "$out/check_bb_test.txt") checks)"
+  else
+    fail "check_bb_test.py"; grep -v '^check_bb_test: ok' "$out/check_bb_test.txt"
+  fi
+  checks "$out" "$out/checks.json" --cases "$(IFS=,; echo "${TEST_CASES[*]}")"
+  for c in "${TEST_CASES[@]}"; do
+    [[ -f $out/$c/events.jsonl ]] || { fail "$c: no outputs"; continue; }
+    if "$PY" "$ROOT/scripts/check_asserts.py" e2 "$out/$c" "$out/checks.json" --case "$c" > "$out/$c/asserts.txt"; then
+      pass "$c: E2's code assertions give check_dms_vsense.py's codes ($(grep -c '^check_asserts: ok' "$out/$c/asserts.txt") comparisons)"
+    else
+      fail "$c: E2's code assertions"; grep -v ': ok ' "$out/$c/asserts.txt"
+    fi
+    loads "$out/$c" "$c"
+  done
+}
+
+# The Phase 1 test, every case run by this script on copies of the project (before milestone B3).
+do_test_scripted() { # <bb> <out>
   local bb=$1 out=$2 c
   prepare "$bb"
   run_many "$bb" "$out" "" "" "${TEST_CASES[@]}"
@@ -305,6 +342,7 @@ OUT=$2
 rm -rf "$OUT" && mkdir -p "$OUT"
 case $MODE in
   test) do_test "$BB" "$OUT" ;;
+  test-scripted) do_test_scripted "$BB" "$OUT" ;;
   gate) do_gate "$BB" "$OUT" ;;
   ref) prepare "$BB"; do_ref "$BB" "$OUT" "${CASES[@]}" ;;
   run) shift 2; prepare "$BB"; run_many "$BB" "$OUT" "" "" "$@" ;;

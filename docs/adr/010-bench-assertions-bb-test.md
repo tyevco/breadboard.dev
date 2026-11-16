@@ -5,7 +5,8 @@
   (see "Review notes"). Amendments: 1, B1 as implemented; 2, the schema
   epoch (milestone S); 3, B2 as implemented; 4, the P1 bench keys
   (`fidelity`, `corner`, `[corners]`, `[[battery]]`; numbered 3 on the
-  P1 branch, renumbered at the merge after B2's Amendment 3).
+  P1 branch, renumbered at the merge after B2's Amendment 3); 5, B3 as
+  implemented (`bb test`, `bb-test/0`, `test.json`, JUnit).
 - **Part of:** the Phase 2 plan, milestones B1-B4. P1-P5 and E5 use it.
   Its schema keys (`bb-bench/1`, the `switch` view kind) land in milestone
   S, the schema epoch.
@@ -834,3 +835,176 @@ Amendment 4 is the record; `spec/project.md` section 3.2 states them):
 
 `[[activity]]`, `[[env]]`, `[probes]` and a `[[load]] replace` stay
 refused, naming their milestones.
+
+## Amendment 5: milestone B3 as implemented (2026-11-16)
+
+Milestone B3 (plan section 4: `bb-test/0`, `bb test`, `test.json`, JUnit) is
+implemented in `cli` (`test_cmd.rs`: the file, the runs, the comparisons,
+`test.json` and `junit.xml`; `bb run --image`), `bbpkg::schema` (`bb-test`
+at major 0) and the normative `spec/test.md`, `spec/schema/test.schema.json`
+(the file), `spec/schema/test-result.schema.json` (`test.json`) and
+`spec/schema/junit-subset.xsd`; `spec/project.md` section 5 (`bb run
+--image`, `bb test`) and `spec/package.md` section 10 (`bb-test` joins the
+versioned schemas) state the rest. The three `dms-*-test` targets of `make
+test` are `bb test` files (`examples/dial-me-spinner/tests/e1.toml`,
+`e2.toml`, `e3.toml`), gated in `make test` and by `make bb-test-gate`.
+Where the implementation decides what D8 and D9 leave open, or departs from
+their wording, it is recorded here.
+
+**A5.1 The case keys.** D8's example shows `bench`, `targets`, `asserts`,
+`[[case.assert]]`, `reference`, `golden` and `expect`, and `[defaults]` with
+`for` and `fidelity`. The dms-* targets need more of `bb run`, so a case (or
+`[defaults]`) takes every run option those targets use, each with its `bb
+run` meaning: `probes`, `sample_rate`, `max_quantum`, `renode_quantum`,
+`engine_order`, `lookahead`, `adc_push`, `seed`, `allow_unqualified`, and a
+case's own `project` or `board` (E2's variants and E3's project route are
+other projects than the file's). Two keys are new:
+
+- **`assert_files`**: B2 (Amendment 3, A3.5) left to B3 where a case takes
+  its assertions from. From the bench's `[[assert]]`, from assertion files
+  (each `bb run --assert`; the ported checks are assertion files, so the
+  Phase 1 benches and every committed hash stay unchanged), and from inline
+  `[[case.assert]]` tables, which `bb test` writes as an assertion file for
+  the run. `asserts` then lists the names the case reports; without it,
+  every `assert` record of the run is reported.
+- **`same_as = "<case>"`**: `nets.csv`, `nets.vcd` and `events.jsonl`
+  byte-identical to another case. Every dms-* target checks an engine order
+  that way (ADR-003 D3), which neither a golden (no grant records) nor
+  `reference` (another partition) expresses.
+
+**A5.2 `targets` and `bb run --image`.** D8's `targets = { "main:U10" =
+"firmware/prebuilt/led_rail.elf" }` runs a project with another image than
+its `[targets]`, and `bb run` is read-only on a project (ADR-007 D7) and
+took the image from `[targets]` only. `bb run --image <instance>=<elf>` (a
+project only) puts the ELF in place of that instance's `[targets]` image in
+memory: its image hash is computed as `bb flash` would write it, `elab`
+checks the target as for a flashed image, and `run.json` records it exactly
+as a flashed one (`kind`, `hash`), so a case and a `bb flash`ed copy of the
+project give the same `run.json`. `bb.toml` is not written. The Phase 1
+scripts ran each firmware on a scratch copy of the project with `bb flash`;
+the bb test files run the repository's project itself.
+
+**A5.3 E2's variant projects.** Three of `dms-vsense-test`'s four cases run
+the project with one edit, which `scripts/dms_vsense.sh` made in scratch
+copies: `load = "none"` on the VSYS_SENSE binding, C5 at 10 nF in the
+netlist, and both. A `bb test` case names a project, so they are committed
+projects, `examples/dial-me-spinner/e2/none`, `e2/c5` and `e2/c5-none`,
+written by `scripts/dms_e2_projects.py` from the project's own `bb.toml`
+(every binding and probe kept, the netlist path changed, no `[targets]`)
+and, for C5, from the vendored netlist with exactly that one edit;
+`--check` runs in `dms-vsense-test`, and their `board.bbm` and `bb.lock`
+are `bb open`'s (`PKG_BOARDS`, so `make packages` and `make locks` cover
+them). `e2/none`'s `board.bbm` is the project's byte for byte (`load` is a
+binding parameter, not board content). `make dms-vsense` keeps its scratch
+copies.
+
+**A5.4 `golden` and `reference`.**
+
+- A golden is a `sha256sum` file of a run without assertions (every
+  committed one). So `non-grant-records` is compared with the run's records
+  without the grant and the `assert` records: the assertions are passive
+  (A3.1), and the committed one-cell hashes hold for a case with
+  assertions. `nets.csv` and `nets.vcd` are compared as they are.
+  `events.jsonl`'s line is not compared (its grant records depend on the
+  partition) and `test.json` lists it as `not_checked`, as the scripts'
+  `nongrant` checks did.
+- `reference = true` is the one-cell run `--max-quantum <L> --lookahead
+  off`. Its records without the grant records (the `assert` records
+  included: B2 gated that they do not depend on the partition) must equal
+  the case's. "Consistency" (D8) is decided from the case's own grant
+  records: no grant longer than one lattice cell. The E2 references are
+  `--lookahead off --adc-push every`; their hashes are E2's goldens, so the
+  E2 file compares goldens and runs no reference.
+
+**A5.5 `test.json` (`bb-test-result/0`).** D8's content: per case the
+outcomes and values (each reported assertion's record: `t_fs`, `value`,
+`limit`, `unit`, `rung`, `msg`, with its expectation), the `run.json` hash
+and the output hashes, plus `firmware`, the run's status and the result of
+each comparison; at the top the file's name and sha256 and the failed
+cases. No wall time, path or host; an error message (which can carry a
+path) goes to `junit.xml` only.
+
+**A5.6 JUnit (D9).**
+
+- The reporter is **dorny/test-reporter v3.2.0** (commit
+  `d1b5dff021aa968b288b02285a8bf47471c5928a`), `reporter: java-junit`.
+  The prototype check D9 asks for runs the action's own parser
+  (`JavaJunitParser`) and report renderer (`getReport`), from its source at
+  that commit, in a `node:24` container (`scripts/junit_reporter_check.sh`,
+  in `make bb-test-gate`): on every `junit.xml` of the gate, the parser's
+  suites, testcases and counts equal what `bb test` wrote, and the report
+  renders naming every suite. `.github/workflows/ci.yml`'s `test` job runs
+  the action at the same commit on `out/dms-*-test/junit.xml` after `make
+  test` (with `checks: write`; skipped on a pull request from a fork, whose
+  token cannot create a check run). That step runs on GitHub only after a
+  push, which this build does not make (no publishing): it is unrun until
+  the human's next push, and the local run of the action's parser is the
+  check.
+- **Departures from D9's wording.** Every case has a `run` testcase (an
+  `error` when the run failed), because the parser drops a `testsuite`
+  without a `testcase`. `skipped` is for a `not_evaluable` outcome that was
+  expected; one that was not expected is a `failure` (type
+  `not_evaluable`), since it fails the exit status (D8). The `properties`
+  are D9's: `rung`, `fidelity`, `deck`, `board_bbm`, `firmware`,
+  `run_json`, and the provenance flags as `agent_generated` and
+  `unreviewed_views` (the views `bb run` flags until a person reviews them,
+  `spec/package.md` section 2; `run.json` carries no `reviewed_by` yet).
+- The subset is `spec/schema/junit-subset.xsd`; `scripts/check_bb_test.py`
+  validates every `junit.xml` with `xmllint` (`libxml2-utils`, added to
+  `make setup` and `make doctor`) and requires it to say what `test.json`
+  says.
+
+**A5.7 G9 is a file rule.** A case with an expected `fail` must report a
+`count` or `event` assertion expected to pass; otherwise `bb test` refuses
+the file before running anything, naming G9. E1's wrong-order controls
+report `EN-driven` and `DIN-driven` (`asserts/e1-run.toml`: the firmware
+switched LED_PWR_EN on and drove LED_DIN_MCU).
+
+**A5.8 The dms-* targets as `bb test` files, with the same outcomes.** Each
+target runs its file through `bb test` (on the pool `make` provides, or
+every Renode fresh with `POOL=0`), validates `test.json` and `junit.xml`,
+then runs on the same outputs what is not an assertion kind (D5, D10):
+
+| Target | In the `bb test` file | Still a script, on `bb test`'s outputs |
+| --- | --- | --- |
+| `dms-rail-test` (`tests/e1.toml`) | the four cases at bb's defaults; E1's four checks (`asserts/e1.toml`); the PIN_CNF audit (`PIN_CNF-audit`, `no-warn`) and the firmware's drive (`asserts/e1-run.toml`); wrong fails exactly LSW-3 (`expect`); the committed one-cell hashes (`golden`); ok-cold at analog-first byte-identical (`same_as`) | `check_dms_rail.py` (the D10 cross-check) and `check_asserts.py e1`; the VLED snapshots (implied by the golden's `nets.csv`, kept as a tolerance check); the convergence wall time (not deterministic); the two FW-6.4 negative controls (moved `pin_edge` records of a finished run) |
+| `dms-vsense-test` (`tests/e2.toml`) | s50, s50-none, c5, c5-none on the project and its variants; E2's codes in-run (`asserts/e2/<case>.toml`, record-only); the committed hashes (`golden`) | `dms_e2_projects.py --check`; `check_dms_vsense.py` (the analog side against `load = "none"`, the suite's charge-sharing arithmetic, C5 / 10) and `check_asserts.py e2`; `run.json`'s load records |
+| `dms-home-test` (`tests/e3.toml`) | step on `board-step.cir` and on the project `e3/step`; the step test's UART phases (`e3/asserts/step.toml`: each line present, the SETTLE time and microstep as `log` fields, no line saying fail); the committed one-cell hashes (`golden`); step at analog-first byte-identical (`same_as`) | the boards are the generator's output and the projects current; `check_dms_home.py --step` (the phases' order, every phase's step rate from the PWM edges, the step against the suite's microstep figures: no kind); `compare_project_run.py` (the documented name mapping) |
+
+Every check the Phase 1 targets made is still made, on the same runs, and
+gives the same verdict: `make dms-rail-test`, `dms-vsense-test` and
+`dms-home-test` pass, and every committed hash holds with the assertions on.
+The engine-order run of `dms-rail-test`, run after the four cases before,
+is now a case beside them.
+
+**A5.9 Gates (`make bb-test-gate`, `scripts/bb_test_gate.sh`).** bb test's
+semantics and negative controls on the Phase 0 boards (`tests/bb-test`:
+equivalence and consistency, an expected `not_evaluable`; an unexpected
+pass, a golden and a `same_as` mismatch and a refused run each failing for
+its own reason, exactly), the G9 refusal, ten runs of each dms-* test file
+with `test.json` byte-identical (G4; the tenth with every Renode fresh, so
+`test.json` does not depend on leasing), `check_bb_test.py` on every run,
+and the JUnit reporter on every `junit.xml` (G5). Measured:
+`make bb-test-gate` passes in 860 s pooled, beside other tracks (load
+6-18): the reference kinds as stated, the four negative controls failing
+exactly, G9 refused, `test.json` byte-identical over ten runs of each file
+(E1 `c433561e…`, E2 `3be4e89f…`, E3 `7416aa13…`, the tenth fresh), and the
+reporter's parser reading all five `junit.xml` files (14, 11, 60, 42 and 30
+testcases; 4 failed and 1 skipped where `bb test` wrote them).
+
+**A5.10 Budget (+0 s, "replaces scripts").** `make bb-test-cost` (measurement lock;
+`scripts/bb_test_cost.sh`), the three targets against their Phase 1
+scripted runs on one 5-slot pool, interleaved, N = 3, medians: dms-rail-test
+25.5 s scripted against 11.2 s as a `bb test` file (its five runs now in
+parallel), dms-vsense-test 46.7 s against 48.5 s, dms-home-test 53.9 s
+against 48.5 s; the sum 122.6 s against 108.2 s, **-14.4 s**. The host was
+not idle (other tracks' gates; load 12-19 over the rounds), so the numbers are
+to be re-measured idle with `make baseline` (H6); the sign holds in every
+round. In a pooled `make check` (1045 s, load 9-15) the steps took 4.6 s,
+30.3 s and 36.0 s.
+
+**A5.11 Not changed.** No engine, no kernel record and no output of `bb
+run` changes; the Phase 1 scripts' scratch-copy runs stay in `make
+dms-rail`, `make dms-vsense` and `make dms-home` (and as `scripts/dms_<x>.sh
+test-scripted`). The ported scripts stay one milestone as the cross-check
+(D10), so B3 deletes none of them.

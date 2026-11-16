@@ -35,6 +35,8 @@ if [ "${MODE}" != demo ]; then
   # The registry tests' throwaway keys and certificate (make registry-test, ADR-011).
   check minisign         minisign -v
   check openssl          openssl version
+  # bb test's junit.xml against spec/schema/junit-subset.xsd (milestone B3, ADR-010 D9).
+  check xmllint          sh -c 'xmllint --version 2>&1 | head -1'
 fi
 check bb               sh -c 'command -v bb'
 check pkg-config       pkg-config --version

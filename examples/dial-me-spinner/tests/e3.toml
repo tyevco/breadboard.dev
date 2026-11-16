@@ -1,0 +1,43 @@
+# examples/dial-me-spinner/tests/e3.toml: make dms-home-test as a bb test file (Phase 2 B3, ADR-010
+# D8-D10, Amendment 5). E3's step case (Phase 1 M10, ADR-008 Amendments 9-12): homing_step.elf, one
+# full step at 446 PPS mid-stroke, 45 ms at 1 MHz samples, on the board file ../e3/board-step.cir and
+# on the project route ../e3/step (Phase 2 R1), at bb's defaults (on E3 one-cell grants: one
+# partition, ADR-008 Amendment 12).
+#   - The step test's UART phases (../e3/asserts/step.toml), in-run.
+#   - Each case's committed one-cell hashes (tests/golden/dms-home: nets.csv, nets.vcd and the non-
+#     grant records without the assert records).
+#   - step with --engine-order analog-first byte-identical to step.
+# scripts/dms_home.sh test runs it, then on the same outputs what is not a kind: the board files are
+# the generator's output and the projects current, check_dms_home.py --step (the phases' order, every
+# phase's step rate from the PWM edges, the step against the suite's microstep figures) and
+# compare_project_run.py (project-step against step after the documented name mapping).
+schema = "bb-test/0"
+board = "../e3/board-step.cir"
+
+[defaults]
+for = "45ms"
+sample_rate = "1MHz"
+assert_files = ["../e3/asserts/step.toml"]
+
+[[case]]
+name = "step"
+targets = { "U10" = "../firmware/prebuilt/homing_step.elf" }
+probes = ["VSYS", "HOME_N", "MOT_NSLEEP", "U10.P0.26", "U10.P0.05", "U10.P0.07", "U10.P0.11", "U10.P1.15",
+          "M1.HOME_N", "MOT_A_OUT1", "COILA_L", "MOT_B_OUT1", "COILB_L", "NB_VBAT", "NB_VSYS"]
+golden = "../../../tests/golden/dms-home/step/outputs.sha256"
+
+[[case]]
+name = "step-order"
+targets = { "U10" = "../firmware/prebuilt/homing_step.elf" }
+probes = ["VSYS", "HOME_N", "MOT_NSLEEP", "U10.P0.26", "U10.P0.05", "U10.P0.07", "U10.P0.11", "U10.P1.15",
+          "M1.HOME_N", "MOT_A_OUT1", "COILA_L", "MOT_B_OUT1", "COILB_L", "NB_VBAT", "NB_VSYS"]
+engine_order = "analog-first"
+same_as = "step"
+
+# The project route (R1): the imported main board, M1 a virtual [[device]]; its firmware is the
+# project's [targets] (homing_step.elf) and its probes the project's [probes].
+[[case]]
+name = "project-step"
+project = "../e3/step"
+bench = "../e3/step/bench.toml"
+golden = "../../../tests/golden/dms-home/project-step/outputs.sha256"

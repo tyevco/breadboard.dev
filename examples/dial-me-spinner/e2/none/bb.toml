@@ -1,0 +1,60 @@
+# examples/dial-me-spinner/e2/none/bb.toml: WRITTEN by scripts/dms_e2_projects.py from
+# ../../bb.toml (do not edit; `scripts/dms_e2_projects.py --check` in make dms-vsense-test).
+# E2's variant none for bb test (tests/e2.toml; Phase 2 B3, ADR-010 Amendment 5): load = "none" on the VSYS_SENSE binding (the unloaded reference).
+# No [targets]: each bb test case gives its image (--image).
+schema = "bb-project/1"
+
+[project]
+name = "dial-me-spinner rev A: E2 none"
+simulate = "main"
+
+[[board]]
+id = "main"
+netlist = "../../kicad/main/dial-me-spinner-main.net"
+ground = "GND"
+
+# J11 is two solder pads for the NFC coil's flex tail: no MPN, no LCSC and
+# no generic footprint, so resolution needs a decision (ADR-007 D4).
+[instances."main:J11"]
+package = "none"
+reason = "NFC coil pads: no RF model in Phase 1"
+
+# LED_PWR_EN: a plain GPIO output (dial-me-spinner docs/firmware.md section 1.3), so
+# PIN_CNF's reset drive, S0S1 (200 Ohm at the PS's 2 mA column).
+[[bind]]
+pin = "main:U10.P1.04"
+model = "digital_out"
+set = "S0S1"
+net = "LED_PWR_EN"
+
+# LED_DIN_MCU: high drive is required (firmware.md section 1.3); the suite's E1
+# decks use the strongest pad of the PS's H0H1 column (28.6 Ohm, ADR-006
+# Amendment 3 item 5a), the worst case for DIN over VLED.
+[[bind]]
+pin = "main:U10.P0.06"
+model = "digital_out"
+set = "H0H1_max"
+net = "LED_DIN_MCU"
+
+# E2 (Phase 1 plan section 2 E2, M8; ADR-008 D7): VSYS_SENSE (R1 2.2 MOhm over R2 1 MOhm, C5 100 nF)
+# on AIN0 = P0.02, read by firmware/prebuilt/vsense.elf through Breadboard's SAADC. The package's
+# adc_in set (nordic/nrf52840-qiaa): the loading input, pin_load view saadc_se (CPAD 3 pF, CS 2.5 pF
+# pre-charged to VPRE = VDD at every acquisition, one charge transfer per acquisition). Every sample
+# is a debug log record (the analog-side observable of E2). The E1 firmware never starts the SAADC,
+# so these two bindings load VSYS_SENSE (CPAD + CS) and nothing else in E1.
+[[bind]]
+pin = "main:U10.P0.02"
+model = "adc_in"
+net = "VSYS_SENSE"
+load = "none"
+trace_samples = true
+
+# The SAADC's VDD input (PSELP = VDD, REFSEL = VDD1_4) and saadc_se's VPRE: +3V3 on U10's VDD pad.
+# vref is the clamp of the pushed value.
+[[bind]]
+pin = "main:U10.VDD"
+model = "adc_in"
+vref = "3.6V"
+
+[probes]
+nets = ["VLED", "LED_DIN", "LED_DIN_MCU", "LED_DIN_R", "VSYS"]

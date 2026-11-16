@@ -9,14 +9,21 @@
 # project is never written). The board is acyclic (the MCU drives, nothing reads back), so its
 # one-cell reference is --max-quantum 10us.
 #
-#   scripts/dms_rail.sh test <bb> <out>     the part in `make test`: every case at bb's defaults,
-#                                           check_dms_rail.py (ok passes; wrong fails exactly LSW-3),
-#                                           the committed one-cell hashes (non-grant records, nets.csv,
-#                                           nets.vcd), the VLED snapshots, a clean PIN_CNF audit, and
-#                                           --engine-order analog-first byte-identical on ok-cold, and
-#                                           check_dms_rail.py's two FW-6.4 negative controls (ok-cold's
-#                                           pin_edge records moved; each fails exactly FW-6.4)
-#   scripts/dms_rail.sh gate <bb> <out>     the M6 gate (make dms-rail): `test`, plus every case's
+#   scripts/dms_rail.sh test <bb> <out>     the part in `make test` (since milestone B3 a bb test file,
+#                                           examples/dial-me-spinner/tests/e1.toml, ADR-010 D8): every
+#                                           case at bb's defaults with the E1 assertions (ok passes;
+#                                           wrong fails exactly LSW-3), a clean PIN_CNF audit, the
+#                                           committed one-cell hashes (non-grant records, nets.csv,
+#                                           nets.vcd) and --engine-order analog-first byte-identical on
+#                                           ok-cold, all in bb test; test.json and junit.xml against
+#                                           the spec (scripts/check_bb_test.py); then on its outputs
+#                                           check_dms_rail.py (the cross-check of ADR-010 D10) and
+#                                           check_asserts.py e1, the VLED snapshots, the convergence
+#                                           wall time, and check_dms_rail.py's two FW-6.4 negative
+#                                           controls (ok-cold's pin_edge records moved; each fails
+#                                           exactly FW-6.4)
+#   scripts/dms_rail.sh gate <bb> <out>     the M6 gate (make dms-rail): the scripted test (every case
+#                                           run by this script), plus every case's
 #                                           one-cell reference run (equal to the default run except
 #                                           grant records, and to the committed hashes, grant records
 #                                           included), analog-first on every case, the board-level
@@ -173,7 +180,39 @@ EOF
   done
 }
 
+# make dms-rail-test since milestone B3 (ADR-010 D8-D10): tests/e1.toml through bb test, then what is
+# not an assertion kind on its outputs. BB_TEST_JOBS (default 5) runs at a time; bb test uses the pool
+# in BB_RENODE_POOL when make provides one (POOL=0: every Renode fresh).
 do_test() { # <bb> <out>
+  local bb=$1 out=$2 c
+  if "$bb" test "$PROJ/tests/e1.toml" --out "$out" --jobs "${BB_TEST_JOBS:-5}" --pool env > "$out/bb-test.log" 2>&1; then
+    pass "bb test tests/e1.toml: every outcome as expected ($(grep -c '^bb test: PASS ' "$out/bb-test.log") cases: the E1 assertions, wrong fails exactly LSW-3, the PIN_CNF audit, the committed hashes, analog-first byte-identical)"
+  else
+    fail "bb test tests/e1.toml"
+  fi
+  grep '^bb test: \(PASS\|FAIL\)\|^bb test:   ' "$out/bb-test.log" | sed 's/^/    /'
+  if "$PY" "$ROOT/scripts/check_bb_test.py" "$out" > "$out/check_bb_test.txt"; then
+    pass "test.json and junit.xml against spec/test.md ($(grep -c '^check_bb_test: ok' "$out/check_bb_test.txt") checks)"
+  else
+    fail "check_bb_test.py"; grep -v '^check_bb_test: ok' "$out/check_bb_test.txt"
+  fi
+  for c in "${CASES[@]}"; do
+    [[ -f $out/$c/events.jsonl ]] || { fail "$c: no outputs"; continue; }
+    checks "$out/$c" "$c"
+    if "$PY" "$ROOT/scripts/check_asserts.py" e1 "$out/$c" "$out/$c/checks.json" > "$out/$c/check_asserts.txt"; then
+      pass "$c: the assertions against check_dms_rail.py ($(grep -c '^check_asserts: ok' "$out/$c/check_asserts.txt") comparisons)"
+    else
+      fail "$c: check_asserts.py e1"; grep -v '^check_asserts: ok' "$out/$c/check_asserts.txt"
+    fi
+    snapshots "$out/$c" "$c"
+    converged "$out/$c" "$c (mcu-first)"
+  done
+  [[ -d $out/ok-cold-order ]] && converged "$out/ok-cold-order" "ok-cold (analog-first)"
+  fw_rule_controls "$out"
+}
+
+# The Phase 1 test, every case run by this script: make dms-rail's first part.
+do_test_scripted() { # <bb> <out>
   local bb=$1 out=$2 c
   prepare "$bb"
   for c in "${CASES[@]}"; do
@@ -202,7 +241,7 @@ do_ref() { # <bb> <out>
 
 do_gate() { # <bb> <out>
   local bb=$1 out=$2 c
-  do_test "$bb" "$out"
+  do_test_scripted "$bb" "$out"
   do_ref "$bb" "$out"
   for c in "${CASES[@]}"; do
     [[ -d $out/$c-ref ]] || continue
@@ -270,6 +309,7 @@ OUT=$2
 rm -rf "$OUT" && mkdir -p "$OUT"
 case $MODE in
   test) do_test "$BB" "$OUT" ;;
+  test-scripted) do_test_scripted "$BB" "$OUT" ;;
   gate) do_gate "$BB" "$OUT" ;;
   ref) prepare "$BB"; do_ref "$BB" "$OUT" ;;
   *) sed -n '2,30p' "$0"; exit 2 ;;
