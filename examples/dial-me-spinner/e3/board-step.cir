@@ -127,8 +127,8 @@ R1 VSYS VSYS_SENSE 2.2Meg
 R2 VSYS_SENSE 0 1Meg
 C5 VSYS_SENSE 0 100n
 * ---- the detent sheet: U40 (coil A), U41 (coil B), R70, J40's coils
-XU40 VSYS P3V3 MOT_A_IN1 MOT_A_IN2 MOT_NSLEEP MOT_A_OUT1 MOT_A_OUT2 0 DRV8837_BRIDGE params: rds=0.33 temp_c=25 twake=30u
-XU41 VSYS P3V3 MOT_B_IN1 MOT_B_IN2 MOT_NSLEEP MOT_B_OUT1 MOT_B_OUT2 0 DRV8837_BRIDGE params: rds=0.33 temp_c=25 twake=30u
+XU40 VSYS P3V3 MOT_A_IN1 MOT_A_IN2 MOT_NSLEEP MOT_A_OUT1 MOT_A_OUT2 0 TI_DRV8837_BRIDGE params: rds=0.33 temp_c=25 twake=30u
+XU41 VSYS P3V3 MOT_B_IN1 MOT_B_IN2 MOT_NSLEEP MOT_B_OUT1 MOT_B_OUT2 0 TI_DRV8837_BRIDGE params: rds=0.33 temp_c=25 twake=30u
 R70 MOT_NSLEEP 0 100k
 RCOILA MOT_A_OUT1 COILA_L 20
 RCOILB MOT_B_OUT1 COILB_L 20
@@ -187,9 +187,9 @@ BEMFB COILB_E MOT_B_OUT2 V = (time > 0.011972875 && time < 0.014492875) ? 0.6110
 * Ports: VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP (the package's pin names VM VCC IN1 IN2 nSLEEP OUT1 OUT2
 *   GND; GND is renamed GNDP, the gnd rule of spec/package.md section 5).
 * =====================================================================================================
-.model drv8837_bridge_body D(IS=1e-12 N=1.2 RS=0.05)
+.model TI_DRV8837_BRIDGE_BODY D(IS=1e-12 N=1.2 RS=0.05)
 
-.subckt DRV8837_BRIDGE VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP
+.subckt TI_DRV8837_BRIDGE VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP
 + params: rds=0.28 temp_c=25 tc_hot=0.0032 tc_cold=0.0005 vih_k=0.46 vil_k=0.38 rpd=100k
 + twake=30u ivm_on=0.8m ivcc_on=0.7m
 .param rdst = {rds*(1 + (temp_c > 25 ? tc_hot : tc_cold)*(temp_c - 25))}
@@ -220,16 +220,16 @@ B_LS1 OUT1 GNDP I = gleg*V(drv_en,GNDP)*V(drv_l2,GNDP)*V(OUT1,GNDP)
 B_HS2 VM OUT2 I = gleg*V(drv_en,GNDP)*V(drv_l2,GNDP)*(1 - V(drv_l1,GNDP))*V(VM,OUT2)
 B_LS2 OUT2 GNDP I = gleg*V(drv_en,GNDP)*V(drv_l1,GNDP)*V(OUT2,GNDP)
 * ---- body diodes (no capacitance, no transit time) and off-state leakage
-D_H1 OUT1 VM drv8837_bridge_body
-D_L1 GNDP OUT1 drv8837_bridge_body
-D_H2 OUT2 VM drv8837_bridge_body
-D_L2 GNDP OUT2 drv8837_bridge_body
+D_H1 OUT1 VM TI_DRV8837_BRIDGE_BODY
+D_L1 GNDP OUT1 TI_DRV8837_BRIDGE_BODY
+D_H2 OUT2 VM TI_DRV8837_BRIDGE_BODY
+D_L2 GNDP OUT2 TI_DRV8837_BRIDGE_BODY
 R_OF1 OUT1 GNDP 100Meg
 R_OF2 OUT2 GNDP 100Meg
 * ---- supply currents
 B_IVM VM GNDP I = ivm_on*V(drv_en,GNDP) + 30n*(1 - V(drv_en,GNDP))
 B_IVC VCC GNDP I = ivcc_on*V(drv_en,GNDP) + 5n*(1 - V(drv_en,GNDP))
-.ends DRV8837_BRIDGE
+.ends TI_DRV8837_BRIDGE
 
 * phase0 (spec/package.md section 8), the set ti/drv8837:bridge is qualified at.
 .options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13

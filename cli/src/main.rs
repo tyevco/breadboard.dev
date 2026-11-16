@@ -113,7 +113,8 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
   --elaborate-only
                  a project: elaborate (checks, deck, probes) and write
                  <out>/deck.cir and run.json, then stop without starting any
-                 engine
+                 engine; a board file: write the analog engine's netlist as
+                 <out>/deck.cir, then stop
   --allow-unqualified
                  run a view that is not lattice-qualified for (lattice, option
                  set) (ADR-006 D6; recorded in run.json). Repeatable
@@ -813,6 +814,12 @@ fn load_deck(board: &board::Board, loads: &[LoadGlue]) -> Result<String, String>
                 Port::Pin(n) => {
                     return Err(format!("{}: a circuit port {n} in a pin_load view", l.view))
                 }
+                Port::State { state } => {
+                    return Err(format!(
+                        "{}: a supply_load state port #{state} in a pin_load view",
+                        l.view
+                    ))
+                }
             });
         }
         let params: String = v
@@ -850,11 +857,9 @@ fn run(a: RunArgs) -> Result<(), String> {
     // Two front ends, one run plan (ADR-007 D9): a Phase 0 board file, or a
     // project's board.bbm elaborated with its bench and bindings.
     let fe = front_end(&a)?;
-    if a.elaborate_only {
-        let rj = fe
-            .run_json
-            .clone()
-            .ok_or("--elaborate-only is for projects (not --netlist)")?;
+    // A project's elaboration: deck.cir and run.json. (A board file's is
+    // below, once the analog engine's netlist is assembled.)
+    if let (true, Some(rj)) = (a.elaborate_only, fe.run_json.clone()) {
         fs::create_dir_all(&a.out).map_err(|e| format!("create {}: {e}", a.out.display()))?;
         fs::write(a.out.join("deck.cir"), &fe.board.spice)
             .map_err(|e| format!("write deck.cir: {e}"))?;
@@ -1280,6 +1285,18 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
 
     fs::create_dir_all(&a.out).map_err(|e| format!("create {}: {e}", a.out.display()))?;
+    if a.elaborate_only {
+        // A board file's elaboration (milestone S's deck gate): the netlist
+        // the analog engine would read (the board's SPICE, its package
+        // views and the glue), and no engine starts.
+        fs::write(a.out.join("deck.cir"), &ncfg.netlist)
+            .map_err(|e| format!("write deck.cir: {e}"))?;
+        println!(
+            "bb run: elaborated (no engine started): the analog netlist in {}",
+            a.out.join("deck.cir").display()
+        );
+        return Ok(());
+    }
     if fe.run_json.is_some() {
         // A project's elaborated deck, for review (its sha256 is in run.json).
         fs::write(a.out.join("deck.cir"), &board.spice)
@@ -1786,6 +1803,9 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         eprintln!("bb run: warning: {h}");
     }
     let lock = bbpkg::lock::Lock::read(&dir.join("bb.lock"), &bbpkg::schema::Registry::current())?;
+    if let Some(h) = lock.as_ref().and_then(bbpkg::lock::Lock::hint) {
+        eprintln!("bb run: warning: {h}");
+    }
     let imp = import::import(&p, import::Mode::Run, lock.as_ref())?;
     for w in &imp.warnings {
         eprintln!("bb run: warning: {w}");

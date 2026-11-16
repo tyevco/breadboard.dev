@@ -18,7 +18,7 @@
 #             t0 = 11 972 875 000 000 fs, 9 microsteps of 280 us), so it is that test's fixture, as
 #             board-step.cir's BEMFA/BEMFB lines are: scripts/check_dms_home.py requires the run's
 #             PWM edges to start the step at t0.
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "dial-me-spinner/detent-stepper"

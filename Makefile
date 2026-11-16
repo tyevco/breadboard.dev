@@ -991,12 +991,15 @@ BENCH_GOLD := tests/golden/bench
 
 # ADR-006 G1 and the package gates of `make test`: every part.toml, pins.toml,
 # test vector and bb.lock validates against spec/schema (python3-jsonschema);
-# `bb pkg lint` is clean; every vector passes through NgspiceEngine at both
-# grant partitions and at every recorded qualification (`bb pkg test`); and
-# every example's bb.lock is current (`bb open --check`).
+# `bb pkg lint` is clean, for the first-party packages with --publish (the
+# view-name rule of ADR-011 D11 an error: gate G10); every vector passes
+# through NgspiceEngine at both grant partitions and at every recorded
+# qualification (`bb pkg test`); and every example's bb.lock is current
+# (`bb open --check`).
 packages: bb
 	$(PYTHON) scripts/validate_packages.py
-	$(BB) pkg lint packages $(PKG_LOCAL)
+	$(BB) pkg lint --publish packages
+	$(BB) pkg lint $(PKG_LOCAL)
 	$(BB) pkg test packages $(PKG_LOCAL)
 	set -e; for b in $(PKG_BOARDS); do $(BB) open --check $$b; done
 	bash scripts/check_local_only.sh
@@ -1231,7 +1234,8 @@ dms-home-rss: firmware bb
 # After an intended change to a package, a platform's .repl or a Renode
 # plugin source the platform declares: rewrite the changed bb.lock entries
 # (review, then commit). A platform's hash covers its .repl and its declared
-# plugin sources only (ADR-015 D6); a legacy entry that still matches is kept.
+# plugin sources only (ADR-015 D6). A bb-lock/0 file is rewritten as
+# bb-lock/1, its legacy platform hashes as the scoped ones (ADR-011 D5).
 locks: bb
 	set -e; for b in $(PKG_BOARDS); do $(BB) open --update-lock $$b; done
 
@@ -1243,13 +1247,26 @@ locks: bb
 # (engines/cpu-renode/tests/plugin_scope.rs).
 plugin-scope:
 	BB_REQUIRE_RENODE=1 $(CARGO) test -p bb-cpu-renode --test plugin_scope -- --ignored --nocapture
-# lock-scope (G5 end to end, about 1-2 min: a second bb is built): a bb with
+# lock-scope (G5 end to end, about 1 min: a second bb is built): a bb with
 # one edit to bb_nrf52_saadc.cs on scratch copies of every board and
-# project, relocked under the D6 rule, changes no STM32 lock and exactly the
-# nRF52840 platform of every nRF lock; the committed (legacy) locks all
-# change under it, which is the churn S's relock removes (scripts/lock_scope.sh).
+# project (the committed locks, which milestone S relocked under the D6 rule:
+# a stock relock of each copy gives them byte for byte) changes no STM32 lock
+# and exactly the nRF52840 platform of every nRF lock (scripts/lock_scope.sh).
 lock-scope: bb
 	bash scripts/lock_scope.sh $(BB) $(PKG_BOARDS)
+
+# --- Phase 2 S: the schema epoch (ADR-009..013) ------------------------------
+# schema-epoch (about 3-5 min, most of it building the base commit's bb; not
+# in make test): every committed board file and every project with each of its
+# benches elaborates (`bb run --elaborate-only`) to the same deck from the base
+# commit's tree and from this one: the base bb and this bb on the base tree
+# byte for byte, and this bb on the base tree and on this tree byte for byte up
+# to the first-party view renames of ADR-011 D11 (scripts/schema_epoch.sh,
+# scripts/schema_epoch_decks.py). EPOCH_BASE is main before the epoch.
+EPOCH_BASE ?= 61a3845
+.PHONY: schema-epoch
+schema-epoch: firmware bb
+	bash scripts/schema_epoch.sh $(BB) $(EPOCH_BASE) out/schema-epoch
 
 # ADR-006 G3: bb's KiCad value parser against the suite's spicelib on the 29
 # distinct passive values of the dial-me-spinner main board (with DMS_REPO

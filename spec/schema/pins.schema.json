@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/pins.schema.json",
-  "title": "bb-pins/0: a component package's pins.toml (spec/package.md, ADR-006 D4)",
+  "title": "bb-pins/0 and bb-pins/1: a component package's pins.toml (spec/package.md, ADR-006 D4, ADR-009 D3, D5)",
+  "description": "bb-pins/1 (the Phase 2 schema epoch, milestone S) keeps every bb-pins/0 key and its meaning and adds limits (ADR-009 D3) and the digital_out parameters rail and rhiz (ADR-009 D5), accepted and inert until milestones P1 and P2 use them. The pin model name power is reserved (ADR-009 D3). A bb-pins/0 file has none of the bb-pins/1 keys.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "pin"],
   "properties": {
-    "schema": { "const": "bb-pins/0" },
+    "schema": { "enum": ["bb-pins/0", "bb-pins/1"] },
     "pin": {
       "type": "array",
       "minItems": 1,
@@ -38,13 +39,50 @@
         "digital_in": { "type": "object", "additionalProperties": { "$ref": "#/$defs/digital_in" } },
         "adc_in": { "type": "object", "additionalProperties": { "$ref": "#/$defs/adc_in" } }
       }
+    },
+    "limits": {
+      "description": "bb-pins/1 (ADR-009 D3): relational limits for absolute maximum ratings; a bound is <value>, <pin> + <value> or <pin> - <value>.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pin", "source"],
+        "anyOf": [{ "required": ["min"] }, { "required": ["max"] }],
+        "properties": {
+          "pin": { "type": "string", "minLength": 1 },
+          "min": { "$ref": "#/$defs/bound" },
+          "max": { "$ref": "#/$defs/bound" },
+          "source": { "type": "string", "minLength": 1 }
+        }
+      }
     }
   },
+  "allOf": [
+    {
+      "description": "A bb-pins/0 file has none of the bb-pins/1 keys.",
+      "if": { "properties": { "schema": { "const": "bb-pins/0" } } },
+      "then": {
+        "not": { "required": ["limits"] },
+        "properties": {
+          "defaults": {
+            "properties": {
+              "digital_out": { "additionalProperties": { "not": { "anyOf": [{ "required": ["rail"] }, { "required": ["rhiz"] }] } } }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "value": {
       "description": "A number with an optional SI prefix and unit (spec/package.md, Values), or for a voltage a supply pin name optionally scaled (VDD, 0.7*VDD).",
       "type": "string",
       "minLength": 1
+    },
+    "bound": {
+      "description": "<value>, <pin> + <value> or <pin> - <value> (one supply-plus-offset term, no general expressions; ADR-009 D3).",
+      "type": "string",
+      "pattern": "^([+-]?[0-9.]\\S*|[A-Za-z][A-Za-z0-9_.+-]*( [+-] [+-]?[0-9.]\\S*)?)$"
     },
     "digital_out": {
       "type": "object",
@@ -55,7 +93,9 @@
         "vol": { "$ref": "#/$defs/value" },
         "rise": { "$ref": "#/$defs/value" },
         "fall": { "$ref": "#/$defs/value" },
-        "zout": { "$ref": "#/$defs/value" }
+        "zout": { "$ref": "#/$defs/value" },
+        "rail": { "type": "string", "minLength": 1, "description": "bb-pins/1 (ADR-009 D5): the supply pin a pi output drives from (default [power] io_rail)." },
+        "rhiz": { "$ref": "#/$defs/value", "description": "bb-pins/1 (ADR-009 D5): the high-Z leakage resistance (default 100Meg)." }
       }
     },
     "digital_in": {

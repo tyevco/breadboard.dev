@@ -1,8 +1,16 @@
 # Event stream (`events.jsonl`)
 
-Status: normative, schema version 1 (ADR-003 D3/D4, plan step 3; version 0
-was Phase 0). Implementation: `bbcore::event`. Changing a record's fields,
-their order, or their meaning requires an ADR.
+Status: normative, schema version 2 (ADR-009 D7 and ADR-010 D7, landed with
+the Phase 2 schema epoch, milestone S; version 1 was ADR-003 D3/D4, version
+0 Phase 0). Implementation: `bbcore::event` (`EVENT_STREAM_VERSION`).
+Changing a record's fields, their order, or their meaning requires an ADR.
+
+Version 2 adds the `reset` record and gives `assert` its version 2 keys
+(`outcome`, `value`, `limit`, `unit`, `rung`). No other record changes,
+and the stream carries no version field, so every version 1 file is a
+version 2 file. Nothing in this build emits `reset` (milestone P5) or
+`assert` (milestone B2); their shapes are fixed here so that the
+milestones that emit them do not change the format again.
 
 Net names (ADR-007 D6, Phase 1 M4): `net` in `pin_edge` and `net_sample`
 is the net's **display name** (a project's KiCad net name, or the kernel
@@ -104,18 +112,44 @@ A line from an engine (for example firmware UART) or from the kernel.
 {"type":"log","t_fs":1000000000000,"source":"renode","level":"info","msg":"boot ok"}
 ```
 
-### `assert`
-Result of a check. Benches and tests emit it; the scheduler does not.
+### `assert` (version 2)
+Result of a check (ADR-010 D5-D7): an assertion of a bench or a test case,
+evaluated deterministically. The scheduler itself never emits one; the
+kernel emits the verdict at the verdict time, after the `net_sample`
+records of equal `t_fs` (the kernel's records come last). It is part of
+the non-grant equivalence comparison.
 
 | key | type | meaning |
 | --- | --- | --- |
-| `t_fs` | int | sim time the check refers to |
+| `t_fs` | int | sim time of the verdict |
 | `name` | string | stable check identifier |
-| `pass` | bool | outcome |
+| `outcome` | string | `pass`, `fail` or `not_evaluable` |
+| `pass` | bool, optional | the outcome as version 1 read it: present unless `not_evaluable` |
+| `value` | int, optional | the measured value, an integer in the base unit `unit` |
+| `limit` | int, optional | the limit it was compared with, in the same unit |
+| `unit` | string, optional | the base unit: `uV`, `fs`, `nA`, `udegC` (µ°C) or `count`, so the stream stays free of floats |
+| `rung` | string | the lowest chosen fidelity rung over the in-scope instances with a port on a net the check reads (ADR-009 D1) |
 | `msg` | string | human-readable detail |
 
 ```json
-{"type":"assert","t_fs":500000000000000,"name":"led_blink_period","pass":true,"msg":"50.00 ms"}
+{"type":"assert","t_fs":10500000000000000,"name":"LED-DATA-V4","outcome":"pass","pass":true,"value":2971511,"limit":2670000,"unit":"uV","rung":"fast","msg":"VLED at P0.06 rise"}
+```
+
+### `reset` (version 2)
+A machine reset of a CPU engine (ADR-009 D7): a brown-out holds the
+machine in reset while `#bor` is high and releases it at `ceil_L` of its
+fall. It sorts like a `log` record of its engine.
+
+| key | type | meaning |
+| --- | --- | --- |
+| `t_fs` | int | the reset's sim time |
+| `source` | string | the CPU engine's name |
+| `cause` | string | `bor` |
+| `phase` | string | `enter`, `exit`, or `stop` (the run ends at the reset, ADR-009 D7's fallback) |
+| `ram` | string, optional | on `exit`: `kept` (RAM survives a brown-out deterministically) |
+
+```json
+{"type":"reset","t_fs":10000000000,"source":"renode","cause":"bor","phase":"exit","ram":"kept"}
 ```
 
 ## Companion outputs (not part of this stream)

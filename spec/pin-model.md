@@ -45,11 +45,11 @@ enum PinSignal {
 
 | Model | Parameters | Phase 0 use |
 | --- | --- | --- |
-| `digital_out` | `voh` V, `vol` V, `rise` Time, `fall` Time, `zout` Ω | **yes** (STM32 PA5) |
+| `digital_out` | `voh` V, `vol` V, `rise` Time, `fall` Time, `zout` Ω; optional `rail` (a supply pin) and `rhiz` Ω (`bb-pins/1`, ADR-009 D5: the `pi` glue of milestone P2; unused at `fast`) | **yes** (STM32 PA5) |
 | `digital_in` | `vih` V, `vil` V, `cin` F | **yes** (STM32 PB0 in `examples/feedback`) |
 | `adc_in` | `vref` V, `bits`; `model`, `load` (ADR-008 D7) | **yes** (STM32F072 PA1, ADC channel 1, in `examples/adc`; nRF52840 AIN0 in `examples/nrf-saadc`) |
 | `analog` | none; bidirectional node, exchanged as volts | not yet (as a probe target only) |
-| `power` | `vmin` V, `vmax` V, `imax` A | not yet |
+| `power` | `vmin` V, `vmax` V, `imax` A | not yet: the name is reserved in `bb-pins/1` (refused as a model until milestone P1 defines it, ADR-009 D3) |
 | `passive` | none; exists only inside the analog engine (R, C, LED...) | **yes** (330 Ω, LED) |
 
 ### `digital_out{voh, vol, rise, fall, zout}`

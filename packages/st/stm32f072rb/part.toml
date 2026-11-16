@@ -1,5 +1,5 @@
 # st/stm32f072rb: the Phase 0 ADC board's MCU (ADR-006 D10, ADR-005).
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "st/stm32f072rb"

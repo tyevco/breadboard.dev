@@ -60,7 +60,7 @@
 * Ports: CT GNDP ON QOD VIN VOUT (the package's pin names CT GND ON QOD VIN VOUT; GND is renamed GNDP, the
 *   gnd rule of spec/package.md section 5).
 * =====================================================================================================
-.subckt TPS22917_LSW_FIT CT GNDP ON QOD VIN VOUT params: ron_add=0 isd_out=0
+.subckt TI_TPS22917_LSW_FIT CT GNDP ON QOD VIN VOUT params: ron_add=0 isd_out=0
 * ---- enable: comparator with hysteresis, then a 2 us RC
 B_ONT    lsf_ont GNDP V = 0.5 + 0.5*tanh((V(ON,GNDP) - 0.68 + 0.05*V(lsf_en,GNDP))/0.005)
 R_EN     lsf_ont lsf_en 2k
@@ -90,4 +90,4 @@ R_QODL   QOD VOUT 1G
 * ---- supply current, and the optional disabled-state leakage to VOUT
 B_IQ     VIN GNDP I = (0.5u*V(lsf_en,GNDP) + 5n*(1 - V(lsf_en,GNDP))) * min(1, max(0, V(VIN,GNDP)))
 B_ISD    VIN VOUT I = {isd_out} * (1 - V(lsf_en,GNDP))
-.ends TPS22917_LSW_FIT
+.ends TI_TPS22917_LSW_FIT

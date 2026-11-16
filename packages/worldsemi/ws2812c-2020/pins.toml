@@ -2,7 +2,7 @@
 # 1 DO, 2 GND, 3 DI, 4 VDD) and KiCad 10.0.8's LED:WS2812B-2020 (DOUT, VSS, DIN, VDD) give them (checked
 # with scripts/check_pins_kicad.py; KiCad's names are the ones a netlist carries, ADR-007 D3). No pin is
 # bound to a co-simulation engine: the part is an analog view only.
-schema = "bb-pins/0"
+schema = "bb-pins/1"
 
 [[pin]]
 number = "1"

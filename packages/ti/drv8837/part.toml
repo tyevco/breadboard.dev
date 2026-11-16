@@ -7,7 +7,7 @@
 # transients) is not migrated: it runs at about 1.75 s of wall time per simulated ms (plan section 2
 # E3). The vectors reproduce the suite's test_drv8837_model_matches_datasheet and the nSLEEP wake of
 # test_nsleep_wake against examples/dial-me-spinner/suite/results.json (6854d25).
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "ti/drv8837"
@@ -32,7 +32,7 @@ purpose = "E3's microstep drive: ideal-switch H-bridge (Table 7-1) with rDS(on) 
 fidelity = ["fast"]
 default_for = ["fast"]
 file = "analog/bridge.lib"
-subckt = "DRV8837_BRIDGE"
+subckt = "TI_DRV8837_BRIDGE"
 ports = ["VM", "VCC", "IN1", "IN2", "nSLEEP", "OUT1", "OUT2", "GND"]
 params = { rds = "0.28", temp_c = "25", twake = "30us" }
 

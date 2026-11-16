@@ -1,66 +1,66 @@
-# bb.lock: written by `bb open` (ADR-006 D8). Do not edit; `bb open --update-lock`
+# bb.lock: written by `bb open` (ADR-006 D8, ADR-011 D5). Do not edit; `bb open --update-lock`
 # rewrites the entries whose package tree or platform content changed.
-schema = "bb-lock/0"
+schema = "bb-lock/1"
 
 [[package]]
 id = "dial-me-spinner/detent-stepper"
 version = "0.1.0"
-path = "../packages/dial-me-spinner/detent-stepper"
-tree = "sha256:6ff15be60588b072ac1c03682e629237e1af45300ded1559a069373ba5eef9b8"
+source = "path+../packages/dial-me-spinner/detent-stepper"
+tree = "sha256:3f345b0b3461fa249f961ddaf83bc2f115578669042314f7e24915470e986380"
 
 [[package]]
 id = "dms/detent-mechanism"
 version = "0.1.0"
-path = "../../../../packages/dms/detent-mechanism"
-tree = "sha256:d769fe2777c3ea9a44d0cafb51bdc245fe1ac91e9c019c70484d7e37a935396e"
+source = "path+../../../../packages/dms/detent-mechanism"
+tree = "sha256:ca8013893567552bf0f795bff5a147d3f7c23f3687ad8d93a72866af307ac565"
 
 [[package]]
 id = "generic/capacitor"
 version = "0.1.0"
-path = "../../../../packages/generic/capacitor"
-tree = "sha256:f6f2a224bd735b89eb12d5f6baa3017a669a18c25bbeb146b7925e06ba140d60"
+source = "path+../../../../packages/generic/capacitor"
+tree = "sha256:21a89d756d6bfad930bc936b240f42581cb1525705e76d7b90e0e79ca34bddc4"
 
 [[package]]
 id = "generic/inductor"
 version = "0.1.0"
-path = "../../../../packages/generic/inductor"
-tree = "sha256:8206cbc66920565f9276342ee9d34eeb7e85c688fefbc051514b5e4a2f73c5c1"
+source = "path+../../../../packages/generic/inductor"
+tree = "sha256:ec869e7843e4ef132feac5f4bfeb5fc604d3f1b1b3cb3c8087ce50987f519371"
 
 [[package]]
 id = "generic/resistor"
 version = "0.1.0"
-path = "../../../../packages/generic/resistor"
-tree = "sha256:f2dfbfccbbffbdae5524b6fe1c7cc0c01b066f7385799d289640cac8e47eb39a"
+source = "path+../../../../packages/generic/resistor"
+tree = "sha256:a654dc5331934af18317bcea38a8a44ca6599366e9872bac82d17c04e5ed832a"
 
 [[package]]
 id = "nordic/nrf52840-qiaa"
 version = "0.1.0"
-path = "../../../../packages/nordic/nrf52840-qiaa"
-tree = "sha256:d1ca9b68ad6b7f109f02593392e193a64f76b5a7dfdb6e4e752d9304f2e1ac72"
+source = "path+../../../../packages/nordic/nrf52840-qiaa"
+tree = "sha256:0ab76806791def4033530f1a18c1f831dcab2e2d9877ba79b160beea0c10103f"
 
 [[package]]
 id = "raytac/mdbt50q-u1mv2"
 version = "0.1.0"
-path = "../../../../packages/raytac/mdbt50q-u1mv2"
-tree = "sha256:097f1b4000d545ab3273503ef6860b9ff0c73eeed95e78f51ee2ef44f2d02229"
+source = "path+../../../../packages/raytac/mdbt50q-u1mv2"
+tree = "sha256:a3539339c5e519797bb3df1b0975cc4052d5b286dc4e954f441848a7c4793208"
 
 [[package]]
 id = "ti/drv8837"
 version = "0.1.0"
-path = "../../../../packages/ti/drv8837"
-tree = "sha256:1179d328b55b35c3ec5abbc6b0001ccb92ac685b38ca85ca538db8022e3e8bf3"
+source = "path+../../../../packages/ti/drv8837"
+tree = "sha256:81ab65abf78387ec62f0f1370a46bdc6893bcb2a941c815c05f5150bb6e987c2"
 
 [[package]]
 id = "ti/tps22917"
 version = "0.2.0"
-path = "../../../../packages/ti/tps22917"
-tree = "sha256:afb27b7638d352b63d96f3f06ad9619937bca689c1cbea64c7f723d669ba2324"
+source = "path+../../../../packages/ti/tps22917"
+tree = "sha256:e983c07604a768d7c84b3d499b87981bb50a845d83e18eeec7c2b7b2c9c86149"
 
 [[package]]
 id = "worldsemi/ws2812c-2020"
 version = "0.1.0"
-path = "../../../../packages/worldsemi/ws2812c-2020"
-tree = "sha256:8ea4929aa6b49665c6258fd62d12e8bb510de38d59921423276a91dd648ebc01"
+source = "path+../../../../packages/worldsemi/ws2812c-2020"
+tree = "sha256:c832760201a3e2f8da5ce8428e2d3a469134470397ffe10432064a7b26250173"
 
 [[platform]]
 id = "device:dms/mechanism@1"
@@ -68,5 +68,6 @@ content = "sha256:2967684c80a6b7a9527550f7b16cb745e5353d5a7341952b3c894d7d8f8ce6
 
 [[platform]]
 id = "renode:nrf52840-bb@3"
-content = "sha256:08cdcd3489f956a72c0af102207821e8c30c661a7ed4c5f8139baef46ae440c2"
-renode = "1.17.0"
+content = "sha256:6e38d73767b8cc61877b897aa9c624a83d5a2c258c6964546f4438b68c137f42"
+engine = "renode"
+engine_version = "1.17.0"

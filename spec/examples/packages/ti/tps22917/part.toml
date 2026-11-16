@@ -3,7 +3,7 @@
 # The view file is not included. Shows a load switch with two views: a
 # committed datasheet-fitted default and a vendor-derived view that would be
 # local-only (ADR-006 D9, approver decision A).
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "ti/tps22917"

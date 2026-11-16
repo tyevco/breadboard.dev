@@ -25,11 +25,11 @@
 * =====================================================================================================
 
 * One pixel: DIN, VDD, VSS.  duty = fraction of full white (3 x 5 mA) drawn as LED current.
-.subckt LSW_WS2812C DIN VDD VSS params: duty=0 is=1e-14 n=1.0 rs=10
+.subckt WORLDSEMI_WS2812C_2020_LSW DIN VDD VSS params: duty=0 is=1e-14 n=1.0 rs=10
 B_IQ     VDD VSS I = 1u * min(1, max(0, V(VDD,VSS)/3.3))
 B_LED    VDD VSS I = {duty} * 15m * min(1, max(0, (V(VDD,VSS) - 1.0)/1.0))
 D_CLH    DIN VDD lsw_ws_esd
 D_CLL    VSS DIN lsw_ws_esd
 C_IN     DIN VSS 15p
 .model lsw_ws_esd d (is={is} n={n} rs={rs} cjo=1p)
-.ends LSW_WS2812C
+.ends WORLDSEMI_WS2812C_2020_LSW

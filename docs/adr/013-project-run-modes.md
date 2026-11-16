@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (2026-11-15; see "Approver decisions
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
-  (see "Review notes"). D1 implemented in R1 (Amendment 1).
+  (see "Review notes"). D1 implemented in R1 (Amendment 1); the majors
+  landed in milestone S (Amendment 2).
 - **Part of:** the Phase 2 plan, milestones R1-R3. W1, W2 and the caliper
   analog-only example use it. `bb-project/1` and `bb-board/1` land in
   milestone S, the schema epoch.
@@ -352,3 +353,20 @@ every committed output of a Phase 1 board are unchanged.
     the two are one partition, so the row's ratio is 1 by construction. It
     was not measured: the host was never idle while other tracks ran, and
     the protocol requires an idle host.
+
+## Amendment 2 (2026-11-15): the schema epoch (milestone S)
+
+Milestone S landed `bb-project/1` and `bb-board/1`. R1's drafts (Amendment
+1, item 1) are S's majors with the same keys. ADR-011 Amendment 1 is the
+record. S adds these `bb-project/1` keys (`spec/project.md` section 1):
+
+- **`[project] simulate`** may be a list (D2). A list of one board means
+  that board; a list of several is refused, naming R2, until R2
+  implements system runs.
+- **`[run]`** (`cpu = "none"`, `lattice`; D3) is refused, naming R3, which
+  is not in this build.
+- **`[registries.<name>]`** (ADR-011 D4) is read, checked and inert.
+
+`bb pkg migrate --project` and `--board` rewrite the schema line or member.
+The board-file form of `bb run --elaborate-only` (it writes the analog
+engine's netlist) is S's deck gate, recorded in ADR-011 Amendment 1.

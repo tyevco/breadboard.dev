@@ -18,13 +18,13 @@
 //! the assembly has no module initialiser (`make plugin-scope`).
 //!
 //! **The legacy hash** (ADR-015 Amendment 3): before H4 the hash covered
-//! every plugin source. A lock entry that holds exactly that hash pins
-//! strictly more than the scoped one (every source and the `.repl`
-//! unchanged), so it is accepted as it stands and kept, and the import
-//! carries it into `board.bbm` and `run.json` unchanged. The relock to the
-//! scoped hash is milestone S's (plan section 4). An entry whose legacy hash
-//! no longer matches is a mismatch like any other, and `bb open
-//! --update-lock` writes the scoped hash.
+//! every plugin source. A `bb-lock/0` entry that holds exactly that hash
+//! pins strictly more than the scoped one (every source and the `.repl`
+//! unchanged), so `bb run` accepts it from a `bb-lock/0` file as it stands.
+//! Migrating the lock to `bb-lock/1` (`bb open`, `bb pkg migrate --lock`;
+//! [`migrate_lock`]) writes it as the scoped hash: milestone S relocked
+//! every committed lock that way. In a `bb-lock/1` file only the scoped
+//! hash matches.
 //!
 //! A new platform (the nRF52840 of ADR-008) adds a row here and to
 //! `bb_cpu_renode::PLATFORM_PLUGINS`.
@@ -122,27 +122,68 @@ impl PlatformDef {
         bbpkg::lock::content_hash(&files)
     }
 
-    /// The lock entry this `bb` writes for the platform.
+    /// The lock entry this `bb` writes for the platform (`bb-lock/1`: the
+    /// scoped hash, and the engine-neutral `engine`/`engine_version`).
     pub fn locked(&self) -> LockedPlatform {
         LockedPlatform {
             id: self.lock_id(),
             content: self.content(),
-            renode: Some(RENODE_VERSION.to_string()),
+            engine: Some("renode".to_string()),
+            engine_version: Some(RENODE_VERSION.to_string()),
         }
     }
 
-    /// The platform as `lock` pins it: its entry unchanged when that holds
+    /// Does `e` hold the legacy hash of these very files, for this Renode?
+    fn is_legacy(&self, e: &LockedPlatform) -> bool {
+        let now = self.locked();
+        e.id == now.id
+            && e.content == self.legacy_content()
+            && e.engine == now.engine
+            && e.engine_version == now.engine_version
+    }
+
+    /// The platform as `lock` pins it. A `bb-lock/0` file's entry that holds
     /// the legacy hash of these very files (which pins every plugin source,
-    /// so more than [`PlatformDef::content`] does), else
-    /// [`PlatformDef::locked`]. A lock without the entry, or with any other
-    /// content, gets the scoped entry, and `drift` reports the difference.
+    /// so more than [`PlatformDef::content`] does) is accepted as it stands,
+    /// so `bb run` reads an unmigrated lock (ADR-015 Amendment 3). Otherwise,
+    /// and always for a `bb-lock/1` file (milestone S wrote every committed
+    /// entry with the scoped hash), [`PlatformDef::locked`], and `drift`
+    /// reports any difference.
     pub fn locked_for(&self, lock: Option<&Lock>) -> LockedPlatform {
         let now = self.locked();
-        match lock.and_then(|l| l.platforms.iter().find(|e| e.id == now.id)) {
-            Some(e) if e.content == self.legacy_content() && e.renode == now.renode => e.clone(),
+        match lock
+            .filter(|l| l.major == 0)
+            .and_then(|l| l.platforms.iter().find(|e| e.id == now.id))
+        {
+            Some(e) if self.is_legacy(e) => e.clone(),
             _ => now,
         }
     }
+}
+
+/// Migrate a `bb-lock/0` lock in memory to `bb-lock/1` (ADR-011 D5, ADR-015
+/// Amendment 3): each Renode platform entry that holds the legacy hash of
+/// this `bb`'s files becomes the scoped entry (the legacy hash pins strictly
+/// more, so no pin is weakened); an entry for a Renode platform this `bb`
+/// does not provide (an old platform major no package names any more, which
+/// cannot be written with a scoped hash) is dropped; every other entry is
+/// kept as it was, so `drift` still reports a stale one. Returns whether the
+/// lock was at the previous major.
+pub fn migrate_lock(lock: &mut Lock) -> bool {
+    if lock.major == bbpkg::lock::LOCK_MAJOR {
+        return false;
+    }
+    lock.platforms
+        .retain(|e| !e.id.starts_with("renode:") || PLATFORMS.iter().any(|p| p.lock_id() == e.id));
+    for e in &mut lock.platforms {
+        if let Some(def) = PLATFORMS.iter().find(|p| p.lock_id() == e.id) {
+            if def.is_legacy(e) {
+                *e = def.locked();
+            }
+        }
+    }
+    lock.major = bbpkg::lock::LOCK_MAJOR;
+    true
 }
 
 /// A `bbdev` device's identity (ADR-006 D8, Amendment 6 A6.4): locked as
@@ -157,7 +198,8 @@ pub fn device_locked(def: &bbdev::DeviceDef) -> LockedPlatform {
     LockedPlatform {
         id: format!("device:{}", def.id),
         content: bbpkg::lock::content_hash(&files),
-        renode: None,
+        engine: None,
+        engine_version: None,
     }
 }
 
@@ -171,7 +213,7 @@ mod tests {
         let l = device_locked(d);
         assert_eq!(l.id, "device:dms/mechanism@1");
         assert!(l.content.starts_with("sha256:") && l.content.len() == 71);
-        assert!(l.renode.is_none());
+        assert!(l.engine.is_none() && l.engine_version.is_none());
         assert!(PLATFORMS.iter().all(|p| p.content() != l.content));
     }
 
@@ -272,32 +314,45 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_entry_is_kept_only_when_it_matches_exactly() {
+    fn a_legacy_entry_is_kept_only_in_a_bb_lock_0_file_when_it_matches_exactly() {
         let p = find("stm32f103-offline@1").unwrap();
-        let entry = |content: String, renode: Option<&str>| Lock {
-            packages: vec![],
+        let entry = |major: u32, content: String, version: Option<&str>| Lock {
+            major,
             platforms: vec![LockedPlatform {
                 id: p.lock_id(),
                 content,
-                renode: renode.map(str::to_string),
+                engine: version.map(|_| "renode".to_string()),
+                engine_version: version.map(str::to_string),
             }],
+            ..Lock::default()
         };
         // No lock, or no entry: the scoped hash.
         assert_eq!(p.locked_for(None), p.locked());
         assert_eq!(p.locked_for(Some(&Lock::default())), p.locked());
-        // The legacy hash of these files: kept as it stands.
-        let legacy = entry(p.legacy_content(), Some(RENODE_VERSION));
+        // The legacy hash of these files in a bb-lock/0 file: kept as it
+        // stands (bb run reads an unmigrated lock).
+        let legacy = entry(0, p.legacy_content(), Some(RENODE_VERSION));
         assert_eq!(p.locked_for(Some(&legacy)), legacy.platforms[0]);
         assert!(bbpkg::lock::drift(Some(&legacy), &[], &[p.locked_for(Some(&legacy))]).is_empty());
+        // In a bb-lock/1 file the legacy hash is a mismatch: the epoch's
+        // relock wrote every entry scoped.
+        let legacy1 = entry(1, p.legacy_content(), Some(RENODE_VERSION));
+        assert_eq!(p.locked_for(Some(&legacy1)), p.locked());
+        assert!(bbpkg::lock::drift(Some(&legacy1), &[], &[p.locked()])[0].is_mismatch());
         // The scoped hash: itself.
-        let scoped = entry(p.content(), Some(RENODE_VERSION));
+        let scoped = entry(1, p.content(), Some(RENODE_VERSION));
         assert_eq!(p.locked_for(Some(&scoped)), p.locked());
         // Anything else (another legacy hash, another Renode): the scoped
         // entry, which drift reports as a mismatch.
         for other in [
-            entry(format!("sha256:{}", "0".repeat(64)), Some(RENODE_VERSION)),
-            entry(p.legacy_content(), Some("1.16.0")),
             entry(
+                0,
+                format!("sha256:{}", "0".repeat(64)),
+                Some(RENODE_VERSION),
+            ),
+            entry(0, p.legacy_content(), Some("1.16.0")),
+            entry(
+                0,
                 find("stm32f072-bb@1").unwrap().legacy_content(),
                 Some(RENODE_VERSION),
             ),
@@ -307,5 +362,44 @@ mod tests {
             let d = bbpkg::lock::drift(Some(&other), &[], &[now]);
             assert!(d.len() == 1 && d[0].is_mismatch(), "{d:?}");
         }
+    }
+
+    #[test]
+    fn migrating_a_lock_scopes_exactly_the_legacy_entries() {
+        // ADR-015 Amendment 3, ADR-011 D5: the bb-lock/1 migration writes a
+        // matching legacy entry with the scoped hash, keeps a stale one (so
+        // drift still reports it) and keeps device entries.
+        let a = find("stm32f103-offline@1").unwrap();
+        let b = find("nrf52840-bb@3").unwrap();
+        let dev = device_locked(bbdev::find("dms/mechanism@1").unwrap());
+        let stale = LockedPlatform {
+            content: format!("sha256:{}", "1".repeat(64)),
+            ..b.locked()
+        };
+        let legacy = LockedPlatform {
+            content: a.legacy_content(),
+            ..a.locked()
+        };
+        let mut lock = Lock {
+            major: 0,
+            // Sorted by id, as a lock file is. renode:nrf52840-bb@1 is an old
+            // platform major this bb does not provide: dropped.
+            platforms: vec![
+                dev.clone(),
+                LockedPlatform {
+                    id: "renode:nrf52840-bb@1".into(),
+                    ..stale.clone()
+                },
+                stale.clone(),
+                legacy,
+            ],
+            ..Lock::default()
+        };
+        assert!(migrate_lock(&mut lock));
+        assert_eq!(lock.major, 1);
+        assert_eq!(lock.platforms, vec![dev, stale, a.locked()]);
+        assert!(!migrate_lock(&mut lock));
+        let back = Lock::parse(&lock.to_text(), &bbpkg::schema::Registry::current()).unwrap();
+        assert_eq!(back.platforms, lock.platforms);
     }
 }

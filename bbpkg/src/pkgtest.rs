@@ -328,13 +328,15 @@ pub const SWITCH_CTL: &str = "ctl";
 /// A port's key in a vector's `[ports]`: a circuit view's pin name; a
 /// `pin_load` view's typed port by its role (`pad`), its signal (`smp`,
 /// `hold`) or the pin it names (`VDD`) (ADR-006 D4, ADR-008 Amendment 5);
-/// a `switch` view's contact by its pin.
+/// a `switch` view's contact by its pin; a `supply_load` view's state port
+/// by its state name (`run` for `#run`; bb-part/1, ADR-009 D4).
 fn port_key(p: &Port) -> &str {
     match p {
         Port::Pin(n) => n,
         Port::Pad => "pad",
         Port::Ctrl { signal } | Port::Observe { signal } => signal,
         Port::OtherPin { pin } => pin,
+        Port::State { state } => state,
     }
 }
 

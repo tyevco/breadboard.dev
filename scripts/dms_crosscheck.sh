@@ -69,7 +69,7 @@ done
 
 declare -A VIEW=(
   [vendor]="$VENDOR/analog/load_switches__tps22917.lib:LSW_TPS22917"
-  [fit]="$ROOT/packages/ti/tps22917/analog/lsw_fit.lib:TPS22917_LSW_FIT"
+  [fit]="$ROOT/packages/ti/tps22917/analog/lsw_fit.lib:TI_TPS22917_LSW_FIT"
 )
 replay() { # <name> <view> <bench> [--battery] [--options x]
   local name=$1 view=$2 bench=$3

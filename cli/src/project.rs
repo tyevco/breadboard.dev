@@ -61,7 +61,23 @@ pub struct Bind {
 /// grammar; `spec/pin-model.md`).
 pub const PIN_PARAM_KEYS: &[&str] = &[
     "voh", "vol", "rise", "fall", "zout", "vih", "vil", "cin", "vref", "bits", "load",
+    // bb-pins/1 (ADR-009 D5): used at `pi` only (milestone P2).
+    "rail", "rhiz",
 ];
+
+/// `[registries.<name>]` (`bb-project/1`, ADR-011 D4): a private registry,
+/// routed by namespace. Read and checked; nothing in this build fetches
+/// from a registry (milestone E1), so it is inert.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegistryEntry {
+    pub name: String,
+    /// `https://...` or `file://...`.
+    pub url: String,
+    /// The registry's minisign public key.
+    pub key: String,
+    /// The namespaces routed to it.
+    pub namespaces: Vec<String>,
+}
 
 /// `[[device.bind]]` (`bb-project/1`, ADR-013 D1): a device pin on a net.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,6 +138,8 @@ pub struct Project {
     pub connections: Vec<ConnectionEntry>,
     /// `[[device]]` (`bb-project/1`).
     pub devices: Vec<DeviceEntry>,
+    /// `[registries.<name>]` (`bb-project/1`, ADR-011 D4; inert until E1).
+    pub registries: Vec<RegistryEntry>,
     /// The migration hint when the file is the previous major
     /// (`bb-project/0`, ADR-006 D11).
     pub schema_hint: Option<String>,
@@ -159,8 +177,107 @@ impl Project {
         let mut simulate = None;
         if let Some(mut p) = o.table_opt("project")? {
             name = p.str_opt("name")?;
-            simulate = p.str_opt("simulate")?;
+            // bb-project/1 (ADR-013 D2): simulate may be a list. One board
+            // is the Phase 1 meaning; several (a single-MCU system run) are
+            // milestone R2's.
+            simulate = match p.get("simulate") {
+                None => None,
+                Some(Value::String(s)) => Some(s.clone()),
+                Some(Value::Array(a)) => {
+                    let ids: Vec<String> = a
+                        .iter()
+                        .map(|v| v.as_str().map(str::to_string))
+                        .collect::<Option<_>>()
+                        .ok_or("[project] simulate: expected a board id or a list of them")?;
+                    match ids.as_slice() {
+                        [one] => Some(one.clone()),
+                        [] => return Err("[project] simulate = []: name a board".into()),
+                        _ => {
+                            return Err(format!(
+                                "[project] simulate = {ids:?}: a system run of several boards is \
+                                 milestone R2 (ADR-013 D2), not implemented in this build"
+                            ))
+                        }
+                    }
+                }
+                Some(v) => {
+                    return Err(format!(
+                        "[project] simulate: expected a board id or a list, got {}",
+                        v.type_name()
+                    ))
+                }
+            };
             p.done()?;
+        }
+        // bb-project/1 (ADR-013 D3): [run] cpu and lattice are milestone
+        // R3's (runs without a CPU target; not in this build). Refused, not
+        // ignored: a project that names them would not run as written.
+        if let Some(r) = o.table_opt("run")? {
+            let keys = r.keys();
+            return Err(format!(
+                "[run] {}: runs without a CPU target and the engine-neutral lattice are \
+                 milestone R3 (ADR-013 D3), not implemented in this build",
+                keys.join(", ")
+            ));
+        }
+        // bb-project/1 (ADR-011 D4): private registries, routed by namespace.
+        let mut registries = Vec::new();
+        if let Some(mut rt) = o.table_opt("registries")? {
+            for rname in rt.keys() {
+                let mut r = rt
+                    .table_opt(&rname)?
+                    .ok_or_else(|| format!("registries.{rname}: expected a table"))?;
+                let e = RegistryEntry {
+                    name: rname.clone(),
+                    url: r.str_req("url")?,
+                    key: r.str_req("key")?,
+                    namespaces: r.strs("namespaces")?,
+                };
+                r.done()?;
+                if !is_id(&rname) {
+                    return Err(format!(
+                        "registries.{rname}: a registry name is lower case [a-z0-9_-]"
+                    ));
+                }
+                if !(e.url.starts_with("https://") || e.url.starts_with("file://")) {
+                    return Err(format!(
+                        "registries.{rname}.url {:?}: https:// or file:// (ADR-011 D4)",
+                        e.url
+                    ));
+                }
+                if e.key.trim().is_empty() {
+                    return Err(format!("registries.{rname}.key: empty"));
+                }
+                if e.namespaces.is_empty() {
+                    return Err(format!(
+                        "registries.{rname}.namespaces: a registry is routed by at least one \
+                         namespace (ADR-011 D4)"
+                    ));
+                }
+                for ns in &e.namespaces {
+                    let ok = !ns.is_empty()
+                        && ns.chars().all(|c| {
+                            c.is_ascii_lowercase()
+                                || c.is_ascii_digit()
+                                || matches!(c, '.' | '_' | '-')
+                        });
+                    if !ok {
+                        return Err(format!(
+                            "registries.{rname}.namespaces: {ns:?} is not a namespace ([a-z0-9._-])"
+                        ));
+                    }
+                    if registries
+                        .iter()
+                        .any(|x: &RegistryEntry| x.namespaces.contains(ns))
+                    {
+                        return Err(format!(
+                            "registries: namespace {ns} is routed to two registries"
+                        ));
+                    }
+                }
+                registries.push(e);
+            }
+            rt.done()?;
         }
         let mut boards = Vec::new();
         for mut b in o.tables("board")? {
@@ -415,10 +532,16 @@ impl Project {
             });
         }
         o.done()?;
+        if schema_hint.is_some() && !registries.is_empty() {
+            return Err(format!(
+                "[registries] is a bb-project/1 key (ADR-011 D4); this file is {schema}"
+            ));
+        }
         Ok(Project {
             dir: dir.to_path_buf(),
             name,
             simulate,
+            registries,
             boards,
             package_paths,
             extra_fields,
@@ -1199,6 +1322,73 @@ b = "base:J3"
             Path::new(".")
         )
         .is_err());
+    }
+
+    #[test]
+    fn bb_project_1_keys_of_the_schema_epoch() {
+        // Milestone S: simulate as a list (one board; several are R2's), [run]
+        // (R3's) refused with its milestone, [registries] (E1's) read and
+        // checked, the bb-pins/1 binding keys rail and rhiz accepted.
+        let v1 = P.replacen("bb-project/0", "bb-project/1", 1);
+        let with = |from: &str, to: &str| v1.replacen(from, to, 1);
+        let p = Project::parse(
+            &with("name = \"t\"", "name = \"t\"\nsimulate = [\"main\"]"),
+            Path::new("."),
+        )
+        .unwrap();
+        assert_eq!(p.simulate, "main");
+        let e = Project::parse(
+            &with(
+                "name = \"t\"",
+                "name = \"t\"\nsimulate = [\"main\", \"base\"]",
+            ),
+            Path::new("."),
+        )
+        .unwrap_err();
+        assert!(e.contains("milestone R2"), "{e}");
+        let e =
+            Project::parse(&format!("{v1}\n[run]\ncpu = \"none\"\n"), Path::new(".")).unwrap_err();
+        assert!(e.contains("[run] cpu") && e.contains("milestone R3"), "{e}");
+        let reg = "\n[registries.acme]\nurl = \"file:///srv/reg\"\nkey = \"RWQ\"\nnamespaces = [\"acme\"]\n";
+        let p = Project::parse(&format!("{v1}{reg}"), Path::new(".")).unwrap();
+        assert_eq!(p.registries[0].namespaces, vec!["acme"]);
+        for (from, to, want) in [
+            ("file:///srv/reg", "http://x", "https:// or file://"),
+            (
+                "namespaces = [\"acme\"]",
+                "namespaces = []",
+                "at least one namespace",
+            ),
+            (
+                "namespaces = [\"acme\"]",
+                "namespaces = [\"Acme\"]",
+                "not a namespace",
+            ),
+            ("key = \"RWQ\"\n", "", "key: required"),
+        ] {
+            let e = Project::parse(
+                &format!("{v1}{}", reg.replacen(from, to, 1)),
+                Path::new("."),
+            )
+            .unwrap_err();
+            assert!(e.contains(want), "{want}: {e}");
+        }
+        let two = format!("{v1}{reg}[registries.other]\nurl = \"https://o\"\nkey = \"K\"\nnamespaces = [\"acme\"]\n");
+        assert!(Project::parse(&two, Path::new("."))
+            .unwrap_err()
+            .contains("routed to two registries"));
+        assert!(Project::parse(&format!("{P}{reg}"), Path::new("."))
+            .unwrap_err()
+            .contains("bb-project/1 key"));
+        let p = Project::parse(
+            &with(
+                "zout = \"50\"",
+                "zout = \"50\"\nrail = \"VDD\"\nrhiz = \"100Meg\"",
+            ),
+            Path::new("."),
+        )
+        .unwrap();
+        assert_eq!(p.binds[0].params.len(), 3);
     }
 
     #[test]

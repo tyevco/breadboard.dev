@@ -5,7 +5,7 @@
 # harness view of its [[connection]] (ADR-007 D5, Amendment 5), and `bb open`
 # resolves and locks it. Phase 1 simulates one board only, so no deck holds it
 # yet; its vectors qualify it for the day both boards are in one deck.
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "dial-me-spinner/link-harness"

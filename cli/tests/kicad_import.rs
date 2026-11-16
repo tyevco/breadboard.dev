@@ -267,7 +267,7 @@ const PWL_DECK_LINES: &[&str] = &[
     "V_pwl_LED bb_pwl_LED 0 PWL(0 1 0.001 2.5)\n",
     "R_pwl_LED bb_pwl_LED LED 50\n",
     // The rest of the scope is unchanged by the bench.
-    "XR3 ALARM LED bb_generic_resistor value=330\n",
+    "XR3 ALARM LED GENERIC_RESISTOR_IDEAL value=330\n",
 ];
 
 #[test]
@@ -330,10 +330,10 @@ fn a_bench_elaborates_into_the_deck() {
     assert!(o.status.success(), "{}", text(&o));
     let deck = std::fs::read_to_string(d.join("out/deck.cir")).unwrap();
     for line in [
-        "XC1 ADC_IN 0 bb_generic_capacitor value=4.7e-7\n",
+        "XC1 ADC_IN 0 GENERIC_CAPACITOR_IDEAL value=4.7e-7\n",
         "XD1 LED 0 example_led_red\n",
-        "XR1 DRIVE ADC_IN bb_generic_resistor value=10000\n",
-        "XR2 ADC_IN 0 bb_generic_resistor value=33000\n",
+        "XR1 DRIVE ADC_IN GENERIC_RESISTOR_IDEAL value=10000\n",
+        "XR2 ADC_IN 0 GENERIC_RESISTOR_IDEAL value=33000\n",
         // A supply with rs is its Norton equivalent (ADR-007 Amendment 3).
         "B_bench_LED 0 LED I = (min(2, V(ADC_IN) - 0.1) - V(LED)) / 10\n",
         "I_bench_load0_ADC_IN ADC_IN 0 DC 0.001\n",
@@ -343,7 +343,7 @@ fn a_bench_elaborates_into_the_deck() {
         assert!(deck.contains(line), "{line:?} not in\n{deck}");
     }
     assert!(!deck.contains("XR3"), "R3 is outside the scope:\n{deck}");
-    assert_eq!(deck.matches(".subckt bb_generic_resistor").count(), 1);
+    assert_eq!(deck.matches(".subckt GENERIC_RESISTOR_IDEAL").count(), 1);
     let rj = std::fs::read_to_string(d.join("out/run.json")).unwrap();
     assert!(rj.contains("\"ref\":\"main:R3\""), "{rj}");
     assert!(rj.contains("\"options\":\"phase0\""), "{rj}");

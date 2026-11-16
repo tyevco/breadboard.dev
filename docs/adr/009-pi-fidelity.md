@@ -9,7 +9,8 @@
   fails, so P0 stops for the approver's Q1 choice. 2 (2026-11-15), the
   approver's decision D-W1: W1 at a labelled stress corner (55 mA, RT9080
   worst) with its own tolerances, plus a gated 50 mA margin check; P0
-  closed.
+  closed. 3 (2026-11-15), milestone S: this ADR's schema keys landed,
+  accepted and inert (ADR-011 Amendment 1).
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
@@ -840,3 +841,34 @@ dedicated `run.json` key would be a schema change and is not made here.
 The singular matrix at `xu2.lsf_vinf` at 60 mA, typical corner, is the
 same finding (Amendment 1, item 6). `make pi-spike` runs 85
 configurations in 84 s on 8 jobs (74 s of runs, host load 0.3-3.9).
+
+## Amendment 3 (2026-11-15): the schema keys landed (milestone S)
+
+Milestone S, the schema epoch, landed this ADR's keys. ADR-011 Amendment
+1 is the record; `spec/package.md`, `spec/pin-model.md` and
+`spec/event-stream.md` state them. All of them are accepted, checked by
+lint and inert. No `fast` deck, output or `run.json` depends on them, and
+`--fidelity pi` stays refused until P1.
+
+- **`bb-part/1`:** `[power]` (`idd.<state> = { typ, max, ref }`, `vdd_min`,
+  `io_rail`; D4, D5), a view's `rails`, the `supply_load` view kind (D4),
+  and `[[analog.corners]]` (D8; names `typ`, `min`, `max`, `suite_compat`,
+  `worst_<x>`, each with a `ref`).
+  - A `supply_load` view has `{ role = "pin" }` supply or ground ports and
+    `{ role = "state", state }` ports. Each state port needs a `[power]
+    idd` entry.
+  - Lint keeps a `supply_load` view off `fast` and off every rung's
+    `default_for`. D1 adds it to the deck beside the chosen view, so the
+    ladder must never choose it.
+- **`bb-pins/1`:** `limits` (D3). A bound is `<value>`, `<pin> + <value>`
+  or `<pin> - <value>`. The `digital_out` parameters `rail` and `rhiz`
+  (D5) are optional, and unused at `fast`.
+  - The pin model name `power` is **reserved**, not defined. D3 names
+    `power{vmin, vmax, imax}` but not where its values come from, so P1
+    defines it within `bb-pins/1`.
+- **Event stream version 2:** the `reset` record (D7: `t_fs`, `source`,
+  `cause`, `phase`, and `ram` on `exit`) and `assert`'s `rung` (D1).
+  `bbcore::event` has both types. Nothing emits them before P5 and B2.
+- **The ADR-006 D3 sentence** about the TPS22917 `pi` view is not
+  corrected here. That sentence is corrected when P1 restates the view
+  (decision D-TPS).

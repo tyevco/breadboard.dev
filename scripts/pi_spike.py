@@ -296,8 +296,11 @@ def cmd_decks(a):
                 setattr(tls, k, v)
         text = captured.pop("text")
         if lsw == "fit":
-            text = text.replace(" LSW_TPS22917 params:", " TPS22917_LSW_FIT params:")
+            text = text.replace(" LSW_TPS22917 params:", " TI_TPS22917_LSW_FIT params:")
         if power == "pi":
+            # The package's pixel view (renamed to its package prefix in the schema epoch, ADR-011 D11):
+            # the suite's instances name the suite's subcircuit.
+            text = re.sub(r"\bLSW_WS2812C\b", "WORLDSEMI_WS2812C_2020_LSW", text)
             body = _body(text, ("VCTL", "VOE", "VOLEDEN"))
             pad = [p for p, out in pads if out == "n_ctl"]
             assert len(pad) == 1, pads

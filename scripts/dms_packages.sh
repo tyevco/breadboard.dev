@@ -120,7 +120,7 @@ m5b)
   rm -rf "$RUN" && mkdir -p "$RUN/runs"
   "$PY" -I "$ROOT/scripts/dms_m5b.py" decks --src "$SRC" --out "$RUN/decks" \
     --view "vendor=$VENDOR/analog/load_switches__tps22917.lib:LSW_TPS22917" \
-    --view "fit=$ROOT/packages/ti/tps22917/analog/lsw_fit.lib:TPS22917_LSW_FIT"
+    --view "fit=$ROOT/packages/ti/tps22917/analog/lsw_fit.lib:TI_TPS22917_LSW_FIT"
   export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/bb-target}
   (cd "$ROOT" && cargo build --release -q -p bb-analog-ngspice --example deck_run)
   DECK_RUN=$CARGO_TARGET_DIR/release/examples/deck_run

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/project.schema.json",
-  "title": "bb-project/1: bb.toml, a Breadboard project (spec/project.md, ADR-007 D5, ADR-013 D1)",
+  "title": "bb-project/1: bb.toml, a Breadboard project (spec/project.md, ADR-007 D5, ADR-011 D4, ADR-013 D1-D3)",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "board"],
@@ -12,7 +12,10 @@
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string" },
-        "simulate": { "$ref": "#/$defs/boardId" }
+        "simulate": {
+          "description": "A board id, or (bb-project/1, ADR-013 D2) a list of them; a list of several boards is milestone R2's system run.",
+          "oneOf": [{ "$ref": "#/$defs/boardId" }, { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/boardId" } }]
+        }
       }
     },
     "board": {
@@ -99,6 +102,7 @@
           "cin": { "type": "string" },
           "vref": { "type": "string" }, "bits": { "type": "string" },
           "load": { "type": "string" },
+          "rail": { "type": "string" }, "rhiz": { "type": "string" },
           "trace_samples": { "type": "boolean" }
         }
       }
@@ -135,7 +139,8 @@
                 "rise": { "type": "string" }, "fall": { "type": "string" },
                 "zout": { "type": "string" },
                 "vih": { "type": "string" }, "vil": { "type": "string" },
-                "cin": { "type": "string" }
+                "cin": { "type": "string" },
+                "rail": { "type": "string" }, "rhiz": { "type": "string" }
               }
             }
           }
@@ -156,6 +161,30 @@
             "type": "array",
             "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 }
           }
+        }
+      }
+    },
+    "run": {
+      "description": "bb-project/1 (ADR-013 D3): runs without a CPU target (cpu = \"none\") and the engine-neutral lattice; milestone R3, refused by bb until it is implemented.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": { "const": "none" },
+        "lattice": { "type": "string", "minLength": 1 }
+      }
+    },
+    "registries": {
+      "description": "bb-project/1 (ADR-011 D4): private registries, routed by namespace; read and checked, inert until milestone E1.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z0-9_-]+$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url", "key", "namespaces"],
+        "properties": {
+          "url": { "type": "string", "pattern": "^(https|file)://" },
+          "key": { "type": "string", "minLength": 1 },
+          "namespaces": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[a-z0-9._-]+$" } }
         }
       }
     }

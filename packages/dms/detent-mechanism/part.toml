@@ -9,7 +9,7 @@
 # it with `*bb part M1 package=dms/detent-mechanism` and binds its pins (spec/package.md section
 # 12); its parameters (ts, die, s0, ...) go on that line. It is not on the schematic, so an
 # imported project cannot hold it yet (route B, a Phase 2 item: approver decision 2, 2026-11-14).
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "dms/detent-mechanism"

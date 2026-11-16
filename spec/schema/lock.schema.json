@@ -1,41 +1,98 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/lock.schema.json",
-  "title": "bb-lock/0: bb.lock, the package and platform lockfile (spec/package.md, ADR-006 D8)",
+  "title": "bb-lock/0 and bb-lock/1: bb.lock, the package and platform lockfile (spec/package.md, ADR-006 D8, ADR-011 D5)",
+  "description": "bb-lock/1 (the Phase 2 schema epoch, milestone S): a package's informative path becomes its source (path+<path>, or registry+<url> from milestone E1), [[vendor_file]] records a file fetched at use, and a platform's renode version becomes the engine-neutral engine and engine_version. bb reads bb-lock/0 (the previous major) and writes bb-lock/1.",
   "type": "object",
-  "additionalProperties": false,
   "required": ["schema"],
-  "properties": {
-    "schema": { "const": "bb-lock/0" },
-    "package": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "version", "path", "tree"],
-        "properties": {
-          "id": { "type": "string", "pattern": "^[a-z0-9._-]+/[a-z0-9._-]+$" },
-          "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
-          "path": { "type": "string" },
-          "tree": { "$ref": "#/$defs/hash" }
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "const": "bb-lock/0" },
+        "package": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "version", "path", "tree"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "version": { "$ref": "#/$defs/version" },
+              "path": { "type": "string" },
+              "tree": { "$ref": "#/$defs/hash" }
+            }
+          }
+        },
+        "platform": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "content"],
+            "properties": {
+              "id": { "$ref": "#/$defs/platform_id" },
+              "content": { "$ref": "#/$defs/hash" },
+              "renode": { "type": "string" }
+            }
+          }
         }
       }
     },
-    "platform": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "content"],
-        "properties": {
-          "id": { "type": "string", "pattern": "^[a-z]+:[a-z0-9_./-]+@[0-9]+$" },
-          "content": { "$ref": "#/$defs/hash" },
-          "renode": { "type": "string" }
+    {
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "const": "bb-lock/1" },
+        "package": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "version", "source", "tree"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "version": { "$ref": "#/$defs/version" },
+              "source": { "type": "string", "pattern": "^(path\\+.+|registry\\+(https|file)://.+)$" },
+              "tree": { "$ref": "#/$defs/hash" }
+            }
+          }
+        },
+        "vendor_file": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "sha256", "license", "used_by"],
+            "properties": {
+              "url": { "type": "string", "pattern": "^https://" },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "license": { "type": "string", "minLength": 1 },
+              "used_by": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
+        "platform": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "content"],
+            "properties": {
+              "id": { "$ref": "#/$defs/platform_id" },
+              "content": { "$ref": "#/$defs/hash" },
+              "engine": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+              "engine_version": { "type": "string", "minLength": 1 }
+            },
+            "dependentRequired": { "engine": ["engine_version"], "engine_version": ["engine"] }
+          }
         }
       }
     }
-  },
+  ],
   "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9._-]+/[a-z0-9._-]+$" },
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "platform_id": { "type": "string", "pattern": "^[a-z]+:[a-z0-9_./-]+@[0-9]+$" },
     "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
   }
 }

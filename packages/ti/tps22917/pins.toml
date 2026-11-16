@@ -2,7 +2,7 @@
 # Functions) and KiCad 10.0.8's Power_Management:TPS22917DBV give them (checked with
 # scripts/check_pins_kicad.py). No pin is bound to a co-simulation engine, so no pin offers a pin model:
 # the part is an analog view only.
-schema = "bb-pins/0"
+schema = "bb-pins/1"
 
 [[pin]]
 number = "1"

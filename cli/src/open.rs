@@ -116,12 +116,12 @@ pub fn resolved(
     let mut pl: Vec<LockedPlatform> = Vec::new();
     for p in &b.packages {
         let dir = std::fs::canonicalize(&p.dir).map_err(|e| format!("{}: {e}", p.dir.display()))?;
-        pk.push(LockedPackage {
-            id: p.part.id.clone(),
-            version: p.part.version.clone(),
-            path: lock::relative_path(&proj, &dir),
-            tree: lock::tree_hash(&dir)?,
-        });
+        pk.push(LockedPackage::at_path(
+            &p.part.id,
+            &p.part.version,
+            &lock::relative_path(&proj, &dir),
+            &lock::tree_hash(&dir)?,
+        ));
         if let Some(pid) = p
             .part
             .behavioral
@@ -181,7 +181,11 @@ pub fn check_lock(board_file: &Path, b: &Board) -> Result<Vec<String>, String> {
     let (pk, pl) = resolved(board_file, b, lock.as_ref())?;
     let d = lock::drift(lock.as_ref(), &pk, &pl);
     if d.is_empty() {
-        return Ok(path_warnings(board_file, lock.as_ref(), &pk));
+        // A bb-lock/0 file is read (its legacy platform hashes too) with the
+        // migration hint (ADR-011 D5, ADR-015 Amendment 3).
+        let mut w: Vec<String> = lock.as_ref().and_then(Lock::hint).into_iter().collect();
+        w.extend(path_warnings(board_file, lock.as_ref(), &pk));
+        return Ok(w);
     }
     let mut msg = format!(
         "{} does not match what {} resolves to (ADR-006 D8):",
@@ -323,7 +327,11 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     }
     let lp = lock_path(&target);
     let reg = Registry::current();
-    let lock = Lock::read(&lp, &reg)?;
+    let mut lock = Lock::read(&lp, &reg)?;
+    // A bb-lock/0 file is migrated in memory (ADR-011 D5): its legacy
+    // platform hashes become the scoped ones (ADR-015 Amendment 3), and the
+    // lock is written as bb-lock/1 even when nothing else changed.
+    let migrated = lock.as_mut().is_some_and(platforms::migrate_lock);
     let (pk, pl) = resolved(&target, &b, lock.as_ref())?;
     for w in path_warnings(&target, lock.as_ref(), &pk) {
         eprintln!("bb open: warning: {w}");
@@ -332,15 +340,20 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     for x in &d {
         let _ = writeln!(out, "bb open: {}", x.describe());
     }
-    if d.is_empty() {
+    if d.is_empty() && !migrated {
         let _ = writeln!(out, "bb open: {} is current", lp.display());
         return Ok(ExitCode::SUCCESS);
     }
     if check {
         return Err(format!(
-            "--check: {} would change ({} entries)",
+            "--check: {} would change ({} entries{})",
             lp.display(),
-            d.len()
+            d.len(),
+            if migrated {
+                "; it is bb-lock/0, the previous major"
+            } else {
+                ""
+            }
         ));
     }
     let mismatches: Vec<&Drift> = d.iter().filter(|x| x.is_mismatch()).collect();
@@ -357,10 +370,15 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     std::fs::write(&lp, new.to_text()).map_err(|e| format!("write {}: {e}", lp.display()))?;
     let _ = writeln!(
         out,
-        "bb open: wrote {} ({} entr{} changed)",
+        "bb open: wrote {} ({} entr{} changed{})",
         lp.display(),
         d.len(),
-        if d.len() == 1 { "y" } else { "ies" }
+        if d.len() == 1 { "y" } else { "ies" },
+        if migrated {
+            "; migrated from bb-lock/0"
+        } else {
+            ""
+        }
     );
     Ok(ExitCode::SUCCESS)
 }
@@ -389,7 +407,10 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
     }
     let lp = dir.join("bb.lock");
     let reg = Registry::current();
-    let lock = Lock::read(&lp, &reg)?;
+    let mut lock = Lock::read(&lp, &reg)?;
+    // A bb-lock/0 file is migrated in memory (ADR-011 D5, ADR-015
+    // Amendment 3), so board.bbm gets the scoped platform hashes too.
+    let migrated = lock.as_mut().is_some_and(platforms::migrate_lock);
     let imp = import::import(&p, import::Mode::Open, lock.as_ref())?;
     let mut out = std::io::stdout().lock();
     for w in &imp.warnings {
@@ -483,11 +504,16 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
         if std::fs::read(&bbm_path).ok().as_deref() != Some(bbm_text.as_bytes()) {
             errs.push(format!("{} would change", bbm_path.display()));
         }
-        if !d.is_empty() {
+        if !d.is_empty() || migrated {
             errs.push(format!(
-                "{} would change ({} entries)",
+                "{} would change ({} entries{})",
                 lp.display(),
-                d.len()
+                d.len(),
+                if migrated {
+                    "; it is bb-lock/0, the previous major"
+                } else {
+                    ""
+                }
             ));
         }
         errs.extend(problems);
@@ -506,10 +532,19 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
             dir.display()
         ));
     }
-    if !d.is_empty() {
+    if !d.is_empty() || migrated {
         let new = lock::apply(lock.as_ref(), &d);
         std::fs::write(&lp, new.to_text()).map_err(|e| format!("write {}: {e}", lp.display()))?;
-        let _ = writeln!(out, "bb open: wrote {}", lp.display());
+        let _ = writeln!(
+            out,
+            "bb open: wrote {}{}",
+            lp.display(),
+            if migrated {
+                " (migrated from bb-lock/0)"
+            } else {
+                ""
+            }
+        );
     }
     let dot = dir.join(import::DOT_BB);
     for (id, text) in &imp.exported {

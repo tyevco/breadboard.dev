@@ -1,18 +1,18 @@
-# bb.lock: written by `bb open` (ADR-006 D8). Do not edit; `bb open --update-lock`
+# bb.lock: written by `bb open` (ADR-006 D8, ADR-011 D5). Do not edit; `bb open --update-lock`
 # rewrites the entries whose package tree or platform content changed.
-schema = "bb-lock/0"
+schema = "bb-lock/1"
 
 [[package]]
 id = "dms/detent-mechanism"
 version = "0.1.0"
-path = "../../packages/dms/detent-mechanism"
-tree = "sha256:d769fe2777c3ea9a44d0cafb51bdc245fe1ac91e9c019c70484d7e37a935396e"
+source = "path+../../packages/dms/detent-mechanism"
+tree = "sha256:ca8013893567552bf0f795bff5a147d3f7c23f3687ad8d93a72866af307ac565"
 
 [[package]]
 id = "st/stm32f103c8"
 version = "0.1.0"
-path = "../../packages/st/stm32f103c8"
-tree = "sha256:64c3d293c3599e3ca426066fbe858afc5725e2f97901e942c99e1d9bfbba6450"
+source = "path+../../packages/st/stm32f103c8"
+tree = "sha256:b4b84fa0966838a0e9e83a52cef87d4f8c37f7c89aa1ad73aa5b82e234e36ca6"
 
 [[platform]]
 id = "device:dms/mechanism@1"
@@ -20,5 +20,6 @@ content = "sha256:2967684c80a6b7a9527550f7b16cb745e5353d5a7341952b3c894d7d8f8ce6
 
 [[platform]]
 id = "renode:stm32f103-offline@1"
-content = "sha256:5e22105590f9ea23b6de8f870429f74f43922aac928b26b7cb68a608155329eb"
-renode = "1.17.0"
+content = "sha256:d6ce44a8be2f44ed55a6f3e6d6c465e41576350fb76f1e48977520c6bc20e060"
+engine = "renode"
+engine_version = "1.17.0"

@@ -2137,9 +2137,16 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                         Json::obj([
                             ("id", Json::str(&l.id)),
                             ("content", Json::str(&l.content)),
+                            // run.json (bb-run/0) keeps its key: the Renode
+                            // version, null for a device (the lock's engine-
+                            // neutral engine_version, ADR-011 D5).
                             (
                                 "renode",
-                                l.renode.as_ref().map(Json::str).unwrap_or(Json::Null),
+                                l.engine_version
+                                    .as_ref()
+                                    .filter(|_| l.engine.as_deref() == Some("renode"))
+                                    .map(Json::str)
+                                    .unwrap_or(Json::Null),
                             ),
                         ])
                     })
