@@ -296,6 +296,14 @@ pub struct NgspiceConfig {
     pub lattice: Option<Time>,
     /// The progress watchdog (ADR-015 D1).
     pub watchdog: Watchdog,
+    /// The lattice snap (ADR-015 Amendment 4, the H2 fix of the SAADC
+    /// stall; default `true`): a solver step that would land more than the
+    /// grant tolerance but less than [`snap_s`] short of the grant or of the
+    /// next lattice point lands on it, so ngspice's TMAX steps never drift
+    /// off the lattice into a sub-femtosecond step to `kL`. `false` is the
+    /// clamp before H2, kept only to reproduce the stall (`bb run
+    /// --ngspice-lattice-snap off`, `make ngspice-stall`).
+    pub lattice_snap: bool,
     /// Bench tables (ADR-010 D3, D4): `EXTERNAL` sources whose values come
     /// from a table handed over once, so no analog value crosses the kernel
     /// boundary per solver point.
@@ -347,6 +355,7 @@ impl NgspiceConfig {
             handoff_spin: Duration::ZERO,
             lattice: None,
             watchdog: Watchdog::default(),
+            lattice_snap: true,
             tables: Vec::new(),
         }
     }
@@ -595,6 +604,8 @@ struct State {
     new_bkpts: Vec<(f64, f64)>,
     /// Grant lattice in fs (0: none).
     lattice_fs: u64,
+    /// [`NgspiceConfig::lattice_snap`] (ADR-015 Amendment 4).
+    lattice_snap: bool,
     /// The early-stop watch of the current `advance_until` grant (ADR-003
     /// D5); `None` for `advance_to`.
     until: Option<Until>,
@@ -882,6 +893,7 @@ impl State {
             corners: Vec::new(),
             new_bkpts: Vec::new(),
             lattice_fs: 0,
+            lattice_snap: true,
             until: None,
             error: None,
             handoff_spin: Duration::ZERO,
@@ -900,12 +912,15 @@ impl State {
     }
 
     /// Limit the next solver step so it lands exactly on the grant, on the
-    /// next lattice point (ADR-003 D2) and on the next ramp corner.
+    /// next lattice point (ADR-003 D2) and on the next ramp corner, and
+    /// stretch a step that would land just short of the grant or lattice
+    /// point onto it (ADR-015 Amendment 4).
     fn clamp(&self, time: f64, delta: &mut f64) {
-        let mut limit = self.target_s;
+        let mut boundary = self.target_s;
         if let Some(l) = next_lattice_s(time, self.lattice_fs) {
-            limit = limit.min(l);
+            boundary = boundary.min(l);
         }
+        let mut limit = boundary;
         if let Some(&c) = self.corners.iter().find(|&&c| c > time + CORNER_MIN_S) {
             limit = limit.min(c);
         }
@@ -916,8 +931,33 @@ impl State {
         }
         if time + *delta > limit && limit > time {
             *delta = limit - time;
+        } else if self.lattice_snap && limit == boundary && boundary > time {
+            // ADR-015 Amendment 4 (H2): a step that would land just short of
+            // the grant or lattice point, more than the grant tolerance below
+            // it but within the snap distance, lands on it instead. Without
+            // this, ngspice's own steps of exactly TMAX = L drift by rounding
+            // (`time + TMAX` is rounded, and the lattice points are not TMAX
+            // apart in f64) until a point lands just outside the tolerance,
+            // and the clamp then adds a sub-femtosecond step to `kL`. Such a
+            // micro-step restarts the integration at about 1e-16 s, where a
+            // board's Newton iteration can fail to converge at every step
+            // (the SAADC stall). A landing within the tolerance is left as
+            // it is, so a run that never drifts that far keeps its solver
+            // points bit for bit.
+            let gap = boundary - (time + *delta);
+            if gap > grant_tolerance_s(boundary) && gap <= snap_s(*delta) {
+                *delta = boundary - time;
+            }
         }
     }
+}
+
+/// The largest gap (s) between a step's landing and the grant or lattice
+/// point after it that [`State::clamp`] closes by stretching the step:
+/// [`CORNER_MIN_S`], and at most 1 % of the step, so a stretch never changes
+/// a step by more than ngspice's own truncation-error control would.
+fn snap_s(delta: f64) -> f64 {
+    CORNER_MIN_S.min(0.01 * delta)
 }
 
 /// The first lattice point after the solver time `time` (s), for a lattice
@@ -1924,6 +1964,7 @@ fn claim(
     st.tables = tables;
     st.handoff_spin = cfg.handoff_spin;
     st.lattice_fs = cfg.lattice.map_or(0, Time::as_fs);
+    st.lattice_snap = cfg.lattice_snap;
     st.wd = WatchCount::new(cfg.watchdog);
     Ok(())
 }

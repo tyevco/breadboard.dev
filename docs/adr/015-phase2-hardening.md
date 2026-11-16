@@ -6,7 +6,9 @@
   as built (D5; it corrects D5's claim that a Renode client reconnects by
   itself). Amendment 3: H4 as built (D6, D7; the declarations live in
   Rust, not in `// bb-plugin-deps:` header lines, and a matching legacy
-  hash is kept until S's relock).
+  hash is kept until S's relock). Amendment 4: H2 as built, the lattice
+  snap (approver decision D-SNAP, 2026-11-16; it resolves ADR-008
+  Amendment 11 Finding 2).
 - **Part of:** the Phase 2 plan, milestones H1-H4 and H6. H2 is the
   SAADC-stall spike that D1 makes bounded.
 - **Normative changes when implemented:**
@@ -963,3 +965,192 @@ the other, at a 1-minute load of 1.7-2.5 before each. Both were green:
 - `POOL=0`: 540 s.
 
 `cargo-test` took 146.0 s in the pooled run.
+
+## Amendment 4: H2 as built, the lattice snap (decision D-SNAP, 2026-11-16)
+
+Milestone H2 was D1's timeboxed spike on the SAADC stall. Its report found
+the cause in `NgspiceEngine`, not in the `saadc_se` view, and stopped at an
+approval point with an engine fix that changes committed references. The
+approver decided (**D-SNAP**, 2026-11-16):
+
+- the **lattice snap** is approved, as H2, in place of D1's three view
+  candidates;
+- `bb run --ngspice-lattice-snap off` keeps the clamp before H2, so `make
+  ngspice-stall` still reproduces the 77.43 ms stall for H1's gate, and
+  `run.json` records the option only when it is off (the `spec/project.md`
+  line is approved);
+- `make ngspice-stall` adds H2's completion runs: 300 ms at L = 5, 10 and
+  20 us, and a 1 s E3 run;
+- the changed references are re-recorded with this reason and their
+  measured per-sample differences, at most 1 uV per sample, with the
+  0.285 ns `pin_edge` shift recorded.
+
+### The cause
+
+- **The drift.** In a quiet stretch ngspice steps exactly TMAX = L. The
+  sum `time + TMAX` is rounded, and the lattice points `kL` (exact in fs,
+  converted to f64) are not TMAX apart in f64. So the accepted points
+  drift off the lattice by rounding, an ulp or so per step.
+- **The micro-step.** `next_lattice_s` counts a point within the grant
+  tolerance (`max(4 ulp, 0.5 fs)`) of `kL` as on it. Once the drift takes a
+  landing just outside the tolerance, short of `kL`, the clamp limited the
+  next step to `kL - time`: a sub-femtosecond step.
+- **The limit cycle.** Such a step restarts the integration at about
+  1e-16 s. On E3's board with the loading view, trapezoidal integration's
+  Newton iteration then fails to settle at every step: the crawl of about
+  0.3 fs per accepted point that H1's watchdog trips on (Amendment 1).
+- **Not the view.** The loading view only makes the board stiff enough to
+  fall into the cycle early. The committed E3 board (`load=none`) falls
+  into it at 502.47 ms of a 1 s `homing_step.elf` run, which no gate ran
+  that long (H2's open finding).
+- **D1's candidates, as the spike measured them** (its logs, not re-run
+  here): a fixed VPRE source in place of `V(vdd)` (candidate 1's stand-in)
+  completed 300 ms at 10 and 20 us, but stalled at 253.21 ms at 5 us and
+  at 524.96 ms in 1 s. `METHOD=GEAR` in the deck (candidate 2) completed
+  the repro, but it is a deck-wide option that changes the integration of
+  every element, not a view fix. Neither touches the micro-step.
+
+### What was built
+
+- **The snap** (`State::clamp`, `engines/analog-ngspice`). When no ramp or
+  table corner comes first and a step would land short of the grant or
+  the next lattice point by a gap `g` with `tolerance < g <= snap`, the
+  step is stretched to land on the point. `snap = min(1 ps, 1 % of the
+  step)`, so a stretch never changes a step by more than ngspice's own
+  truncation-error control would. A landing within the tolerance is left
+  as it is, so a run whose steps never drift that far keeps its solver
+  points. Measured: the spike, E2's `s1`, `s50` and `c5` and their
+  `load = "none"` twins, E3, and six of the seven bench cases are
+  byte-identical.
+- **The option.** `NgspiceConfig::lattice_snap` (default `true`) and
+  `bb run --ngspice-lattice-snap on|off`. `off` is exactly the clamp before
+  H2: with it, every committed reference on `main` before H2 regenerates
+  byte for byte (all of `make golden-update` and `make bench-update`, E2's
+  eight references included). `bb run` prints a warning when it is off,
+  and a project run's `run.json` records `options.ngspice_lattice_snap:
+  "off"`; the key is absent otherwise, so no other `run.json` changes
+  (`spec/project.md` section 6).
+- **`bb pkg test`** runs with the snap on, like `bb run`. No vector or
+  qualification changed (`make packages`).
+- **Determinism and the protocol.** The snap is a pure function of the
+  solver's `time` and step and adds no state. Grants, the lattice,
+  `ceil_L` and the boundaries are unchanged; a solver point still lands
+  on every lattice point. Every changed run below has identical grant
+  records.
+- **Tests** (`cargo-test`):
+  - `lattice.rs`, `quiet_tmax_steps_take_no_micro_step`: 400 ms of a
+    settled RC in 10 ms grants takes no step under 1 ps with the snap,
+    every point the clamp put on a lattice point is within 0.5 fs of it,
+    and it takes fewer points; the negative control (`lattice_snap =
+    false`) takes such micro-steps. Measured: with the snap no step under
+    1 ps, the largest `|t - kL|` 5.0e-16 s, 40 062 points; without it 517
+    micro-steps, points up to 5.2e-13 s off the lattice, 41 891 points.
+  - `threshold.rs`, `lattice_point_crossings_after_2s_are_partition_independent`:
+    its expected trace changes. The lattice points had drifted a few ulps
+    short by 4.137 s, so the PULSE corner value came out a hair under
+    `vih` and PB0 rose one point later. Now the rise is exactly at 4.137 s
+    and the fall one point after 4.153 s. The partition independence it
+    tests holds as before.
+
+### The changed references
+
+Each was regenerated twice from the same tree: with the snap off (it gave
+the committed files byte for byte) and with it on. The differences, from
+the two runs' `nets.csv` and non-grant records (`nets.vcd` follows
+`nets.csv`). The outputs are written in whole microvolts, so "1 uV" is one
+count of the last digit: the solver's values differ by less than 2 uV.
+
+| Reference | Values that differ | Largest difference | Non-grant records |
+| --- | --- | --- | --- |
+| `feedback` (one-cell, and the default run's snapshots) | 28 of SENSE | 1 uV | U1.PB0's fall at 101.4525 ms: -285 275 fs (0.285 ns) |
+| `feedback-open` (partition hashes) | 31 of SENSE | 1 uV | the same fall: -285 275 fs |
+| `nrf-feedback` | 42 of SENSE | 1 uV | U1.P0.11's fall at 101.4282 ms: -283 679 fs (0.284 ns) |
+| `adc` | 10 of ADC_IN | 1 uV | identical |
+| `adc-open` | 11 of ADC_IN | 1 uV | identical |
+| `adc-stock` | 19 of ADC_IN | 1 uV | identical |
+| `adc-open-stock` | 11 of ADC_IN | 1 uV | identical |
+| `adc-kicad` | 11 of ADC_IN | 1 uV | identical |
+| E1 `dms-rail` ok-cold | 369 (VLED 5, LED_DIN 182, LED_DIN_R 182) | 1 uV | identical |
+| E1 ok-nominal | 373 (VLED 4, LED_DIN 182, LED_DIN_R 182, VSYS 5) | 1 uV | identical |
+| E1 wrong-cold | 372 (LED_DIN 185, LED_DIN_R 186, VSYS 1) | 1 uV | identical |
+| E1 wrong-nominal | 373 (VLED 1, LED_DIN 186, LED_DIN_R 186) | 1 uV | identical |
+| `bench` trigger | 1 of RC_N | 1 uV | identical |
+| E2 `dms-vsense` sag | 4 of VLED | 1 uV | identical |
+| E2 rec | 1 of VLED | 1 uV | identical |
+
+- **The edges.** The two `pin_edge` shifts are `digital_in` threshold
+  crossings, interpolated between solver points that moved. Every MCU
+  edge that follows them is unchanged, because each is applied at
+  `ceil_L` of the crossing, which did not move.
+- **`make gdb-test`**'s E1 check compares against E1's ok-cold hashes, so
+  it follows them.
+- **E1's VLED snapshots** (`tests/golden/dms-rail/ok-*/vled.csv`) were
+  already stale before H2. P1 restated the TPS22917 view and re-recorded
+  E1's hashes but not its snapshots, which `make dms-rail-test` checks
+  only within 1 mV. Against the snap-off regeneration, the committed
+  ok-cold snapshot differed at 235 points, by up to 96 uV, and ok-nominal
+  at 2 points by 1 uV. The re-recorded snapshots carry both changes; H2's
+  share is 1 point of ok-cold, by 1 uV.
+
+### Deviation: E2's sag and rec are not byte-identical
+
+D-SNAP records "E2 and E3 byte-identical" from H2's spike, which ran on
+`main` before P1. P1 then restated the TPS22917 view, which drives VLED,
+and re-recorded E2's `sag` and `rec`. On P1's views the snap moves 4 of
+`sag`'s VLED samples and 1 of `rec`'s by 1 uV; E2's other six cases
+are byte-identical. These two references are re-recorded under the plan's
+own H2 rule for E2 ("changed E2 hashes are re-recorded with the reason and
+the per-sample difference, at most 1 uV"). E2's checks pass on them
+(`make dms-vsense`, below). E3 is byte-identical.
+
+### Gates, measured
+
+On `a944cf2` (`main` with B2, E1 and P1) plus this change, on 2026-11-16.
+
+- **`make ngspice-stall`: all checks passed** (1 min 46 s, idle host,
+  1-minute load 0.3 at the start).
+  - Part 1, the snap off: the repro ends in `NoProgress:ngspice at
+    77430000059213fs` in the cell (77.43 ms, 77.44 ms], as in H1, in
+    23.9 s with bb's peak RSS 38.6 MB; the outputs before the error equal a
+    `--for 77430us` run; `--ngspice-watchdog 20000,10000` trips identically
+    twice; the committed board runs 100 ms clean.
+  - Part 2, the snap on: the repro completes 300 ms at
+    `--renode-quantum` 5 us (34.2 s), 10 us (19.5 s) and 20 us (11.7 s),
+    and 1 s at 10 us (52.7 s); the committed E3 board completes 1 s
+    (50.8 s); with the snap off that run stalls at 502.47 ms, in the cell
+    (502470us, 502480us].
+- **`make dms-vsense` (E2): gate PASS** (20 min 45 s, beside `make check
+  POOL=0`): every `check_dms_vsense.py` check, the refusal and the
+  determinism runs; all eight references equal `tests/golden/dms-vsense` in every record
+  (`sag` and `rec` as re-recorded here, the other six unchanged); the
+  defaults equal them except grants.
+- **`make dms-home` (E3): gate PASS** (37 min 19 s, beside `make check`):
+  `step`, `typ`, `worst` and `park` equal their committed one-cell hashes
+  in every record, unchanged; analog-first byte-identical; `--max-quantum
+  1ms` equal except grants; 10 runs of `typ` byte-identical.
+- **`make docs-plots-check`: PASS** (177 s). No figure changed: the E1
+  and E2 differences are below the plots' resolution.
+- **`make check`: green, pooled** (1 049 s, beside `make dms-home`, load
+  up to 28) **and `POOL=0`** (1 313 s, beside `make dms-home` and `make
+  dms-vsense`). Every step of `make test` that reads a changed reference
+  passes on it: `feedback`, `feedback-order`, `nrf-feedback`, `adc`,
+  `adc-order`, `adc-stock`, `adc-kicad`, `dms-rail-test`, `bench-test`,
+  `ec-reconnect` and `gdb-test`; `dms-vsense-test` and `dms-home-test`
+  unchanged; `packages` unchanged.
+- **The CI gates on the changed references: PASS** (210 s in all):
+  `partition` (the spike and `feedback-open`), `feedback-open`,
+  `lookahead-inert` (117 grants with lookahead on, as before),
+  `lookahead-equiv`, `adc-equiv`, `lattice-check` and `make dms-rail` (the
+  M6 gate, with its 10-run determinism).
+- **`make pool-equiv`: PASS** (22 min 52 s): 30 configurations, two
+  rounds, every pooled run byte-identical to its fresh run and to the
+  committed hashes, the re-recorded ones included.
+
+### Budget
+
+H2's `make test` budget is none ("—"). It adds one engine test,
+`quiet_tmax_steps_take_no_micro_step` (the `lattice` test binary takes
+0.57 s for its three tests), and changes no
+gate's runtime measurably. `make ngspice-stall` is nightly. With H2's runs
+it took 1 min 46 s on an idle host (load 0.3); its H1 repro took 23.9 s,
+against 77.9-120.6 s under load in H1.

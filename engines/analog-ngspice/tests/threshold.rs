@@ -402,21 +402,25 @@ fn lattice_point_crossings_after_2s_are_partition_independent() {
         true,
     );
     println!("one-cell trace {t1:?}");
-    // The rise's corner value comes out a hair under 2.0 V, so PB0 rises
-    // at the next solver point, inside the cell after 4.137 s. The fall ends
-    // on V1 = 0.8 V exactly: vil is reached exactly on the lattice point.
+    // The rise ends on V2 = 2.0 V = vih exactly on the lattice point 4.137
+    // s: vih is reached exactly at kL. (Before ADR-015 Amendment 4 the
+    // lattice points had drifted a few ulps short by then, the corner value
+    // came out a hair under 2.0 V and PB0 rose one point later; the fall
+    // then ended on 0.8 V exactly. Now the point on 4.153 s is the f64
+    // nearest it, where the PULSE's own arithmetic gives a hair over vil, so
+    // PB0 falls at the next point, inside the cell after it.)
     let got: Vec<(Time, Level)> = t1
         .iter()
         .map(|tr| (tr.t, tr.signal.level().unwrap()))
         .collect();
     assert_eq!(got.len(), 2, "{got:?}");
-    assert_eq!(got[0].1, Level::High);
-    assert!(got[0].0 > Time::from_ms(4137) && got[0].0 <= Time::from_ms(4137) + L);
     assert_eq!(
-        got[1],
-        (Time::from_ms(4153), Level::Low),
-        "vil reached exactly at the lattice point"
+        got[0],
+        (Time::from_ms(4137), Level::High),
+        "vih reached exactly at the lattice point"
     );
+    assert_eq!(got[1].1, Level::Low);
+    assert!(got[1].0 > Time::from_ms(4153) && got[1].0 <= Time::from_ms(4153) + L);
     let want: Vec<Time> = got.iter().map(|&(t, _)| t).collect();
     assert_eq!(t1, t2, "10 ms grants change the trace");
     assert_eq!(t1, t3, "1 s grants change the trace");

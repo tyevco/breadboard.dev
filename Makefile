@@ -1275,13 +1275,16 @@ measured-cost-table-dms-home-project: firmware bb
 	    "--lookahead off" "" - - - -- $(DMS_HOME_PSTEP_ARGS)
 
 # --- Phase 2 H1: ngspice robustness (ADR-015 D1-D4) --------------------------------------------
-# ADR-015 G1, the progress watchdog (D1): the SAADC stall repro (e3/board.cir with P0.02 on the
-# loading saadc_se view, homing_step.elf, 100 ms) ends in NoProgress:ngspice at 77.43 ms in the cell
+# ADR-015 G1, the progress watchdog (D1), with the lattice snap off (--ngspice-lattice-snap off,
+# the step clamp before H2): the SAADC stall repro (e3/board.cir with P0.02 on the loading saadc_se
+# view, homing_step.elf, 100 ms) ends in NoProgress:ngspice at 77.43 ms in the cell
 # (77.43 ms, 77.44 ms] within STALL_MAX_S (120 s) and with bb's peak RSS under STALL_MAX_RSS_KB
 # (500 MB); the outputs before the error equal a run that ends at 77.43 ms; a lower limit trips
-# identically twice; the committed board (load=none) is the negative control. Fresh Renode, under
-# the host measurement lock (a timing gate; about 3.5 minutes, so not in make test: its tier is
-# nightly, ADR-015 D11). scripts/ngspice_stall.sh.
+# identically twice; the committed board (load=none) is the negative control. Then Phase 2 H2
+# (ADR-015 Amendment 4, the lattice snap, bb's default): the repro completes 300 ms at
+# --renode-quantum 5us, 10us and 20us and 1 s, and the committed E3 board completes 1 s (with the
+# snap off it stalls at 502.47 ms). Fresh Renode, under the host measurement lock (a timing gate;
+# about 5 minutes, so not in make test: its tier is nightly, ADR-015 D11). scripts/ngspice_stall.sh.
 NGSPICE_STALL_OUT ?= out/ngspice-stall
 measured-ngspice-stall: firmware bb
 	bash scripts/ngspice_stall.sh $(BB) $(NGSPICE_STALL_OUT)

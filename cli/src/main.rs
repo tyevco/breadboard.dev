@@ -93,7 +93,8 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
               [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
               [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
-              [--ngspice-watchdog 200000,10000] [--assert <file.toml> ...]
+              [--ngspice-watchdog 200000,10000] [--ngspice-lattice-snap on|off]
+              [--assert <file.toml> ...]
        bb assert <run-dir> --assert <file.toml> [--assert ...] [--bench <bench.toml>]
               [--out <file>]
        bb pool run|start|stop|status ...   (bb pool --help)
@@ -216,7 +217,14 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  consecutive points that do not advance the time by a whole
                  fs, fails the run with NoProgress:ngspice instead of hanging.
                  Counts, not wall time, so the failure is deterministic; a
-                 board that needs more says so here (recorded in run.json)";
+                 board that needs more says so here (recorded in run.json)
+  --ngspice-lattice-snap
+                 on (default) or off: ngspice's lattice snap (ADR-015
+                 Amendment 4). A solver step that would land just short of
+                 the grant or the next lattice point lands on it. off is the
+                 step clamp before H2, kept only to reproduce the SAADC stall
+                 (make ngspice-stall); it changes results (recorded in
+                 run.json as ngspice_lattice_snap: \"off\")";
 
 struct RunArgs {
     /// `--netlist`: a Phase 0 board file; `None`: a project.
@@ -257,6 +265,9 @@ struct RunArgs {
     gdb_wait: bool,
     /// `--ngspice-watchdog` (ADR-015 D1).
     watchdog: Watchdog,
+    /// `--ngspice-lattice-snap on` (true, the default) or `off` (ADR-015
+    /// Amendment 4).
+    lattice_snap: bool,
     /// `--assert` files (ADR-010 Amendment 3).
     asserts: Vec<PathBuf>,
 }
@@ -420,6 +431,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut gdb = None;
     let mut gdb_wait = None;
     let mut watchdog = Watchdog::default();
+    let mut lattice_snap = true;
     let mut asserts = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -513,6 +525,10 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--ngspice-watchdog" => {
                 watchdog =
                     parse_watchdog(&val(a)?).map_err(|e| format!("--ngspice-watchdog: {e}"))?
+            }
+            "--ngspice-lattice-snap" => {
+                lattice_snap =
+                    parse_on_off(&val(a)?).map_err(|e| format!("--ngspice-lattice-snap: {e}"))?
             }
             "--renode-pool" => {
                 renode_pool = match val(a)?.as_str() {
@@ -608,6 +624,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         gdb,
         gdb_wait: gdb_wait.unwrap_or(true),
         watchdog,
+        lattice_snap,
         asserts,
     })
 }
@@ -1307,6 +1324,14 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
     ncfg.adc_push = a.adc_push;
     ncfg.watchdog = a.watchdog;
+    ncfg.lattice_snap = a.lattice_snap;
+    if !a.lattice_snap {
+        eprintln!(
+            "bb run: warning: --ngspice-lattice-snap off: ngspice's step clamp before ADR-015 \
+             Amendment 4, kept only to reproduce the SAADC stall; the results differ from the \
+             committed references"
+        );
+    }
     // The bench (ADR-010 D3, D4): its tables, handed over once, and the
     // sources a triggered action drives through the bench engine.
     ncfg.tables = stim.tables.clone();
@@ -1674,6 +1699,11 @@ fn run(a: RunArgs) -> Result<(), String> {
         if a.gdb.is_some() {
             options.push(("gdb", bbcore::cjson::Json::Bool(true)));
             options.push(("gdb_wait", bbcore::cjson::Json::Bool(a.gdb_wait)));
+        }
+        if !a.lattice_snap {
+            // ADR-015 Amendment 4: only when off, so every other run's
+            // run.json is unchanged.
+            options.push(("ngspice_lattice_snap", bbcore::cjson::Json::str("off")));
         }
         rj.push(("options".into(), bbcore::cjson::Json::obj(options)));
         rj.push((

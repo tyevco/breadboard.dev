@@ -622,8 +622,11 @@ locked hashes); `deck_sha256`;
 `options` (every run option that can change results, the probes, and
 `ngspice_watchdog`: `max_points_per_cell` and
 `max_points_without_progress`, the progress watchdog's limits, which decide
-whether a run completes or fails with `NoProgress`, ADR-015 D1; with
-`--gdb` also `gdb` and `gdb_wait`); `debug`, `true` for a run with a
+whether a run completes or fails with `NoProgress`, ADR-015 D1;
+`ngspice_lattice_snap`: `"off"`, only for a run with
+`bb run --ngspice-lattice-snap off`, ngspice's step clamp before the
+lattice snap, kept to reproduce the SAADC stall (ADR-015 Amendment 4), and
+absent otherwise; with `--gdb` also `gdb` and `gdb_wait`); `debug`, `true` for a run with a
 debugger attached (`bb run --gdb`, ADR-008 D10 and Amendment 7) and
 absent otherwise: a debug run is never compared against a reference; and
 `versions`. `bb run` flags a view whose provenance is `estimated` or

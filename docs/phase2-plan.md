@@ -331,7 +331,7 @@ Three rules are new (section 7):
 | --- | --- | --- | --- | --- |
 | H0 | **Process and baseline.** One `git worktree` per track on ext4 (`~/src/bb-<track>`), each with its own `CARGO_TARGET_DIR`, through `make worktree TRACK=<name>`. A host lock (`flock ~/.cache/bb/measure.lock`) taken by every perf, cost and startup target. The gate-budget table in AGENTS.md. CI caches the Renode tarball and the apt packages. **The runtime baseline:** `make check` on an idle ext4 worktree, and each CI job's wall time, measured N = 3 | The baseline committed in the budget table; two concurrent tracks build without crossing artifacts (a test that builds both and compares crate hashes); cost targets refuse to run while another one holds the lock | — | — |
 | H1 | **ngspice robustness.** A deterministic progress watchdog (an error, not a hang). Engine-owned `.save` of exactly the vectors the engine reads. B-expression lint (function table and arity). Operating-point fail-fast | The SAADC stall repro (`e3/board.cir` with the loading view, 100 ms) ends in `NoProgress:ngspice` at 77.43 ms within the budget, with bounded memory. Every committed hash unchanged (`make test`, `make dms-home`, `make dms-vsense`). E3 `typ` peak RSS with `.save` measured over the full 2.7 s first, then gated at that figure + 20 % (from 1.5 GB). A three-argument `min()` in a view is refused by `bb pkg lint` (it segfaults libngspice 42) | +30 s in `make test` | 015 D1-D4 |
-| H2 | **SAADC loading-view stall**, a timeboxed spike (1 week) like Phase 1's S1. Candidates in order: VPRE as a per-acquisition value from the engine; qualification under a Gear option set; a view-local restatement of `Brst` | E3's homing with the loading view (`homing_step.elf`, 300 ms) completes. E2's `make dms-vsense` checks still pass. Changed E2 hashes are re-recorded with the reason and the per-sample difference (≤ 1 µV, or justified). If no candidate works in the timebox, the fallback: the view is qualified only for periodic sampling, and `bb run` refuses it on a board where the firmware stops sampling (recorded) | — | 015 D1, 008 |
+| H2 | **SAADC loading-view stall**, a timeboxed spike (1 week) like Phase 1's S1. Candidates in order: VPRE as a per-acquisition value from the engine; qualification under a Gear option set; a view-local restatement of `Brst` | E3's homing with the loading view (`homing_step.elf`, 300 ms) completes. E2's `make dms-vsense` checks still pass. Changed E2 hashes are re-recorded with the reason and the per-sample difference (≤ 1 µV, or justified). If no candidate works in the timebox, the fallback: the view is qualified only for periodic sampling, and `bb run` refuses it on a board where the firmware stops sampling (recorded) (as built, under approver decision D-SNAP, section 10: the cause was the engine's lattice clamp, not the view; the **lattice snap** in `NgspiceEngine`, with `bb run --ngspice-lattice-snap off` to reproduce the stall. `make ngspice-stall`: H1's 77.43 ms stall with the snap off; with it the repro completes 300 ms at 5, 10 and 20 µs and 1 s, and the committed E3 board 1 s (with the snap off it stalls at 502.47 ms). E3 and six of E2's eight cases byte-identical; E2's `sag` and `rec` (on P1's views) and the references of `feedback`, `feedback-open`, `nrf-feedback`, the ADC boards, `adc-kicad`, E1 and `bench` re-recorded, at most 1 µV per sample, two `digital_in` edges moved by 0.285 and 0.284 ns; ADR-015 Amendment 4) | — | 015 D1, 008 |
 | H3 | **External Control exposure.** A reverse-connection External Control client: `bb` listens on loopback and Renode connects out (`CreateExternalControlClient`); `bb` admits only the connection whose owning process is its own Renode child. Renode 1.17.0's server has no accept hook (verified in `ExternalControlSocket.cs`) | A local foreign client is refused N/N (N = 20) against both the Renode side (nothing listens) and `bb`'s listener. `make ec-reconnect`, `make ec-long` and `make pool-equiv` unchanged | +10 s | 015 D5 |
 | H4 | **Lock churn and the package-path trap.** A platform hash covers the `.repl` and the plugin sources whose types that platform loads, plus the shared ones. `bb open` and `bb run` warn when a lock's `path` differs from the resolved path | Editing `bb_nrf52_saadc.cs` changes no STM32 lock. A modified package beside a board copy is no longer ignored silently. The relock lands in S's commit (as built: `make lock-scope`, `make plugin-scope`, `cli/tests/lock.rs`; ADR-015 Amendment 3) | — | 015 D6-D7 |
 | H5 | **Multi-producer quiet grants** (E3 from 270 000 grants). **G0 first** (one week, before the rest is costed): E3 `typ` measured three ways, the committed run, the digital-only MOT nets at one cell (the model change alone), and D1-D4 on a branch | G0: the protocol gain over the model change ≥ 3× in simulation time, or ADR-014 is withdrawn and `dms-home` stays nightly. Then `make dms-home`: every case equal to its one-cell reference except grant records (a true equivalence: the partitions differ); E3 `typ` ≥ 3× faster in simulation than the model change alone, and at most 5 000 grants (from 270 000); no promise broken. A new gate `make multi-producer` on a small synthetic board, in `make test`. The project route (R1) measured and reported | +30 s (`multi-producer`) | 014 |
@@ -759,6 +759,23 @@ check added:
 
 This is ADR-009 Amendment 2, and it is in section 2 (W1), section 4 (P0)
 and section 5 (item 1).
+
+**Round 3 (2026-11-16), on H2's report: D-SNAP.** H2's spike found the
+SAADC stall's cause in `NgspiceEngine`'s lattice clamp (a sub-femtosecond
+step after TMAX steps drift off the lattice, then a trapezoidal Newton
+limit cycle), and stopped at an approval point because the fix changes
+committed references. The approver approved the **lattice snap** as H2:
+
+- `bb run --ngspice-lattice-snap off` and a `run.json` key (only when
+  off) keep the stall reproducible for H1's gate; the `spec/project.md`
+  line for the key is approved;
+- `make ngspice-stall` adds H2's completion runs (300 ms at 5, 10 and
+  20 µs, and a 1 s E3 run that completes);
+- the changed references are re-recorded with this reason and their
+  measured per-sample differences (at most 1 µV per sample), with the
+  0.285 ns edge recorded.
+
+This is ADR-015 Amendment 4, and it is in section 4 (the H2 row).
 
 **This build's scope.** Hardening and the technical exit:
 
