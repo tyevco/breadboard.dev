@@ -98,7 +98,7 @@ WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
                   nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test \
-                  bench-test bench-gate dms-home-project assert-test assert-gate
+                  bench-test bench-gate dms-home-project assert-test assert-gate bb-test-gate
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -974,7 +974,8 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/adc/kicad examples/dial-me-spinner examples/nrf-saadc/board.cir \
               examples/dial-me-spinner/system tests/device-smoke/board.cir \
               examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir examples/bench \
-              examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step
+              examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step \
+              examples/dial-me-spinner/e2/none examples/dial-me-spinner/e2/c5 examples/dial-me-spinner/e2/c5-none
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages \
              examples/bench/packages examples/dial-me-spinner/e3/packages
@@ -1026,6 +1027,23 @@ pooled-assert-test: bb
 	$(ASSERT_ENV) bash scripts/assert_gate.sh test $(BB) $(ASSERT_OUT)-test
 pooled-assert-gate: bb
 	$(ASSERT_ENV) bash scripts/assert_gate.sh gate $(BB) $(ASSERT_OUT)
+
+# --- Phase 2 B3: bb test, bb-test/0, test.json and JUnit (ADR-010 D8-D9, Amendment 5) ----------
+# make dms-rail-test, dms-vsense-test and dms-home-test (in make test) run examples/dial-me-spinner/
+# tests/{e1,e2,e3}.toml through `bb test`. bb-test-gate (scripts/bb_test_gate.sh, about 15 min): bb
+# test's semantics and negative controls (tests/bb-test), the G9 refusal, 10 runs of each dms-* test
+# file with test.json byte-identical (the last with every Renode fresh), check_bb_test.py on every run,
+# and the JUnit reporter CI pins reading every junit.xml (scripts/junit_reporter_check.sh: dorny/
+# test-reporter's java-junit parser in a node container; the network once, for its clone, image and
+# npm ci). bb-test-cost (measurement lock, idle host): the three targets as bb test files against the
+# Phase 1 scripts' runs (scripts/<x>.sh test-scripted), interleaved, medians: B3's budget is +0 s.
+.PHONY: bb-test-gate pooled-bb-test-gate measured-bb-test-cost
+BB_TEST_GATE_OUT ?= out/bb-test-gate
+pooled-bb-test-gate: bb
+	DMS_RAIL_WORK=$(BB_SCRATCH)/bb-test-rail DMS_VSENSE_WORK=$(BB_SCRATCH)/bb-test-vsense \
+	  bash scripts/bb_test_gate.sh $(BB) $(BB_TEST_GATE_OUT)
+measured-bb-test-cost: firmware bb
+	$(BB) pool run --slots $(POOL_SLOTS) -- bash scripts/bb_test_cost.sh $(BB) out/bb-test-cost
 
 # ADR-006 G1 and the package gates of `make test`: every part.toml, pins.toml,
 # test vector and bb.lock validates against spec/schema (python3-jsonschema);
@@ -1111,7 +1129,10 @@ DMS_RAIL_WRONG_ARGS = --project $(DMS_RAIL_WORK)/proj-wrong --bench $(DMS_RAIL_W
 
 # In `make test`: both firmwares at both benches at bb's defaults: check_dms_rail.py (the correct
 # order passes LED-DATA-V4, LSW-3 and LSW-2; the wrong order fails exactly LSW-3), the committed
-# one-cell hashes, the VLED snapshots, a clean PIN_CNF audit, and analog-first byte-identical.
+# one-cell hashes, the VLED snapshots, a clean PIN_CNF audit, and analog-first byte-identical. Since
+# Phase 2 B3 a bb test file (examples/dial-me-spinner/tests/e1.toml: the runs, the assertions, the
+# hashes, analog-first) and the checks that are not assertion kinds on its outputs; its test.json and
+# junit.xml in out/dms-rail-test (scripts/dms_rail.sh test).
 pooled-dms-rail-test: bb
 	bash scripts/dms_rail.sh test $(BB) $(DMS_RAIL_OUT)-test
 
@@ -1162,7 +1183,9 @@ export DMS_VSENSE_WORK
 DMS_VSENSE_ARGS  = --project $(DMS_VSENSE_WORK)/proj-50ms --bench $(DMS_VSENSE_WORK)/proj-50ms/bench/vsense.toml \
                    --for 650ms --probe net:VSYS_SENSE --sample-rate 10kHz
 
-# In `make test`: s50, s50-none, c5 and c5-none at bb's defaults, check_dms_vsense.py on them (the
+# In `make test` (since Phase 2 B3 the bb test file examples/dial-me-spinner/tests/e2.toml, on the
+# project and its variants e2/none, e2/c5, e2/c5-none, then the scripts' checks on its outputs):
+# s50, s50-none, c5 and c5-none at bb's defaults, check_dms_vsense.py on them (the
 # analog side against load = "none", the codes, the C5 / 10 fault), their committed one-cell
 # hashes (non-grant records, nets.csv, nets.vcd) and run.json's record of each binding's load.
 pooled-dms-vsense-test: bb
@@ -1221,7 +1244,10 @@ DMS_HOME_PSTEP_ARGS = --project $(DMS_HOME_E3)/step --bench $(DMS_HOME_E3)/step/
 DMS_HOME_PTYP_ARGS  = --project $(DMS_HOME_E3)/home --bench $(DMS_HOME_E3)/home/bench.toml --for 2700ms \
                       --sample-rate 10kHz
 
-# In `make test` (about 40 s): the E3 boards are the generator's output, the step case at bb's
+# In `make test` (about 40 s; since Phase 2 B3 the runs, the step test's UART phases, the hashes and
+# analog-first are the bb test file examples/dial-me-spinner/tests/e3.toml, and check_dms_home.py
+# --step and compare_project_run.py read its outputs): the E3 boards are the generator's output, the
+# step case at bb's
 # defaults and with --engine-order analog-first (byte-identical), check_dms_home.py --step (one full
 # step at 446 PPS against the suite's test_firmware_microstep_pwm), its committed one-cell hashes;
 # beside them (Phase 2 R1) the step case on the project route, e3/step: its committed one-cell
@@ -1470,7 +1496,7 @@ MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-tabl
                    adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
                    setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \
-                   ngspice-stall bench-perf
+                   ngspice-stall bench-perf bb-test-cost
 .PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
 $(MEASURE_TARGETS):
 	@bash scripts/measure_lock.sh $@ $(MAKE) --no-print-directory measured-$@

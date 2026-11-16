@@ -1213,8 +1213,11 @@ pub fn renode_command(renode: &Path) -> Command {
     c
 }
 
+/// Give `cmd` `PR_SET_PDEATHSIG` = `SIGKILL`: the child dies when the thread
+/// that spawns it exits (see [`renode_command`]). `bb test` spawns its
+/// `bb run` children with it too.
 #[cfg(target_os = "linux")]
-fn die_with_parent(cmd: &mut Command) {
+pub fn die_with_parent(cmd: &mut Command) {
     use std::os::unix::process::CommandExt;
     extern "C" {
         fn prctl(option: std::os::raw::c_int, ...) -> std::os::raw::c_int;
@@ -1241,7 +1244,7 @@ fn die_with_parent(cmd: &mut Command) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn die_with_parent(_cmd: &mut Command) {}
+pub fn die_with_parent(_cmd: &mut Command) {}
 
 /// Environment switch for the startup JIT profile (ADR-004 Amendment 6):
 /// `BB_RENODE_JIT_PROFILE=off` starts fresh Renode processes without it.

@@ -1,0 +1,64 @@
+# tests/bb-test/negative.toml: bb test's negative controls (milestone B3, ADR-010 D8-D9, Amendment 5;
+# make bb-test-gate). bb test must exit 1, and test.json must list exactly the first four cases as failed,
+# each for its own reason (scripts/bb_test_gate.sh checks which element of each case is not ok):
+#   unexpected-pass   a negative control whose controlled outcome does not happen: PB0-edges is
+#                     expected to fail and passes (ADR-010 D8: an unexpected pass is a failure)
+#   golden-mismatch   tests/bb-test/wrong.sha256: feedback's committed hashes (500 ms) with nets.csv's
+#                     changed (the other files match: only nets.csv differs)
+#   same-as-differs   the polling firmware, same_as the EXTI one: its outputs differ
+#   run-fails         --max-quantum 10ms is not a multiple of --renode-quantum 7us: bb run refuses
+#                     it (an error testcase in junit.xml)
+#   control-ok        a negative control that holds (as expected: the case passes)
+schema = "bb-test/0"
+board = "../../examples/feedback/board.cir"
+
+[defaults]
+for = "210ms"
+targets = { "U1" = "../../examples/feedback/firmware/build/feedback.elf" }
+probes = ["SENSE", "LED_B", "U1.PA5", "U1.PB0", "U1.PA6"]
+
+[[case]]
+name = "unexpected-pass"
+expect = { "PB0-edges" = "fail" }
+
+[[case.assert]]
+name = "PB0-edges"
+kind = "count"
+net = "U1.PB0"
+min = 1
+
+[[case.assert]]
+name = "PA5-edges"
+kind = "count"
+net = "U1.PA5"
+min = 1
+
+[[case]]
+name = "golden-mismatch"
+for = "500ms"
+golden = "wrong.sha256"
+
+[[case]]
+name = "same-as-differs"
+targets = { "U1" = "../../examples/feedback/firmware/build/feedback_poll.elf" }
+same_as = "unexpected-pass"
+
+[[case]]
+name = "run-fails"
+renode_quantum = "7us"
+
+[[case]]
+name = "control-ok"
+expect = { "PB0-many" = "fail" }
+
+[[case.assert]]
+name = "PB0-many"
+kind = "count"
+net = "U1.PB0"
+min = 1000000
+
+[[case.assert]]
+name = "PA5-edges"
+kind = "count"
+net = "U1.PA5"
+min = 1

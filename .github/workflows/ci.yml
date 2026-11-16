@@ -9,6 +9,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    # checks: write for the JUnit report's check run (milestone B3, below).
+    permissions:
+      contents: read
+      actions: read
+      checks: write
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/bb-target
       CARGO_TERM_COLOR: always
@@ -46,6 +51,20 @@ jobs:
 
       - name: Test
         run: make test
+
+      # Milestone B3 (ADR-010 D9, Amendment 5): make test's dms-*-test targets are bb test files;
+      # each writes out/dms-*-test/junit.xml (spec/schema/junit-subset.xsd). The java-junit parser
+      # of this exact commit reads them as bb test writes them: checked locally by make
+      # bb-test-gate (scripts/junit_reporter_check.sh runs the action's own parser and report).
+      # A pull request from a fork gets a read-only token, which cannot create the check run.
+      - name: Publish the bb test JUnit reports
+        if: ${{ !cancelled() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: dorny/test-reporter@d1b5dff021aa968b288b02285a8bf47471c5928a # v3.2.0
+        with:
+          name: bb test (JUnit)
+          path: out/dms-*-test/junit.xml
+          reporter: java-junit
+          fail-on-empty: true
 
   # ADR-004: `make test` runs on a warm Renode pool by default; this job
   # keeps the fresh path (one Renode per run) covered.

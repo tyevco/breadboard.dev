@@ -41,10 +41,14 @@
 #   neg-fb286  the same at tS 286 ms (the FB's maximum): exactly the HOME_N latency check
 #
 #   scripts/dms_home.sh test <bb> <out>   the part in `make test`: the boards are the generator's output,
-#                                         step at bb's defaults and with --engine-order analog-first,
-#                                         check_dms_home.py --step, the committed one-cell hashes; and
-#                                         project-step beside them (its hashes, compare_project_run.py
-#                                         against step)
+#                                         and (since milestone B3 a bb test file, examples/dial-me-spinner/
+#                                         tests/e3.toml, ADR-010 D8) step at bb's defaults and with
+#                                         --engine-order analog-first (byte-identical) and project-step
+#                                         beside them, with the step test's UART phases as assertions and
+#                                         their committed one-cell hashes, all in bb test; test.json and
+#                                         junit.xml against the spec (scripts/check_bb_test.py); then on
+#                                         its outputs check_dms_home.py --step and compare_project_run.py
+#                                         (project-step against step)
 #   scripts/dms_home.sh gate <bb> <out>   the M10 gate (make dms-home): every case at bb's defaults and as
 #                                         its one-cell reference, check_dms_home.py on each, the defaults
 #                                         equal to the references (every record, grants included: one
@@ -240,7 +244,30 @@ boards() {
   else fail "the E3 board files differ from scripts/dms_home_boards.py's output"; fi
 }
 
+# make dms-home-test since milestone B3 (ADR-010 D8-D10): tests/e3.toml through bb test, then what is
+# not an assertion kind on its outputs. bb test uses the pool in BB_RENODE_POOL when make provides one
+# (POOL=0: every Renode fresh), JOBS runs at a time.
 do_test() { # <bb> <out>
+  local bb=$1 out=$2
+  boards
+  projects "$bb"
+  if "$bb" test "$ROOT/examples/dial-me-spinner/tests/e3.toml" --out "$out" --jobs "$JOBS" --pool env > "$out/bb-test.log" 2>&1; then
+    pass "bb test tests/e3.toml: every outcome as expected ($(grep -c '^bb test: PASS ' "$out/bb-test.log") cases: the step test's phases, the committed hashes, analog-first byte-identical)"
+  else
+    fail "bb test tests/e3.toml"
+  fi
+  grep '^bb test: \(PASS\|FAIL\)\|^bb test:   ' "$out/bb-test.log" | sed 's/^/    /'
+  if "$PY" "$ROOT/scripts/check_bb_test.py" "$out" > "$out/check_bb_test.txt"; then
+    pass "test.json and junit.xml against spec/test.md ($(grep -c '^check_bb_test: ok' "$out/check_bb_test.txt") checks)"
+  else
+    fail "check_bb_test.py"; grep -v '^check_bb_test: ok' "$out/check_bb_test.txt"
+  fi
+  [[ -f $out/step/events.jsonl ]] && check "$out/step" step
+  [[ -f $out/project-step/events.jsonl ]] && cross "$out/step" "$out/project-step"
+}
+
+# The Phase 1 and R1 test, every case run by this script (before milestone B3).
+do_test_scripted() { # <bb> <out>
   local bb=$1 out=$2
   boards
   projects "$bb"
@@ -367,6 +394,7 @@ OUT=$(realpath -m "$2")
 rm -rf "$OUT" && mkdir -p "$OUT"
 case $MODE in
   test) do_test "$BB" "$OUT" ;;
+  test-scripted) do_test_scripted "$BB" "$OUT" ;;
   gate) do_gate "$BB" "$OUT" ;;
   project) do_project "$BB" "$OUT" ;;
   ref) boards; do_ref "$BB" "$OUT" "${CASES[@]}" "${PCASES[@]}" ;;

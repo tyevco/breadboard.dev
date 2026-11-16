@@ -7,7 +7,8 @@ Default roots: packages/ (first-party), spec/examples/packages/ (the
 spec's example packages), examples/ (the bb.lock files and the projects)
 and tests/fixtures/kicad/ (the import fixtures). Every part.toml, the
 pins.toml it names, every test vector in its [tests] dir, every bb.lock,
-every project file bb.toml and bench file (bench/*.toml) are converted from
+every project file bb.toml, bench file (bench/*.toml) and bb test file (a
+.toml whose schema is bb-test/0) are converted from
 TOML to JSON (tomllib), and every board.bbm is read as JSON with integers
 only (a float is an error, spec/canonical-json.md); all are validated
 against spec/schema/*.schema.json (JSON Schema 2020-12, python3-jsonschema).
@@ -32,7 +33,7 @@ except ImportError:  # pragma: no cover
 REPO = pathlib.Path(__file__).resolve().parent.parent
 SCHEMAS = {
     name: json.loads((REPO / "spec" / "schema" / f"{name}.schema.json").read_text(encoding="utf-8"))
-    for name in ("part", "pins", "lock", "pkgtest", "project", "bench", "board-bbm")
+    for name in ("part", "pins", "lock", "pkgtest", "project", "bench", "board-bbm", "test")
 }
 for s in SCHEMAS.values():
     jsonschema.Draft202012Validator.check_schema(s)
@@ -91,6 +92,12 @@ def self_test():
         ("bench", {"schema": "bb-bench/1", "assert": [{"name": "a b", "kind": "range", "net": "X", "max": "1V"}]}),
         ("bench", {"schema": "bb-bench/1", "assert": [{"name": "a", "kind": "edge_timing", "max": "1ms",
                                                        "start": {"edge": "X", "level": 1, "log": "^b"}, "end": {"edge": "Y", "level": 0}}]}),
+        # ADR-010 D8 (milestone B3): bb-test/0, a project or a board, never both; a case is named, not *-ref.
+        ("test", {"schema": "bb-test/0", "project": ".", "board": "b.cir", "case": [{"name": "a", "for": "1ms"}]}),
+        ("test", {"schema": "bb-test/0", "project": ".", "case": [{"name": "a-ref", "for": "1ms"}]}),
+        ("test", {"schema": "bb-test/0", "project": ".", "case": [{"name": "a", "expect": {"X": "passed"}}]}),
+        ("test", {"schema": "bb-test/0", "project": ".", "case": [{"name": "a", "frobnicate": True}]}),
+        ("test", {"schema": "bb-test/0", "project": ".", "defaults": {"golden": "g"}, "case": [{"name": "a"}]}),
     ]
     good = [
         ("part", {"schema": "bb-part/0", "part": {"id": "x/y", "version": "1.0.0", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"}}),
@@ -117,6 +124,11 @@ def self_test():
         ("lock", {"schema": "bb-lock/0", "package": [{"id": "x/y", "version": "1.0.0", "path": ".", "tree": "sha256:" + "0" * 64}]}),
         ("project", {"schema": "bb-project/1", "project": {"simulate": ["main"]}, "board": [{"id": "main", "netlist": "a.net"}],
                      "registries": {"acme": {"url": "file:///r", "key": "RW", "namespaces": ["acme"]}}}),
+        ("test", {"schema": "bb-test/0", "project": ".", "defaults": {"for": "120ms", "assert_files": ["a.toml"]},
+                  "case": [{"name": "ok", "bench": "b.toml", "targets": {"main:U10": "fw.elf"}, "golden": "g.sha256",
+                            "expect": {"LSW-3": "fail"}, "reference": True, "engine_order": "analog-first",
+                            "assert": [{"name": "c", "kind": "count", "net": "X", "min": 1}]},
+                           {"name": "b", "board": "b.cir", "same_as": "ok", "lookahead": "off"}]}),
     ]
     for kind, doc in bad:
         if not errors(kind, doc):
@@ -138,6 +150,7 @@ def main(argv):
         REPO / "spec" / "examples" / "packages",
         REPO / "examples",
         REPO / "tests" / "fixtures" / "kicad",
+        REPO / "tests" / "bb-test",
     ]
     checked, failed = 0, 0
 
@@ -190,6 +203,15 @@ def main(argv):
         # Assertion files (bb run --assert; ADR-010 Amendment 3): bb-bench/1 files of [[assert]].
         for af in sorted(root.rglob("asserts/**/*.toml")):
             check("bench", af)
+        # bb test files (ADR-010 D8, milestone B3): every .toml whose schema is bb-test/... (a
+        # package's tests/ dir holds bb-pkgtest vectors, checked above).
+        for tf in sorted(root.rglob("*.toml")):
+            try:
+                schema = str(load(tf).get("schema", ""))
+            except (OSError, tomllib.TOMLDecodeError):
+                schema = "bb-test/?"
+            if schema.startswith("bb-test/"):
+                check("test", tf)
         for bbm in sorted(root.rglob("board.bbm")):
             checked += 1
             try:

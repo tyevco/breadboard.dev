@@ -1,0 +1,55 @@
+# examples/dial-me-spinner/tests/e2.toml: make dms-vsense-test as a bb test file (Phase 2 B3,
+# ADR-010 D8-D10, Amendment 5). E2, the battery reading through the SAADC with the loading adc_in
+# (Phase 1 plan section 2 E2, M8) at bench/vsense.toml, at bb's defaults (lookahead: the loading
+# adc_in makes the board cyclic):
+#   s50        vsense_50ms.elf (a reading every 50 ms), 650 ms, the project itself
+#   s50-none   the same with load = "none" on the VSYS_SENSE binding (../e2/none)
+#   c5         vsense.elf (every 1 s), 1100 ms, C5 fitted one decade low (../e2/c5)
+#   c5-none    the same, load = "none" (../e2/c5-none)
+# The variant projects are written by scripts/dms_e2_projects.py from ../bb.toml (one edit each;
+# --check in make dms-vsense-test).
+#   - E2's reading codes (asserts/e2/<case>.toml, written by scripts/dms_asserts.py from
+#     check_dms_vsense.py's model: record-only `log` kinds), in-run.
+#   - Each case's committed hashes (tests/golden/dms-vsense: nets.csv, nets.vcd and the non-grant
+#     records without the assert records) of its every-lattice-point reference.
+# scripts/dms_vsense.sh test runs it, then on the same outputs what is not a kind:
+# check_dms_vsense.py (the analog side against load = "none", the suite's charge-sharing arithmetic,
+# C5 / 10), the codes against it (scripts/check_asserts.py e2), and run.json's load records.
+schema = "bb-test/0"
+project = ".."
+
+[defaults]
+bench = "../bench/vsense.toml"
+probes = ["VSYS_SENSE"]
+sample_rate = "10kHz"
+
+[[case]]
+name = "s50"
+for = "650ms"
+targets = { "main:U10" = "../firmware/prebuilt/vsense_50ms.elf" }
+assert_files = ["../asserts/e2/s50.toml"]
+golden = "../../../tests/golden/dms-vsense/s50/outputs.sha256"
+
+[[case]]
+name = "s50-none"
+project = "../e2/none"
+for = "650ms"
+targets = { "main:U10" = "../firmware/prebuilt/vsense_50ms.elf" }
+assert_files = ["../asserts/e2/s50-none.toml"]
+golden = "../../../tests/golden/dms-vsense/s50-none/outputs.sha256"
+
+[[case]]
+name = "c5"
+project = "../e2/c5"
+for = "1100ms"
+targets = { "main:U10" = "../firmware/prebuilt/vsense.elf" }
+assert_files = ["../asserts/e2/c5.toml"]
+golden = "../../../tests/golden/dms-vsense/c5/outputs.sha256"
+
+[[case]]
+name = "c5-none"
+project = "../e2/c5-none"
+for = "1100ms"
+targets = { "main:U10" = "../firmware/prebuilt/vsense.elf" }
+assert_files = ["../asserts/e2/c5-none.toml"]
+golden = "../../../tests/golden/dms-vsense/c5-none/outputs.sha256"

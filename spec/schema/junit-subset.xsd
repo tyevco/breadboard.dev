@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  spec/schema/junit-subset.xsd: the JUnit subset bb test writes as junit.xml (spec/test.md section 4;
+  ADR-010 D9, Amendment 5). No formal JUnit standard exists; this is the Jenkins/Ant shape that GitHub
+  and GitLab reporters read, restricted to what bb test writes:
+
+    testsuites (name, tests, failures, errors, skipped, time)
+      testsuite (name, tests, failures, errors, skipped, time)    one per case
+        properties/property (name, value)                         rung, fidelity, the hashes, provenance
+        testcase (classname, name, time)                          one per assertion and per comparison
+          failure (message, type) | error (message, type) | skipped (message) | system-out
+
+  junit.xml carries wall times (time) and is not a deterministic output; test.json is.
+  Validate with: xmllint -noout -schema spec/schema/junit-subset.xsd junit.xml
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+
+  <xs:simpleType name="count">
+    <xs:restriction base="xs:nonNegativeInteger"/>
+  </xs:simpleType>
+
+  <!-- Seconds, with a decimal point and three digits (wall time), or 0. -->
+  <xs:simpleType name="seconds">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="0|[0-9]+\.[0-9]{3}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="name">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="problem">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="message" type="xs:string" use="required"/>
+        <xs:attribute name="type" type="xs:string" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+  <xs:complexType name="skipped">
+    <xs:attribute name="message" type="xs:string" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="testcase">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="1">
+        <xs:element name="failure" type="problem"/>
+        <xs:element name="error" type="problem"/>
+        <xs:element name="skipped" type="skipped"/>
+      </xs:choice>
+      <xs:element name="system-out" type="xs:string" minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="classname" type="name" use="required"/>
+    <xs:attribute name="name" type="name" use="required"/>
+    <xs:attribute name="time" type="seconds" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="property">
+    <xs:attribute name="name" type="name" use="required"/>
+    <xs:attribute name="value" type="xs:string" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="properties">
+    <xs:sequence>
+      <xs:element name="property" type="property" minOccurs="1" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="testsuite">
+    <xs:sequence>
+      <xs:element name="properties" type="properties" minOccurs="0" maxOccurs="1"/>
+      <xs:element name="testcase" type="testcase" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="name" type="name" use="required"/>
+    <xs:attribute name="tests" type="count" use="required"/>
+    <xs:attribute name="failures" type="count" use="required"/>
+    <xs:attribute name="errors" type="count" use="required"/>
+    <xs:attribute name="skipped" type="count" use="required"/>
+    <xs:attribute name="time" type="seconds" use="required"/>
+  </xs:complexType>
+
+  <xs:element name="testsuites">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="testsuite" type="testsuite" minOccurs="1" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:attribute name="name" type="name" use="required"/>
+      <xs:attribute name="tests" type="count" use="required"/>
+      <xs:attribute name="failures" type="count" use="required"/>
+      <xs:attribute name="errors" type="count" use="required"/>
+      <xs:attribute name="skipped" type="count" use="required"/>
+      <xs:attribute name="time" type="seconds" use="required"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

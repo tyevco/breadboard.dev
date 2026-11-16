@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://breadboard.dev/spec/schema/test-result.schema.json",
+  "title": "bb-test-result/0: bb test's test.json (spec/test.md section 3; ADR-010 D8, Amendment 5)",
+  "description": "Canonical JSON (spec/canonical-json.md: integers only, keys sorted), deterministic: no wall time, no path. One entry per case of the test file, in its order; per case its run's status, every reported assertion (its expectation, its record's outcome and values), the output hashes, and the golden, reference and same_as comparisons the case asks for.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "file", "sha256", "ok", "failed", "cases"],
+  "properties": {
+    "schema": { "const": "bb-test-result/0" },
+    "file": { "type": "string", "pattern": "^[^/]+$" },
+    "sha256": { "$ref": "#/$defs/sha" },
+    "ok": { "type": "boolean" },
+    "failed": { "type": "array", "items": { "type": "string" } },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "ok", "run", "asserts", "hashes"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+          "ok": { "type": "boolean" },
+          "run": { "enum": ["ok", "failed"] },
+          "firmware": { "$ref": "#/$defs/sha" },
+          "asserts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "kind", "expected", "ok", "outcome"],
+              "properties": {
+                "name": { "type": "string" },
+                "kind": { "enum": ["range", "at", "settle", "edge_timing", "count", "frequency", "log", "event", ""] },
+                "expected": { "enum": ["pass", "fail", "not_evaluable"] },
+                "ok": { "type": "boolean" },
+                "outcome": { "enum": ["pass", "fail", "not_evaluable", "missing"] },
+                "t_fs": { "type": "integer", "minimum": 0 },
+                "value": { "type": ["integer", "null"] },
+                "limit": { "type": ["integer", "null"] },
+                "unit": { "enum": ["uV", "fs", "nA", "udegC", "count", null] },
+                "rung": { "type": "string" },
+                "msg": { "type": "string" }
+              }
+            }
+          },
+          "hashes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "events.jsonl": { "$ref": "#/$defs/sha" },
+              "nets.csv": { "$ref": "#/$defs/sha" },
+              "nets.vcd": { "$ref": "#/$defs/sha" },
+              "non-grant-records": { "$ref": "#/$defs/sha" },
+              "run.json": { "$ref": "#/$defs/sha" }
+            }
+          },
+          "golden": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["file", "ok", "checked", "differs", "not_checked"],
+            "properties": {
+              "file": { "type": "string" },
+              "ok": { "type": "boolean" },
+              "checked": { "$ref": "#/$defs/outputs" },
+              "differs": { "$ref": "#/$defs/outputs" },
+              "not_checked": { "$ref": "#/$defs/outputs" },
+              "error": { "type": "string" }
+            }
+          },
+          "reference": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ok"],
+            "properties": {
+              "kind": { "enum": ["equivalence", "consistency"] },
+              "ok": { "type": "boolean" },
+              "run": { "const": "failed" },
+              "differs": { "$ref": "#/$defs/outputs" },
+              "error": { "type": "string" },
+              "hashes": { "type": "object" }
+            }
+          },
+          "same_as": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["case", "ok", "files"],
+            "properties": {
+              "case": { "type": "string" },
+              "ok": { "type": "boolean" },
+              "files": { "$ref": "#/$defs/outputs" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "outputs": {
+      "type": "array",
+      "items": { "enum": ["events.jsonl", "nets.csv", "nets.vcd", "non-grant-records"] }
+    }
+  }
+}

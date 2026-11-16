@@ -1,0 +1,86 @@
+# tests/bb-test/semantics.toml: bb test's own semantics on the Phase 0 boards (milestone B3, ADR-010
+# D8-D9, Amendment 5; make bb-test-gate). Every case is as expected, so bb test exits 0.
+#   feedback           examples/feedback, 500 ms (a feedback loop: lookahead lifts the loop cap), its
+#                      committed one-cell hashes
+#   feedback-lookahead the same for 210 ms with reference = true: the one-cell run (--max-quantum 10us
+#                      --lookahead off) gives the same non-grant records, nets.csv and nets.vcd, and
+#                      since the case's grants are longer than one cell, test.json says "equivalence"
+#   feedback-one-cell  210 ms at --lookahead off: its grants are one cell already, so the reference
+#                      comparison is "consistency" (ADR-010 D8)
+#   spike              examples/spike, 210 ms (acyclic, 10 ms grants) against its one-cell reference
+# (The references are 210 ms: a one-cell run of 500 ms takes about 45 s.)
+# Inline assertions ([[case.assert]]): counts that pass, and a settle whose every deadline is after the
+# run's end, expected not_evaluable (a skipped testcase in junit.xml).
+schema = "bb-test/0"
+board = "../../examples/feedback/board.cir"
+
+[defaults]
+for = "500ms"
+targets = { "U1" = "../../examples/feedback/firmware/build/feedback.elf" }
+probes = ["SENSE", "LED_B", "U1.PA5", "U1.PB0", "U1.PA6"]
+
+[[case]]
+name = "feedback"
+golden = "../golden/feedback/outputs.sha256"
+expect = { "SENSE-settle" = "not_evaluable" }
+
+[[case.assert]]
+name = "PB0-edges"
+kind = "count"
+net = "U1.PB0"
+min = 1
+msg = "the RC crosses PB0's thresholds"
+
+[[case.assert]]
+name = "PA6-edges"
+kind = "count"
+net = "U1.PA6"
+min = 1
+msg = "the ISR copies PB0 to PA6"
+
+[[case.assert]]
+name = "SENSE-settle"
+kind = "settle"
+net = "SENSE"
+event = { edge = "U1.PA5", level = 0 }
+within = "10s"
+max = "10mV"
+from = "450ms"
+msg = "a deadline after the run's end: not evaluable"
+
+[[case]]
+name = "feedback-lookahead"
+for = "210ms"
+reference = true
+
+[[case.assert]]
+name = "PB0-edges"
+kind = "count"
+net = "U1.PB0"
+min = 1
+
+[[case]]
+name = "feedback-one-cell"
+for = "210ms"
+lookahead = "off"
+reference = true
+
+[[case.assert]]
+name = "PB0-edges"
+kind = "count"
+net = "U1.PB0"
+min = 1
+
+[[case]]
+name = "spike"
+for = "210ms"
+board = "../../examples/spike/board.cir"
+targets = { "U1" = "../../examples/spike/firmware/build/blinky.elf" }
+probes = ["LED_A", "PA5"]
+reference = true
+
+[[case.assert]]
+name = "PA5-blinks"
+kind = "count"
+net = "U1.PA5"
+min = 2

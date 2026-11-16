@@ -63,6 +63,7 @@ mod pool;
 mod probe_cmd;
 mod project;
 mod registry;
+mod test_cmd;
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -94,7 +95,8 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
               [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
               [--ngspice-watchdog 200000,10000] [--ngspice-lattice-snap on|off]
-              [--assert <file.toml> ...]
+              [--assert <file.toml> ...] [--image <instance>=<file.elf> ...]
+       bb test <file.toml> --out <dir> [--jobs N] [--pool auto|env|off]   (bb test --help)
        bb assert <run-dir> --assert <file.toml> [--assert ...] [--bench <bench.toml>]
               [--out <file>]
        bb pool run|start|stop|status ...   (bb pool --help)
@@ -122,6 +124,11 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  verdict is an assert record of events.jsonl at its window's
                  close; a failing assertion does not fail the run. `bb assert`
                  evaluates the record-only kinds again on a finished run
+  --image      a project: run <file.elf> on <instance> in place of bb.toml's
+                 [targets] image (bb test's case targets, ADR-010 D8,
+                 Amendment 5); its image hash is computed and recorded in
+                 run.json as a flashed one's. bb.toml is not written.
+                 Repeatable (one per instance)
   --fidelity   the analog fidelity rung of a project's views: fast (the
                  default) or pi (ADR-009 D1); wins over the bench's fidelity
   --elaborate-only
@@ -270,6 +277,9 @@ struct RunArgs {
     lattice_snap: bool,
     /// `--assert` files (ADR-010 Amendment 3).
     asserts: Vec<PathBuf>,
+    /// `--image <instance>=<file>`: a project's image in place of
+    /// `[targets]` (ADR-010 D8, Amendment 5).
+    images: Vec<(String, PathBuf)>,
 }
 
 /// `--ngspice-watchdog <points per cell>,<points without progress>`.
@@ -433,6 +443,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut watchdog = Watchdog::default();
     let mut lattice_snap = true;
     let mut asserts = Vec::new();
+    let mut images: Vec<(String, PathBuf)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -447,6 +458,17 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--project" => project = Some(PathBuf::from(val(a)?)),
             "--bench" => bench = Some(PathBuf::from(val(a)?)),
             "--assert" => asserts.push(PathBuf::from(val(a)?)),
+            "--image" => {
+                let v = val(a)?;
+                let (inst, file) = v
+                    .split_once('=')
+                    .filter(|(i, f)| !i.is_empty() && !f.is_empty())
+                    .ok_or_else(|| format!("--image {v:?}: expected <instance>=<file.elf>"))?;
+                if images.iter().any(|(i, _)| i == inst) {
+                    return Err(format!("--image {inst}: given twice"));
+                }
+                images.push((inst.to_string(), PathBuf::from(file)));
+            }
             "--fidelity" => fidelity = Some(val(a)?),
             "--allow-unqualified" => allow_unqualified.push(val(a)?),
             "--elaborate-only" => elaborate_only = true,
@@ -568,6 +590,11 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         }
         need(firmware.as_ref(), "--firmware")?;
         need(target.as_ref(), "--target")?;
+        if !images.is_empty() {
+            return Err(
+                "--image is for a project; a board file takes --firmware and --target".into(),
+            );
+        }
     } else if firmware.is_some() || target.is_some() {
         return Err(
             "a project takes its firmware and target from bb.toml [targets] (`bb flash`, ADR-007 D7);              --firmware and --target are for --netlist"
@@ -626,6 +653,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         watchdog,
         lattice_snap,
         asserts,
+        images,
     })
 }
 
@@ -1929,6 +1957,41 @@ fn assert_files(
     Ok((specs, json))
 }
 
+/// `--image <instance>=<file>` (ADR-010 D8, Amendment 5): the file, an ELF,
+/// replaces the `[targets]` image of that instance (a `[targets]` key with
+/// the same reference, on the same board where both name one), or is added,
+/// with its image hash computed as `bb flash` would write it. Nothing is
+/// written; `elab::plan` then checks the target as for a flashed image.
+fn image_overrides(p: &mut project::Project, images: &[(String, PathBuf)]) -> Result<(), String> {
+    let split = |k: &str| match k.split_once(':') {
+        Some((b, r)) => (Some(b.to_string()), r.to_string()),
+        None => (None, k.to_string()),
+    };
+    for (inst, file) in images {
+        let bytes =
+            fs::read(file).map_err(|e| format!("--image {inst}: {}: {e}", file.display()))?;
+        let hash = image::elf_image_hash(&bytes)
+            .map_err(|e| format!("--image {inst}: {}: {e}", file.display()))?;
+        let (b, r) = split(inst);
+        p.targets.retain(|(k, _)| {
+            let (kb, kr) = split(k);
+            !(kr == r && (kb.is_none() || b.is_none() || kb == b))
+        });
+        let abs = std::path::absolute(file)
+            .map_err(|e| format!("--image {inst}: {}: {e}", file.display()))?;
+        p.targets.push((
+            inst.clone(),
+            vec![project::Image {
+                file: abs.to_string_lossy().into_owned(),
+                kind: "elf".into(),
+                hash,
+                offset: None,
+            }],
+        ));
+    }
+    Ok(())
+}
+
 fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
     if let Some(netlist) = &a.netlist {
         // Parts may come from packages (ADR-006): resolved on the search
@@ -1971,7 +2034,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
     // A project: read-only (ADR-007 D7). board.bbm and bb.lock must be what
     // `bb open` would write now.
     let dir = import::project_dir(a.project.as_deref())?;
-    let p = project::Project::read(&dir)?;
+    let mut p = project::Project::read(&dir)?;
     if let Some(h) = &p.schema_hint {
         eprintln!("bb run: warning: {h}");
     }
@@ -2007,6 +2070,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
                 .join("; ")
         ));
     }
+    image_overrides(&mut p, &a.images)?;
     let bench = match &a.bench {
         Some(b) => project::Bench::read(b)?,
         None => project::Bench::empty(),
@@ -2186,6 +2250,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("test") => test_cmd::main(&args[1..]),
         Some("pool") => pool::main(&args[1..]),
         Some("open") => open::main(&args[1..]),
         Some("flash") => flash::main(&args[1..]),

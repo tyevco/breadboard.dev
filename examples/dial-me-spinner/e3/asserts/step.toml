@@ -1,0 +1,69 @@
+# examples/dial-me-spinner/e3/asserts/step.toml: homing_step.elf's step test phases (milestone B3,
+# ADR-010 D8, Amendment 5), for tests/e3.toml (make dms-home-test): every UART line of
+# scripts/check_dms_home.py --step's first check is present, and none says "fail". The order of the
+# lines, the step rate from the PWM edges and the step against the suite's microstep figures are not
+# kinds (ADR-010 D5, D10), so check_dms_home.py --step keeps checking them on the same run.
+schema = "bb-bench/1"
+
+[[assert]]
+name = "step-H0-wake"
+kind = "log"
+source = "U10"
+match = "^uart0: homing: H0 wake"
+present = true
+
+[[assert]]
+name = "step-H0-energise"
+kind = "log"
+source = "U10"
+match = "^uart0: homing: H0 energise u=0"
+present = true
+
+[[assert]]
+name = "step-one-full-step"
+kind = "log"
+source = "U10"
+match = "^uart0: homing: step test: one full step"
+present = true
+
+# "SETTLE 20.16 ms at u=8": a pattern is a literal without "." (ADR-010 Amendment 3), so the numbers
+# are fields of the line, exact.
+[[assert]]
+name = "step-SETTLE"
+kind = "log"
+source = "U10"
+match = "^uart0: homing: SETTLE "
+field = "SETTLE"
+min = "20.16ms"
+max = "20.16ms"
+
+[[assert]]
+name = "step-SETTLE-u"
+kind = "log"
+source = "U10"
+match = "^uart0: homing: SETTLE "
+field = "u"
+min = 8
+max = 8
+
+[[assert]]
+name = "step-brake"
+kind = "log"
+source = "U10"
+match = "^uart0: homing: brake"
+present = true
+
+[[assert]]
+name = "step-done"
+kind = "log"
+source = "U10"
+match = "^uart0: homing: step test done: u=8"
+present = true
+
+[[assert]]
+name = "step-no-fail"
+kind = "log"
+source = "U10"
+match = "fail"
+max = 0
+msg = "no UART line says fail"

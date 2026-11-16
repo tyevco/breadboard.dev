@@ -588,6 +588,15 @@ its sha256 is in `run.json`.
   reads a `bb-lock/0` lock with the migration hint (`spec/package.md`
   section 9). `--assert <file>` (repeatable, a board file too) adds an
   assertion file's checks (section 3.4); the summary prints every verdict.
+  `--image <instance>=<file.elf>` (a project; repeatable, one per instance;
+  ADR-010 D8, Amendment 5) runs that ELF on the instance in place of
+  `[targets]`' image: its image hash is computed as `bb flash` would write
+  it and recorded in `run.json`'s `targets` as a flashed image's; `bb.toml`
+  is neither read for it nor written. It is how a `bb test` case's
+  `targets` reach the run.
+- **`bb test <file> --out <dir> [--jobs N] [--pool auto|env|off]`**
+  (ADR-010 D8-D9, milestone B3): runs a `bb-test/0` file's cases and writes
+  `test.json` and `junit.xml` (`spec/test.md`).
 - **`bb assert <run dir> --assert <file>… [--bench <file>] [--out <file>]`.**
   Evaluates assertions again on a finished run's `events.jsonl` and prints
   (or writes) their `assert` records (section 3.4). Reads nothing else and
