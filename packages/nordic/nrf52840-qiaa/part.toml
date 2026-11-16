@@ -12,7 +12,7 @@ schema = "bb-part/1"
 
 [part]
 id = "nordic/nrf52840-qiaa"
-version = "0.1.0"
+version = "0.2.0"
 kind = "soc"
 manufacturer = "Nordic Semiconductor"
 mpn = ["NRF52840-QIAA", "NRF52840-QIAA-R", "NRF52840-QIAA-R7"]
@@ -29,6 +29,11 @@ file = "pins.toml"
 [behavioral]
 engine = "renode"
 platform = "nrf52840-bb@3"
+
+# ADR-009 D5 (milestone P2): at pi a digital_out drives from VDD, the GPIO supply (PS v1.1 section
+# 6.9.3.1: VOH and IOH are given against VDD).
+[power]
+io_rail = "VDD"
 
 [provenance]
 source = "datasheet"

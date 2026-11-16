@@ -1,0 +1,62 @@
+# examples/dial-me-spinner/bench/cold-pi-ioh.toml: LED_PWR_EN's high level under a stated load at
+# pi (Phase 2 milestone P2, ADR-009 D5 and gate G8).
+#
+# bench/cold-pi.toml (E1's cold bench at pi; see there) plus one load: data/led_pwr_en_ioh.csv
+# draws 0.5 mA from LED_PWR_EN from 5 ms to 30 ms, while the E1 firmware holds P1.04 high (0.130 ms
+# to 35.230 ms). 0.5 mA is the condition of the nRF52840 PS v1.1's VOH row for a standard-drive pin
+# (section 6.9.3.1: VOH,SD >= VDD - 0.4 V at 0.5 mA, VDD >= 1.7 V). The pin also feeds R3 (100 kOhm
+# to GND, about 29 uA at the cold +3V3) and U2's ON input, so it sources at least 0.5 mA: the
+# stated load. At pi the pin drives from +3V3 (its VDD) through S0S1's zout, so the check below
+# compares its high level with the rail at the same instant, not with a fixed 3.3 V, and not with
+# the unloaded rail (which an unloaded rail-tracking output meets by construction).
+schema = "bb-bench/1"
+temp_c = "-10"
+fidelity = "pi"
+
+[[supply]]
+net = "VSYS"
+volts = "3.0V"
+rs = "0.5692"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "10m"
+track = { net = "VSYS", drop = "44.167mV" }
+
+[[load]]
+net = "VSYS"
+amps = "50mA"
+
+[[load]]
+net = "LED_PWR_EN"
+profile = "data/led_pwr_en_ioh.csv"
+interp = "hold"
+
+[analog]
+nets = [
+  "GND", "VSYS", "+3V3", "VSYS_SENSE", "VLED", "LED_PWR_EN", "LSW_CT", "LSW_QOD",
+  "LED_DIN_MCU", "LED_DIN_R", "LED_DIN",
+  "LED_D1", "LED_D2", "LED_D3", "LED_D4", "LED_D5", "LED_D6", "LED_D7", "LED_D8",
+  "LED_D9", "LED_D10", "LED_D11", "LED_D12", "LED_D13", "LED_D14", "LED_D15", "LED_D16",
+  "LED_D17", "LED_D18", "LED_D19", "LED_D20", "LED_D21", "LED_D22", "LED_D23", "LED_D24",
+  "LED_D25", "LED_D26", "LED_D27", "LED_D28", "LED_D29", "LED_D30", "LED_D31", "LED_D32",
+  "LED_D33", "LED_D34", "LED_D35", "LED_D36", "LED_D37", "LED_D38", "LED_D39", "LED_D40",
+  "LED_D41", "LED_D42", "LED_D43", "LED_D44", "LED_D45", "LED_D46", "LED_D47", "LED_D48",
+]
+exclude = ["main:U1"]
+
+[options]
+set = "phase0"
+
+# G8: VOH >= VDD - 0.4 V at the stated load, at every accepted solver point while the load draws
+# (6 ms to 29 ms: 1 ms inside the load's window at each end).
+[[assert]]
+name = "PS-VOH-SD"
+kind = "range"
+net = "LED_PWR_EN"
+ref = "+3V3"
+min = "-0.4V"
+from = "6ms"
+to = "29ms"
+msg = "LED_PWR_EN's high level against its VDD at 0.5 mA (nRF52840 PS v1.1 6.9.3.1, VOH,SD)"

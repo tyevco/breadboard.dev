@@ -13,7 +13,10 @@
   accepted and inert (ADR-011 Amendment 1). 4 (2026-11-15), P1 as
   implemented: the `pi` packages, the TPS22917 restated (decision D-TPS),
   the `pi` lint, the dial, corners, the battery, and W1/W2 in static-load
-  mode on the package views (`make pi-static`).
+  mode on the package views (`make pi-static`). 5 (2026-11-16), P2 as
+  implemented: the rail-tracking, tristate glue, `oe` from `PIN_CNF.DIR`
+  (the prototype: exact, within the 5 %), G9 on twenty Phase 1 decks, E1
+  cold's LSW-3 without the pessimism, G8 (`make pi-glue`).
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
@@ -1013,3 +1016,175 @@ TPS61040's own output state regulates through a band.
 - `scripts/kicad_import.sh`'s M4f counts were stale since Phase 1 M10
   (`ti/drv8837`); with P1's packages they are 56 by MPN and 14
   unresolved (`make kicad-import` passes with `KICAD_WINDOWS=0`).
+
+## Amendment 5 (2026-11-16): P2 as implemented (rail-tracking, tristate `digital_out`; the `oe` prototype; G8, G9)
+
+Milestone P2 (plan section 4). `make pi-glue` is its gate (all pass);
+`make pi-glue-test` (in `make test`) is its fast part, and `make
+pi-oe-cost` (a measurement, under the host lock) is the prototype's cost
+row. `spec/pin-model.md` (the `pi` form of `digital_out`, glue rule 11) and
+`spec/project.md` (`--pi-oe`, `--operating-point`, `run.json` `pi_glue`)
+state what follows; both are D5's normative changes.
+
+**The glue** is D5's, with names: `V_bb_<id>` (the level `s`, 0..1),
+`V_bb_<id>_oe`, `B_bb_<id>_hi`, `B_bb_<id>_lo` and `R_bb_<id>_hz`, `<id>`
+being `<part>_<pin>` (`cli/src/main.rs` `pi_glue_deck`). `s` and `oe` ramp
+0 V / 1 V over the output's own `rise` and `fall` (D5 does not say how
+`oe` ramps; a step would put a discontinuity in two B sources). A pin with
+`zout = 0` is refused at `pi`. At `fast` nothing changes: no glue, no
+`#oe` output, no `run.json` key (G1).
+
+- **`rail`** is the binding's `rail`, else the set's, else the package's
+  `[power] io_rail`; a pin with none is refused at `pi`. The rail's net
+  must be in the analog scope. `nordic/nrf52840-qiaa` (0.2.0) and
+  `st/stm32f072rb` (0.2.0) now declare `[power] io_rail = "VDD"`; `make
+  locks` relocked every example that pins them, and `examples/adc/kicad`'s
+  `board.bbm` records the new version. `st/stm32f103c8` does not: only
+  board files use it, and a board file has no rail (below), and the
+  registry gate publishes it at 0.1.0.
+- **`<vss>`** is the net of the package's ground pins (a module: through
+  its pinmap), else the board's ground; ground pins on two nets are
+  refused. **`rhiz`** defaults to 100 MΩ (default 6); a set or a binding
+  may set it.
+- **`run.json`** records, only at `pi`, `pi_glue`: per output its kernel
+  net, `rail`, `rail_net`, `rhiz`, `vss_net` and `oe`.
+- `voh` and `vol` are unused at `pi`; a binding that sets them gets a
+  warning (the package's `voh = "VDD"` is not warned about).
+- **Devices** (ADR-013) keep the `fast` form at every rung: D5 is about
+  MCU pins, and a device package has no rail.
+
+**The `oe` prototype (default 3).** On the nRF52840, `oe` is the CPU
+engine's output `<pin>#oe` (`PinDirection::OutputEnable`,
+`PinSpec::nrf_oe`): the engine reads the existing `PIN_CNF` write hook
+(ADR-008 D4) after every advance, tracks `DIR` per pin from `DIR`,
+`DIRSET`, `DIRCLR` and `PIN_CNF[n]` writes, and reports each change at the
+write's virtual time by the GPIO lattice rule (rule 1, 2; a write stamped
+at the grant end is carried to the next grant, rule 3). It is low after
+reset (`PIN_CNF = 0x2`). The kernel binds it to the glue's `oe` source
+like a loading `adc_in`'s `#smp`; its edges are `pin_edge` records of the
+kernel net `<part>.<pin>#oe`. A carried `#oe` change ends a lookahead
+promise, and the audit treats it like a carried GPIO event.
+
+- **Exact** (`engines/cpu-renode/tests/nrf52840.rs`; both in `make
+  pi-glue` and in `cargo-test`):
+  - `nrf_oe_same_clock_as_gpio` (new gate firmware `nrf_oe.c`: `DIRSET`
+    and `OUTSET` in adjacent stores, then `OUTCLR` and a `PIN_CNF` input
+    write): every `#oe` edge has the time of its ISR's GPIO edge (5 of 5
+    in the gate's 60 ms; 9 of 9 over 100 ms while prototyping), so a
+    direction write and a GPIO write of one slice get one time, and
+    program order is never inverted. In Renode 1.17.0 the hook's
+    `machine.LocalTimeSource` is the `MasterTimeSource` itself on a
+    single-machine emulation (checked in the monitor), the clock GPIO
+    events are stamped with.
+  - `nrf_oe_trace_exact` (`nrf_pincnf.c`): the boot writes at 1 fs, the
+    input pins with no edge, P0.17's ISR writes a few instructions after
+    the ISR's P0.13 toggle, in program order and within one cell (here the
+    next slice: 10.010125 ms against 10.010000000001 ms, and 20.020000000001
+    against 20.019625 ms); the GPIO edges unchanged by the `#oe` pins; the
+    audit's mid-run record at the `#oe` rise when both run; identical at
+    one-cell grants, 10 ms grants and lookahead on.
+- **Cost:** `make pi-oe-cost` (E1 cold at `pi`, 120 ms, fresh Renode;
+  A = `--pi-oe fixed`, B = `PIN_CNF.DIR`; interleaved, medians of the
+  simulation time; the gate is B / A ≤ 1.05). The first run (N = 5, host
+  load 13-55 from other tracks' gates) gave **1.261**, with one B run of
+  31 s. The engine's `EXTERNAL` callbacks, which ngspice makes for every
+  source at every Newton load, then allocated two strings per call, and B
+  has two more such sources (the `oe` inputs). They now look the name up
+  on the stack (`bb_analog_ngspice::source_key`; the same keys, so no
+  result changes: every committed hash holds, `make check` pooled and
+  `POOL=0`). After it: N = 5 at load 13-16, 0.875; N = 9 at load 7-12,
+  **1.000** (3.15 s against 3.15 s; CPU 7.58 against 7.93 s). The first
+  figure was not measured again on the old callbacks, so how much of it
+  was the allocations and how much the load is not known. `make
+  pi-oe-cost` now takes N = 9 (`PI_OE_COST_N`). The host was never idle.
+- **Decision (default 3 applied):** `PIN_CNF.DIR` is the `oe` source on
+  the nRF52840 (exact, and within the 5 %). `bb run --pi-oe fixed` keeps
+  the fallback (`oe = 1`) for comparison: on E1 cold it moves no sample by
+  more than 0.009 mV (VLED at 2.23 ms; LED_PWR_EN and LED_DIN_MCU are 0 V
+  through R3 and the LED chain either way before the firmware drives
+  them). "Always 0 while held in reset" waits for P5's reset.
+- **STM32 (deviation):** no direction hook exists for the STM32 GPIO
+  (`MODER`), so every STM32 output uses the fallback, `oe = 1`, recorded
+  as `oe = "fixed"`. No Phase 2 check reads an STM32 output at `pi`.
+
+**G9: the operating point with every `oe = 0`** (`bb run
+--operating-point`: the run's deck and glue, ADR-015 D4's `.op` with the
+transient-op fallback off, every input at its initial value and every `oe`
+at 0; no CPU starts). Twenty decks, each with its expected number of `pi`
+outputs, all solve:
+
+| Deck | `pi` outputs |
+| --- | --- |
+| `spike`, `nrf-saadc` | 1 |
+| `feedback`, `adc`, `nrf-feedback`, `adc-kicad`, dial-me-spinner at `nominal`, `cold`, `vsense`, `sag`, `sag-recover` | 2 |
+| `nrf-pwm` | 4 |
+| E3 `board.cir`, `board-step.cir`, `board-ts75.cir`, `board-park.cir`, the `e3/step` project | 5 |
+| `feedback-open`, `adc-open`, the `e3/home` project (its MOT nets are digital-only) | 0: no MCU output on a circuit net |
+
+- A board file names no rail, and P1 refuses `pi` on one. `--operating-
+  point` alone accepts `--fidelity pi` on a board file and gives its MCU
+  outputs a stand-in rail at their `voh`; with `oe = 0` a rail carries no
+  current, so this is the board's `pi` operating point.
+- The projects run at their benches made `pi` in scratch copies
+  (`fidelity = "pi"`, and `main:U1` excluded: at `pi` the RT9080 has a view
+  and would drive +3V3 beside the bench's supply, which stands in for it).
+  `adc-kicad` has no bench, and at `pi` its outputs' rail +3V3 must be
+  driven: its G9 bench is a 3.3 V supply on +3V3.
+- **Negative control** (`cli` unit test `pi_glue_text_and_high_z_
+  operating_point`): examples/feedback's RC with `oe = 0` solves with
+  `rhiz` and fails without it (no DC path to SENSE); it solves with
+  `oe = 1`. The test also fixes the glue's text.
+
+**E1 cold at `pi`** (`bench/cold-pi.toml`: `bench/cold.toml` with
+`fidelity = "pi"` and `main:U1` excluded, the same reason). Every part
+but U1 has the same view at `fast` and `pi` (P1), so the deck differs
+only in the glue. P1.04 and P0.06 are high-Z until the boot code makes
+them outputs (`#oe` at 0.12 and 0.13 ms), then drive from +3V3 (2.927 V at
+this corner): LED_PWR_EN 5.8 mV below it (R3, 100 kΩ, through 200 Ω),
+LED_DIN_MCU 0.8 mV below it.
+
+| | `fast` (`voh` 3.3 V) | `pi` (rail-tracking) |
+| --- | --- | --- |
+| LSW-3, correct order | 0.320308 V at 30.2 ms | **0.000000 V** (at t = 0; while P0.06 is high at most −51.4 mV); the suite: −5.5e-10 V |
+| LSW-3, wrong order | FAIL (ADR-008 Amendment 3: 0.793 V) | **FAIL, 0.777445 V** at 45.26 ms (DIN clamp 3.14 mA): exactly LSW-3, as at `fast` |
+| LED-DATA-V4, LSW-2, FW-6.4 (correct) | pass: 2.971510 V, 24.420 ms | pass: 2.971510 V, 24.420 ms |
+
+So the documented pessimism is removed and the verdicts stand.
+
+**G8** (`bench/cold-pi-ioh.toml`: the same bench, plus 0.5 mA drawn from
+LED_PWR_EN from 5 to 30 ms, `data/led_pwr_en_ioh.csv`). 0.5 mA is the
+condition of the PS v1.1's VOH,SD row (section 6.9.3.1: VOH ≥ VDD − 0.4 V
+at 0.5 mA, VDD ≥ 1.7 V); the pin also feeds R3 and U2's ON input, so it
+sources 0.5282 mA. The assertion `PS-VOH-SD` (range of V(LED_PWR_EN) −
+V(+3V3) from 6 to 29 ms, min −0.4 V) passes: VOH 2.821693 V at VDD
+2.927342 V, −0.105649 V, a margin of 0.294 V. The rail at the same
+instant is the reference, not 3.3 V and not the unloaded rail.
+
+**Partition independence** (`make pi-glue`), for the correct order, the
+wrong order and the G8 bench: the default run (lookahead on, 10 ms cap:
+71, 79 and 29 grants) and 1 ms grants equal the one-cell reference
+(`--max-quantum 10us --lookahead off`: 12 000, 12 000 and 3 200 grants)
+in `nets.csv`, `nets.vcd` and every non-grant record; the references
+equal `tests/golden/pi-glue/<case>/outputs.sha256` (new), grant records
+included; `--engine-order analog-first` and a second run are
+byte-identical. No promise was broken.
+
+**Deviations, recorded.**
+
+- STM32 outputs use the fallback `oe = 1` (no direction hook).
+- Device outputs keep the `fast` glue at `pi`.
+- A board file's `pi` glue exists only for `--operating-point`, with a
+  stand-in rail.
+- E1's `pi` benches exclude `main:U1`; the bench's +3V3 supply is the
+  suite's ideal LDO, as at `fast`.
+- `oe` ramps over the output's `rise`/`fall`.
+- `scripts/bench_gate.sh` (B1's G1) now names the five Phase 1 benches it
+  migrates between `bb-bench/0` and `/1`; the new `cold-pi*.toml` use
+  `/1`-only keys (`fidelity`, `exclude`, a profile load, `[[assert]]`).
+- **Budget:** `pi-glue-test` 5.9 s pooled and 11.9 s `POOL=0`
+  (`make check` runs of 1 009 s and 1 076 s beside other tracks, load
+  7-15; earlier runs 8.0 s and 9.7 s), within the +15 s. The two
+  `nrf_oe_*` tests in `cargo-test` take 17-21 s of their own, in parallel
+  with the `nrf52840` binary's other tests (the binary took 44-53 s in
+  these runs). The `cli` unit test takes under 0.1 s. `make pi-glue`: 2.0
+  min (load 8-15).

@@ -4,9 +4,9 @@ schema = "bb-lock/1"
 
 [[package]]
 id = "st/stm32f072rb"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../packages/st/stm32f072rb"
-tree = "sha256:897ace8b15fde157874896a327a3d82deb46deac632980dddac8244c39d6f541"
+tree = "sha256:ab32fa81d651f9072cabfb4dade2426b2ecd5d1eed1504cfd575f8a93eac82f0"
 
 [[platform]]
 id = "renode:stm32f072-bb@1"

@@ -1,0 +1,7 @@
+# The nRF52840 PS v1.1's VOH condition for a standard-drive pin (section 6.9.3.1: VOH,SD >= VDD -
+# 0.4 V at 0.5 mA, VDD >= 1.7 V), drawn from LED_PWR_EN while the E1 firmware holds it high (it
+# rises at 0.130 ms and falls at 35.230 ms): 0.5 mA from 5 ms to 30 ms (hold), else none.
+t,I
+0,0
+0.005,0.0005
+0.03,0

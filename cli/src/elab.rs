@@ -481,7 +481,16 @@ pub struct PlanArgs<'a> {
     pub cli_probes: &'a [String],
     /// `--assert` files' assertions (ADR-010 Amendment 3), after the bench's.
     pub extra_asserts: &'a [bbcore::assert::Spec],
+    /// `bb run --pi-oe fixed` (ADR-009 D5): every pi digital_out drives with
+    /// `oe = 1` (the fallback) even where the platform reports `PIN_CNF.DIR`.
+    pub pi_oe_fixed: bool,
 }
+
+/// The `oe` sources of a `pi` digital_out (ADR-009 D5), as run.json names
+/// them: `PIN_CNF.DIR` from the engine's write hook (the nRF52840), or the
+/// fallback `oe = 1` (every other platform, or `bb run --pi-oe fixed`).
+pub const OE_PIN_CNF: &str = "pin_cnf_dir";
+pub const OE_FIXED: &str = "fixed";
 
 fn sha(bytes: &[u8]) -> String {
     format!("sha256:{}", bbpkg::sha256::hex_digest(bytes))
@@ -674,6 +683,10 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     // Chip pins whose adc_in binding says `load = "none"` explicitly
     // (ADR-008 D7: run.json records it).
     let mut load_none: Vec<String> = Vec::new();
+    // ADR-009 D5 (milestone P2): at `pi`, each MCU digital_out's rail chip
+    // pin and high-Z leakage, resolved to nets below, once the analog scope
+    // is known: (ctx, kernel net, circuit node, rail pin, rhiz).
+    let mut pi_req: Vec<(String, String, String, String, f64)> = Vec::new();
     for b in &p.binds {
         let ctx = format!("bb.toml [[bind]] {}", b.pin);
         let (bb, r, pin) = insts
@@ -811,6 +824,34 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             pin: cpin,
             kind,
         };
+        if let (true, PinKind::Out { net, .. }) = (a.fidelity == "pi", &pb.kind) {
+            let (rail, rhiz) = board::digital_out_pi_keys(Some(chip), b.set.as_deref(), &explicit)
+                .map_err(|e| format!("{ctx}: {e}"))?;
+            let rail = rail
+                .or_else(|| chip.part.power.as_ref().and_then(|w| w.io_rail.clone()))
+                .ok_or_else(|| {
+                    format!(
+                        "{ctx}: a digital_out at pi drives from its rail (ADR-009 D5): set rail = \
+                         \"<supply pin>\" on the binding, or [power] io_rail in {}",
+                        chip.part.id
+                    )
+                })?;
+            for k in ["voh", "vol"] {
+                if explicit.iter().any(|(x, _)| *x == k) {
+                    warnings.push(format!(
+                        "{ctx}: {k} is ignored at pi: the output drives from its rail {rail} \
+                         (ADR-009 D5)"
+                    ));
+                }
+            }
+            pi_req.push((
+                ctx.clone(),
+                pb.kernel_net(),
+                net.clone(),
+                rail,
+                rhiz.unwrap_or(board::RHIZ_DEFAULT),
+            ));
+        }
         bound.insert(pin.clone(), pb.kernel_net());
         pins.push(pb);
     }
@@ -921,6 +962,104 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                         .unwrap_or(net.as_str())
                 ));
             }
+        }
+    }
+
+    // --- ADR-009 D5 (milestone P2): the `pi` glue. The rail is the net of the
+    // chip pin `rail` names on the target (a module: every pad its pinmap
+    // maps to that pin), in the analog scope; the low side is the net of the
+    // chip's ground pins, else the board's ground. A digital_out on a
+    // digital-only net has no glue at any rung.
+    let chip_pin_nets = |cp: &str| -> BTreeSet<String> {
+        tinst
+            .pins
+            .iter()
+            .filter(|x| match &pad_to_chip {
+                Some(m) => m.get(&x.number).map(String::as_str) == Some(cp),
+                None => x.name == cp,
+            })
+            .filter_map(|x| x.net.clone())
+            .filter(|n| !board.net(n).expect("net").unconnected)
+            .collect()
+    };
+    let mut pi_glue: BTreeMap<String, board::PiGlue> = BTreeMap::new();
+    let mut pi_json: Vec<Json> = Vec::new();
+    if !pi_req.is_empty() {
+        let mut gnd: BTreeSet<String> = BTreeSet::new();
+        for g in chip.pins.pins.iter().filter(|x| x.role == "ground") {
+            gnd.extend(chip_pin_nets(&g.name));
+        }
+        let (vss, vss_net) = match gnd.len() {
+            0 => ("0".to_string(), None),
+            1 => {
+                let n = gnd.into_iter().next().expect("one");
+                if !scoped(&n) {
+                    return Err(format!(
+                        "pi: the ground pins of {tb}:{tref} are on {n}, outside the analog scope"
+                    ));
+                }
+                (board.net(&n).expect("net").spice.clone(), Some(n))
+            }
+            _ => {
+                return Err(format!(
+                    "pi: the ground pins of {tb}:{tref} are on several nets ({}): a digital_out's \
+                     low side is ambiguous",
+                    gnd.into_iter().collect::<Vec<_>>().join(", ")
+                ))
+            }
+        };
+        for (ctx, kn, node, rail, rhiz) in pi_req {
+            if digital_only.contains(&node) {
+                continue;
+            }
+            let nets = chip_pin_nets(&rail);
+            let rn = match nets.len() {
+                1 => nets.into_iter().next().expect("one"),
+                0 => return Err(format!("{ctx}: its rail {rail} is on no net (ADR-009 D5)")),
+                _ => {
+                    return Err(format!(
+                        "{ctx}: its rail {rail} is on several nets: {}",
+                        nets.into_iter().collect::<Vec<_>>().join(", ")
+                    ))
+                }
+            };
+            if !scoped(&rn) {
+                return Err(format!(
+                    "{ctx}: its rail {rail} is on {rn}, outside the analog scope: at pi the \
+                     output drives from it (ADR-009 D5); put {rn} in [analog] nets"
+                ));
+            }
+            let rnode = board.net(&rn).expect("net").spice.clone();
+            let mut o = vec![
+                ("pin".to_string(), Json::str(&kn)),
+                ("rail".to_string(), Json::str(&rail)),
+                ("rail_net".to_string(), Json::str(&rn)),
+                ("rhiz".to_string(), Json::str(format!("{}", rhiz))),
+            ];
+            if let Some(v) = &vss_net {
+                o.push(("vss_net".to_string(), Json::str(v)));
+            }
+            o.push((
+                "oe".to_string(),
+                Json::str(if pdef.board_name == "nrf52840" && !a.pi_oe_fixed {
+                    OE_PIN_CNF
+                } else {
+                    OE_FIXED
+                }),
+            ));
+            pi_json.push(Json::Obj(o));
+            pi_glue.insert(
+                kn,
+                board::PiGlue {
+                    rail: board::PiRail::Net {
+                        node: rnode,
+                        net: rn,
+                        pin: rail,
+                    },
+                    vss: vss.clone(),
+                    rhiz,
+                },
+            );
         }
     }
 
@@ -2411,6 +2550,11 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             Json::Arr(digital_only_names.iter().map(Json::str).collect()),
         ));
     }
+    // ADR-009 D5 (milestone P2): the pi glue of every MCU digital_out, only
+    // at pi (so no fast run.json changes).
+    if !pi_json.is_empty() {
+        run_json.push(("pi_glue".to_string(), Json::Arr(pi_json)));
+    }
     let mut parts = vec![part];
     let mut packages = vec![chip.clone()];
     for d in &devs {
@@ -2431,6 +2575,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             warnings: Vec::new(),
             audit: Some(audit),
             digital_only,
+            pi_glue,
         },
         target: tref,
         firmware,

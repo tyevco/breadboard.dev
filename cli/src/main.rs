@@ -94,7 +94,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
               [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
               [--ngspice-watchdog 200000,10000] [--ngspice-lattice-snap on|off]
-              [--assert <file.toml> ...]
+              [--assert <file.toml> ...] [--pi-oe pin-cnf|fixed] [--operating-point]
        bb assert <run-dir> --assert <file.toml> [--assert ...] [--bench <bench.toml>]
               [--out <file>]
        bb pool run|start|stop|status ...   (bb pool --help)
@@ -123,7 +123,23 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  close; a failing assertion does not fail the run. `bb assert`
                  evaluates the record-only kinds again on a finished run
   --fidelity   the analog fidelity rung of a project's views: fast (the
-                 default) or pi (ADR-009 D1); wins over the bench's fidelity
+                 default) or pi (ADR-009 D1); wins over the bench's fidelity.
+                 At pi every MCU digital_out drives from its rail (the net
+                 of the package's [power] io_rail, or the binding's rail)
+                 through zout, and goes high-Z (rhiz, default 100 MOhm) while
+                 its output enable oe is 0 (ADR-009 D5)
+  --pi-oe      what drives a pi digital_out's oe (ADR-009 D5): pin-cnf (the
+                 default) reads PIN_CNF.DIR on the nRF52840 from the engine's
+                 write hook, so a pin is high-Z until firmware makes it an
+                 output; fixed (and every other platform): oe = 1. Changes
+                 results; recorded in run.json pi_glue
+  --operating-point
+                 build the run's analog deck and glue, solve its DC operating
+                 point (ADR-015 D4: no transient-op fallback), report, and
+                 stop without starting the CPU. At pi every digital_out is
+                 high-Z (oe = 0), an MCU's state after reset: gate G9 of
+                 ADR-009. A board file takes --fidelity pi only here: its
+                 outputs get the pi glue with a stand-in rail at voh
   --elaborate-only
                  a project: elaborate (checks, deck, probes) and write
                  <out>/deck.cir and run.json, then stop without starting any
@@ -270,6 +286,11 @@ struct RunArgs {
     lattice_snap: bool,
     /// `--assert` files (ADR-010 Amendment 3).
     asserts: Vec<PathBuf>,
+    /// `--pi-oe fixed` (ADR-009 D5): `oe = 1` on every pi digital_out.
+    pi_oe_fixed: bool,
+    /// `--operating-point` (ADR-009 G9): solve the deck's DC operating
+    /// point, every pi digital_out high-Z, and stop.
+    operating_point: bool,
 }
 
 /// `--ngspice-watchdog <points per cell>,<points without progress>`.
@@ -433,6 +454,8 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut watchdog = Watchdog::default();
     let mut lattice_snap = true;
     let mut asserts = Vec::new();
+    let mut pi_oe_fixed = false;
+    let mut operating_point = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -450,6 +473,14 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--fidelity" => fidelity = Some(val(a)?),
             "--allow-unqualified" => allow_unqualified.push(val(a)?),
             "--elaborate-only" => elaborate_only = true,
+            "--operating-point" => operating_point = true,
+            "--pi-oe" => {
+                pi_oe_fixed = match val(a)?.as_str() {
+                    "pin-cnf" => false,
+                    "fixed" => true,
+                    v => return Err(format!("--pi-oe: {v:?}: expected pin-cnf or fixed")),
+                }
+            }
             "--for" => duration = Some(val(a)?.parse::<Time>().map_err(|e| format!("--for: {e}"))?),
             "--probe" => {
                 let v = val(a)?;
@@ -576,7 +607,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     }
     if let Some(f) = &fidelity {
         check_fidelity(f).map_err(|e| format!("--fidelity {e}"))?;
-        if netlist.is_some() && f != "fast" {
+        if netlist.is_some() && f != "fast" && !operating_point {
             return Err(format!(
                 "--fidelity {f}: a board file's SPICE body has no views to choose a rung for \
                  (the fidelity dial selects a project's package views, ADR-009 D1)"
@@ -626,6 +657,8 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         watchdog,
         lattice_snap,
         asserts,
+        pi_oe_fixed,
+        operating_point,
     })
 }
 
@@ -895,6 +928,133 @@ fn load_deck(board: &board::Board, loads: &[LoadGlue]) -> Result<String, String>
     ))
 }
 
+/// The pi glue of one MCU `digital_out` (ADR-009 D5) whose `oe` is the
+/// pin's `PIN_CNF.DIR`: the CPU engine's `<pin>#oe` output and its kernel
+/// net, which drives the glue's `oe` source.
+struct PiOe {
+    cpu_pin: String,
+    kernel_net: String,
+}
+
+/// The `oe` and level drives of the pi glue: 0 V / 1 V control nodes ramped
+/// over the output's own rise and fall, no output resistance (the B sources
+/// are the only load).
+fn unit_drive(m: &bbcore::DigitalOut) -> bbcore::DigitalOut {
+    bbcore::DigitalOut {
+        voh: 1.0,
+        vol: 0.0,
+        rise: m.rise,
+        fall: m.fall,
+        zout: 0.0,
+    }
+}
+
+/// The pi glue of the MCU's `digital_out` pins (ADR-009 D5, milestone P2;
+/// glue rule 11 of spec/pin-model.md), in pin order: per pin the ramped
+/// level `s` and the output enable `oe` as control nodes, two linear B
+/// conductances of `zout` to the rail and to the low side, and the high-Z
+/// leakage `rhiz` to the low side:
+///
+/// ```text
+/// V_bb_<id>     __pi_s_<id>  0 dc 0 external
+/// V_bb_<id>_oe  __pi_oe_<id> 0 dc 0 external      (PIN_CNF.DIR; fixed: dc 1)
+/// B_bb_<id>_hi  <rail> <net> I = V(__pi_oe_<id>)*V(__pi_s_<id>)*(V(<rail>)-V(<net>))/<zout>
+/// B_bb_<id>_lo  <net>  <vss> I = V(__pi_oe_<id>)*(1-V(__pi_s_<id>))*(V(<net>)-V(<vss>))/<zout>
+/// R_bb_<id>_hz  <net>  <vss> <rhiz>
+/// ```
+///
+/// A board file's stand-in rail is `V_bb_<id>_rail __pi_rail_<id> 0 dc
+/// <voh>`. With `op` (`--operating-point`) every `oe` is 0. Returns the
+/// deck text, the analog engine's inputs and the `PIN_CNF.DIR` sources.
+fn pi_glue_deck(
+    board: &board::Board,
+    pins: &[&board::PinBinding],
+    oe_dir: bool,
+    op: bool,
+) -> Result<(String, Vec<InputBinding>, Vec<PiOe>), String> {
+    let mut text = String::new();
+    let mut inputs = Vec::new();
+    let mut oes = Vec::new();
+    for p in pins {
+        let PinKind::Out { net, model } = &p.kind else {
+            continue;
+        };
+        let k = p.kernel_net();
+        let Some(g) = board.pi_glue.get(&k) else {
+            continue;
+        };
+        if model.zout <= 0.0 {
+            return Err(format!(
+                "{k}: zout = {}: a pi digital_out needs zout > 0 (ADR-009 D5)",
+                model.zout
+            ));
+        }
+        let id = spice_name(&format!("{}_{}", p.part, p.pin));
+        let (s, oe) = (format!("__pi_s_{id}"), format!("__pi_oe_{id}"));
+        let rail = match &g.rail {
+            board::PiRail::Net { node, .. } => node.clone(),
+            board::PiRail::StandIn => {
+                let r = format!("__pi_rail_{id}");
+                text.push_str(&format!("V_bb_{id}_rail {r} 0 dc {:e}\n", model.voh));
+                r
+            }
+        };
+        let low = |n: &str| {
+            if g.vss == "0" {
+                format!("V({n})")
+            } else {
+                format!("(V({n})-V({}))", g.vss)
+            }
+        };
+        text.push_str(&format!("V_bb_{id} {s} 0 dc 0 external\n"));
+        inputs.push(InputBinding {
+            pin: k.clone(),
+            source: format!("V_bb_{id}"),
+            drive: Drive::Digital {
+                model: unit_drive(model),
+                initial: Level::Low,
+            },
+            glue_node: None,
+        });
+        if oe_dir {
+            text.push_str(&format!("V_bb_{id}_oe {oe} 0 dc 0 external\n"));
+            let kn = format!("{k}#oe");
+            inputs.push(InputBinding {
+                pin: kn.clone(),
+                source: format!("V_bb_{id}_oe"),
+                drive: Drive::Digital {
+                    model: unit_drive(model),
+                    initial: Level::Low,
+                },
+                glue_node: None,
+            });
+            oes.push(PiOe {
+                cpu_pin: format!("{}#oe", p.pin),
+                kernel_net: kn,
+            });
+        } else {
+            text.push_str(&format!(
+                "V_bb_{id}_oe {oe} 0 dc {}\n",
+                if op { 0 } else { 1 }
+            ));
+        }
+        let z = format!("{:e}", model.zout);
+        text.push_str(&format!(
+            "B_bb_{id}_hi {rail} {net} I = V({oe})*V({s})*(V({rail})-V({net}))/{z}\n"
+        ));
+        text.push_str(&format!(
+            "B_bb_{id}_lo {net} {} I = V({oe})*(1-V({s}))*{}/{z}\n",
+            g.vss,
+            low(net)
+        ));
+        text.push_str(&format!("R_bb_{id}_hz {net} {} {:e}\n", g.vss, g.rhiz));
+    }
+    if !text.is_empty() {
+        text.insert_str(0, "* bb: pi digital_out glue (ADR-009 D5, glue rule 11)\n");
+    }
+    Ok((text, inputs, oes))
+}
+
 /// A view parameter value (the package value grammar) as a SPICE number.
 fn spice_value(v: &str) -> String {
     match bbpkg::value::parse_number(v) {
@@ -1093,6 +1253,12 @@ fn run(a: RunArgs) -> Result<(), String> {
     // net through a rule-1 EXTERNAL source; the package's pin_load view sits
     // on the pad, and the pushed value is the view's observe node (V(hold)).
     let loads = load_glue(&board, &mcu_pins)?;
+    // ADR-009 D5 (milestone P2): at pi, the MCU's digital_out pins in the
+    // rail-tracking, tristate form (none at fast). On the nRF52840 each
+    // one's oe is its PIN_CNF.DIR, a `<pin>#oe` output of the CPU engine
+    // from its PIN_CNF write hook; elsewhere (or --pi-oe fixed) oe = 1.
+    let oe_dir = nrf && !a.pi_oe_fixed;
+    let (pi_deck, pi_inputs, pi_oes) = pi_glue_deck(&board, &mcu_pins, oe_dir, a.operating_point)?;
     // The assertions' nets (ADR-010 D5): a project's are resolved by its
     // elaboration; a board file's are its own names (an MCU or device pin's
     // kernel net `<ref>.<pin>` is digital, any other name a circuit node).
@@ -1124,6 +1290,10 @@ fn run(a: RunArgs) -> Result<(), String> {
         rcfg.pins
             .push(PinSpec::adc_sample(&l.cpu_pin, adc_name, l.channel));
     }
+    for o in &pi_oes {
+        rcfg.pins
+            .push(PinSpec::nrf_oe(&o.cpu_pin).map_err(|e| e.to_string())?);
+    }
     rcfg.adc_trace = mcu_pins
         .iter()
         .filter(|p| matches!(p.kind, PinKind::Adc { trace: true, .. }))
@@ -1145,7 +1315,7 @@ fn run(a: RunArgs) -> Result<(), String> {
     // the CPU is in a loop.
     let stim = &fe.stimulus;
     let bench_mcu = stim.mcu_pins();
-    let binds = engine_binds(
+    let mut binds = engine_binds(
         &mcu_pins,
         &dev_pins,
         &loads,
@@ -1153,6 +1323,22 @@ fn run(a: RunArgs) -> Result<(), String> {
         stim,
         &board.digital_only,
     );
+    // The pi glue's oe sources (ADR-009 D5): `<pin>#oe` of the CPU engine
+    // into the analog engine, like a loading adc_in's `#smp`.
+    for o in &pi_oes {
+        binds.push(devices::Bind {
+            engine: devices::CPU,
+            pin: o.cpu_pin.clone(),
+            net: o.kernel_net.clone(),
+            dir: Direction::Output,
+        });
+        binds.push(devices::Bind {
+            engine: devices::ANALOG,
+            pin: o.kernel_net.clone(),
+            net: o.kernel_net.clone(),
+            dir: Direction::Input,
+        });
+    }
     let (cyclic, in_cycle) = devices::cycles(devices::ENGINES, &binds);
     let plugin = match a.plugin {
         PluginMode::Auto => in_cycle[devices::CPU],
@@ -1208,8 +1394,9 @@ fn run(a: RunArgs) -> Result<(), String> {
     // and ngspice lands on every lattice point, so its solver points do not
     // depend on the grant partition or the sample rate.
     let mut netlist = board.spice.clone();
-    if !loads.is_empty() {
-        // The board body up to its `.end`, then the loads (glue rule 9).
+    if !loads.is_empty() || !pi_deck.is_empty() {
+        // The board body up to its `.end`, then the loads (glue rule 9) and
+        // the pi glue (glue rule 11).
         let mut body: Vec<&str> = Vec::new();
         for l in board.spice.lines() {
             if l.trim().eq_ignore_ascii_case(".end") {
@@ -1219,7 +1406,10 @@ fn run(a: RunArgs) -> Result<(), String> {
         }
         netlist = body.join("\n");
         netlist.push('\n');
-        netlist.push_str(&load_deck(&board, &loads)?);
+        if !loads.is_empty() {
+            netlist.push_str(&load_deck(&board, &loads)?);
+        }
+        netlist.push_str(&pi_deck);
     }
     // ADR-015 D3: the deck's B/E/G expressions against ngspice 42's function
     // table before ngspice reads them (a three-argument min() segfaults it).
@@ -1243,10 +1433,14 @@ fn run(a: RunArgs) -> Result<(), String> {
             glue_node: Some(l.smp_node.clone()),
         });
     }
+    // The pi glue's level and oe inputs (ADR-009 D5).
+    ncfg.inputs.extend(pi_inputs);
     for p in &mcu_pins {
         match &p.kind {
             // An output on a digital-only net (ADR-014 D4): no glue.
             PinKind::Out { net, .. } if board.digital_only.contains(net) => {}
+            // At pi: the glue above.
+            PinKind::Out { .. } if board.pi_glue.contains_key(&p.kernel_net()) => {}
             // An MCU output into the circuit: EXTERNAL source + zout glue.
             PinKind::Out { net, model } => ncfg.inputs.push(InputBinding {
                 pin: p.kernel_net(),
@@ -1385,6 +1579,23 @@ fn run(a: RunArgs) -> Result<(), String> {
         });
     }
 
+    if a.operating_point {
+        // ADR-009 G9 (milestone P2) with ADR-015 D4's fail-fast: the deck's
+        // DC operating point, every input at its initial value (at pi every
+        // digital_out high-Z), no transient-op fallback; no engine runs.
+        let t0 = Instant::now();
+        bb_analog_ngspice::operating_point(&ncfg)
+            .map_err(|e| format!("operating point at {}: {e}", fe.fidelity))?;
+        println!(
+            "bb run: operating point solved at {} ({} pi digital_out(s) high-Z, oe = 0; {} \
+             input(s) at their initial values) in {:.2} s",
+            fe.fidelity,
+            board.pi_glue.len(),
+            ncfg.inputs.len(),
+            t0.elapsed().as_secs_f64()
+        );
+        return Ok(());
+    }
     fs::create_dir_all(&a.out).map_err(|e| format!("create {}: {e}", a.out.display()))?;
     if a.elaborate_only {
         // A board file's elaboration (milestone S's deck gate): the netlist
@@ -1936,7 +2147,27 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         // writes.
         // A registry package comes from the cache by its locked tree hash;
         // bb run never fetches (ADR-011 D4).
-        let (board, lock_warnings) = open::board_for_run(netlist)?;
+        let (mut board, lock_warnings) = open::board_for_run(netlist)?;
+        // `--operating-point --fidelity pi` (ADR-009 G9, milestone P2): a
+        // board file names no rail, so each output's pi glue drives from a
+        // stand-in at its voh; with oe = 0 the rail carries no current.
+        let fidelity = a.fidelity.clone().unwrap_or_else(|| "fast".into());
+        if fidelity == "pi" {
+            for p in &board.pins {
+                if matches!(p.kind, PinKind::Out { .. })
+                    && Some(p.part.as_str()) == a.target.as_deref()
+                {
+                    board.pi_glue.insert(
+                        p.kernel_net(),
+                        board::PiGlue {
+                            rail: board::PiRail::StandIn,
+                            vss: "0".into(),
+                            rhiz: board::RHIZ_DEFAULT,
+                        },
+                    );
+                }
+            }
+        }
         for w in &board.warnings {
             eprintln!("bb run: warning: {}: {w}", netlist.display());
         }
@@ -1965,7 +2196,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
             run_json: None,
             flagged: Vec::new(),
             stimulus: elab::Stimulus::default(),
-            fidelity: "fast".into(),
+            fidelity,
         });
     }
     // A project: read-only (ADR-007 D7). board.bbm and bb.lock must be what
@@ -2028,6 +2259,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         allow_unqualified: &a.allow_unqualified,
         cli_probes: &a.probes,
         extra_asserts: &extra,
+        pi_oe_fixed: a.pi_oe_fixed,
     })?;
     for w in &plan.warnings {
         eprintln!("bb run: warning: {w}");
@@ -2206,6 +2438,81 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-009 D5 / G9 (milestone P2): the pi glue's text, and its DC
+    /// operating point with oe = 0 on a net whose only DC path is the glue
+    /// (examples/feedback's RC: PA5 -> 1k -> SENSE -> 1 uF): it solves with
+    /// the high-Z leakage and fails without it (the negative control: the
+    /// gate is not vacuous), and it solves with oe = 1.
+    #[test]
+    fn pi_glue_text_and_high_z_operating_point() {
+        let text = "* rc\n*bb part U1 engine=renode platform=stm32f103\n\
+                    *bb pin U1.PA5 net=PA5 model=digital_out voh=3.3 vol=0 rise=5ns fall=7ns \
+                    zout=25\nR2 PA5 SENSE 1k\nC1 SENSE 0 1u\n.end\n";
+        let mut board = board::parse(text).unwrap();
+        board.pi_glue.insert(
+            "U1.PA5".into(),
+            board::PiGlue {
+                rail: board::PiRail::StandIn,
+                vss: "0".into(),
+                rhiz: board::RHIZ_DEFAULT,
+            },
+        );
+        let pins: Vec<&board::PinBinding> = board.pins.iter().collect();
+        let (deck, inputs, oes) = pi_glue_deck(&board, &pins, false, true).unwrap();
+        assert_eq!(
+            deck,
+            "* bb: pi digital_out glue (ADR-009 D5, glue rule 11)\n\
+             V_bb_U1_PA5_rail __pi_rail_U1_PA5 0 dc 3.3e0\n\
+             V_bb_U1_PA5 __pi_s_U1_PA5 0 dc 0 external\n\
+             V_bb_U1_PA5_oe __pi_oe_U1_PA5 0 dc 0\n\
+             B_bb_U1_PA5_hi __pi_rail_U1_PA5 PA5 I = \
+             V(__pi_oe_U1_PA5)*V(__pi_s_U1_PA5)*(V(__pi_rail_U1_PA5)-V(PA5))/2.5e1\n\
+             B_bb_U1_PA5_lo PA5 0 I = V(__pi_oe_U1_PA5)*(1-V(__pi_s_U1_PA5))*V(PA5)/2.5e1\n\
+             R_bb_U1_PA5_hz PA5 0 1e8\n"
+        );
+        assert!(oes.is_empty());
+        assert_eq!(inputs.len(), 1);
+        let Drive::Digital { model, initial } = inputs[0].drive else {
+            panic!("{:?}", inputs[0].drive)
+        };
+        assert_eq!(
+            (model.voh, model.vol, model.rise, model.fall, model.zout, initial),
+            (
+                1.0,
+                0.0,
+                Time::from_ns(5),
+                Time::from_ns(7),
+                0.0,
+                Level::Low
+            )
+        );
+        let body = text.trim_end().trim_end_matches(".end");
+        let op = |deck: &str| {
+            let mut c = NgspiceConfig::new(
+                format!("{body}{deck}"),
+                Time::from_us(10),
+                Time::from_us(10),
+            );
+            c.inputs = inputs.clone();
+            bb_analog_ngspice::operating_point(&c)
+        };
+        op(&deck).expect("oe = 0 with the high-Z leakage");
+        let no_hz: String = deck
+            .lines()
+            .filter(|l| !l.starts_with("R_bb_U1_PA5_hz"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let e = op(&no_hz).expect_err("oe = 0 without a DC path must fail");
+        assert!(
+            e.to_string().to_lowercase().contains("pa5")
+                || e.to_string().to_lowercase().contains("sense"),
+            "{e}"
+        );
+        let (on, ..) = pi_glue_deck(&board, &pins, false, false).unwrap();
+        assert!(on.contains("V_bb_U1_PA5_oe __pi_oe_U1_PA5 0 dc 1\n"));
+        op(&on).expect("oe = 1");
+    }
 
     #[test]
     fn watchdog_option_and_op_views() {

@@ -234,6 +234,86 @@ pub struct Board {
     /// routed through the kernel net only; the analog engine has no glue,
     /// input or output on them. Empty for a board file.
     pub digital_only: BTreeSet<String>,
+    /// The `pi` glue of every MCU `digital_out` on a circuit net (ADR-009
+    /// D5, milestone P2), by kernel net (`U10.P0.06`); empty at `fast`.
+    pub pi_glue: BTreeMap<String, PiGlue>,
+}
+
+/// The default high-Z leakage of a `pi` `digital_out` (ADR-009 D5 and its
+/// default 6): 100 MΩ, a numerics floor (33 nA at 3.3 V).
+pub const RHIZ_DEFAULT: f64 = 100e6;
+
+/// Where a `pi` `digital_out` drives its high level from (ADR-009 D5).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PiRail {
+    /// The net of the package pin `rail` names (a project): the SPICE node,
+    /// the display net and the chip pin.
+    Net {
+        node: String,
+        net: String,
+        pin: String,
+    },
+    /// A board file names no rail: a stand-in ideal source at the binding's
+    /// `voh`, Phase 0's fixed level (used only by `bb run
+    /// --operating-point`, gate G9, where `oe = 0` makes the rail carry no
+    /// current).
+    StandIn,
+}
+
+/// The `pi` form of one MCU `digital_out` (ADR-009 D5).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PiGlue {
+    pub rail: PiRail,
+    /// The SPICE node of the low side (the package's ground pins' net;
+    /// `0` for a board file).
+    pub vss: String,
+    /// The high-Z leakage, Ω.
+    pub rhiz: f64,
+}
+
+/// The `pi` keys of a `digital_out` binding (ADR-009 D5; `spec/package.md`
+/// section 4): `rail` (a pin name) and `rhiz` (Ω), from the explicit keys
+/// over the package's parameter set; `None` where neither gives one.
+pub fn digital_out_pi_keys(
+    pkg: Option<&Package>,
+    set: Option<&str>,
+    explicit: &[(&str, &str)],
+) -> Result<(Option<String>, Option<f64>), String> {
+    let mut from: BTreeMap<String, Param> = match pkg {
+        Some(p) => param_set(p, "digital_out", set)?,
+        None => BTreeMap::new(),
+    };
+    for &(k, v) in explicit {
+        let kind = match k {
+            "rail" => ParamKind::Pin,
+            "rhiz" => ParamKind::Q {
+                dim: Dim::Resistance,
+                supply_ok: false,
+            },
+            _ => continue,
+        };
+        from.insert(
+            k.into(),
+            parse_param(v, kind).map_err(|e| format!("{k}: {e}"))?,
+        );
+    }
+    let rail = match from.remove("rail") {
+        Some(Param::Name(n)) => Some(n),
+        Some(_) => return Err("rail: expected a pin name".into()),
+        None => None,
+    };
+    let rhiz = match from.remove("rhiz") {
+        Some(Param::Quantity(q)) => {
+            let r = to_f64(q, Dim::Resistance);
+            if r <= 0.0 {
+                return Err("rhiz must be > 0".into());
+            }
+            Some(r)
+        }
+        Some(_) => return Err("rhiz: expected a resistance".into()),
+        None => None,
+    };
+    Ok((rail, rhiz))
 }
 
 /// What the `PIN_CNF` audit expects of one pin (ADR-008 D4).
@@ -677,6 +757,7 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         warnings,
         audit: None,
         digital_only: BTreeSet::new(),
+        pi_glue: BTreeMap::new(),
     })
 }
 

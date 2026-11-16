@@ -554,6 +554,14 @@ pub enum PinDirection {
     /// presence marks the input as loaded, which arms the TACQ >= 2 L
     /// refusal.
     AdcSample,
+    /// The `#oe` output of an nRF52840 GPIO (ADR-009 D5, milestone P2): an
+    /// output of the engine (not a GPIO event) at the level of the pin's
+    /// `PIN_CNF.DIR` (1 = output), from the `PIN_CNF` write hook on its
+    /// port's DIR/DIRSET/DIRCLR and `PIN_CNF` registers, each change at the
+    /// write's own virtual time by the lattice rule of GPIO events. Low after
+    /// reset (`PIN_CNF` = 0x2, an input). [`PinSpec::gpio`] and
+    /// [`PinSpec::index`] name the GPIO pin.
+    OutputEnable,
 }
 
 /// One MCU pin exposed to the kernel.
@@ -630,6 +638,17 @@ impl PinSpec {
             index: input,
             direction: PinDirection::AdcSample,
         }
+    }
+
+    /// The `#oe` output of nRF52840 GPIO `name` (`P0.06#oe`: the pin's
+    /// `PIN_CNF.DIR`, ADR-009 D5).
+    pub fn nrf_oe(name: &str) -> Result<PinSpec, EngineError> {
+        let pin = name.strip_suffix("#oe").ok_or_else(|| {
+            EngineError::Other(format!("{name:?}: an output-enable pin is <pin>#oe"))
+        })?;
+        let mut p = PinSpec::nrf(pin, PinDirection::OutputEnable)?;
+        p.name = name.to_string();
+        Ok(p)
     }
 }
 
@@ -1666,6 +1685,11 @@ pub struct RenodeEngine {
     pin_cnf_writes: PathBuf,
     pin_cnf_read: u64,
     pin_cnf_state: Vec<(u32, Option<String>)>,
+    /// The hooks' lines `[t_ns, port, offset, value]` read and not yet
+    /// consumed by the audit, and by the `#oe` outputs (ADR-009 D5; those
+    /// stamped at the last grant end wait for the next grant).
+    hook_audit: Vec<[u64; 4]>,
+    hook_oe: Vec<[u64; 4]>,
     /// Log records not yet drained (a write stamped after the current
     /// grant's end waits for the next one).
     logs: Vec<bbcore::LogRecord>,
@@ -1878,14 +1902,16 @@ impl RenodeEngine {
         let nrf_only = cfg.uart_log
             || cfg.pwm
             || !cfg.adc_trace.is_empty()
-            || cfg
-                .pins
-                .iter()
-                .any(|p| p.direction == PinDirection::AdcSample);
+            || cfg.pins.iter().any(|p| {
+                matches!(
+                    p.direction,
+                    PinDirection::AdcSample | PinDirection::OutputEnable
+                )
+            });
         if nrf_only && cfg.platform != Platform::Nrf52840Bb {
             return Err(EngineError::Other(
-                "a loading adc_in (#smp), trace_samples, UART log lines and PWM pins are for the \
-                 nRF52840 platform only"
+                "a loading adc_in (#smp), trace_samples, UART log lines, PWM pins and #oe outputs \
+                 are for the nRF52840 platform only"
                     .into(),
             ));
         }
@@ -1983,10 +2009,17 @@ impl RenodeEngine {
         // after every advance. The hook returns the value unchanged, so the
         // emulation is not affected.
         let pin_cnf_log = workdir.join(PIN_CNF_WRITES);
+        // ADR-009 D5: the `#oe` outputs read the same hooks.
         let mut ports: Vec<u32> = cfg
             .pin_cnf_audit
             .iter()
             .filter_map(|a| nrf_pin(&a.pin).map(|(p, _)| p))
+            .chain(
+                cfg.pins
+                    .iter()
+                    .filter(|p| p.direction == PinDirection::OutputEnable)
+                    .filter_map(|p| p.gpio.strip_prefix("gpio")?.parse().ok()),
+            )
             .collect();
         ports.sort_unstable();
         ports.dedup();
@@ -2118,9 +2151,13 @@ impl RenodeEngine {
             let md = client.get_machine(&cfg.machine)?;
             let mut pins = Vec::new();
             for (i, spec) in cfg.pins.iter().enumerate() {
-                if spec.direction == PinDirection::AdcSample {
-                    // Not a GPIO: its edges come from the SAADC's
-                    // acquisition ring (ADR-008 D7).
+                if matches!(
+                    spec.direction,
+                    PinDirection::AdcSample | PinDirection::OutputEnable
+                ) {
+                    // Not a GPIO event: its edges come from the SAADC's
+                    // acquisition ring (ADR-008 D7), or from the PIN_CNF
+                    // write hook (`#oe`, ADR-009 D5: DIR is 0 after reset).
                     pins.push(PinState {
                         spec: spec.clone(),
                         gpio: -1,
@@ -2331,6 +2368,8 @@ impl RenodeEngine {
             pin_cnf_audit: cfg.pin_cnf_audit.clone(),
             pin_cnf_writes: pin_cnf_log,
             pin_cnf_read: 0,
+            hook_audit: Vec::new(),
+            hook_oe: Vec::new(),
             pin_cnf_state: vec![(NRF_PIN_CNF_RESET, None); cfg.pin_cnf_audit.len()],
             logs: Vec::new(),
             pin_cnf_findings: Default::default(),
@@ -2659,8 +2698,14 @@ impl RenodeEngine {
     /// with the write's own virtual time (the lattice rule of GPIO events:
     /// a stamp on a lattice point is reported 1 fs after it). That time does
     /// not depend on the grant partition. Only complete lines are consumed.
-    fn poll_pin_cnf_writes(&mut self) -> Result<(), EngineError> {
-        if self.pin_cnf_audit.is_empty() {
+    /// Read the `PIN_CNF` write hooks' new complete lines into the audit's
+    /// and the `#oe` outputs' queues (each `[t_ns, port, offset, value]`).
+    fn read_hook_lines(&mut self) -> Result<(), EngineError> {
+        let oe = self
+            .pins
+            .iter()
+            .any(|p| p.spec.direction == PinDirection::OutputEnable);
+        if self.pin_cnf_audit.is_empty() && !oe {
             return Ok(());
         }
         let len = match std::fs::metadata(&self.pin_cnf_writes) {
@@ -2688,6 +2733,82 @@ impl RenodeEngine {
             let [t_ns, port, offset, value] = v[..] else {
                 return Err(bad());
             };
+            let w = [t_ns, port, offset, value];
+            if !self.pin_cnf_audit.is_empty() {
+                self.hook_audit.push(w);
+            }
+            if oe {
+                self.hook_oe.push(w);
+            }
+        }
+        Ok(())
+    }
+
+    /// ADR-009 D5 (milestone P2): the `#oe` changes of the `PIN_CNF` writes
+    /// read so far (and those carried from the last grant end), each at its
+    /// write's virtual time by the lattice rule of GPIO events; a write
+    /// stamped at the grant end `t` itself belongs to the next grant (rule
+    /// 3). Returns `(edge_time, pin, level)` in write order; a write that
+    /// leaves `DIR` as it was is no change.
+    fn oe_changes(&mut self, t: Time) -> Result<Vec<(Time, usize, Level)>, EngineError> {
+        let mut out = Vec::new();
+        let lines = std::mem::take(&mut self.hook_oe);
+        let target_ns = t.as_fs() / FS_PER_NS;
+        for (k, w) in lines.iter().enumerate() {
+            let [t_ns, port, offset, value] = *w;
+            if t_ns > target_ns {
+                return Err(EngineError::Protocol(format!(
+                    "PIN_CNF write at {t_ns} ns, after the grant end {target_ns} ns"
+                )));
+            }
+            if t_ns == target_ns {
+                // Lattice rule 3: this write and every later one belong to
+                // the next grant.
+                self.hook_oe = lines[k..].to_vec();
+                break;
+            }
+            let value = value as u32;
+            let edge_time = lattice_edge_time(t_ns, self.quantum_ns);
+            for i in 0..self.pins.len() {
+                let spec = &self.pins[i].spec;
+                if spec.direction != PinDirection::OutputEnable {
+                    continue;
+                }
+                let n = spec.index as u32;
+                if spec.gpio != format!("gpio{port}") {
+                    continue;
+                }
+                let bit = value >> n & 1 != 0;
+                let old = self.pins[i].gpio_level == Level::High;
+                let dir = match offset {
+                    NRF_GPIO_DIR => bit,
+                    NRF_GPIO_DIRSET if bit => true,
+                    NRF_GPIO_DIRCLR if bit => false,
+                    o if o == NRF_GPIO_PIN_CNF + 4 * u64::from(n) => value & 1 != 0,
+                    _ => continue,
+                };
+                if dir == old {
+                    continue;
+                }
+                self.pins[i].gpio_level = Level::from_bool(dir);
+                out.push((edge_time, i, Level::from_bool(dir)));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Read the `PIN_CNF` write hooks' new lines (ADR-008 D4) and turn each
+    /// write that leaves an audited pin disagreeing with its binding (or
+    /// disagreeing differently) into a `warn`/`error` log record stamped
+    /// with the write's own virtual time (the lattice rule of GPIO events:
+    /// a stamp on a lattice point is reported 1 fs after it). That time does
+    /// not depend on the grant partition. Only complete lines are consumed.
+    fn poll_pin_cnf_writes(&mut self) -> Result<(), EngineError> {
+        if self.pin_cnf_audit.is_empty() {
+            return Ok(());
+        }
+        self.read_hook_lines()?;
+        for [t_ns, port, offset, value] in std::mem::take(&mut self.hook_audit) {
             let value = value as u32;
             let t = lattice_edge_time(t_ns, self.quantum_ns);
             for i in 0..self.pin_cnf_audit.len() {
@@ -2780,9 +2901,12 @@ impl RenodeEngine {
         // grant end is reported at `now + 1 fs` (lattice rule 3).
         // So does a PWM pin change past the last grant end (ADR-008
         // Amendment 9), which is due before the next clock limit.
+        // So does a `#oe` change of a PIN_CNF write stamped at the last grant
+        // end (ADR-009 D5).
         if !self.carried.is_empty()
             || self.saadc.as_ref().is_some_and(|s| !s.carried.is_empty())
             || self.pwm.as_ref().is_some_and(|p| !p.carried.is_empty())
+            || !self.hook_oe.is_empty()
         {
             return Ok(now);
         }
@@ -2826,7 +2950,7 @@ impl RenodeEngine {
         }
         // A change stamped at the grant end executed right after it.
         let carried_at = Time::from_ns(self.renode_ns) + Time::from_fs(1);
-        if !self.carried.is_empty() && carried_at < until {
+        if (!self.carried.is_empty() || !self.hook_oe.is_empty()) && carried_at < until {
             return Err(broken(carried_at));
         }
         // A PWM pin change recorded past the grant end (ADR-008 Amendment 9).
@@ -3099,7 +3223,7 @@ impl Engine for RenodeEngine {
             .filter(|p| {
                 matches!(
                     p.spec.direction,
-                    PinDirection::Output | PinDirection::AdcSample
+                    PinDirection::Output | PinDirection::AdcSample | PinDirection::OutputEnable
                 )
             })
             .map(|p| {
@@ -3398,7 +3522,7 @@ impl RenodeEngine {
         for p in &mut self.pins {
             p.gpio = match p.spec.direction {
                 PinDirection::Adc => client.get_adc(md, &p.spec.gpio).map_err(proto)?,
-                PinDirection::AdcSample => -1,
+                PinDirection::AdcSample | PinDirection::OutputEnable => -1,
                 _ => client.get_gpio(md, &p.spec.gpio).map_err(proto)?,
             };
         }
@@ -3590,6 +3714,36 @@ impl RenodeEngine {
                 pin: self.pins[i].spec.name.clone(),
                 signal: PinSignal::digital(level, at),
             });
+        }
+        // ADR-009 D5 (milestone P2): the `#oe` outputs, each pin's
+        // PIN_CNF.DIR, from the write hooks of this advance (and those
+        // carried from the last grant end).
+        if self
+            .pins
+            .iter()
+            .any(|p| p.spec.direction == PinDirection::OutputEnable)
+        {
+            self.read_hook_lines()?;
+            for (edge_time, i, level) in self.oe_changes(t)? {
+                if last_change[i].is_some_and(|x| edge_time <= x) {
+                    return Err(EngineError::Protocol(format!(
+                        "{}: two direction changes stamped in the same Renode slice ({edge_time}); \
+                         the edge-stamp resolution is the quantum, lower --renode-quantum",
+                        self.pins[i].spec.name
+                    )));
+                }
+                last_change[i] = Some(edge_time);
+                let pin = &mut self.pins[i];
+                pin.level = level;
+                pin.edge_time = edge_time;
+                self.trace.push(Transition {
+                    t: edge_time,
+                    pin: pin.spec.name.clone(),
+                    signal: PinSignal::digital(level, edge_time),
+                });
+            }
+            // Emulation order is time order; GPIO edges and #oe merge.
+            self.trace.sort_by_key(|tr| tr.t);
         }
         // ADR-008 D7: the `#smp` toggles of the acquisitions this advance
         // started (and those carried from the last grant end), one edge per
