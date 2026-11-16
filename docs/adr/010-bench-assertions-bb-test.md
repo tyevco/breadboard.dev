@@ -416,3 +416,147 @@ recommended answers (plan section 10). For this ADR:
 - **No vacuous negative controls** (from the W1 finding): G9.
 
 **Not adopted:** none.
+
+## Amendment 1: milestone B1 as implemented (2026-11-15)
+
+Milestone B1 (plan section 4: `bb-bench/1`, the bench engine, timed
+actions, CSV playback, current profiles, faults, the `switch` view kind)
+is implemented in `bbbench`, `engines/analog-ngspice`, `bbpkg` and `cli`,
+and gated by `make bench-test` (in `make test`), `make bench-gate` and
+`make bench-perf` on `examples/bench`. `spec/project.md` section 3 and
+`spec/package.md` sections 3 and 10 state the result. Where the
+implementation decides something D1-D4 leave open, or departs from their
+wording, it is recorded here.
+
+**A1.1 The schema epoch.** Milestone S has not landed. B1 carries its own
+part of the epoch, as the plan allows ("tracks develop against the epoch's
+draft schemas"): the registry's current majors are `bb-part/1` (only the
+`switch` view kind is new; the other `bb-part/1` keys of ADR-009 and
+ADR-012 stay reserved) and `bb-bench/1`. Both migrate from `/0` by the
+schema line. `/0` packages now lint with the migration hint (a warning);
+S migrates them, with the one `make locks`. The Phase 1 benches are
+migrated in their own commit. No `/1` file reaches `main` before S.
+
+**A1.2 Tables, and which points are breakpoints.** D3's `EXTERNAL` source
+with a cursor is a `TableSource` of the analog engine (V and I sources;
+`GetISRCData` is now registered for current profiles). The solver's steps
+are clamped to every point. Whether a point is also an ngspice breakpoint
+is a cost question that D3 does not settle, and G2 and the plan's B1 row
+pull in different directions:
+
+- G2 asks a playback to equal the same data as a short `[[pwl]]`, byte for
+  byte. A PWL card sets a breakpoint at every point, so the table must too.
+  It does: `bench/playback-small.toml` (601 points) and
+  `bench/playback-pwl.toml` give identical `nets.csv`, `nets.vcd` and
+  non-grant records.
+- The B1 row asks for 1 s at 100 ksps in at most 2 s of added wall time. A
+  breakpoint restarts the integration at order 1 with a step of a tenth of
+  the gap, so a breakpoint on every lattice point makes about four solver
+  points per cell instead of one. Measured on `examples/bench` (interleaved,
+  N = 3, medians; the host was shared with other tracks, load 14): 3.22 s
+  added with breakpoints, 0.36 s without. With the rule below, `make
+  bench-perf` on the idle host (N = 5, load 0.7): base 3.08 s, playback
+  3.07 s total, so the playback adds nothing measurable (−0.01 s).
+
+The rule: the points of a `hold` table (a step, which needs the
+breakpoint) and of a table of at most 1 000 points (the `[[pwl]]` warning
+limit, where G2 applies and the cost is negligible) are breakpoints; a
+longer linear table's points are corners only. On `bench/playback-small`
+the difference the breakpoints make is 4 µV on AFILT, the RC behind the
+source. A breakpoint is released at the accepted point that opens the
+lattice cell before the one holding it, so it is in ngspice's table
+before the step decision at the cell's start; that is a function of the
+solver points only (every lattice point has one).
+
+**A1.3 `hold` is left-continuous**, as an input ramp is: at a point's time
+the old value, after it the new one. The step then falls in the solver's
+first, short step after the breakpoint. (Right-continuous, the solver
+point at the breakpoint itself was solved with the new value, which spreads
+the step over the preceding step.)
+
+**A1.4 The bench engine's registration (D4).** D4 says "registered after
+the analog engine". It is registered **first**, in both engine orders.
+Inside a feedback loop the kernel orders a component's members
+lattice-bound engines first, then by registration (ADR-003 D3), so the
+bench then advances after the CPU (whose edges trigger it) and before the
+analog engine (which its triggered sources drive): a triggered change
+reaches the analog engine before it advances through the change's time, in
+either engine order. Its records sort first at equal times in both orders,
+so `--engine-order analog-first` stays byte-identical (gated).
+
+**A1.5 A triggered source** is the bench engine's output, an input of the
+analog engine (`Drive::Timed`) that changes at its own time by a 1 ns
+ramp. An MCU edge is at a lattice point plus 1 fs, closer to the lattice
+point than the solver resolves a corner (1 ps); a bare step there would be
+integrated over whatever step the solver takes next (a press reached PB0
+480 ns late in a trial); with the ramp's end as a corner and a breakpoint
+it reaches PB0 7.6 ns after the press, as the timed press does (7.3 ns).
+The cost: a bench engine between the CPU and the analog engine in a loop
+leaves the kernel no quiet grant (ADR-003 D5 needs exactly one producer
+feeding the quiet CPU, first in its order), so such a run's grants are one
+lattice cell (`bench/trigger.toml`: 7 000 grants for 70 ms). Its partition
+gates are consistency checks. A bench engine that only drives the CPU
+(`bench/digital-set.toml`) is that one producer, and lookahead serves it
+(31 grants for 100 ms).
+
+**A1.6 Triggers are edges only.** D2's trigger on "the named edge or `log`
+match": a `log` trigger is refused in this build; the bench engine reads
+pins, and `log` matching arrives with B2's `log` assertion kind. A trigger
+fires once, at the first change of the pin to `level` after `t = 0`; the
+initial level is not an edge. Its action is at `t_edge + delay` on the
+analog side; on an MCU pin the MCU applies it at `ceil_L(t_edge + delay)`,
+as D2 states. A trigger that reached the bench only at a boundary after
+its action's time is a protocol error (it cannot happen with A1.4's
+order).
+
+**A1.7 Details D2 leaves open**, decided here:
+
+- `set` targets a `[[supply]]`'s net (`to` a voltage: the supply's voltage
+  becomes the set source's node; an ideal fixed supply becomes the source
+  itself) or a bound `digital_in` pin (`to` `0` or `1`). With `for`, it
+  returns to the bench's own value (the supply's `volts`, the pin's
+  initial level). A pin the bench drives starts low, unless its playback
+  has a point at `t = 0`. One pin takes one stimulus (a playback or sets).
+- Timed actions on one target may not overlap (refused).
+- `bounce = { count, max }`: `2 × count` distinct toggles in `(0, max)`
+  after the press and after the release (SplitMix64 from `seed`, the
+  switch and the action), ending in the new state; `max` defaults to the
+  view's `bounce_max` and may not exceed it or `for`. The offsets are in
+  `run.json`.
+- A fault is the `bb_switch` element at the default `ron` and `roff`:
+  `open` moves the named instance pin to a node of its own, connected
+  through the closed element before `at` (so 50 mΩ of series resistance
+  before the fault); `short` is to the board's ground. Both take an
+  optional `for` (not in D2) after which the fault ends.
+- A `[[load]]` with a `profile` takes `interp` (not in D2), default
+  `linear`.
+- The switch element is the subcircuit `bb_switch a b ctl` (a control port
+  beside the two contacts); its control node is `bb_ctl_<ref>` (D2 calls
+  it `<ref>_ctl`).
+- The bench engine's identity (`bench@1`, the content hash of `bbbench`'s
+  sources) is recorded in `run.json` (`bench.engine`). Locking it as
+  `engine:bench@1` changes `bb.lock`, whose schema is ADR-011's (S); it
+  waits for S.
+- The `bb-bench/1` keys of D2 that later milestones implement (`fidelity`,
+  `corner`, `[[battery]]`, `[[activity]]`, `[[env]]`, `[probes]`, a
+  `[[load]]` `replace`) are refused with the milestone named, not accepted
+  inert: a bench that names one would not run as written. S may make them
+  inert instead; this ADR prefers the refusal.
+
+**A1.8 Gates as run.** G1: the five Phase 1 benches elaborate to
+byte-identical decks as `/0` and `/1` (`bb run --elaborate-only`), and every
+case that runs them gives its committed hashes on the migrated files:
+`dms-rail-test` (E1's four cases), `dms-vsense-test` (s50, c5 and their
+twins) and, run once outside `make test`, E2's sag, rec, s1 and s1-none
+(`tests/golden/dms-vsense`). `make pool-equiv` with three `examples/bench`
+entries passes (28 configurations, one Renode process). G2: the playback cost and the short-table identity (A1.2).
+The plan's digital-playback gate: a digital playback into U1.PB0 with the
+edge times that an ideal `[[pwl]]` on its net gives at PB0's thresholds
+(`data/btn.csv`, checked against the `[[pwl]]` run) gives the same eight
+`pin_edge` records to the fs, the same PA6 response, and every change in
+`(ceil_L(t), ceil_L(t) + L]`. G8: a 1 kΩ switch charges 1 µF within 9 µV
+of the analytic RC at 20.1-30 ms; open, it divides by `roff` within 5 µV;
+a press on a resistor is refused naming its views. Partition independence:
+every case at `--max-quantum` 10 µs, 1 ms and 10 ms equals its default run
+in `nets.csv`, `nets.vcd` and the non-grant records, and the committed
+hashes are those of the one-cell references.

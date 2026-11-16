@@ -1,0 +1,39 @@
+# examples/dial-me-spinner/e3/step/bench.toml: E3's step bench on the project route (Phase 2 R1).
+#
+# The main board alone, as ../board.cir's bench: the dial-me-spinner suite's power path of
+# test_firmware_microstep_pwm[VBAT3.7-25C] at DC. The cell 3.7 V behind the path's series
+# resistance, RPACK 0.2 + BAT-FET 0.09 + the link's VSYS 0.0484 and GND 0.0322667 Ohm = 0.370667 Ohm
+# (a Norton source), the 150 mA of other VSYS loads, and +3V3 from an ideal 3.3 V behind 50 mOhm. At
+# DC VSYS is ../board.cir's: the firmware's one VSYS reading (code 1296) is the same. Not reproduced:
+# the base board's VBAT and VSYS capacitors and the link's split into VSYS and GND (they need the base
+# board in the deck, R2), and the board file's derated VSYS capacitors with 10 mOhm ESR (the project
+# deck has the schematic's values, generic/capacitor).
+#
+# The analog scope keeps the MOT nets and the bridges' outputs, as ../board-step.cir does: U40 and U41
+# (ti/drv8837:bridge, its default rDS(on) 0.28 Ohm; ../board-step.cir uses the suite's 0.33 Ohm
+# maximum), R70 and J40 (dial-me-spinner/detent-stepper:step_emf) are in the deck, U10's PWM edges
+# reach the bridges through their glue, and M1 reads them through the kernel net.
+schema = "bb-bench/1"
+temp_c = "25"
+
+[[supply]]
+net = "VSYS"
+volts = "3.7V"
+rs = "0.370667"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "50m"
+
+[[load]]
+net = "VSYS"
+amps = "150mA"
+
+[analog]
+nets = ["GND", "VSYS", "+3V3", "VSYS_SENSE", "HOME_N",
+        "MOT_A_IN1", "MOT_A_IN2", "MOT_B_IN1", "MOT_B_IN2", "MOT_NSLEEP",
+        "MOT_A_OUT1", "MOT_A_OUT2", "MOT_B_OUT1", "MOT_B_OUT2"]
+
+[options]
+set = "phase0"

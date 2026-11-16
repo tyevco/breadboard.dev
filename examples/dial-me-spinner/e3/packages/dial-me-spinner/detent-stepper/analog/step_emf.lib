@@ -1,0 +1,18 @@
+* dial-me-spinner/detent-stepper view "step_emf" (breadboard.dev, Apache-2.0): the detent stepper's
+* two phases on J40 with the back-EMF of a rotor turning at pps full steps per second from t0 to
+* tstop (E3's step case: examples/dial-me-spinner/e3/board-step.cir's BEMFA and BEMFB, the suite's
+* KE_MAX 1.37 V per k step/s and load angle pi/2; motor_drive__stepper.lib's PMSTEP_PHASE, phase A
+* -E sin, phase B +E cos). The EMF is a V-type B source in series with the phase's 20 Ohm and
+* 4.3 mH, as in board-step.cir (no milliohm path, so phase0 holds; AGENTS.md).
+* Ports: Pin_1 Pin_2 (phase A), Pin_3 Pin_4 (phase B).
+.subckt dms_detent_stepper_step_emf PA1 PA2 PB1 PB2 params: r=20 l=4.3m ke=1.37 pps=446
++ delta=1.5707963267949 t0=0 tstop=0
+.param emf_e = {ke*pps/1000}
+.param emf_w = {2*3.14159265358979*pps/4}
+RA PA1 a_l {r}
+LA a_l a_e {l}
+BEMFA a_e PA2 V = (time > t0 && time < tstop) ? emf_e*(-sin(emf_w*(time - t0) - delta)) : 0
+RB PB1 b_l {r}
+LB b_l b_e {l}
+BEMFB b_e PB2 V = (time > t0 && time < tstop) ? emf_e*cos(emf_w*(time - t0) - delta) : 0
+.ends dms_detent_stepper_step_emf

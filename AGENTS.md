@@ -50,7 +50,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense`, the E3 cases `typ` and `step` of `make dms-home` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 5 min alone, most of it the E3 homing: 305 s in the M10 review, 450 s in M10 beside other gates). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, from B1 `bench-test`, from E4 `vscode-templates`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -81,14 +81,15 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make nrf-gates` | Phase 1 M2 gate (ADR-008 D1-D4, D6; Amendment 2): the Renode engine tests `engines/cpu-renode/tests/nrf52840.rs` on Breadboard's nRF52840 (`Platform::Nrf52840Bb`, `nrf52840-bb@1`: no SVD download, 64 MIPS) with the bare-metal gate firmware in `engines/cpu-renode/tests/firmware/nrf52840/` (nrf-blinky edges identical at one-cell grants, 10 ms grants, plugin armed and lookahead on, self-test status exactly 0x3; nrf-ppi; nrf-busywait: a 10 ms nrfx busy-wait takes 6.66 ms of virtual time; the D6 TIMER-compare-then-long-sleep promise clamp; the PIN_CNF audit, mid-run and end-of-run) and the prebuilt Zephyr gate image (nrf-zephyr), then `make nrf-feedback` (about 2 min) |
 | `make nrf-saadc-model` | Phase 1 M8, first half (ADR-008 D7, D8, Amendment 4; in `make test`, about 25 s): Breadboard's nRF52840 SAADC (`BbNrf52Saadc` on `nrf52840-bb@2`). The Renode-only register and timing tests in ADR-005's test-plan shape (`examples/nrf-saadc/bb_saadc_test.py`, `nrf_saadc_idle.elf` / `nrf_saadc_burst.elf`: reset values, every TACQ x RESOLUTION x OVERSAMPLE x BURST instant, the 8x BURST, transfer and rounding, VDD, EasyDMA, LIMIT, timer mode, the IRQ, the TACQ < 2 L refusal, the UART tap; run twice, byte-identical), then `scripts/nrf_saadc_board.sh` on `examples/nrf-saadc` (the loading `adc_in`: 8 `#smp` toggles and exactly 8 charge transfers per 8x burst against the analytic charge sharing, codes, UART lines; lookahead at 1 ms and 10 ms, push-on-change and `--engine-order analog-first` equal to the every-lattice-point one-cell reference `tests/golden/nrf-saadc/outputs.sha256`; the refusal at `--renode-quantum 25us` and its message; the `load=none` escape). `make nrf-saadc-update` rewrites the hashes; `make cost-table-nrf-saadc` is the board's cost-table row (also in `make cost-table`; idle host) |
 | `make nrf-pwm-model` | Phase 1 M10, first step (ADR-008 D9, Amendment 9; in `make test`, about 25 s): Breadboard's nRF52840 PWM0-PWM3 (`BbNrf52Pwm`), the TEMP and NVMC stand-ins (`BbNrf52Temp`, `BbNrf52Nvmc`) and their host port (`BbNrf52HostPort` at 0x5FFC0000: the PWM pin ring, TEMP's value) on `nrf52840-bb@3`. `examples/nrf-pwm/bb_pwm_test.py`, Renode-only, each group twice and byte-identical: `registers` (`nrf_saadc_idle.elf`; reset values; every pin change exact to 0.5 ns for up and up-and-down x PRESCALER x COUNTERTOP x COMP x POLARITY; REFRESH, ENDDELAY, LOOP, the SHORTS, NextStep, the Grouped, Common and WaveForm decoders, PSEL and ENABLE while running, every event instant, the IRQs, the ring overflow; TEMP's DATARDY at 36 us and STOP; NVMC erase timing, CONFIG gating, partial erase, ERASEALL) and `firmware` (`nrf_pwm_step.elf`: TEMP, an NVMC erase polled on READY, 4 full steps at 446 PPS as `nrfx_pwm_complex_playback` runs them, every pin change against the firmware's duty table, the UART lines, and no lookahead promise past the next PWM edge). Then the engine path (M10, third step; ADR-008 Amendment 11): `examples/nrf-pwm/board.cir` (cyclic through a constant `digital_in`) runs the same firmware through `bb run`, fresh: `scripts/check_nrf_pwm.py` requires the four pins' `pin_edge` records to be the duty table's changes to the femtosecond, and the one-cell reference (`--lookahead off`), the default (lookahead on), `--max-quantum 1ms` and analog-first give identical `nets.csv`, `nets.vcd` and non-grant records |
-| `make dms-home` / `make dms-home-test` | Phase 1 M10 gate (plan section 2 E3; ADR-008 Amendments 9-12, ADR-006 Amendments 6-7): E3, the detent homing H0-H5 on the hand-written board files of `examples/dial-me-spinner/e3` (written by `scripts/dms_home_boards.py`; the detent sheet, the nRF52840, the device `M1`, and the suite's power path as the bench) with `firmware/prebuilt/homing.elf` and `homing_step.elf` (`scripts/dms_home.sh`, `scripts/check_dms_home.py`). Cases: `step` (one full step at 446 PPS through the bridges and coils, against the suite's `test_firmware_microstep_pwm[VBAT3.7-25C]`, tolerances 2.5 % / 1 % per unit duty), `typ` (tS 50 ms), `worst` (the suite's DRV5032FA corner: tS 75 ms, BOP 4.8 mT, BRP 0.5 mT, at its worst sample phase), `park` (H1, BOP/BRP 4.8/0.5 mT). `dms-home` (about 55 min on `DMS_HOME_JOBS` 5; a homing run is 270 000 one-cell grants, about 4.5 min alone and 6-7 min with five in parallel, 1.5 GB): every case and its one-cell reference (`--lookahead off`), the checks (H0-H5, step counts, every phase's step rate from the PWM edges, no park-stop contact before H4, H3 ending 20-108 steps from the stop, the park stall, the HOME_N latency of Amendment 10 as a worst-phase bound: the device's tS must be the FA's, tS + tACTIVE and the run's latency within 75 ms typical, 97.4 ms worst), the references against `tests/golden/dms-home`, analog-first and `--max-quantum 1ms` (typ, step; on E3 the defaults, the reference and 1 ms are one partition, so that is a consistency check, Amendment 12), 10-run determinism (typ), and three negative controls that must fail exactly their checks (`homing_fast.elf`: step rate, stop contact, H3; M1 at tS 200 and 286 ms, the DRV5032FB: the latency). `dms-home-test` (in `make test`, about 40 s): the boards are the generator's output, `step` with its checks, hashes and analog-first. `make dms-home-update` rewrites the goldens; `make cost-table-dms-home` is its cost-table row (idle host) |
+| `make dms-home` / `make dms-home-test` | Phase 1 M10 gate (plan section 2 E3; ADR-008 Amendments 9-12, ADR-006 Amendments 6-7): E3, the detent homing H0-H5 on the hand-written board files of `examples/dial-me-spinner/e3` (written by `scripts/dms_home_boards.py`; the detent sheet, the nRF52840, the device `M1`, and the suite's power path as the bench) with `firmware/prebuilt/homing.elf` and `homing_step.elf` (`scripts/dms_home.sh`, `scripts/check_dms_home.py`). Cases: `step` (one full step at 446 PPS through the bridges and coils, against the suite's `test_firmware_microstep_pwm[VBAT3.7-25C]`, tolerances 2.5 % / 1 % per unit duty), `typ` (tS 50 ms), `worst` (the suite's DRV5032FA corner: tS 75 ms, BOP 4.8 mT, BRP 0.5 mT, at its worst sample phase), `park` (H1, BOP/BRP 4.8/0.5 mT). `dms-home` (about 55 min on `DMS_HOME_JOBS` 5; a homing run is 270 000 one-cell grants, about 4.5 min alone and 6-7 min with five in parallel, about 330 MB with the engine's `.save`, 1.5 GB before H1): every case and its one-cell reference (`--lookahead off`), the checks (H0-H5, step counts, every phase's step rate from the PWM edges, no park-stop contact before H4, H3 ending 20-108 steps from the stop, the park stall, the HOME_N latency of Amendment 10 as a worst-phase bound: the device's tS must be the FA's, tS + tACTIVE and the run's latency within 75 ms typical, 97.4 ms worst), the references against `tests/golden/dms-home`, `typ`'s peak RSS (ADR-015 G2, `make dms-home-rss`), analog-first and `--max-quantum 1ms` (typ, step; on E3 the defaults, the reference and 1 ms are one partition, so that is a consistency check, Amendment 12), 10-run determinism (typ), and three negative controls that must fail exactly their checks (`homing_fast.elf`: step rate, stop contact, H3; M1 at tS 200 and 286 ms, the DRV5032FB: the latency). `dms-home-test` (in `make test`, about 40 s): the boards are the generator's output, `step` with its checks, hashes and analog-first, and beside it (Phase 2 R1) `project-step`, the step case on the project route, with its hashes and `scripts/compare_project_run.py` against `step`. `make dms-home-update` rewrites the goldens (the project cases' too); `make cost-table-dms-home` is its cost-table row (idle host) |
+| `make dms-home-project` / `make cost-table-dms-home-project` | Phase 2 R1 gate (ADR-013 D1, gate G1; about 9 min under load): E3's `step` and `typ` on the project route, `examples/dial-me-spinner/e3/step` and `e3/home` (the imported main board, `M1` a virtual `[[device]]`, J40 the motor's phases from the project-local `e3/packages`), at bb's defaults and as their one-cell references (`--lookahead off`; one partition, so a consistency check), the references against `tests/golden/dms-home/project-*`, `check_dms_home.py` on `project-typ`, `scripts/compare_project_run.py` against the board files' `step` and `typ` (run beside them, and equal to their goldens: the non-grant records and every shared digital column byte-identical after the documented name mapping, the analog columns reported), analog-first on `project-step`, and `project-typ`'s digital-only MOT nets (ADR-014 D4: `e3/home/bench.toml` leaves them out of `[analog] nets`) and grant count reported (`scripts/dms_home.sh project`), and a `--seed 2` negative control that the comparison must fail on M1's seeded phase. `cost-table-dms-home-project` is its cost-table row (`project-step`, one-cell vs defaults; also in `make cost-table`; idle host) |
 | `make device-smoke` | Phase 1 M10, second step (ADR-006 D7, Amendment 6; in `make test`, about 20 s): `tests/device-smoke/board.cir`, examples/feedback's STM32F103 and firmware with the `dms/mechanism@1` device (`packages/dms/detent-mechanism`) in a loop with the CPU through the direct digital routes of `spec/package.md` section 12 (U1.PA5 -> M1.NSLEEP, M1.IN_A1; M1.HOME_N -> U1.PB0). Four fresh runs (`--renode-pool off`: the board is not in `pool-equiv`): the one-cell reference (`--lookahead off`), the default, `--engine-order analog-first` and the default again; `scripts/check_device_smoke.py` on each (HOME_N rises at exactly 57.04 ms, PA6 follows within one cell); `nets.csv`, `nets.vcd` and the non-grant records identical across all four |
 | `make nrf-feedback` | ADR-008 D3 board-level gate (in `make test`): `examples/nrf-feedback` (examples/feedback's circuit on the nRF52840: RTC0 drives `U1.P0.13`, GPIOTE IN on `U1.P0.11` copies to `U1.P0.15`) with lookahead on at 1 ms and 10 ms byte-identical to its one-cell `--lookahead off` reference (`tests/golden/nrf-feedback/outputs.sha256`; `make nrf-feedback-ref`), no promise broken, `check_feedback.py --nrf`, and `--engine-order analog-first` byte-identical |
 | `make nrf-costs` | ADR-008 D1: fresh startup and per-grant cost of the nRF52840 blinky at 64 MIPS against the STM32F103 blinky (interleaved, N = `BB_NRF_COST_N`, medians); reports only. Run it on an idle host |
 | `make lookahead-startup` | ADR-003 step 5 startup-cost gate: Renode engine startup with the cached plugin within 0.3 s of a start without it (interleaved, N = 7, medians; run on an idle host) |
 | `make startup-perf` | ADR-004 G1: fresh `bb run` engine startup of the spike and the feedback board at least 12 % and 0.3 s below `BB_RENODE_STOCK_RUNTIME=1` (the stock .NET settings, no JIT profile and the 100 ms connect poll), interleaved, N = 7 (`STARTUP_N`), medians, outputs identical; `STARTUP_BASE=<bb>` compares against another binary. Run it on an idle host |
 | `make jit-profile-stress` | ADR-004 Amendment 9: the startup JIT profile's gather under load (`scripts/jit_profile_stress.sh`): `JIT_STRESS_ROUNDS` (4) rounds of `JIT_STRESS_PAR` (8) parallel gathering spike runs, each with an empty `BB_CACHE_DIR`, while `JIT_STRESS_LOAD` busy loops (default 2 x nproc) load every CPU; every run must leave exactly one profile (about 3 min). Not in `make test`: it loads the host on purpose |
-| `make pool-equiv` | ADR-004 G4: one pool process serves, twice each in alternating order (`POOL_EQUIV_ROUNDS`), the spike (default, 1 ms, 500 ms), feedback (on, off, plugin never, polling firmware), adc (on, off), adc-open, adc-stock, adc-open-stock, adc-kicad (Phase 1 M4), nrf-feedback (on, off, plugin never; M2), E1 (`dms-rail` ok-cold default and one-cell, wrong-nominal; M6), nrf-saadc (default and its every-lattice-point reference; M8), E2 (`dms-vsense` s50 default and reference; M8) and E3 (`dms-home-step`, `dms-home` typ; M10); every pooled run must be leased and byte-identical to its fresh run and to the committed hashes (`scripts/pool_equiv.sh`) |
+| `make pool-equiv` | ADR-004 G4: one pool process serves, twice each in alternating order (`POOL_EQUIV_ROUNDS`), the spike (default, 1 ms, 500 ms), feedback (on, off, plugin never, polling firmware), adc (on, off), adc-open, adc-stock, adc-open-stock, adc-kicad (Phase 1 M4), nrf-feedback (on, off, plugin never; M2), E1 (`dms-rail` ok-cold default and one-cell, wrong-nominal; M6), nrf-saadc (default and its every-lattice-point reference; M8), E2 (`dms-vsense` s50 default and reference; M8) E3 (`dms-home-step`, `dms-home` typ; M10) and E3 on the project route (`dms-home-project-step`, `dms-home-project`; Phase 2 R1); every pooled run must be leased and byte-identical to its fresh run and to the committed hashes (`scripts/pool_equiv.sh`) |
 | `make pool-perf` | ADR-004 G2: on a 1-slot pool, the first lease starts in at most 0.5 s, median engine startup is at most 0.30 s for spike, feedback and adc (N = 7), and spike total wall at most 1.2 s (`scripts/pool_perf.sh`). Run it on an idle host |
 | `bb pool run -- <cmd>` | Run `<cmd>` with a warm Renode pool in `BB_RENODE_POOL` (`--slots N`, `--max-runs K`); `bb pool start` / `stop` / `status` for an interactive shell (`bb pool --help`). `bb run --renode-pool off` ignores a pool |
 | `make golden-update` | Regenerate the golden snapshots, the spike output hashes and the partition hashes (spike, feedback, feedback-open), the feedback one-cell reference hashes and the ADC reference hashes from fresh, checked runs. Review the diff before committing it: a change to an equivalence reference is a change to results and needs a reason (and, for the protocol, an ADR) |
@@ -117,7 +118,13 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make worktree TRACK=<name>` | Phase 2 H0 (plan section 7 rule 1): the track's git worktree `~/src/bb-<name>` (`WORKTREE_ROOT`) on the branch `p2/<name>`, from `main` when the branch is new, locked against a `git worktree prune` from Windows, with its own git-ignored `local.mk` (included first by the Makefile): `CARGO_TARGET_DIR` `~/.cache/bb-target-wt-<name>`, `BB_SCRATCH` `~/.cache/bb-wt-<name>` (the gates' project copies and work directories) and `DMS_REPO`. Idempotent; `make worktree-remove TRACK=<name>` removes it and keeps the branch (`scripts/worktree.sh`) |
 | `make worktree-test` | H0 gate (not in `make test`; four release builds of `bb`): two throwaway worktrees build `bb` at the same time, and their crate hashes are compared (bbcore's rlib differs by a marker only A has; bbpkg's rlib and each `bb` carry their own package path, never the other's); negative control: built one after the other into one shared target directory, B's `make bb` compiles nothing and leaves B a binary with A's code and package path (cargo names sources by their workspace-relative path) (`scripts/worktree_test.sh`) |
 | `make measure-lock-test` | H0 gate (in `make test`, a few seconds): on a private lock file, every target of `MEASURE_TARGETS` refuses while a probe holds the measurement lock (the hold checked from outside), before building anything; the probe runs before and after (`scripts/measure_lock_test.sh`) |
+| `make ngspice-stall` | Phase 2 H1 gate (ADR-015 G1, D1; nightly tier, not in `make test`; under the measurement lock, fresh Renode): the SAADC stall repro, `e3/board.cir` with `U10.P0.02` on the loading `saadc_se` view and `homing_step.elf`, 100 ms, ends in `NoProgress:ngspice at 77430000059213fs` (77.43 ms) in the cell (77.43 ms, 77.44 ms] within `STALL_MAX_S` (120 s) and with bb's peak RSS under `STALL_MAX_RSS_KB` (500 MB); the outputs written before the error equal a `--for 77430us` run (`nets.csv`, `nets.vcd` and the non-grant records byte for byte; the grant records add the failed grant's own); `--ngspice-watchdog 20000,10000` trips identically twice; negative control: the committed board (`load=none`) runs the same 100 ms clean (`scripts/ngspice_stall.sh`, about 3.5 min) |
+| `make dms-home-rss` | Phase 2 H1 gate (ADR-015 G2, D2): E3 `typ` (2.7 s) at bb's defaults with bb's peak RSS (`bb run: peak RSS`, `VmHWM`) at most `DMS_HOME_RSS_MAX_KB` = 403 627 kB, the full-length measurement with the engine's `.save` (336 356 kB, against 1.5 GB without) plus 20 %, and its committed hashes (`scripts/dms_home.sh rss`, about 4 min alone); `make dms-home` checks the same on its `typ` run |
 | `make baseline` | H0: the runtime baseline. `make check` (`BASELINE_ARGS`) `BASELINE_N` = 3 times after one uncounted warm-up, on an idle ext4 worktree, under the measurement lock; wall times, load before each run and `make test`'s per-step times (`out/test-timing.tsv`, written by every `make test`) in `out/baseline` (`scripts/baseline.sh`). Its result is the table in "Gate budgets" |
+| `make bench-test` / `make bench-gate` | Phase 2 B1 (ADR-010 D1-D4, Amendment 1): `bb-bench/1` and the bench engine on `examples/bench` (a synthetic STM32F103 project with examples/feedback's firmware; a copy in `$(BB_SCRATCH)/bb-bench`, `scripts/bench_gate.sh`). `bench-test` (in `make test`): seven cases at bb's defaults through `scripts/check_bench.py` (the switch view's analytic RC settling and open-state divider, G8; the current profile; the analog playback equal to its CSV; the faults; the seeded bounce; the sets; the triggers' times; a digital playback into U1.PB0 with the edge times of an equivalent `[[pwl]]` gives the same edges to the fs and the same response, applied at `ceil_L`), the committed one-cell reference hashes (`tests/golden/bench`), G2 (a 601-point playback equals the same points as an inline `[[pwl]]`), eight refusals, and G1 (the Phase 1 benches as `bb-bench/0` and `/1` build byte-identical decks; `bb pkg migrate --bench`). `bench-gate`: that, plus every case at `--max-quantum` 10 µs, 1 ms and 10 ms and `--engine-order analog-first`, and determinism (about 6.5 min). `make bench-update` rewrites the goldens from one-cell references |
+| `make bench-perf` | Phase 2 B1 cost gate (measurement lock; idle host): `bench/playback-long.toml` (1 s, 100 001 points every 10 µs) against `bench/playback-base.toml` (AIN on a constant supply), interleaved, N = `BENCH_PERF_N` (5), medians: the playback adds at most 2.0 s of wall time |
+| `make vcd-check` / `make vcd-check-fixture` | Phase 2 E4 gate G1 (ADR-016 D1, Amendment 1; CI job `dms-rail`, 16 s with the demo): `tools/vcd-check` (wellen 0.25.7, Surfer's waveform library, outside the workspace) loads `make demo`'s two `nets.vcd` and the committed fixture `tests/fixtures/vcd/mixed.vcd`: timescale 1 fs, every `$var` present with its type (`real` as Real, `wire 1` as a 1-bit Wire), every change, the `$comment` name map, and every real net equal to the run's `nets.csv` at every row; then six negative controls on edited copies of the fixture each fail with their own message (`scripts/vcd_check.sh`). `vcd-check-fixture` skips the demo. The docs page is `site/guide/viewing.md` |
+| `make vscode-templates` / `make vscode-test` | Phase 2 E4 gate G2 (ADR-016 D2, Amendment 1). `vscode-templates` (in `make test`, 0.1 s): `docs/templates/vscode/{tasks,launch}.json` statically against D2 (attach, `servertype: external`, `overrideAttachCommands: []`, no `svdFile`, the port, the `endsPattern` against bb's listening line in `cli/src/main.rs`, a `beginsPattern` that does not swallow it). `vscode-test` (local only: downloads a pinned VS Code 1.145.3 and cortex-debug 1.12.1 with its four dependencies from Open VSX once into `~/.cache/bb/vscode-test`, sha256-checked; needs `xvfb` and unprivileged user namespaces; about 2 min): the templates copied verbatim into a copy of the dial-me-spinner project, run in a headless VS Code in a network namespace with only loopback; attach, reads and stop give all four `tests/golden/dms-rail/ok-cold` hashes, and the negative control (a breakpoint through cortex-debug) marks the run and changes its outputs (`scripts/vscode_test.sh`) |
 
 `make firmware` builds the firmware ELFs (spike, feedback, ADC and the Renode
 lookahead gate firmware in `engines/cpu-renode/tests/firmware`, and the
@@ -213,17 +220,17 @@ milestone may add to `make test` (wall time, on the baseline host). The
 | Milestone | `make test` budget | Measured `make test` addition | Full gate (measured) |
 | --- | --- | --- | --- |
 | H0 | — (`measure-lock-test`, a few seconds) | 0.7 s (`measure-lock-test`) | `make worktree-test` 76 s; `make baseline` 32 min |
-| H1 | +30 s | | |
+| H1 | +30 s | under 1 s (the new unit and lint tests); `packages`' operating-point checks not measurable (`bb pkg test` A/B: median 31.4 s against 34.0 s before H1, N = 5, at load 23-60) | `make ngspice-stall` 3.4 min (the repro 77.9-120.6 s under load: 2-minute bound on an idle host; ADR-015 Amendment 1); `make dms-home-rss` 8.6 min; `make dms-home` 62 min (both beside other gates) |
 | H2 | — | | |
 | H3 | +10 s | | |
 | H4 | — | | |
 | H5 | +30 s (`multi-producer`) | | |
 | H6 | — (removes: `fresh` to nightly, `adc-stock`, split `cargo-test`) | | |
 | S | — | | |
-| B1 | +40 s | | |
+| B1 | +40 s | `bench-test` 5.0 s in an idle pooled `make check` (456 s in all, load 1.2-5.5); alone 10.6 s pooled (with the pool's start), 15.2 s `POOL=0`; in a `make check` beside other tracks (load 4-26) 20.6 s and 27.1 s | `make bench-gate` 6.5 min (load 30-60); `make bench-perf` 31 s (idle: the 1 s, 100 ksps playback adds −0.01 s) |
 | B2 | +20 s | | |
 | B3 | +0 s (replaces scripts) | | |
-| R1 | +15 s | | |
+| R1 | +15 s | +4.8 s (`project-step` beside `step` in `dms-home-test`; N = 3 under load 16-48 from other tracks, so to be re-measured idle) | `make dms-home-project` 9 min 0 s (same load) |
 | R2 | +30 s | | |
 | P0 | — (spike) | 0 s (`make pi-spike` is not in `make test`) | `make pi-spike` 102 s (82 runs, 8 jobs, host load 8-11) |
 | P1 | +30 s | | |
@@ -233,7 +240,7 @@ milestone may add to `make test` (wall time, on the baseline host). The
 | P4 | +40 s | | |
 | P5 | +40 s | | |
 | E1 | +20 s (local registry fixture) | | |
-| E4 | — | | |
+| E4 | — (`vscode-templates`, under 1 s) | 0.1 s (`vscode-templates`) | `make vcd-check` 16 s with the demo (CI `dms-rail`); `make vscode-test` 116 s, local (ADR-016 Amendment 1) |
 
 This build adds at most 350 s to `make test` (plan section 8, without
 R3's 10 s; B4, R3, P6, E2, E3 and E5 are not in this build). Section 5
@@ -249,7 +256,8 @@ importers/kicad/        bb-kicad (ADR-007 D1-D3): S-expression reader, the netli
                         gates, schematic gates, the kicad-cli runner (on a temporary copy, never in the project)
 bbpkg/                  component packages (ADR-006, spec/package.md): value grammar and integer units,
                         TOML reader, part.toml/pins.toml, lint, view files and deck assembly, test
-                        vectors through NgspiceEngine, tree hashes and bb.lock, schema versions, SHA-256
+                        vectors through NgspiceEngine, tree hashes and bb.lock, schema versions, SHA-256;
+                        bexpr.rs (ADR-015 D3: B/E/G expressions and .func against ngspice 42's tables)
 packages/               first-party packages: generic/{resistor,capacitor,inductor}, st/stm32f103c8,
                         st/stm32f072rb; Phase 1 M5: ti/tps22917 (datasheet-fitted view), worldsemi/
                         ws2812c-2020, nordic/nrf52840-qiaa, raytac/mdbt50q-u1mv2 (a module);
@@ -261,7 +269,13 @@ bbdev/                  the Phase 1 device API (ADR-006 D7, Amendment 6): `Devic
                         `Rng`, `DeviceEngine` (engine.rs; t_safe MAX, quiet_until = the earliest
                         timer, advance_until), the device table `DEVICES` and dms_mechanism.rs
                         (the detent mechanism and DRV5032, `dms/mechanism@1`); tests/scheduler.rs (G6)
-engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0)
+bbbench/                Phase 2 B1 (ADR-010 D3, D4): the canonical bench CSV (csv.rs) and the bench
+                        engine (engine.rs: digital outputs into MCU pins and triggered actions;
+                        t_safe MAX, exact quiet_until, advance_until; identity bench@1)
+engines/analog-ngspice/ ngspice shared-lib engine (libngspice.so.0); Phase 2 H1: the progress watchdog,
+                        the engine-owned .save and operating_point (ADR-015 D1, D2, D4); bench tables
+                        (TableSource: EXTERNAL V/I sources from a table with a cursor) and
+                        Drive::Timed (B1)
                         examples/deck_run.rs: a SPICE body through NgspiceEngine with digital-glue edges (S1)
 engines/cpu-renode/     Renode engine over the External Control API; platforms/: the plugin
                         assembly's sources (bb_lookahead.cs, the lookahead block, ADR-003 D5;
@@ -299,7 +313,11 @@ examples/dial-me-spinner/ Phase 1 reference board (dial-me-spinner 6854d25): SOU
 examples/dial-me-spinner/e3/ Phase 1 M10 (E3, route A): board.cir (typ), board-ts75.cir (worst),
                         board-park.cir (H1), board-step.cir (the whole detent sheet: the bridge
                         view copied verbatim, the coils, the suite's back-EMF), one bb.lock; all
-                        written by scripts/dms_home_boards.py (make dms-home-test checks them)
+                        written by scripts/dms_home_boards.py (make dms-home-test checks them);
+                        Phase 2 R1 (ADR-013 D1): home/ and step/, the typ and step cases as
+                        projects (bb.toml with M1 a virtual [[device]], bench.toml, board.bbm,
+                        bb.lock), and packages/dial-me-spinner/detent-stepper (J40's motor
+                        phases, views coils and step_emf; a project-local package)
 examples/dial-me-spinner/system/ Phase 1 M11 (ADR-007 Amendment 5): main + base as one project
                         (both vendored netlists, qualified names), [[connection]] main:J1 - base:J3
                         through the harness view of packages/dial-me-spinner/link-harness (a
@@ -333,7 +351,13 @@ tests/golden/nrf-feedback/ one-cell reference hashes of examples/nrf-feedback (P
 tests/golden/adc-kicad/ one-cell reference hashes of the examples/adc/kicad project (Phase 1 M4)
 tests/golden/dms-rail/  one-cell reference hashes of E1's four cases and VLED snapshots (Phase 1 M6)
 tests/golden/dms-vsense/ every-lattice-point reference hashes of E2's seven cases (Phase 1 M8)
-tests/golden/dms-home/  one-cell reference hashes of E3's four cases (Phase 1 M10)
+tests/golden/dms-home/  one-cell reference hashes of E3's four cases (Phase 1 M10) and of its two
+                        project cases, project-step and project-typ (Phase 2 R1)
+examples/bench/         Phase 2 B1: a synthetic STM32F103 project (bench.net by make_netlist.py;
+                        examples/feedback's firmware), local switch packages (example/pushbutton,
+                        example/switch-1k), bench/*.toml (every bb-bench/1 stimulus), data/ (CSVs
+                        by make_data.py; data/btn.csv from the [[pwl]] run)
+tests/golden/bench/     one-cell reference hashes of examples/bench's seven cases (Phase 2 B1)
 tests/device-smoke/     the device route's smoke board (board.cir, bb.lock; make device-smoke)
 tests/fixtures/kicad/   the synthetic two-board system of ADR-007 gate M4b (cli/tests/kicad_import.rs)
 spec/                   normative protocol and schema docs (package.md and schema/*.schema.json: ADR-006;
@@ -361,9 +385,18 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py), demo.sh,
                         stranger_test.sh, docs_plots.sh (+ docs_plots.py),
                         jit_profile_stress.sh, gdb_gate.py, dms_system.sh, check_nrf_pwm.py,
-                        dms_home.sh (+ dms_home_boards.py, check_dms_home.py); Phase 2 H0:
+                        dms_home.sh (+ dms_home_boards.py, check_dms_home.py; Phase 2 R1:
+                        compare_project_run.py); Phase 2 H0:
                         worktree.sh (+ worktree_test.sh), measure_lock.sh (+ measure_lock_test.sh),
-                        baseline.sh, step_time.sh; P0: pi_spike.sh (+ pi_spike.py)
+                        baseline.sh, step_time.sh; B1: bench_gate.sh (+ check_bench.py);
+                        P0: pi_spike.sh (+ pi_spike.py); Phase 2 E4: vcd_check.sh, vscode_test.sh
+                        (+ vscode_templates.py, vscode_test/: the extension test run inside VS Code)
+tools/vcd-check/        Phase 2 E4 (ADR-016 D1): the VCD loader of make vcd-check (wellen 0.25.7,
+                        Surfer's waveform library); its own crate and Cargo.lock, OUTSIDE the
+                        workspace (an empty [workspace]), built into $CARGO_TARGET_DIR/vcd-check
+docs/templates/vscode/  Phase 2 E4 (ADR-016 D2): tasks.json and launch.json, copied by hand into a
+                        project's .vscode/ (cortex-debug attached to bb run --gdb)
+tests/fixtures/vcd/     the viewer check's committed input (mixed.vcd, mixed.csv: a real E1 run)
 .github/actions/bb-setup/ make setup with the Renode tarball and the apt packages cached (Phase 2 H0)
 ```
 
@@ -480,6 +513,12 @@ feedback board).
   strings or dates into it (they go to `.bb/import.json`, which is not
   committed). Example projects commit `board.bbm` and `bb.lock`; a package
   change means `make locks` and a reviewed `board.bbm` diff.
+  `bb-project/1` and `bb-board/1` (ADR-013 D1, Phase 2 R1): a
+  `[[device]]` takes a board file's device rules (`spec/package.md`
+  section 12); a virtual one is board content (`virtual: true` in
+  `board.bbm`), its parameters are not. A bound digital net outside the
+  bench's `[analog] nets` is digital-only (ADR-014 D4): no glue, kernel
+  routing only. Without `[analog] nets` nothing changes.
 - **Publication.** The repository is public at
   https://github.com/tyevco/breadboard.dev (`origin`). Agents commit locally
   and never push, change remotes or change GitHub settings; only the
@@ -557,6 +596,13 @@ feedback board).
   the server's receive thread sleeps in `accept`
   (`ec_server_accepting`); keep it that way.
 - **Parsing KiCad files with regex.** Use a real S-expression parser.
+- **Feeding recorded data through a `[[pwl]]`.** An inline PWL card is
+  O(n²) in ngspice (100 000 points took 103 s); `bb run` warns above 1 000
+  points and refuses above 10 000. A `[[playback]]` (a bench table served
+  with a cursor, ADR-010 D3) is the route, and its CSV is the only runtime
+  format: never read a capture format in a run. A table never crosses the
+  kernel boundary per solver point; only a triggered action's change does,
+  as one `Drive::Timed` transition (ADR-010 Amendment 1).
 - **A branch-current unknown in series with a milliohm path in an analog
   view.** Under `phase0` (`ABSTOL=1e-13`) ngspice converges every branch
   current to 1e-13 A + 1e-5·|i|. That includes 0 V ammeters, CCVS and CCCS
@@ -573,6 +619,22 @@ feedback board).
   v4.5.0 `regulator_enable()` sleeps `off-on-delay-us`, and
   `startup-delay-us` applies only to a regulator enabled at boot (ADR-008
   Amendment 3). Read the driver before relying on a devicetree delay.
+- **A wall-clock timeout for an ngspice stall, or raising the watchdog to
+  get past one** (ADR-015 D1). The watchdog counts accepted solver points
+  per lattice cell, so a stall fails the same way in every run
+  (`NoProgress:ngspice`); fix the view (H2). `--ngspice-watchdog` is for a
+  board that legitimately needs more points per cell, and `run.json`
+  records it.
+- **A function call ngspice 42's table does not have, or with another
+  arity** (ADR-015 D3). ngspice does not check arity: a three-argument
+  `min()` in a B source segfaults libngspice 42 (and the whole `bb`
+  process), and inside braces numparam silently computes `min(a, c)`.
+  `min`/`max` take exactly two arguments; `bb pkg lint`, `bb pkg test` and
+  `bb run` refuse the rest (`bbpkg::bexpr`).
+- **A `.save` card in a board, view or test circuit** (ADR-015 D2). The
+  engine owns `.save` and saves exactly the vectors it reads; a deck with
+  its own is refused. Without it ngspice kept every vector at every solver
+  point (E3 `typ`: 1.5 GB; with it, 330 MB).
 - Using float seconds for scheduling. Convert at the engine's FFI boundary only.
 - Assuming engines advance in registration order. They advance in the plan
   order the kernel builds from the bindings (producers first, ADR-003 D3);

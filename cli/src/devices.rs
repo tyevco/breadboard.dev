@@ -22,6 +22,10 @@ use crate::board::{Board, PinKind};
 pub const CPU: usize = 0;
 pub const ANALOG: usize = 1;
 pub const DEVICES: usize = 2;
+/// The bench engine (ADR-010 D4).
+pub const BENCH: usize = 3;
+/// The number of engine indices.
+pub const ENGINES: usize = 4;
 
 /// One kernel binding: `engine.pin` on `net`.
 #[derive(Clone, Debug, PartialEq, Eq)]

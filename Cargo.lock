@@ -17,6 +17,7 @@ dependencies = [
  "bb-analog-ngspice",
  "bb-cpu-renode",
  "bb-kicad",
+ "bbbench",
  "bbcore",
  "bbdev",
  "bbpkg",
@@ -33,6 +34,14 @@ dependencies = [
 [[package]]
 name = "bb-kicad"
 version = "0.0.1"
+
+[[package]]
+name = "bbbench"
+version = "0.0.1"
+dependencies = [
+ "bbcore",
+ "bbpkg",
+]
 
 [[package]]
 name = "bbcore"

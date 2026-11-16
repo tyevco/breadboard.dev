@@ -30,6 +30,37 @@ pub enum EngineError {
         /// When the engine woke.
         at: Time,
     },
+    /// The engine stopped making progress inside a grant (ADR-015 D1,
+    /// `spec/time-grant.md` "What engines MUST NOT do"): an analog solver
+    /// took more accepted points in one lattice cell, or more consecutive
+    /// points without advancing its time, than its watchdog allows. The
+    /// limits are counts, never wall time, so the error is deterministic.
+    /// The scheduler reports it as `SchedError::EngineNoProgress`.
+    #[error("no progress at {at}: {detail}")]
+    NoProgress {
+        /// The engine's time when the watchdog tripped (rounded to fs).
+        at: Time,
+        /// What tripped, the lattice point and the solver's own state.
+        detail: String,
+    },
+    /// An analog engine's DC operating point failed (ADR-015 D4). `nodes`
+    /// are the nodes the solver named (lower case, in its order), so the
+    /// caller can name the views on them.
+    #[error("the operating point failed{}: {detail}", op_nodes(nodes))]
+    OperatingPoint {
+        /// Nodes the solver named in its failure report.
+        nodes: Vec<String>,
+        /// The solver's failure lines.
+        detail: String,
+    },
+}
+
+fn op_nodes(nodes: &[String]) -> String {
+    if nodes.is_empty() {
+        String::new()
+    } else {
+        format!(" (ngspice names node {})", nodes.join(", "))
+    }
 }
 
 /// A simulation engine (CPU emulator, analog solver, ...).

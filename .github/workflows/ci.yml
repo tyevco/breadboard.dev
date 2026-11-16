@@ -245,6 +245,14 @@ jobs:
       - name: Docs plots up to date
         run: make docs-plots-check
 
+      # Phase 2 E4 (ADR-016 G1, Amendment 1): the viewers of site/guide/viewing.md read bb's VCD.
+      # tools/vcd-check (wellen 0.25.7, Surfer's waveform library; its own crate outside the
+      # workspace) loads make demo's nets.vcd files and tests/fixtures/vcd/mixed.vcd against their
+      # nets.csv, then six negative controls must fail. This job, not the docs workflow: the docs
+      # workflow has no Renode to run make demo, and runs only on a push to main.
+      - name: Viewer check (VCD through wellen)
+        run: make vcd-check
+
   # ADR-008 D5: the committed E1 images rebuilt in a fresh west workspace (the pinned manifest,
   # Zephyr v4.5.0, SDK 1.0.1) must have the image hashes of firmware/prebuilt/SHA256SUMS.
   fw-rebuild:

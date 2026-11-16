@@ -1,0 +1,37 @@
+# examples/bench/bench/digital-pwl.toml: BTN driven by an ideal [[pwl]] (it overrides R1's
+# pull-up), which U1.PB0 reads through its digital_in model (ngspice thresholds BTN at every solver
+# point, ADR-003 D3; Renode applies each edge at ceil_L). Fast ramps make five pulses in 100 ms.
+# Milestone B1: a digital playback into U1.PB0 (bench/digital-playback.toml) with these edge times
+# must give the same edges and the same response on PA6.
+schema = "bb-bench/1"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "1"
+
+[[supply]]
+net = "VSW"
+volts = "3.3V"
+rs = "10m"
+
+# AIN has no playback here: 0 V keeps R3 and C2 at a DC operating point.
+[[supply]]
+net = "AIN"
+volts = "0V"
+
+[[pwl]]
+net = "BTN"
+points = [
+  ["0", "3.3V"], ["12.3456ms", "3.3V"], ["12.3466ms", "0V"],
+  ["20.5ms", "0V"], ["20.502ms", "3.3V"],
+  ["33.33333ms", "3.3V"], ["33.33383ms", "0V"],
+  ["41.007ms", "0V"], ["41.0071ms", "3.3V"],
+  ["58ms", "3.3V"], ["58.0001ms", "0V"],
+  ["58.06ms", "0V"], ["58.0605ms", "3.3V"],
+  ["77.77777ms", "3.3V"], ["77.77877ms", "0V"],
+  ["90ms", "0V"], ["90.001ms", "3.3V"],
+]
+
+[options]
+set = "phase0"

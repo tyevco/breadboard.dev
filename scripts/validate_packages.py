@@ -47,22 +47,41 @@ def self_test():
     bad = [
         ("part", {"schema": "bb-part/0", "part": {"id": "x/y", "version": "1", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"}}),
         ("part", {"schema": "bb-part/0", "part": {"id": "x/y", "version": "1.0.0", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"}, "thermal": {}}),
-        ("part", {"schema": "bb-part/1", "part": {"id": "x/y", "version": "1.0.0", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"}}),
+        ("part", {"schema": "bb-part/2", "part": {"id": "x/y", "version": "1.0.0", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"}}),
+        # ADR-010 D2: the switch view kind is bb-part/1's, has no file, and has two pin ports.
+        ("part", {"schema": "bb-part/0", "part": {"id": "x/y", "version": "1.0.0", "kind": "mechanical", "license": "MIT"}, "pins": {"file": "p"},
+                  "analog": [{"name": "c", "kind": "switch", "fidelity": ["fast"], "ports": [{"role": "pin", "pin": "1"}, {"role": "pin", "pin": "2"}]}]}),
+        ("part", {"schema": "bb-part/1", "part": {"id": "x/y", "version": "1.0.0", "kind": "mechanical", "license": "MIT"}, "pins": {"file": "p"},
+                  "analog": [{"name": "c", "kind": "switch", "fidelity": ["fast"], "file": "x.lib", "ports": [{"role": "pin", "pin": "1"}, {"role": "pin", "pin": "2"}]}]}),
+        ("part", {"schema": "bb-part/1", "part": {"id": "x/y", "version": "1.0.0", "kind": "mechanical", "license": "MIT"}, "pins": {"file": "p"},
+                  "analog": [{"name": "c", "kind": "switch", "fidelity": ["fast"], "ports": [{"role": "pin", "pin": "1"}]}]}),
+        # ADR-010 D1, D2: bb-bench/1 keys are not bb-bench/0's; an action presses or sets.
+        ("bench", {"schema": "bb-bench/0", "action": [{"press": "SW1", "at": "1ms"}]}),
+        ("bench", {"schema": "bb-bench/1", "action": [{"press": "SW1", "set": "X", "to": "1V", "at": "1ms"}]}),
+        ("bench", {"schema": "bb-bench/1", "load": [{"net": "X", "amps": "1A", "profile": "p.csv"}]}),
         ("pins", {"schema": "bb-pins/0", "pin": [{"number": "1", "name": "A", "role": "gpio"}]}),
         ("pins", {"schema": "bb-pins/0", "pin": [{"number": "1", "name": "A", "role": "io"}], "defaults": {"digital_out": {"default": {"voh": "3.3V"}}}}),
         ("lock", {"schema": "bb-lock/0", "package": [{"id": "x/y", "version": "1.0.0", "path": ".", "tree": "sha256:00"}]}),
         ("pkgtest", {"schema": "bb-pkgtest/0", "view": "v", "circuit": "c.cir", "stop": "1ms", "ports": {}, "expect": []}),
-        ("project", {"schema": "bb-project/0", "board": [{"id": "main", "netlist": "a.net", "kicad": "a.kicad_pro"}]}),
-        ("project", {"schema": "bb-project/0", "board": [{"id": "main", "netlist": "a.net"}], "instances": {"J1": {"package": "none"}}}),
+        ("project", {"schema": "bb-project/1", "board": [{"id": "main", "netlist": "a.net", "kicad": "a.kicad_pro"}]}),
+        ("project", {"schema": "bb-project/1", "board": [{"id": "main", "netlist": "a.net"}], "instances": {"J1": {"package": "none"}}}),
+        ("project", {"schema": "bb-project/1", "board": [{"id": "main", "netlist": "a.net"}], "device": [{"ref": "M1", "package": "x/y", "bind": [{"pin": "A", "net": "N", "model": "adc_in"}]}]}),
+        ("project", {"schema": "bb-project/0", "board": [{"id": "main", "netlist": "a.net"}]}),
         ("bench", {"schema": "bb-bench/0", "supply": [{"net": "VSYS"}]}),
-        ("board-bbm", {"schema": "bb-board/0", "boards": [{"id": "m", "ground": "GND"}], "nets": [{"name": "A", "board": "m", "spice": "a b", "nodes": []}], "instances": [], "platforms": [], "probes": []}),
+        ("board-bbm", {"schema": "bb-board/1", "boards": [{"id": "m", "ground": "GND"}], "nets": [{"name": "A", "board": "m", "spice": "a b", "nodes": []}], "instances": [], "platforms": [], "probes": []}),
     ]
-    good = ("part", {"schema": "bb-part/0", "part": {"id": "x/y", "version": "1.0.0", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"}})
+    good = [
+        ("part", {"schema": "bb-part/0", "part": {"id": "x/y", "version": "1.0.0", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"}}),
+        ("part", {"schema": "bb-part/1", "part": {"id": "x/y", "version": "1.0.0", "kind": "mechanical", "license": "MIT"}, "pins": {"file": "p"},
+                  "analog": [{"name": "c", "kind": "switch", "fidelity": ["fast"], "ports": [{"role": "pin", "pin": "1"}, {"role": "pin", "pin": "2"}], "params": {"ron": "1k"}}]}),
+        ("bench", {"schema": "bb-bench/1", "action": [{"press": "SW1", "at": "1ms", "for": "2ms", "bounce": {"count": 2}}]}),
+    ]
     for kind, doc in bad:
         if not errors(kind, doc):
             sys.exit(f"validate_packages: self-test FAILED: the {kind} schema accepted {doc}")
-    if errors(*good):
-        sys.exit("validate_packages: self-test FAILED: the part schema rejected a minimal valid part")
+    for kind, doc in good:
+        if errors(kind, doc):
+            sys.exit(f"validate_packages: self-test FAILED: the {kind} schema rejected {doc}")
 
 
 def load(path):
@@ -123,6 +142,8 @@ def main(argv):
         for proj in sorted(root.rglob("bb.toml")):
             check("project", proj)
         for bench in sorted(root.rglob("bench/*.toml")):
+            if bench.name == "bb.toml":
+                continue  # a project named bench (examples/bench), checked above
             check("bench", bench)
         for bbm in sorted(root.rglob("board.bbm")):
             checked += 1

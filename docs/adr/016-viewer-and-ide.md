@@ -2,7 +2,10 @@
 
 - **Status:** Accepted (2026-11-15; see "Approver decisions
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
-  (see "Review notes").
+  (see "Review notes"). D1 and D2 implemented, milestone E4 (2026-11-15,
+  Amendment 1): G2's VS Code step is automated in a headless VS Code
+  instead of checked by hand, and G1 runs in the CI job that already runs
+  the demo. D3 is not built (default 1).
 - **Part of:** the Phase 2 plan, milestone E4.
 - **Normative changes when implemented:** none to `spec/`. The outputs
   stay as `spec/event-stream.md` defines them. This ADR records licence
@@ -183,3 +186,205 @@ those were accepted with their recommended answers (plan section 10).
 dependencies are real, but they stay out of the workspace and out of `bb`;
 a hand-written VCD reader would check the docs page against Breadboard's
 own understanding of VCD, not against Surfer's.
+
+## Amendments
+
+### Amendment 1: D1 and D2 as implemented (E4, 2026-11-15)
+
+No `spec/` file, no output and no protocol changes. `bb` is unchanged.
+The only change to `make test` is `vscode-templates`, a static check of
+under 1 s.
+
+**D1, the docs page.** `site/guide/viewing.md` ("Viewers and VS Code" in
+the guide's sidebar) covers:
+
+- which file to open, and the 1 fs timescale;
+- the one `board` scope, in which dotted pin names stay one variable;
+- real variables written only at sample instants (draw them as steps);
+- the `$comment` name map;
+- Surfer (web, desktop, VS Code extension), Vaporview and GTKWave, with
+  the licences and versions of the Context table;
+- why PulseView cannot read the file.
+
+The page links to app.surfer-project.org and hosts no Surfer code (D4).
+`site/guide/debugging.md`, `site/guide/testing.md` and
+`site/reference/outputs.md` link to it.
+
+**G1 as implemented.** `tools/vcd-check` is a crate with an empty
+`[workspace]` of its own and its own `Cargo.lock`. It uses
+`wellen = "=0.25.7"`, is built `--locked` into
+`$(CARGO_TARGET_DIR)/vcd-check`, and never enters `cargo build
+--workspace` or `bb`. For each VCD it requires:
+
+- wellen's timescale `Timescale { 1, FemtoSeconds }`;
+- every `$var` of the header as a wellen variable of the same leaf name
+  in `board`, with nothing extra: `real 64` as `VarType::Real` with the
+  Real encoding, `wire 1` as `VarType::Wire` with `BitVector(1)`;
+- a value at time 0 for every variable, and as many changes as the file
+  has value-change lines for its identifier;
+- the time table ending at the file's last `#` time;
+- every `$comment` entry naming a declared variable;
+- with the run's `nets.csv`: its columns are exactly the real variables,
+  through the name map, and at every row each value wellen holds equals
+  the CSV's value as a number. This is more than D1 listed. It is what
+  "real variables read as Real" means for a viewer: the value drawn is
+  the value bb wrote.
+
+`make vcd-check` (`scripts/vcd_check.sh`) runs `make demo` and loads its
+two VCDs (`out/demo/rail`, `out/demo/rail-wrong`; fewer than two found
+fails). It then loads the committed fixture `tests/fixtures/vcd/mixed.vcd`
+(1.3 KB) with `mixed.csv` (9.7 KB). These are a real E1 run of 32 ms at
+5 kHz: five real nets, three wires with two edges and the name map. Two
+runs gave identical bytes, and `tests/fixtures/vcd/README.md` gives the
+command.
+
+Six negative controls, each on an edited copy of the fixture, must fail
+with their own message, and each copy must differ from the fixture:
+
+| Control | Edit | Expected failure |
+| --- | --- | --- |
+| timescale | the timescale set to 1 ps | `timescale is not 1 fs` |
+| csv-value | one CSV value moved by 1 µV | `CSV values differ` |
+| drop-change | one VLED change line dropped | `CSV values differ` |
+| comment | a map entry naming an undeclared variable | `not declared` |
+| real-as-wire | a real declared as a 1-bit wire | wellen 0.25.7 panics (`Failed to parse four state value`); the tool catches the panic and fails with `wellen could not load it` |
+| wire-as-reg | a wire declared as `reg` | `bb writes only` |
+
+`make vcd-check-fixture` runs the fixture and the controls without the
+demo.
+
+- **Deviation: G1 runs in the CI job `dms-rail`, not in the docs
+  workflow.** The docs workflow builds and deploys the Pages site, runs
+  only on a push to `main` and has no Renode, so it cannot run `make
+  demo`. `dms-rail` already runs the demo's E1 runs for
+  `docs-plots-check`, the other check of the docs site's content. The step
+  is the same check, in a job that can produce its input.
+- **Measured** (2026-11-15, this worktree): `make vcd-check` 16 s
+  including the demo. The tool loads and checks E1's 120 ms VCD (190 KB,
+  against 12 001 CSV rows) in 0.02 s.
+
+**D2, the templates.** `docs/templates/vscode/tasks.json` and
+`launch.json` (JSON with comments; every setting is explained in place):
+
+- **The task** `bb: run --gdb`: `bb run --gdb 3333 --bench
+  bench/cold.toml --for 120ms --out out/debug` from the workspace folder.
+  It is the debugging guide's E1 run; the user edits the bench, the
+  duration and the output directory. `isBackground` is true.
+- **The problem matcher.** `background` has `activeOnStart: true`, a
+  `beginsPattern` that matches none of bb's lines, and `endsPattern:
+  "GDB: listening on"`.
+- **The configuration** `bb: attach (cortex-debug)`, exactly as D2
+  lists:
+  - `type: cortex-debug`, `request: attach`, `servertype: external`;
+  - `gdbTarget: localhost:3333`, `gdbPath: gdb-multiarch`;
+  - `executable`: the project's ELF;
+  - `overrideAttachCommands: []`;
+  - no `svdFile` and no load;
+  - `preLaunchTask: "bb: run --gdb"`.
+
+Facts verified against the installed code, not guessed:
+
+- **cortex-debug 1.12.1** (`dist/debugadapter.js`):
+  - its `External` server controller's `initCommands` is `target-select
+    extended-remote <gdbTarget>`;
+  - its `attachCommands` is `interpreter-exec console "monitor halt"`,
+    which `overrideAttachCommands: []` replaces;
+  - `disconnectRequest` deletes the breakpoints (`break-delete`) and then
+    detaches with `target-detach`. It sends `kill` only for
+    `terminateDebuggee` or `suspendDebuggee`, which bb treats as a detach
+    anyway.
+- **VS Code 1.145.3** (`workbench.desktop.main.js`):
+  - the background matcher key is `activeOnStart`;
+  - `processLineInternal` is `tryBegin(line) || tryFinish(line)`, so a
+    line that matches `beginsPattern` is never tested against
+    `endsPattern`.
+
+  The first draft had `beginsPattern: "^bb run: "`. bb's first line is
+  the listening line, so the task never became ready and the attach never
+  started (measured: `startDebugging` timed out at 240 s with bb waiting
+  at reset). `make vscode-templates` now requires that `beginsPattern`
+  does not match the listening line.
+
+**G2 as implemented: the VS Code step is automated, not manual.** D2 had
+"the templates attach in VS Code on the user's host" as a manual check
+recorded in review notes, because CI has no GUI. `make vscode-test`
+(`scripts/vscode_test.sh`) runs it in a real VS Code instead.
+
+The setup:
+
+- **Pinned downloads.** The test fetches once into
+  `~/.cache/bb/vscode-test`, each file checked against a sha256 in the
+  script:
+  - VS Code 1.145.3 (linux-x64, from update.code.visualstudio.com);
+  - cortex-debug 1.12.1 with its declared `extensionDependencies`
+    `mcu-debug.debug-tracker-vscode` 0.0.15, `memory-view` 0.0.29,
+    `rtos-views` 0.0.18 and `peripheral-viewer` 1.6.5, from Open VSX.
+
+  The VSIXs are unpacked into a private extensions directory. Nothing
+  goes through `code --install-extension` or the marketplace.
+- **The project.** The templates are copied byte for byte into the
+  `.vscode/` of a copy of the dial-me-spinner project with `led_rail.elf`
+  recorded (`dms_rail.sh prepare`, as `make gdb-test` does).
+- **The VS Code run:**
+  - under Xvfb, in a network namespace of its own with only loopback
+    (`unshare -rn`, then back to the user's own uid);
+  - telemetry, updates and experiments off, workspace trust disabled;
+  - `scripts/vscode_test/runner.js` as `--extensionTestsPath`. It
+    starts the configuration by name with `vscode.debug.startDebugging`,
+    as the Run and Debug view does, and logs every DAP message.
+- **What a run goes through.** VS Code runs the preLaunchTask through
+  the templates' problem matcher. cortex-debug starts gdb-multiarch and
+  attaches.
+- **The shim.** A `bb` shim on `PATH` records the argv and tees bb's
+  output; the templates call `bb` as written.
+
+The two cases:
+
+- **`attach`.** After the stop that the attach reports, the test reads
+  the threads, the stack, every scope's variables (98 values, the core
+  registers, `pc=0x9c4 <z_arm_reset>`) and the word at `$sp`. Then it
+  stops the session, and the run finishes. Every one of these held:
+  - VS Code exit 0, task exit 0;
+  - bb's argv equal to the template's `args`;
+  - one DAP `attach` request with the template's settings;
+  - no `monitor` refusal;
+  - bb's summary `debugger sessions 1, no stop inside a slice and no
+    write`, and no debug-run mark;
+  - all four hashes (`nets.csv`, `nets.vcd`, non-grant records,
+    `events.jsonl`) equal to `tests/golden/dms-rail/ok-cold/outputs.sha256`,
+    the run without GDB;
+  - nothing added to `.vscode/`.
+- **`break`, the negative control** (the comparison and the GDB path
+  acted). After the attach, a `FunctionBreakpoint` at
+  `gpio_nrfx_port_set_bits_raw`, then continue. Every one of these held:
+  - the stop came at `gpio_nrfx_port_set_bits_raw@0x000036b6`;
+  - the breakpoint was removed and the session stopped;
+  - exactly one `debug run: GDB` warn record, and `run.json` `debug: true`;
+  - `nets.csv`, `nets.vcd` and the non-grant records all differ from the
+    golden.
+- **Measured** (2026-11-15): both cases passed in two consecutive full
+  runs. The cases took 19-61 s of VS Code time each, with the host
+  shared with other tracks, and `make vscode-test` took 116 s with the
+  downloads cached.
+
+Deviations and limits:
+
+- **Not in `make test` or CI.** The test downloads about 380 MB once, and
+  needs `xvfb` and unprivileged user namespaces. GitHub's ubuntu-24.04
+  runners restrict those through AppArmor, which was not tried, since CI
+  only runs on a push. `make test` keeps the network-free rule of E1. The
+  automated gdb-multiarch half of G2 remains `make gdb-test` (in `make
+  test`) and `make gdb` (CI).
+- **The host.** VS Code ran on Linux (WSL2 Ubuntu 24.04, on the user's
+  machine). VS Code for Windows with its WSL remote was not exercised;
+  the docs page says so and recommends the WSL remote. A human check
+  there stays optional. It is not a gate, because the automated run is
+  a stronger check than the manual one D2 asked for.
+- **`make vscode-templates`** (in `make test`, about 0.1 s) checks the
+  templates statically against D2, and checks the `endsPattern` against
+  the format string in `cli/src/main.rs`. E4's `make test` budget is "—";
+  this sub-second check follows H0's `measure-lock-test` precedent and
+  is recorded in AGENTS.md's milestone table.
+
+**D3 is not built** (default 1: only if E5's users ask for it, or the
+preprint needs interactive figures). G3 does not apply.

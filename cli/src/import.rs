@@ -1130,7 +1130,212 @@ pub fn import(p: &Project, mode: Mode) -> Result<Imported, String> {
                 status: status.into(),
                 reason,
                 pins,
+                is_virtual: false,
             });
+        }
+    }
+
+    // Devices (`[[device]]`, bb-project/1; ADR-013 D1, Phase 1 route B). A
+    // virtual device becomes an instance of its board with `virtual: true`,
+    // its pins the device package's, each on the net its binding names (the
+    // binding is board content). A device on a schematic symbol is the
+    // resolved instance itself; its bindings must name the nets its pins are
+    // on. The device package and its device identity are locked.
+    let net_items: Vec<(&str, &str, &str)> = kicad_names
+        .iter()
+        .map(|(d, b, k)| (d.as_str(), b.as_str(), k.as_str()))
+        .collect();
+    let net_names = names::Nets {
+        items: net_items,
+        simulated: &p.simulate,
+    };
+    let mut virtual_instances: Vec<Instance> = Vec::new();
+    let mut device_nodes: Vec<(String, Node)> = Vec::new();
+    for d in &p.devices {
+        let ctx = format!("bb.toml [[device]] {}", d.reference);
+        let (bid, r) = match d.reference.split_once(':') {
+            Some((b, r)) => (b.to_string(), r.to_string()),
+            None if p.boards.len() == 1 => (p.boards[0].id.clone(), d.reference.clone()),
+            None => {
+                return Err(format!(
+                    "{ctx}: qualify the reference as <board>:{} (ADR-007 D7)",
+                    d.reference
+                ))
+            }
+        };
+        if !p.boards.iter().any(|b| b.id == bid) {
+            return Err(format!("{ctx}: no [[board]] {bid}"));
+        }
+        if r.is_empty() || r.contains(['.', ':']) {
+            return Err(format!("{ctx}: a reference designator has no '.' or ':'"));
+        }
+        let pkg = pk
+            .get(&d.package)
+            .map_err(|e| format!("{ctx}: {e}"))?
+            .clone();
+        let did = pkg
+            .part
+            .behavioral
+            .as_ref()
+            .filter(|b| b.engine == "device")
+            .and_then(|b| b.device.clone())
+            .ok_or_else(|| {
+                format!(
+                    "{ctx}: package {} is not a device (its [behavioral] engine must be \
+                     \"device\", spec/package.md section 12)",
+                    pkg.part.id
+                )
+            })?;
+        if bbdev::find(&did).is_none() {
+            return Err(format!(
+                "{ctx}: package {}: device {did} is not one this bb provides ({})",
+                pkg.part.id,
+                bbdev::ids().join(", ")
+            ));
+        }
+        let exists = board
+            .instances
+            .iter()
+            .any(|i| i.board == bid && i.reference == r)
+            || virtual_instances
+                .iter()
+                .any(|i| i.board == bid && i.reference == r);
+        // Each binding's pin (a package pin) and net (a net of the device's
+        // board).
+        let mut bound: BTreeMap<String, String> = BTreeMap::new();
+        for b in &d.binds {
+            let pp = pkg.pins.by_name(&b.pin).ok_or_else(|| {
+                format!(
+                    "{ctx}: [[device.bind]] {}: package {} has no pin {} (it has: {})",
+                    b.pin,
+                    pkg.part.id,
+                    b.pin,
+                    pkg.pins
+                        .pins
+                        .iter()
+                        .map(|x| x.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+            let net = net_names
+                .resolve(&b.net)
+                .map_err(|e| format!("{ctx}: [[device.bind]] {}: net {e}", b.pin))?;
+            let nb = kicad_names
+                .iter()
+                .find(|(dn, ..)| *dn == net)
+                .map(|x| x.1.clone())
+                .unwrap_or_default();
+            if nb != bid {
+                return Err(format!(
+                    "{ctx}: [[device.bind]] {}: net {net} is on board {nb}, the device on {bid}",
+                    b.pin
+                ));
+            }
+            if net.starts_with("unconnected-(") || net.contains(":unconnected-(") {
+                return Err(format!(
+                    "{ctx}: [[device.bind]] {}: {net} is an unconnected net",
+                    b.pin
+                ));
+            }
+            bound.insert(pp.number.clone(), net);
+        }
+        let tree = pk.tree(&pkg.part.id)?;
+        let pref = PackageRef {
+            id: pkg.part.id.clone(),
+            version: pkg.part.version.clone(),
+            tree,
+        };
+        if d.is_virtual {
+            if exists {
+                return Err(format!(
+                    "{ctx}: virtual = true, but {bid}:{r} is already an instance of the board \
+                     (a virtual device's reference must not collide, ADR-013 D1)"
+                ));
+            }
+            let pins: Vec<InstancePin> = pkg
+                .pins
+                .pins
+                .iter()
+                .map(|pp| InstancePin {
+                    number: pp.number.clone(),
+                    name: pp.name.clone(),
+                    net: bound.get(&pp.number).cloned(),
+                })
+                .collect();
+            for (num, net) in &bound {
+                device_nodes.push((
+                    net.clone(),
+                    Node {
+                        reference: r.clone(),
+                        pin: num.clone(),
+                    },
+                ));
+            }
+            virtual_instances.push(Instance {
+                board: bid.clone(),
+                reference: r.clone(),
+                value_text: String::new(),
+                value: None,
+                footprint: String::new(),
+                lib: String::new(),
+                part: String::new(),
+                sheet: String::new(),
+                fields: BTreeMap::new(),
+                flags: Vec::new(),
+                package: Some(pref),
+                resolution: Resolution {
+                    stage: "override".into(),
+                    key: Some(d.package.clone()),
+                },
+                status: "ok".into(),
+                reason: None,
+                pins,
+                is_virtual: true,
+            });
+        } else {
+            let inst = board
+                .instances
+                .iter()
+                .find(|i| i.board == bid && i.reference == r)
+                .ok_or_else(|| {
+                    format!(
+                        "{ctx}: no instance {bid}:{r} on the schematic (a device with no symbol \
+                         takes virtual = true, ADR-013 D1)"
+                    )
+                })?;
+            if inst.package.as_ref().map(|x| x.id.as_str()) != Some(pkg.part.id.as_str()) {
+                return Err(format!(
+                    "{ctx}: {bid}:{r} resolves to {} ({}), not {} (name the package in \
+                     [instances.\"{bid}:{r}\"] or its bb:part field)",
+                    inst.package
+                        .as_ref()
+                        .map(|x| x.id.as_str())
+                        .unwrap_or("no package"),
+                    inst.status,
+                    pkg.part.id
+                ));
+            }
+            for (num, net) in &bound {
+                let on = inst
+                    .pins
+                    .iter()
+                    .find(|x| &x.number == num)
+                    .and_then(|x| x.net.clone());
+                if on.as_deref() != Some(net.as_str()) {
+                    return Err(format!(
+                        "{ctx}: pin {num} is on {}, the binding names {net}",
+                        on.as_deref().unwrap_or("no net")
+                    ));
+                }
+            }
+        }
+        used.entry(pkg.part.id.clone()).or_insert(pkg);
+    }
+    board.instances.extend(virtual_instances);
+    for (net, node) in device_nodes {
+        if let Some(n) = board.nets.iter_mut().find(|n| n.name == net) {
+            n.nodes.push(node);
         }
     }
 
@@ -1195,6 +1400,30 @@ pub fn import(p: &Project, mode: Mode) -> Result<Imported, String> {
                 )
             })?;
             let l = def.locked();
+            if !board.platforms.iter().any(|x| x.id == l.id) {
+                board.platforms.push(Platform {
+                    id: l.id.clone(),
+                    content: l.content.clone(),
+                });
+                locked_platforms.push(l);
+            }
+        }
+        // A device package (ADR-006 D7, Amendment 6; ADR-013 D1): its device
+        // identity, `device:<id>@<major>`, as a board file's bb.lock has it.
+        if let Some(did) = pkg
+            .part
+            .behavioral
+            .as_ref()
+            .filter(|b| b.engine == "device")
+            .and_then(|b| b.device.as_deref())
+        {
+            let def = bbdev::find(did).ok_or_else(|| {
+                format!(
+                    "package {}: device {did} is not one this bb provides",
+                    pkg.part.id
+                )
+            })?;
+            let l = platforms::device_locked(def);
             if !board.platforms.iter().any(|x| x.id == l.id) {
                 board.platforms.push(Platform {
                     id: l.id.clone(),

@@ -1,0 +1,151 @@
+# examples/dial-me-spinner/e3/home/bb.toml: E3, the detent homing H0-H5 (dial-me-spinner docs/firmware.md
+# section 5.4), as a project: the imported main board with the mechanism as a virtual device (Phase 2
+# R1, ADR-013 D1, Phase 1 route B). The project route of the typ case of make dms-home
+# (../board.cir, which scripts/dms_home_boards.py writes): homing.elf from the click end, M1 at the
+# DRV5032FA's typical tS 50 ms. ../step is the step case. make dms-home-project runs both
+# (scripts/dms_home_project.sh).
+#
+# The main board is imported from the netlist vendored at dial-me-spinner 6854d25 (../../SOURCE), as
+# ../../bb.toml does. What the board file hand-writes, the project takes from the board:
+#   - U10 is the Raytac module (raytac/mdbt50q-u1mv2, its chip nordic/nrf52840-qiaa), bound by pad;
+#   - the detent sheet's parts are the schematic's: U40, U41 (ti/drv8837), R70 and the capacitors;
+#   - M1 (dms/detent-mechanism, device dms/mechanism@1) has no schematic symbol: a virtual device
+#     (board.bbm records it with virtual: true), bound to the five driver commands and HOME_N;
+#   - U42, the DRV5032FA on HOME_N, is inside M1, so it is excluded below;
+#   - J40, the motor connector, is the motor's two phases (../packages, dial-me-spinner/detent-stepper).
+# The bench (bench.toml) stands in for the base board's power path and leaves the MOT nets out of
+# [analog] nets, so U40, U41, R70 and J40 are out of the deck and the five MOT nets are digital-only
+# (ADR-014 D4: no glue; U10's PWM edges reach M1 through the kernel only).
+schema = "bb-project/1"
+
+[project]
+name = "dial-me-spinner rev A: E3 homing, typ (tS 50 ms)"
+
+[[board]]
+id = "main"
+netlist = "../../kicad/main/dial-me-spinner-main.net"
+ground = "GND"
+
+# dial-me-spinner/detent-stepper (J40's motor).
+[packages]
+paths = ["../packages"]
+
+# As in ../../bb.toml: the NFC coil pads need a decision (ADR-007 D4).
+[instances."main:J11"]
+package = "none"
+reason = "NFC coil pads: no RF model in Phase 1"
+
+[instances."main:U42"]
+package = "none"
+reason = "the DRV5032FA home switch is part of the virtual device M1 (dms/detent-mechanism), which drives HOME_N"
+
+[instances."main:J40"]
+package = "dial-me-spinner/detent-stepper"
+
+# Written by `bb flash --project e3/home --target U10 ../../firmware/prebuilt/homing.elf` (the image
+# hash of ADR-008 D5).
+[targets."main:U10"]
+images = [{ file = "../../firmware/prebuilt/homing.elf", kind = "elf", hash = "sha256:dd0a5d24c1648e781ee718df1287c8c8fd99d5479a57d21970db4693dade0105" }]
+
+# The four PWM0 channels and nSLEEP: plain GPIO outputs at the suite's S0S1 bound (800 Ohm), 3.3 V
+# (../board.cir's *bb pin lines; the PWM model's edges at their exact instants, ADR-008 D9).
+[[bind]]
+pin = "main:U10.P0.26"
+model = "digital_out"
+set = "S0S1_bound"
+voh = "3.3V"
+net = "MOT_A_IN1"
+
+[[bind]]
+pin = "main:U10.P0.05"
+model = "digital_out"
+set = "S0S1_bound"
+voh = "3.3V"
+net = "MOT_A_IN2"
+
+[[bind]]
+pin = "main:U10.P0.07"
+model = "digital_out"
+set = "S0S1_bound"
+voh = "3.3V"
+net = "MOT_B_IN1"
+
+[[bind]]
+pin = "main:U10.P0.11"
+model = "digital_out"
+set = "S0S1_bound"
+voh = "3.3V"
+net = "MOT_B_IN2"
+
+[[bind]]
+pin = "main:U10.P1.15"
+model = "digital_out"
+set = "S0S1_bound"
+voh = "3.3V"
+net = "MOT_NSLEEP"
+
+# HOME_N reads M1.HOME_N directly (spec/package.md section 12); the thresholds are the board file's.
+[[bind]]
+pin = "main:U10.P1.14"
+model = "digital_in"
+vih = "2.31V"
+vil = "0.99V"
+net = "HOME_N"
+
+# The VSYS reading (an ideal input: the firmware reads VSYS once at idle, before H0; ../board.cir) and
+# the SAADC's VDD input.
+[[bind]]
+pin = "main:U10.P0.02"
+model = "adc_in"
+vref = "3.6V"
+load = "none"
+net = "VSYS_SENSE"
+
+[[bind]]
+pin = "main:U10.VDD"
+model = "adc_in"
+vref = "3.6V"
+
+# M1: the lead screw, carriage, magnet and U42 DRV5032FA as one device (dms/mechanism@1), from the
+# click end (s0 = 500 steps) at the typical tS. Its reference is M1 as in ../board.cir, so its seeded
+# sample phase is the same.
+[[device]]
+ref = "main:M1"
+package = "dms/detent-mechanism"
+virtual = true
+params = { s0 = "500", ts = "50ms" }
+
+[[device.bind]]
+pin = "IN_A1"
+net = "MOT_A_IN1"
+model = "digital_in"
+
+[[device.bind]]
+pin = "IN_A2"
+net = "MOT_A_IN2"
+model = "digital_in"
+
+[[device.bind]]
+pin = "IN_B1"
+net = "MOT_B_IN1"
+model = "digital_in"
+
+[[device.bind]]
+pin = "IN_B2"
+net = "MOT_B_IN2"
+model = "digital_in"
+
+[[device.bind]]
+pin = "NSLEEP"
+net = "MOT_NSLEEP"
+model = "digital_in"
+
+[[device.bind]]
+pin = "HOME_N"
+net = "HOME_N"
+model = "digital_out"
+
+# ../board.cir's probes (scripts/dms_home.sh) less MOT_NSLEEP, a digital-only net here (U10.P1.15 is
+# its level).
+[probes]
+nets = ["VSYS", "HOME_N", "U10.P0.26", "U10.P0.05", "U10.P0.07", "U10.P0.11", "U10.P1.15", "M1.HOME_N"]

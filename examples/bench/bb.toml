@@ -1,0 +1,39 @@
+# examples/bench/bb.toml: the synthetic board of milestone B1 (Phase 2 plan section 4, track B;
+# ADR-010 D2-D4), as a Breadboard project (ADR-007 D5).
+#
+# bench.net is written by make_netlist.py (the circuit is described there). U1 runs
+# examples/feedback's firmware (feedback.elf: PA5 toggles every 50 ms, the EXTI0 ISR copies PB0 to
+# PA6); the firmware target is not committed: scripts/bench_gate.sh records it with `bb flash` in
+# a copy of this directory (bb run never writes into a project). The benches in bench/ drive it
+# with every B1 stimulus: playback, current profiles, presses (with bounce and with a trigger),
+# set actions and faults.
+schema = "bb-project/1"
+
+[project]
+name = "examples/bench: the bench engine's board (milestone B1)"
+
+[[board]]
+id = "main"
+netlist = "bench.net"
+ground = "GND"
+
+[packages]
+paths = ["packages"]
+
+[[bind]]
+pin = "U1.PA5"
+model = "digital_out"
+net = "TRIG"
+
+[[bind]]
+pin = "U1.PA6"
+model = "digital_out"
+net = "LED_DRV"
+
+[[bind]]
+pin = "U1.PB0"
+model = "digital_in"
+net = "BTN"
+
+[probes]
+nets = ["BTN", "AIN", "AFILT", "RC_N", "+3V3", "VSW", "LED_DRV", "U1.PA5", "U1.PA6", "U1.PB0"]

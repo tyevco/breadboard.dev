@@ -53,6 +53,7 @@ export default defineConfig({
             { text: 'The E2 demo', link: '/guide/demo-e2' },
             { text: 'The E3 demo', link: '/guide/demo-e3' },
             { text: 'Debugging with GDB', link: '/guide/debugging' },
+            { text: 'Viewers and VS Code', link: '/guide/viewing' },
             { text: 'Installing and setup modes', link: '/guide/setup' },
             { text: 'Running the tests', link: '/guide/testing' },
             { text: 'Project layout', link: '/guide/layout' },

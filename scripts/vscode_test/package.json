@@ -1,0 +1,12 @@
+{
+  "name": "bb-vscode-template-test",
+  "displayName": "Breadboard VS Code template test",
+  "description": "Drives the committed VS Code templates (docs/templates/vscode) against bb run --gdb, inside a headless VS Code (Phase 2 E4, ADR-016 G2). Used only by scripts/vscode_test.sh.",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "publisher": "breadboard",
+  "engines": { "vscode": "^1.69.0" },
+  "main": "./extension.js",
+  "activationEvents": []
+}

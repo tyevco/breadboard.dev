@@ -44,7 +44,7 @@
 //!
 //! The parser is a tokenizer over a line-oriented grammar; no regex.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bbcore::{AdcIn, DigitalIn, DigitalOut, Time};
 use bbpkg::package::{param_set, parse_param, pin_model_params, Package, Param, ParamKind};
@@ -87,7 +87,7 @@ impl Part {
 /// A device part's `key=value` parameters (spec/package.md section 12): each
 /// key one of the device's, each value in the package value grammar of its
 /// kind. The device is built once to check the values' ranges.
-fn device_params(
+pub(crate) fn device_params(
     def: &bbdev::DeviceDef,
     kv: &BTreeMap<&str, &str>,
 ) -> Result<Vec<(String, bbdev::ParamValue)>, String> {
@@ -229,6 +229,11 @@ pub struct Board {
     /// for a board file, which names neither (the bound pins are audited
     /// without a drive).
     pub audit: Option<Vec<(String, AuditExpect)>>,
+    /// Digital-only nets, by SPICE node (ADR-014 D4, ADR-013 D1): a project's
+    /// bound digital nets outside the bench's `[analog] nets`. Their pins are
+    /// routed through the kernel net only; the analog engine has no glue,
+    /// input or output on them. Empty for a board file.
+    pub digital_only: BTreeSet<String>,
 }
 
 /// What the `PIN_CNF` audit expects of one pin (ADR-008 D4).
@@ -633,12 +638,13 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         packages: packages.into_values().collect(),
         warnings,
         audit: None,
+        digital_only: BTreeSet::new(),
     })
 }
 
 /// A device part's pin (spec/package.md section 12): one of the device's
 /// pins, `digital_in` on an input and `digital_out` on an output.
-fn device_pin(part: &Part, pin: &str, model: &str) -> Result<(), String> {
+pub(crate) fn device_pin(part: &Part, pin: &str, model: &str) -> Result<(), String> {
     let def = bbdev::find(&part.platform)
         .ok_or_else(|| format!("device {}: not provided by this bb", part.platform))?;
     let dev = def.instantiate(&part.params)?;

@@ -12,7 +12,7 @@
 # (about 3.62 V >= 3.58 V, more than 30 ms after the shed) with E1's on sequence.
 # Not reproduced (plan section 2): the BQ25180 power path, the base-board VSYS capacitance, the
 # cell's own dynamics (a piecewise-linear OCV stands in for a load step and its recovery), tolerances.
-schema = "bb-bench/0"
+schema = "bb-bench/1"
 temp_c = "25"
 
 [[pwl]]

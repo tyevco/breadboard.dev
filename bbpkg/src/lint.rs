@@ -4,6 +4,7 @@
 //! hint, an explicit binding that differs from the package, a conflict
 //! between views). Lint never changes a file.
 
+use crate::bexpr;
 use crate::optsets;
 use crate::package::{
     module_pinmap, param_set, pin_model_params, Package, Param, Port, LOCAL_ONLY,
@@ -452,6 +453,16 @@ fn lint_views(pkg: &Package, o: &mut Out) {
                 }
             }
         }
+        // A switch view (ADR-010 D2): bb generates its element, so there is
+        // no file to check; its two contacts must be different pins.
+        if v.kind == "switch" {
+            if v.ports.first() == v.ports.get(1) {
+                o.e(format!("{at}: a switch's two contacts are the same pin"));
+            }
+            let def = crate::package::switch_definition();
+            texts.push((format!("view {}", v.name), def));
+            continue;
+        }
         // The file: definitions, the subckt and its port count, the gnd rule.
         let path = pkg.dir.join(&v.file);
         let text = match std::fs::read_to_string(&path) {
@@ -482,6 +493,11 @@ fn lint_views(pkg: &Package, o: &mut Out) {
                 }
                 for g in spice::gnd_violations(&defs) {
                     o.e(format!("{at}: {}: {g}", v.file));
+                }
+                // ADR-015 D3: every B/E/G expression and .func body against
+                // ngspice 42's function table and arity.
+                for e in bexpr::check(&text) {
+                    o.e(format!("{at}: {}: {e}", v.file));
                 }
                 // A bare M in any number of the file is not checked here:
                 // view files are SPICE, where M is milli by definition; the

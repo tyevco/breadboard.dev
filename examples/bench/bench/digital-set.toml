@@ -1,0 +1,39 @@
+# examples/bench/bench/digital-set.toml: `set` actions on a bound MCU digital_in pin (ADR-010 D2):
+# the bench engine drives U1.PB0 (it starts low), high from 30 ms for 10 ms, and high again 5 ms
+# after PA5's first rise (50 ms), for 1 ms. The EXTI0 ISR copies each edge to PA6. U1 and the bench
+# engine form a loop (PA5 triggers, PB0 is driven) that lookahead serves: the bench engine is the
+# one producer feeding U1 and stops early on the lattice.
+schema = "bb-bench/1"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "1"
+
+[[supply]]
+net = "VSW"
+volts = "3.3V"
+rs = "10m"
+
+# AIN has no playback here: 0 V keeps R3 and C2 at a DC operating point.
+[[supply]]
+net = "AIN"
+volts = "0V"
+
+[[action]]
+set = "U1.PB0"
+to = "1"
+at = "30ms"
+for = "10ms"
+
+[[action]]
+set = "U1.PB0"
+to = "1"
+after = { edge = "U1.PA5", level = 1, delay = "5ms" }
+for = "1ms"
+
+[analog]
+nets = ["GND", "+3V3", "BTN", "TRIG", "LED_DRV", "AIN", "AFILT", "VSW", "RC_N"]
+
+[options]
+set = "phase0"

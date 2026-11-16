@@ -5,9 +5,23 @@
 //! previous major prints a migration hint; a newer major is refused with
 //! "upgrade bb". `bb pkg migrate` rewrites a package to the current major.
 //!
-//! Every schema is at major 0 today, so no previous major exists yet. The
-//! machinery is exercised by a synthetic `bb-part/1` registry in the tests
-//! (gate G9), which is exactly what the first real bump will use.
+//! The Phase 2 schema epoch (milestone S, ADR-009..013) moves every schema
+//! to its next major in one commit. Milestones B1 (ADR-010) and R1
+//! (ADR-013) develop against the epoch's draft and carry their pieces of it
+//! here:
+//!
+//! - `bb-bench/1` (ADR-010 D1): every `/0` key keeps its meaning, so the
+//!   migration rewrites the `schema` line only, and a migrated bench builds
+//!   a byte-identical deck (gate G1);
+//! - `bb-part/1`, for the `switch` view kind (ADR-010 D2): every `/0` key
+//!   keeps its meaning, so the migration rewrites the `schema` line only.
+//!   The other `bb-part/1` keys (ADR-009, ADR-012) stay reserved until S;
+//! - `bb-project/1` and `bb-board/1` (ADR-013 D1, R1: `[[device]]` and
+//!   virtual instances): their `/0` files are read and migrated, the schema
+//!   line only.
+//!
+//! The machinery is also exercised by a synthetic bump in the tests (gate
+//! G9 of ADR-006).
 
 use std::fmt;
 
@@ -73,11 +87,46 @@ pub enum Version {
     Previous { hint: String },
 }
 
+/// `bb-part/0` -> `bb-part/1`: the `schema` line (every `/0` key keeps its
+/// meaning; `/1` adds the `switch` view kind, ADR-010 D2).
+fn part_0_to_1(t: &str) -> Result<String, String> {
+    rewrite_schema_line(t, "bb-part/1")
+}
+
+/// `bb-bench/0` -> `bb-bench/1`: the `schema` line (ADR-010 D1: every `/0`
+/// key keeps its meaning).
+fn bench_0_to_1(t: &str) -> Result<String, String> {
+    rewrite_schema_line(t, "bb-bench/1")
+}
+
 impl Registry {
-    /// The registry of this build: every schema at major 0.
+    /// The registry of this build: `bb-part` and `bb-bench` at major 1
+    /// (ADR-010, the B1 draft of the schema epoch), `bb-project` and
+    /// `bb-board` at major 1 (ADR-013, R1), every other schema at major 0.
     pub fn current() -> Registry {
+        fn project_0_to_1(t: &str) -> Result<String, String> {
+            rewrite_schema_line(t, "bb-project/1")
+        }
+        // board.bbm is canonical JSON with one `"schema":"bb-board/0"` member;
+        // `bb open` rewrites it whole anyway.
+        fn board_0_to_1(t: &str) -> Result<String, String> {
+            let from = "\"schema\":\"bb-board/0\"";
+            if t.matches(from).count() != 1 {
+                return Err("board.bbm: no single schema member".into());
+            }
+            Ok(t.replacen(from, "\"schema\":\"bb-board/1\"", 1))
+        }
         Registry {
-            entries: SCHEMAS.iter().map(|s| (*s, 0, Vec::new())).collect(),
+            entries: SCHEMAS
+                .iter()
+                .map(|s| match *s {
+                    "bb-part" => (*s, 1, vec![part_0_to_1 as Migration]),
+                    "bb-bench" => (*s, 1, vec![bench_0_to_1 as Migration]),
+                    "bb-project" => (*s, 1, vec![project_0_to_1 as Migration]),
+                    "bb-board" => (*s, 1, vec![board_0_to_1 as Migration]),
+                    _ => (*s, 0, Vec::new()),
+                })
+                .collect(),
         }
     }
 
@@ -178,50 +227,95 @@ pub fn rewrite_schema_line(text: &str, new_id: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// A synthetic bump: bb-part/1 renames nothing but changes the id (the
-    /// shape of the first real migration, ADR-006 D11, gate G9).
+    /// A synthetic bump: bb-pins/1 renames nothing but changes the id (the
+    /// shape of a migration, ADR-006 D11, gate G9).
     fn bumped() -> Registry {
-        fn part_0_to_1(t: &str) -> Result<String, String> {
-            rewrite_schema_line(t, "bb-part/1")
+        fn pins_0_to_1(t: &str) -> Result<String, String> {
+            rewrite_schema_line(t, "bb-pins/1")
         }
         let mut r = Registry::current();
         for e in &mut r.entries {
-            if e.0 == "bb-part" {
+            if e.0 == "bb-pins" {
                 e.1 = 1;
-                e.2 = vec![part_0_to_1 as Migration];
+                e.2 = vec![pins_0_to_1 as Migration];
             }
         }
         r
     }
 
     #[test]
-    fn current_build_reads_major_0_only() {
+    fn current_build_reads_its_majors() {
         let r = Registry::current();
-        assert_eq!(r.check("bb-part", "bb-part/0"), Ok(Version::Current));
-        let e = r.check("bb-part", "bb-part/1").unwrap_err();
+        assert_eq!(r.check("bb-pins", "bb-pins/0"), Ok(Version::Current));
+        let e = r.check("bb-pins", "bb-pins/1").unwrap_err();
         assert!(e.contains("upgrade bb"), "{e}");
-        assert!(r.check("bb-part", "bb-pins/0").is_err());
-        assert!(r.check("bb-part", "bb-part").is_err());
-        assert!(r.check("bb-part", "bb-part/01").is_err());
-        assert_eq!(r.migrate("bb-part", "bb-part/0", "x"), Ok(None));
+        assert!(r.check("bb-pins", "bb-part/0").is_err());
+        assert!(r.check("bb-pins", "bb-pins").is_err());
+        assert!(r.check("bb-pins", "bb-pins/01").is_err());
+        assert_eq!(r.migrate("bb-pins", "bb-pins/0", "x"), Ok(None));
+        // B1's draft of the schema epoch (ADR-010 D1, D2): bb-part/1 and
+        // bb-bench/1 are current, their /0 is the previous major and
+        // migrates by its schema line.
+        for (name, now) in [("bb-part", "bb-part/1"), ("bb-bench", "bb-bench/1")] {
+            assert_eq!(r.current_id(name), now);
+            assert_eq!(r.check(name, now), Ok(Version::Current));
+            let old = now.replace("/1", "/0");
+            assert!(matches!(r.check(name, &old), Ok(Version::Previous { .. })));
+            let text = format!("# c\nschema = \"{old}\"\n[x]\ny = 1\n");
+            assert_eq!(
+                r.migrate(name, &old, &text).unwrap().unwrap(),
+                text.replace(&old, now)
+            );
+            assert!(r
+                .check(name, &now.replace("/1", "/2"))
+                .unwrap_err()
+                .contains("upgrade bb"));
+        }
+    }
+
+    #[test]
+    fn project_and_board_are_at_major_1() {
+        // ADR-013 (Phase 2 R1): bb-project/1 and bb-board/1; /0 is read and
+        // migrated, the schema line only.
+        let r = Registry::current();
+        assert_eq!(r.current_id("bb-project"), "bb-project/1");
+        assert_eq!(r.current_id("bb-board"), "bb-board/1");
+        assert!(matches!(
+            r.check("bb-project", "bb-project/0"),
+            Ok(Version::Previous { .. })
+        ));
+        assert!(r
+            .check("bb-project", "bb-project/2")
+            .unwrap_err()
+            .contains("upgrade bb"));
+        let t = "# p\nschema = \"bb-project/0\"\n[[board]]\nid = \"main\"\n";
+        assert_eq!(
+            r.migrate("bb-project", "bb-project/0", t).unwrap().unwrap(),
+            "# p\nschema = \"bb-project/1\"\n[[board]]\nid = \"main\"\n"
+        );
+        let b = "{\"boards\":[],\"schema\":\"bb-board/0\"}\n";
+        assert_eq!(
+            r.migrate("bb-board", "bb-board/0", b).unwrap().unwrap(),
+            "{\"boards\":[],\"schema\":\"bb-board/1\"}\n"
+        );
     }
 
     #[test]
     fn synthetic_bump_reads_previous_and_migrates() {
         let r = bumped();
-        assert_eq!(r.current_id("bb-part"), "bb-part/1");
+        assert_eq!(r.current_id("bb-pins"), "bb-pins/1");
         assert!(matches!(
-            r.check("bb-part", "bb-part/0"),
+            r.check("bb-pins", "bb-pins/0"),
             Ok(Version::Previous { .. })
         ));
-        assert_eq!(r.check("bb-part", "bb-part/1"), Ok(Version::Current));
+        assert_eq!(r.check("bb-pins", "bb-pins/1"), Ok(Version::Current));
         assert!(r
-            .check("bb-part", "bb-part/2")
+            .check("bb-pins", "bb-pins/2")
             .unwrap_err()
             .contains("upgrade bb"));
-        let text = "# c\nschema = \"bb-part/0\"   # keep?\n[part]\nid = \"x/y\"\n";
-        let m = r.migrate("bb-part", "bb-part/0", text).unwrap().unwrap();
-        assert_eq!(m, "# c\nschema = \"bb-part/1\"\n[part]\nid = \"x/y\"\n");
-        assert_eq!(r.migrate("bb-part", "bb-part/1", &m), Ok(None));
+        let text = "# c\nschema = \"bb-pins/0\"   # keep?\n[[pin]]\nnumber = \"1\"\n";
+        let m = r.migrate("bb-pins", "bb-pins/0", text).unwrap().unwrap();
+        assert_eq!(m, "# c\nschema = \"bb-pins/1\"\n[[pin]]\nnumber = \"1\"\n");
+        assert_eq!(r.migrate("bb-pins", "bb-pins/1", &m), Ok(None));
     }
 }

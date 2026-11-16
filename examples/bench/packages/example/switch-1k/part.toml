@@ -1,0 +1,40 @@
+# example/switch-1k: a test switch with a 1 kOhm contact, as a project-local package of
+# examples/bench (ADR-006 D1). With 1 uF behind it, a press charges the capacitor with
+# tau = 1 ms, which the lattice resolves: the analytic RC settling of ADR-010 gate G8.
+schema = "bb-part/1"
+
+[part]
+id = "example/switch-1k"
+version = "0.1.0"
+kind = "mechanical"
+license = "Apache-2.0"
+description = "A test switch with a 1 kOhm closed contact (ADR-010 gate G8)"
+
+[footprints]
+kicad = ["Button_Switch_SMD:SW_SPST_PTS645"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "contact"
+kind = "switch"
+purpose = "a switched conductance: 1 kOhm closed, 100 MOhm open (the default roff)"
+fidelity = ["fast"]
+default_for = ["fast"]
+ports = [{ role = "pin", pin = "1" }, { role = "pin", pin = "2" }]
+params = { ron = "1k" }
+
+[analog.provenance]
+source = "estimated"
+base = "a test element: the switch view kind (ADR-010 D2) with ron = 1 kOhm"
+not_modelled = ["any real part: it exists for the analytic gate"]
+generated_by = "Claude (Phase 2 B1)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

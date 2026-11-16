@@ -97,7 +97,8 @@ else
 WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
-                  nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test
+                  nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test \
+                  bench-test bench-gate dms-home-project
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -156,9 +157,11 @@ pooled-test:
 	+$(STEP) dms-rail-test
 	+$(STEP) dms-vsense-test
 	+$(STEP) dms-home-test
+	+$(STEP) bench-test
 	+$(STEP) ec-reconnect
 	+$(STEP) packages
 	+$(STEP) gdb-test
+	+$(STEP) vscode-templates
 	+$(STEP) dms-system
 
 bb:
@@ -411,6 +414,8 @@ cost-table-runs:
 	    - - - -- $(DMS_VSENSE_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-home $(PERF_N) "--lookahead off" "" - - - \
 	    -- $(DMS_HOME_TYP_ARGS)
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-home-project $(PERF_N) "--lookahead off" "" - - - \
+	    -- $(DMS_HOME_PSTEP_ARGS)
 
 # The Phase 1 M8 row alone (examples/nrf-saadc, the loading adc_in): lookahead off (one cell) vs
 # bb's defaults, fresh and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
@@ -506,8 +511,11 @@ measured-jit-profile-stress: firmware bb
 # it uses the pool.
 POOL_EQUIV_OUT    ?= out/pool-equiv
 POOL_EQUIV_ROUNDS ?= 2
-pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare
+pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare bench-prepare
 	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
+	    "bench-stimulus;$(BENCH_GOLD)/stimulus.sha256;nongrant;$(BENCH_STIM_ARGS)" \
+	    "bench-trigger;$(BENCH_GOLD)/trigger.sha256;nongrant;$(BENCH_TRIG_ARGS)" \
+	    "bench-set;$(BENCH_GOLD)/set.sha256;nongrant;$(BENCH_SET_ARGS)" \
 	    "dms-rail;$(DMS_RAIL_GOLD)/ok-cold/outputs.sha256;nongrant;$(DMS_RAIL_ARGS)" \
 	    "dms-rail-ref;$(DMS_RAIL_GOLD)/ok-cold/outputs.sha256;all;$(DMS_RAIL_ARGS) --max-quantum 10us" \
 	    "dms-rail-wrong;$(DMS_RAIL_GOLD)/wrong-nominal/outputs.sha256;nongrant;$(DMS_RAIL_WRONG_ARGS)" \
@@ -532,7 +540,9 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare
 	    "dms-vsense;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;nongrant;$(DMS_VSENSE_ARGS)" \
 	    "dms-vsense-ref;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;all;$(DMS_VSENSE_ARGS) --lookahead off --adc-push every" \
 	    "dms-home-step;$(DMS_HOME_GOLD)/step/outputs.sha256;all;$(DMS_HOME_STEP_ARGS)" \
-	    "dms-home;$(DMS_HOME_GOLD)/typ/outputs.sha256;all;$(DMS_HOME_TYP_ARGS)"
+	    "dms-home;$(DMS_HOME_GOLD)/typ/outputs.sha256;all;$(DMS_HOME_TYP_ARGS)" \
+	    "dms-home-project-step;$(DMS_HOME_GOLD)/project-step/outputs.sha256;all;$(DMS_HOME_PSTEP_ARGS)" \
+	    "dms-home-project;$(DMS_HOME_GOLD)/project-typ/outputs.sha256;all;$(DMS_HOME_PTYP_ARGS)"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -929,9 +939,41 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/feedback-open/board.cir examples/adc/board.cir examples/adc/board-open.cir \
               examples/adc/kicad examples/dial-me-spinner examples/nrf-saadc/board.cir \
               examples/dial-me-spinner/system tests/device-smoke/board.cir \
-              examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir
+              examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir examples/bench \
+              examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
-PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages
+PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages \
+             examples/bench/packages examples/dial-me-spinner/e3/packages
+
+# --- Phase 2 B1: bb-bench/1 and the bench engine (ADR-010 D1-D4) -----------
+# examples/bench, a synthetic STM32F103 board running examples/feedback's firmware, with every B1
+# stimulus (scripts/bench_gate.sh describes the cases and checks). bench-test (in make test):
+# check_bench.py on each case at bb's defaults (the switch view's analytic RC settling, G8; the
+# digital playback's edges equal an equivalent [[pwl]]'s and are applied at ceil_L), the
+# committed one-cell reference hashes, G2 (a playback against the same points as a [[pwl]]), the
+# refusals, and G1 on the Phase 1 benches (bb-bench/0 and /1 build byte-identical decks).
+# bench-gate: that, plus every case at --max-quantum 10us, 1ms and 10ms and analog-first, and
+# determinism. bench-perf (idle host, measurement lock): a 1 s, 100 ksps playback adds <= 2 s.
+# bench-update rewrites tests/golden/bench from fresh one-cell references (review the diff).
+.PHONY: bench-test bench-gate bench-perf bench-update bench-prepare pooled-bench-test pooled-bench-gate
+BENCH_OUT  ?= out/bench
+BENCH_WORK ?= $(BB_SCRATCH)/bb-bench
+export BENCH_WORK
+pooled-bench-test: bb
+	bash scripts/bench_gate.sh test $(BB) $(BENCH_OUT)-test
+pooled-bench-gate: bb
+	bash scripts/bench_gate.sh gate $(BB) $(BENCH_OUT)
+bench-update: firmware bb
+	bash scripts/bench_gate.sh update $(BB) $(BENCH_OUT)-ref
+bench-prepare: firmware bb
+	bash scripts/bench_gate.sh prepare $(BB)
+measured-bench-perf: firmware bb
+	env -u BB_RENODE_POOL bash scripts/bench_gate.sh perf $(BB) $(BENCH_OUT)-perf
+BENCH_ARGS = --project $(BENCH_WORK)/p --sample-rate 10kHz
+BENCH_STIM_ARGS = $(BENCH_ARGS) --bench $(BENCH_WORK)/p/bench/stimulus.toml --for 300ms
+BENCH_TRIG_ARGS = $(BENCH_ARGS) --bench $(BENCH_WORK)/p/bench/trigger.toml --for 70ms
+BENCH_SET_ARGS  = $(BENCH_ARGS) --bench $(BENCH_WORK)/p/bench/digital-set.toml --for 100ms
+BENCH_GOLD := tests/golden/bench
 
 # ADR-006 G1 and the package gates of `make test`: every part.toml, pins.toml,
 # test vector and bb.lock validates against spec/schema (python3-jsonschema);
@@ -1076,7 +1118,8 @@ measured-cost-table-dms-vsense: firmware bb dms-vsense-prepare
 # carrying the main board's detent sheet, the nRF52840 (PWM0, TEMP, SAADC) and the mechanism and
 # DRV5032 device M1 (dms/mechanism@1), with firmware/prebuilt/homing.elf (the procedure) and
 # homing_step.elf (one full step at 446 PPS). scripts/dms_home.sh; ADR-008 Amendments 9-11.
-.PHONY: pooled-dms-home pooled-dms-home-test dms-home-ref dms-home-update cost-table-dms-home
+.PHONY: pooled-dms-home pooled-dms-home-test pooled-dms-home-project dms-home-ref dms-home-update \
+        cost-table-dms-home cost-table-dms-home-project dms-home-rss
 DMS_HOME_OUT  ?= out/dms-home
 DMS_HOME_GOLD := tests/golden/dms-home
 DMS_HOME_E3   := examples/dial-me-spinner/e3
@@ -1090,12 +1133,31 @@ DMS_HOME_STEP_ARGS = --netlist $(DMS_HOME_E3)/board-step.cir --firmware $(DMS_HO
                      --target U10 --for 45ms $(DMS_HOME_PINS) --probe net:MOT_A_OUT1 --probe net:COILA_L \
                      --probe net:MOT_B_OUT1 --probe net:COILB_L --probe net:NB_VBAT --probe net:NB_VSYS \
                      --sample-rate 1MHz
+# Phase 2 R1 (ADR-013 D1): the same two cases on the project route, examples/dial-me-spinner/e3/home
+# (typ) and e3/step: the imported main board with M1 as a virtual [[device]] (their probes are the
+# projects' [probes]).
+DMS_HOME_PSTEP_ARGS = --project $(DMS_HOME_E3)/step --bench $(DMS_HOME_E3)/step/bench.toml --for 45ms \
+                      --sample-rate 1MHz
+DMS_HOME_PTYP_ARGS  = --project $(DMS_HOME_E3)/home --bench $(DMS_HOME_E3)/home/bench.toml --for 2700ms \
+                      --sample-rate 10kHz
 
 # In `make test` (about 40 s): the E3 boards are the generator's output, the step case at bb's
 # defaults and with --engine-order analog-first (byte-identical), check_dms_home.py --step (one full
-# step at 446 PPS against the suite's test_firmware_microstep_pwm), its committed one-cell hashes.
+# step at 446 PPS against the suite's test_firmware_microstep_pwm), its committed one-cell hashes;
+# beside them (Phase 2 R1) the step case on the project route, e3/step: its committed one-cell
+# hashes, and scripts/compare_project_run.py against the board file's run (non-grant records and
+# digital columns byte-identical after the name mapping).
 pooled-dms-home-test: bb
 	bash scripts/dms_home.sh test $(BB) $(DMS_HOME_OUT)-test
+
+# The Phase 2 R1 gate (ADR-013 D1, gate G1; about 5 minutes): E3's step and typ on the project route
+# (e3/step, e3/home) at bb's defaults and as their one-cell references (--lookahead off; equal: one
+# partition, a consistency check), the references against tests/golden/dms-home/project-*,
+# check_dms_home.py on project-typ, compare_project_run.py against the board files' step and typ (run
+# beside them, and equal to their own goldens), analog-first on project-step, and project-typ's
+# digital-only MOT nets and grant count reported (ADR-014's long grants, H5).
+pooled-dms-home-project: bb
+	bash scripts/dms_home.sh project $(BB) $(DMS_HOME_OUT)-project
 
 # The plan's M10 gate (E3, about 55 minutes on 5 jobs): step, typ (tS 50 ms), worst (the suite's
 # DRV5032FA corner: tS 75 ms, BOP 4.8 mT, BRP 0.5 mT, at its worst sample phase) and park (H1) at bb's
@@ -1122,6 +1184,35 @@ measured-cost-table-dms-home: firmware bb
 	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
 	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-home $(PERF_N) \
 	    "--lookahead off" "" - - - -- $(DMS_HOME_TYP_ARGS)
+
+# The Phase 2 R1 row (the project route, e3/step: homing_step.elf, 45 ms): the one-cell reference vs
+# bb's defaults (one partition on E3), fresh and on a 1-slot pool, with the protocol. Run it on an
+# otherwise idle host.
+measured-cost-table-dms-home-project: firmware bb
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-home-project $(PERF_N) \
+	    "--lookahead off" "" - - - -- $(DMS_HOME_PSTEP_ARGS)
+	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-home-project $(PERF_N) \
+	    "--lookahead off" "" - - - -- $(DMS_HOME_PSTEP_ARGS)
+
+# --- Phase 2 H1: ngspice robustness (ADR-015 D1-D4) --------------------------------------------
+# ADR-015 G1, the progress watchdog (D1): the SAADC stall repro (e3/board.cir with P0.02 on the
+# loading saadc_se view, homing_step.elf, 100 ms) ends in NoProgress:ngspice at 77.43 ms in the cell
+# (77.43 ms, 77.44 ms] within STALL_MAX_S (120 s) and with bb's peak RSS under STALL_MAX_RSS_KB
+# (500 MB); the outputs before the error equal a run that ends at 77.43 ms; a lower limit trips
+# identically twice; the committed board (load=none) is the negative control. Fresh Renode, under
+# the host measurement lock (a timing gate; about 3.5 minutes, so not in make test: its tier is
+# nightly, ADR-015 D11). scripts/ngspice_stall.sh.
+NGSPICE_STALL_OUT ?= out/ngspice-stall
+measured-ngspice-stall: firmware bb
+	bash scripts/ngspice_stall.sh $(BB) $(NGSPICE_STALL_OUT)
+
+# ADR-015 G2, engine-owned .save (D2): E3 typ (homing.elf, 2700 ms, bb's defaults) with bb's peak RSS
+# at most DMS_HOME_RSS_MAX_KB: the full-length measurement with .save plus 20 % (ADR-015 Amendment 1;
+# 1.5 GB without .save), and its outputs equal to tests/golden/dms-home/typ (one partition: a
+# consistency check of .save). About 4 minutes; make dms-home runs the same check on its typ run.
+DMS_HOME_RSS_OUT ?= out/dms-home-rss
+dms-home-rss: firmware bb
+	bash scripts/dms_home.sh rss $(BB) $(DMS_HOME_RSS_OUT)
 
 # After an intended change to a package, a platform's .repl or a Renode
 # plugin source: rewrite the changed bb.lock entries (review, then commit).
@@ -1203,6 +1294,38 @@ gdb gdb-test: firmware bb
 	$(PYTHON) scripts/gdb_gate.py $(if $(filter gdb,$@),gate,test) --bb $(BB) --gdb $(GDB) \
 	    --out $(GDB_OUT)/$(if $(filter gdb,$@),gate,test) --work $(GDB_WORK)
 
+# --- Phase 2 E4: viewers and VS Code (ADR-016) ----------------------------------------------------
+# make vcd-check (G1; CI job dms-rail, about 30 s after the demo): tools/vcd-check (wellen 0.25.7,
+# Surfer's waveform library; its own crate OUTSIDE the workspace, built into its own target
+# directory) loads make demo's nets.vcd files and the committed fixture tests/fixtures/vcd/mixed.vcd:
+# timescale 1 fs, every $var present with its type (real as Real), every change, the $comment name
+# map, and every real net equal to the run's nets.csv at every row; then six negative controls on
+# copies of the fixture each fail with their own message (scripts/vcd_check.sh).
+# make vcd-check-fixture: the fixture and the controls only (no demo).
+# make vscode-templates (in make test, under 1 s): the static check of docs/templates/vscode.
+# make vscode-test (G2; local, not in make test or CI: it downloads a pinned VS Code and the pinned
+# cortex-debug VSIXs once into ~/.cache/bb/vscode-test, and needs xvfb and unprivileged user
+# namespaces; about 1 min): the templates, copied verbatim into a copy of the dial-me-spinner
+# project, attach cortex-debug to bb run --gdb inside a headless VS Code with no network; attach,
+# reads and detach give all four committed hashes of the run without GDB, and the negative control
+# (a breakpoint through cortex-debug) marks the run and changes its outputs (scripts/vscode_test.sh).
+.PHONY: vcd-check vcd-check-fixture vcd-check-tool vscode-templates vscode-test
+VCD_CHECK_DIR ?= $(CARGO_TARGET_DIR)/vcd-check
+VCD_CHECK     := $(VCD_CHECK_DIR)/release/vcd-check
+VCD_CHECK_OUT ?= out/vcd-check
+vcd-check-tool:
+	CARGO_TARGET_DIR=$(VCD_CHECK_DIR) $(CARGO) build --release --locked --manifest-path tools/vcd-check/Cargo.toml
+vcd-check: vcd-check-tool demo
+	bash scripts/vcd_check.sh $(VCD_CHECK) $(DEMO_OUT) $(VCD_CHECK_OUT)
+vcd-check-fixture: vcd-check-tool
+	bash scripts/vcd_check.sh $(VCD_CHECK) --fixture-only $(VCD_CHECK_OUT)
+vscode-templates:
+	PYTHON=$(PYTHON) bash scripts/vscode_test.sh --static
+VSCODE_OUT  ?= out/vscode
+VSCODE_WORK ?= $(BB_SCRATCH)/bb-vscode
+vscode-test: firmware bb
+	PYTHON=$(PYTHON) bash scripts/vscode_test.sh $(BB) $(VSCODE_OUT) $(VSCODE_WORK)
+
 # --- Phase 2 H0: track worktrees, the measurement lock, the runtime baseline ----------------------
 # make worktree TRACK=<name>: the git worktree ~/src/bb-<name> (WORKTREE_ROOT) on the branch
 # p2/<name>, from main for a new branch, locked against a prune from Windows, with its own
@@ -1228,9 +1351,11 @@ worktree-test:
 # list. make measure-lock-test (in make test): on a private lock, every member refuses while a
 # probe holds it (scripts/measure_lock_test.sh).
 MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-table-dms-rail \
-                   cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home adc-startup adc-speed \
+                   cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home cost-table-dms-home-project \
+                   adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
-                   setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe
+                   setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \
+                   ngspice-stall bench-perf
 .PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
 $(MEASURE_TARGETS):
 	@bash scripts/measure_lock.sh $@ $(MAKE) --no-print-directory measured-$@

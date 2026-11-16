@@ -13,6 +13,17 @@
 #          4.8 mT, BRP 0.5 mT) at its worst sample phase
 #   park   homing.elf on board-park.cir, 3200 ms: from inside the park zone (H1 runs), typical tS 50 ms,
 #          BOP/BRP 4.8/0.5 mT (H1 longest)
+# The project route (Phase 2 R1, ADR-013 D1; examples/dial-me-spinner/e3/home and e3/step): the same cases
+# on the imported main board, M1 a virtual [[device]], U40/U41/R70/J40 the schematic's parts:
+#   project-typ   e3/home (homing.elf, M1 s0 = 500, tS 50 ms), 2700 ms; the bench leaves the MOT nets out
+#                 of [analog] nets, so they are digital-only (ADR-014 D4: no glue, no pull-downs)
+#   project-step  e3/step (homing_step.elf, M1 s0 = 400), 45 ms; the bench keeps the power stage in scope
+# Their decks differ from the board files' (elaborated from the KiCad netlist: element and node names, the
+# schematic's capacitor values, rDS(on) 0.28 Ohm, no base-board capacitors), so their nets.csv and nets.vcd
+# have their own one-cell references and goldens (tests/golden/dms-home/project-*), and
+# scripts/compare_project_run.py gates the documented name mapping against the board-file run: the
+# non-grant records byte-identical, every shared digital column identical, the analog columns reported.
+#
 # The boards are cyclic (U10 -> M1 -> U10, and ngspice -> U10 through VSYS_SENSE), so bb loads the
 # lookahead plugin and runs lookahead by default; the kernel finds no quiet grant on them (two producers
 # feed U10, ADR-003 D5 allows one; ADR-008 Amendment 11), so bb's defaults are one-cell grants too. The
@@ -31,7 +42,9 @@
 #
 #   scripts/dms_home.sh test <bb> <out>   the part in `make test`: the boards are the generator's output,
 #                                         step at bb's defaults and with --engine-order analog-first,
-#                                         check_dms_home.py --step, the committed one-cell hashes
+#                                         check_dms_home.py --step, the committed one-cell hashes; and
+#                                         project-step beside them (its hashes, compare_project_run.py
+#                                         against step)
 #   scripts/dms_home.sh gate <bb> <out>   the M10 gate (make dms-home): every case at bb's defaults and as
 #                                         its one-cell reference, check_dms_home.py on each, the defaults
 #                                         equal to the references (every record, grants included: one
@@ -39,12 +52,23 @@
 #                                         --engine-order analog-first byte-identical, --max-quantum 1ms
 #                                         equal (typ, step), 10-run determinism (typ), and the three
 #                                         negative controls
+#   scripts/dms_home.sh project <bb> <out>   the R1 gate (make dms-home-project): the project cases at
+#                                         bb's defaults and as their one-cell references (equal: one
+#                                         partition), the references equal to their goldens,
+#                                         check_dms_home.py on project-typ, compare_project_run.py
+#                                         against typ and step (run here too), analog-first on
+#                                         project-step, and project-typ's grants and digital-only nets
+#                                         reported (ADR-014's long grants need them out of the deck)
 #   scripts/dms_home.sh ref <bb> <out>    the one-cell references only (for golden-update)
 #   scripts/dms_home.sh update <out>      write tests/golden/dms-home from <out>'s references
 #   scripts/dms_home.sh run <bb> <out> <cases...>   only run the named cases at bb's defaults, no checks
 #                                         (make docs-plots draws from them)
-# DMS_HOME_JOBS (default 5) runs at a time: a homing run holds about 1.5 GB (ngspice keeps every
-# solver point) and takes about 4.5 minutes alone, 6-7 with five in parallel (the gate: about 45).
+#   scripts/dms_home.sh rss <bb> <out>    typ alone: bb's peak RSS at most RSS_MAX_KB (ADR-015 G2) and
+#                                         its committed hashes (make dms-home-rss; the gate checks the
+#                                         same on its typ run)
+# DMS_HOME_JOBS (default 5) runs at a time: a homing run holds about 330 MB (ngspice keeps every
+# solver point of the vectors the engine saves, ADR-015 D2; 1.5 GB before H1) and takes about 4.5
+# minutes alone, 6-7 with five in parallel (the gate: about 45).
 set -euo pipefail
 MODE=$1
 shift
@@ -54,8 +78,12 @@ FWD=$ROOT/examples/dial-me-spinner/firmware/prebuilt
 GOLD=$ROOT/tests/golden/dms-home
 JOBS=${DMS_HOME_JOBS:-5}
 DET_RUNS=${DET_RUNS:-10}
+# ADR-015 G2: E3 typ's peak RSS with the engine's .save, measured over the full 2.7 s (336 356 kB,
+# H1, ADR-015 Amendment 1; 1.5 GB without .save), plus 20 %.
+RSS_MAX_KB=${DMS_HOME_RSS_MAX_KB:-403627}
 PY=${PYTHON:-python3}
 CASES=(step typ worst park)
+PCASES=(project-step project-typ)
 NEGS=(neg-fast neg-fb200 neg-fb286)
 NEG=
 status=0
@@ -75,6 +103,9 @@ args_of() { # <case>: bb run arguments
     neg-fast) echo "--netlist $E3/board.cir --firmware $FWD/homing_fast.elf --target U10 --for 2700ms $PINS --sample-rate 10kHz" ;;
     neg-fb200) echo "--netlist $NEG/fb200.cir --firmware $FWD/homing.elf --target U10 --for 2700ms $PINS --sample-rate 10kHz" ;;
     neg-fb286) echo "--netlist $NEG/fb286.cir --firmware $FWD/homing.elf --target U10 --for 2800ms $PINS --sample-rate 10kHz" ;;
+    # The project route (R1); the probes are the projects' [probes].
+    project-step) echo "--project $E3/step --bench $E3/step/bench.toml --for 45ms --sample-rate 1MHz" ;;
+    project-typ) echo "--project $E3/home --bench $E3/home/bench.toml --for 2700ms --sample-rate 10kHz" ;;
   esac
 }
 check_args() { # <case>
@@ -83,7 +114,27 @@ check_args() { # <case>
     typ) echo "--corner typ" ;;
     worst) echo "--corner worst" ;;
     park) echo "--corner typ --start park" ;;
+    project-typ) echo "--corner typ" ;;
   esac
+}
+
+# A project run against the board-file run it stands for (R1, ADR-013 D1 gate G1).
+cross() { # <board-file run> <project run>
+  if "$PY" "$ROOT/scripts/compare_project_run.py" "$1" "$2" > "$2.cross.txt"; then
+    pass "$(basename "$2") equals $(basename "$1") after the name mapping (non-grant records, digital columns)"
+  else
+    fail "$(basename "$2") differs from $(basename "$1") after the name mapping"
+  fi
+  grep -v ': ok \|PASS\|FAIL (' "$2.cross.txt" | sed 's/^compare_project_run: /    /'
+}
+
+# The project files are current (bb run refuses them otherwise; this says why first).
+projects() { # <bb>
+  local d
+  for d in "$E3/home" "$E3/step"; do
+    if "$1" open --check "$d" > /dev/null 2>&1; then pass "$(basename "$d"): board.bbm and bb.lock are current"
+    else fail "$(basename "$d"): board.bbm or bb.lock is stale (bb open --check $d)"; fi
+  done
 }
 
 # A job list "<dir>|<case>|<extra args>", run JOBS at a time.
@@ -172,6 +223,18 @@ negcheck() { # <dir> <patterns...>
   else fail "$(basename "$d"): the negative control does not fail exactly: $*"; fi
 }
 
+# ADR-015 G2 (D2, engine-owned .save): bb's own peak RSS on a typ run (the "bb run: peak RSS" line)
+# at most RSS_MAX_KB: the full-length measurement with .save plus 20 % (ADR-015 Amendment 1).
+rss_check() { # <dir>
+  local kb
+  kb=$(sed -n 's/^bb run: peak RSS \([0-9]*\) kB.*/\1/p' "$1.log" | tail -1)
+  if [[ -n $kb ]] && (( kb <= RSS_MAX_KB )); then
+    pass "typ: bb's peak RSS ${kb} kB <= ${RSS_MAX_KB} kB (ADR-015 G2; 1.5 GB without .save)"
+  else
+    fail "typ: bb's peak RSS ${kb:-unknown} kB > ${RSS_MAX_KB} kB (ADR-015 G2)"
+  fi
+}
+
 boards() {
   if "$PY" "$ROOT/scripts/dms_home_boards.py" --check; then pass "the E3 board files are the generator's output"
   else fail "the E3 board files differ from scripts/dms_home_boards.py's output"; fi
@@ -180,10 +243,60 @@ boards() {
 do_test() { # <bb> <out>
   local bb=$1 out=$2
   boards
-  run_jobs "$bb" "$out/step||" "$out/step-order|step|--engine-order analog-first"
+  projects "$bb"
+  run_jobs "$bb" "$out/step||" "$out/step-order|step|--engine-order analog-first" "$out/project-step||"
   check "$out/step" step
   hashes "$out/step" step nongrant
   same "$out/step" "$out/step-order" "step: --engine-order analog-first byte-identical" nets.csv events.jsonl nets.vcd
+  # The project route (R1): its own one-cell hashes, and the board file's run after the name mapping.
+  hashes "$out/project-step" project-step nongrant
+  cross "$out/step" "$out/project-step"
+}
+
+# The R1 gate (Phase 2 plan R1, ADR-013 gate G1): E3's step and typ on the project route.
+do_project() { # <bb> <out>
+  local bb=$1 out=$2 c
+  boards
+  projects "$bb"
+  run_jobs "$bb" "$out/step||" "$out/typ||" "$out/project-step||" "$out/project-step-ref|project-step|--lookahead off" \
+    "$out/project-step-order|project-step|--engine-order analog-first" "$out/project-typ||" \
+    "$out/project-typ-ref|project-typ|--lookahead off" "$out/neg-seed|project-step|--seed 2"
+  hashes "$out/step" step all
+  hashes "$out/typ" typ all
+  for c in "${PCASES[@]}"; do
+    [[ -d $out/$c && -d $out/$c-ref ]] || continue
+    same "$out/$c" "$out/$c-ref" "$c: bb's defaults equal the one-cell reference (grant records included)" \
+      nets.csv nets.vcd events.jsonl
+    hashes "$out/$c-ref" "$c" all
+    grep -q '0 promises broken' "$out/$c.log" && pass "$c: 0 promises broken" \
+      || fail "$c: a lookahead promise was broken"
+  done
+  check "$out/project-typ" project-typ
+  same "$out/project-step" "$out/project-step-order" "project-step: --engine-order analog-first byte-identical" \
+    nets.csv events.jsonl nets.vcd
+  cross "$out/step" "$out/project-step"
+  cross "$out/typ" "$out/project-typ"
+  # The negative control (plan section 7: the mechanism must act): project-step at another seed moves
+  # M1's seeded sample phase, so its device records differ and the comparison must fail on them.
+  if "$PY" "$ROOT/scripts/compare_project_run.py" "$out/step" "$out/neg-seed" > "$out/neg-seed.cross.txt"; then
+    fail "neg-seed: compare_project_run.py passed a run at --seed 2"
+  elif grep -q 'FAIL non-grant records differ' "$out/neg-seed.cross.txt" \
+       && grep -q 'first window at' "$out/neg-seed.cross.txt"; then
+    pass "neg-seed: compare_project_run.py fails a run at --seed 2 on M1's seeded sample phase"
+  else
+    fail "neg-seed: compare_project_run.py failed a run at --seed 2, but not on M1's first record"
+  fi
+  # ADR-014's long grants (H5) need the MOT nets out of the analog engine: report what the project does.
+  "$PY" - "$out/project-typ" "$out/typ" <<'EOF'
+import json, sys
+from pathlib import Path
+p, t = Path(sys.argv[1]), Path(sys.argv[2])
+rj = json.loads((p / "run.json").read_text())
+g = lambda d: sum(1 for ln in (d / "events.jsonl").open() if '"type":"grant"' in ln)
+print(f"dms-home:   project-typ: digital-only nets (no glue, ADR-014 D4): {', '.join(rj.get('digital_only', [])) or 'none'}")
+print(f"dms-home:   project-typ: {g(p)} grants (the board file's typ: {g(t)}); quiet grants need H5 (ADR-014 D1-D3)")
+EOF
+  grep -h 'bb run: lookahead' "$out/project-typ.log" | sed 's/^/dms-home:   project-typ: /'
 }
 
 do_ref() { # <bb> <out> <cases...>
@@ -215,6 +328,7 @@ do_gate() { # <bb> <out>
     grep -q '0 promises broken' "$out/$c.log" && pass "$c: 0 promises broken" \
       || fail "$c: a lookahead promise was broken"
   done
+  rss_check "$out/typ"
   for c in typ step; do
     same "$out/$c" "$out/$c-order" "$c: --engine-order analog-first byte-identical" nets.csv events.jsonl nets.vcd
     hashes "$out/$c-q1ms" "$c" nongrant
@@ -242,7 +356,7 @@ do_gate() { # <bb> <out>
 case $MODE in
   update)
     out=$1
-    for c in "${CASES[@]}"; do
+    for c in "${CASES[@]}" "${PCASES[@]}"; do
       mkdir -p "$GOLD/$c"
       (cd "$out/$c-ref" && sha256sum nets.csv events.jsonl nets.vcd non-grant-records) > "$GOLD/$c/outputs.sha256"
     done
@@ -254,7 +368,9 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 case $MODE in
   test) do_test "$BB" "$OUT" ;;
   gate) do_gate "$BB" "$OUT" ;;
-  ref) boards; do_ref "$BB" "$OUT" "${CASES[@]}" ;;
+  project) do_project "$BB" "$OUT" ;;
+  ref) boards; do_ref "$BB" "$OUT" "${CASES[@]}" "${PCASES[@]}" ;;
+  rss) run_jobs "$BB" "$OUT/typ||"; rss_check "$OUT/typ"; hashes "$OUT/typ" typ all ;;
   run) shift 2; jobs=(); for c in "$@"; do jobs+=("$OUT/$c|$c|"); done; run_jobs "$BB" "${jobs[@]}" ;;
   *) sed -n '2,/^set -euo/{/^set -euo/!p}' "$0"; exit 2 ;;
 esac

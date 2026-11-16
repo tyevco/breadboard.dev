@@ -1,0 +1,37 @@
+# examples/dial-me-spinner/e3/home/bench.toml: E3's homing bench on the project route (Phase 2 R1).
+#
+# The main board alone, as ../board.cir's bench: the dial-me-spinner suite's power path of
+# test_firmware_microstep_pwm[VBAT3.7-25C] at DC. The cell 3.7 V behind the path's series
+# resistance, RPACK 0.2 + BAT-FET 0.09 + the link's VSYS 0.0484 and GND 0.0322667 Ohm = 0.370667 Ohm
+# (a Norton source), the 150 mA of other VSYS loads, and +3V3 from an ideal 3.3 V behind 50 mOhm. At
+# DC VSYS is ../board.cir's: the firmware's one VSYS reading (code 1296) is the same. Not reproduced:
+# the base board's VBAT and VSYS capacitors and the link's split into VSYS and GND (they need the base
+# board in the deck, R2), and the board file's derated VSYS capacitors with 10 mOhm ESR (the project
+# deck has the schematic's values, generic/capacitor).
+#
+# The analog scope leaves the MOT nets out (ADR-013 D1, ADR-014 D4): U40, U41, R70 and J40 are out of
+# the deck, and MOT_A_IN1, MOT_A_IN2, MOT_B_IN1, MOT_B_IN2 and MOT_NSLEEP are digital-only (no glue).
+# In scope: the VSYS capacitors (C1, C2, C6, C41, C70, C72, C74), the VSYS reading (R1, R2, C5), the
+# +3V3 capacitors, and HOME_N with M1's output glue (as in ../board.cir).
+schema = "bb-bench/1"
+temp_c = "25"
+
+[[supply]]
+net = "VSYS"
+volts = "3.7V"
+rs = "0.370667"
+
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "50m"
+
+[[load]]
+net = "VSYS"
+amps = "150mA"
+
+[analog]
+nets = ["GND", "VSYS", "+3V3", "VSYS_SENSE", "HOME_N"]
+
+[options]
+set = "phase0"

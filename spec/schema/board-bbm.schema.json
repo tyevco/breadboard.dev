@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/board-bbm.schema.json",
-  "title": "bb-board/0: board.bbm, the elaborated board (spec/board-bbm.md, ADR-007 D6). Canonical JSON, integers only (spec/canonical-json.md)",
+  "title": "bb-board/1: board.bbm, the elaborated board (spec/board-bbm.md, ADR-007 D6). Canonical JSON, integers only (spec/canonical-json.md)",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "boards", "nets", "instances", "platforms", "probes"],
   "properties": {
-    "schema": { "const": "bb-board/0" },
+    "schema": { "const": "bb-board/1" },
     "boards": {
       "type": "array",
       "minItems": 1,
@@ -131,6 +131,7 @@
         },
         "status": { "enum": ["ok", "no_model", "excluded", "unmodelled"] },
         "reason": { "type": "string" },
+        "virtual": { "const": true },
         "pins": {
           "type": "array",
           "items": {

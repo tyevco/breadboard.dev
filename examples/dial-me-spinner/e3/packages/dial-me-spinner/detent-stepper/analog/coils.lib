@@ -1,0 +1,9 @@
+* dial-me-spinner/detent-stepper view "coils" (breadboard.dev, Apache-2.0): the detent stepper's two
+* phases on J40 with the rotor at rest. r and l per phase (motor_drive__stepper.lib at 25 C).
+* Ports: Pin_1 Pin_2 (phase A), Pin_3 Pin_4 (phase B).
+.subckt dms_detent_stepper_coils PA1 PA2 PB1 PB2 params: r=20 l=4.3m
+RA PA1 a_l {r}
+LA a_l PA2 {l}
+RB PB1 b_l {r}
+LB b_l PB2 {l}
+.ends dms_detent_stepper_coils

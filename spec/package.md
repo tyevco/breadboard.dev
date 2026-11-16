@@ -107,16 +107,41 @@ Phase 1 implements three layers.
   | Key | Meaning |
   | --- | --- |
   | `name` | unique in the package |
-  | `kind` | `circuit` (default) or `pin_load` |
+  | `kind` | `circuit` (default), `pin_load` or (`bb-part/1`) `switch` |
   | `purpose` | text |
   | `fidelity` | the rungs it is valid for (`fast`, `pi`, `si`, `em`; at least one) |
   | `default_for` | the rungs it is the default for; a subset of `fidelity`; at most one view per package may name a rung |
-  | `file` | the view file (SPICE), relative to the package |
-  | `subckt` | the subcircuit the file defines |
-  | `ports` | `circuit`: the subckt's ports in order, as pin names; `pin_load`: typed ports (section 4) |
+  | `file` | the view file (SPICE), relative to the package (none for `switch`) |
+  | `subckt` | the subcircuit the file defines (none for `switch`) |
+  | `ports` | `circuit`: the subckt's ports in order, as pin names; `pin_load`: typed ports (section 4); `switch`: its two contacts, `{ role = "pin", pin = "<name>" }` |
   | `params` | `{ name = "<value>" }` defaults, in the value grammar (section 6) |
   | `[[analog.qualified]]` | `{ lattice, options }` pairs the view is qualified for, written by `bb pkg test --record` (section 8) |
   | `provenance` | section 2 |
+
+**The `switch` view kind** (`bb-part/1`, ADR-010 D2). A contact that a
+bench `[[action]] press` closes (`spec/project.md` section 3). `bb`
+generates its element, so the view has no `file` or `subckt`:
+
+- every switch instance is `X<ref> <contact 1> <contact 2> bb_ctl_<ref>
+  bb_switch ron=<ron> roff=<roff>`, and the definition, emitted once with
+  the other view definitions, is one B conductance with no branch-current
+  unknown:
+
+  ```spice
+  .subckt bb_switch a b ctl ron=0.05 roff=1e8
+  B1 a b I = (V(a) - V(b)) * (1 / {roff} + V(ctl) * (1 / {ron} - 1 / {roff}))
+  .ends bb_switch
+  ```
+
+- `bb_ctl_<ref>` is the control node: 0 V open, 1 V closed. Its source
+  `V_bb_ctl_<ref>` is `DC 0` (open) when no action presses the instance,
+  else an `EXTERNAL` source the bench drives;
+- `params`: `ron` and `roff` (resistances, defaults `50m` and `100Meg`, so
+  both states keep a DC conductance; `0 < ron < roff`) and an optional
+  `bounce_max` (a time: the longest bounce a press of it may ask for);
+- a test vector maps the two contacts and `ctl` (the control node, driven
+  by an `[[edge]]` of 0 V / 1 V) to nodes, and qualifies the view like any
+  other (section 8).
 
 **Selection, with the ladder** `fast < pi < si < em`. For a run at fidelity
 `F` an instance uses: the view named by the project's per-instance override;
@@ -362,6 +387,17 @@ vector file name, lattice, option set, partition, every measured value in
 µV or fs, and the sha256 of every sample's `f64` bits), so two packages'
 results compare byte for byte (ADR-006 gate G8).
 
+Before the transient, the runner **lints the deck's expressions** (section
+11) and **solves the vector's DC operating point** under the run's option
+set (ADR-015 D4): an `.op` analysis with the option set's card, so its
+iteration limits apply (Newton, gmin stepping, source stepping), without
+ngspice's transient-op fallback (`optran`, which ngspice 42 makes its
+default and which a large deck can spend tens of seconds in before it gives
+up). A failure is reported at once, naming the nodes ngspice names. Every
+pair a vector runs under (its own and every recorded qualification) gets
+this check. The engine's own `.save` (ADR-015 D2) is part of every deck:
+a circuit or view with a `.save` card of its own is refused.
+
 **Qualification.** A view is lattice-qualified for (`L`, option set) when
 all its vectors pass under that pair. `bb pkg test` runs each view under
 every vector's own pair and every recorded `[[analog.qualified]]` pair; a
@@ -461,7 +497,15 @@ Applies to `bb-part`, `bb-pins`, `bb-pkgtest`, `bb-lock`, `bb-project`,
   a newer major is refused with "upgrade bb"; an older one is refused.
 - `bb pkg migrate` rewrites a package (its `part.toml`, `pins.toml` and test
   vectors) in place to the current majors, mechanically. First-party
-  packages are migrated in the same commit as the schema change.
+  packages are migrated in the same commit as the schema change. `bb pkg
+  migrate --bench <file>...` rewrites bench files (ADR-010 D1).
+- **Current majors** (the Phase 2 schema epoch, ADR-009..013, lands every
+  schema's next major in milestone S; milestone B1 carries its part of
+  it): `bb-part/1` (every `/0` key keeps its meaning; adds the `switch`
+  view kind, section 3; the other `bb-part/1` keys stay reserved until S)
+  and `bb-bench/1` (ADR-010 D1; `spec/project.md` section 3). Both
+  migrations from `/0` rewrite the `schema` line only. Every other schema
+  is at major 0.
 - **Package semver:** a change to a view's results (a vector's measured
   value) is at least a minor bump; a changed port list, pin list or
   parameter-set name is a major bump; a provenance-only edit is a patch.
@@ -493,6 +537,19 @@ Errors:
 - view files: top-level content (section 3), the subckt exists, the `gnd`
   rule (section 5), and the package's own views define no top-level name
   differently;
+- **expressions** (ADR-015 D3; `bbpkg::bexpr`): every function call in a
+  B source's `V=`/`I=` expression, an E or G source's `value=`, `vol=` or
+  `cur=` expression and a `.func` body is checked against ngspice 42's own
+  tables, taken from its sources: the B-expression parser's
+  (`src/spicelib/parser/inpptree.c`: one argument, except `pow`, `pwr`,
+  `min` and `max` with exactly two, `ternary_fcn` with three, `pwl` with an
+  input and `x, y` pairs; `v()` one or two nodes, `i()` one source) and,
+  inside `{...}`, numparam's (`src/frontend/numparam/xpressn.c`). An
+  unknown function (not in the table and not a `.func`), a wrong arity and a
+  `.func` called with the wrong number of arguments are errors. A
+  three-argument `min()` segfaults libngspice 42; in numparam it is
+  silently `min(a, c)`. `bb run` and `bb pkg test` run the same check on
+  the whole deck before ngspice reads it;
 - test vectors parse and name existing views and their ports.
 
 Warnings: a previous-major file (the migration hint), a parameter set for a
@@ -556,9 +613,9 @@ others in `alt`).
   rule 2).
 - A device's id and content hash are locked as `device:<id>@<major>`
   (section 9).
-- A device part exists only in a board file. A `[[device]]` entry for
-  projects (`bb.toml`) is a Phase 2 item (approver decision 2,
-  2026-11-14).
+- A device part exists in a board file, or in a project's `[[device]]`
+  (`spec/project.md` section 1; ADR-013 D1, Phase 2 R1). The rules above
+  apply to both.
 
 ## 13. Examples
 

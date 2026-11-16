@@ -255,6 +255,37 @@ fn view_rules() {
 }
 
 #[test]
+fn b_expression_rules() {
+    // ADR-015 D3 / G3: a three-argument min() (it segfaults libngspice 42),
+    // an unknown function and a wrong arity are each refused; the same view
+    // with a two-argument min() lints clean.
+    fn b_line(expr: &str) -> impl Fn(&mut Files) + '_ {
+        move |f: &mut Files| {
+            set(
+                f,
+                "analog/a.lib",
+                "C1 OUT GNDP 1p\n",
+                &format!("C1 OUT GNDP 1p\nB1 OUT GNDP I = {expr}\n"),
+            )
+        }
+    }
+    has(
+        with("min3", b_line("min(V(IN), 1, 2)*1m")),
+        "min() takes exactly 2 arguments in ngspice 42's B-expression parser, not 3 (libngspice 42 segfaults on it)",
+    );
+    has(
+        with("unknown-fn", b_line("atan2(V(IN), 1)*1m")),
+        "unknown function atan2()",
+    );
+    has(
+        with("arity", b_line("tanh(V(IN), 2)*1m")),
+        "tanh() takes exactly 1 argument",
+    );
+    let e = with("min2", b_line("min(V(IN), 1)*1m"));
+    assert!(e.is_empty(), "{e:?}");
+}
+
+#[test]
 fn pin_rules() {
     // vil < vih; a supply reference to a non-supply pin; incomplete sets.
     has(
@@ -354,7 +385,7 @@ fn findings(dir: &Path, chip: Option<&Path>) -> Vec<(Level, String)> {
         .collect()
 }
 
-const CHIP_PART: &str = r#"schema = "bb-part/0"
+const CHIP_PART: &str = r#"schema = "bb-part/1"
 [part]
 id = "test/chip"
 version = "0.1.0"
@@ -397,7 +428,7 @@ vil = "0.3*VDD"
 cin = "3p"
 "#;
 
-const MOD_PART: &str = r#"schema = "bb-part/0"
+const MOD_PART: &str = r#"schema = "bb-part/1"
 [part]
 id = "test/module"
 version = "0.1.0"

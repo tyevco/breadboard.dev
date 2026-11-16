@@ -1,0 +1,45 @@
+# The view "step_emf" with its window moved to [1 ms, 3 ms]: each phase's Pin_2/Pin_4 at ground and
+# Pin_1/Pin_3 into 1 MOhm, so V(out) is the phase's EMF times 1 MOhm / (1 MOhm + 20 Ohm) (the
+# inductance's time constant into 1 MOhm is 4.3 ns). EMF amplitude ke x pps / 1000 = 0.61102 V,
+# w = 2 pi pps / 4 = 700.575 rad/s, phase A -E sin(w (t - t0) - pi/2), phase B +E cos(...).
+schema = "bb-pkgtest/0"
+view = "step_emf"
+circuit = "step_emf.cir"
+stop = "4ms"
+params = { t0 = "1ms", tstop = "3ms" }
+
+[ports]
+Pin_1 = "outa"
+Pin_2 = "0"
+Pin_3 = "outb"
+Pin_4 = "0"
+
+[[expect]]
+meas = { node = "outa", at = "0.5ms" }
+value = "0V"
+tol = "1uV"
+source = "before t0 the EMF is 0"
+
+[[expect]]
+meas = { node = "outa", at = "1.5ms" }
+value = "0.573904V"
+tol = "0.1mV"
+source = "analytic: 0.61102 x -sin(700.575 x 0.5 ms - pi/2) x 1e6 / (1e6 + 20)"
+
+[[expect]]
+meas = { node = "outb", at = "1.5ms" }
+value = "0.209678V"
+tol = "0.1mV"
+source = "analytic: 0.61102 x cos(700.575 x 0.5 ms - pi/2) x 1e6 / (1e6 + 20)"
+
+[[expect]]
+meas = { node = "outb", at = "2ms" }
+value = "0.393891V"
+tol = "0.1mV"
+source = "analytic: 0.61102 x cos(700.575 x 1 ms - pi/2) x 1e6 / (1e6 + 20)"
+
+[[expect]]
+meas = { node = "outa", at = "3.5ms" }
+value = "0V"
+tol = "1uV"
+source = "after tstop the EMF is 0"

@@ -227,6 +227,14 @@ pub enum SchedError {
         promised: Time,
         at: Time,
     },
+    /// An engine's progress watchdog tripped inside a grant (ADR-015 D1):
+    /// `NoProgress:<engine>`, at the engine's time `at`.
+    #[error("NoProgress:{engine} at {at}: {detail}")]
+    EngineNoProgress {
+        engine: String,
+        at: Time,
+        detail: String,
+    },
     #[error("output I/O failed: {0}")]
     Io(#[from] io::Error),
     #[error("scheduler halted after an earlier error")]
@@ -1418,13 +1426,19 @@ fn positions(order: &[usize]) -> Vec<usize> {
 }
 
 /// An engine error during `phase`; a broken quiet promise the engine
-/// reported (ADR-003 D5.4) becomes [`SchedError::PromiseBroken`].
+/// reported (ADR-003 D5.4) becomes [`SchedError::PromiseBroken`], a tripped
+/// progress watchdog (ADR-015 D1) [`SchedError::EngineNoProgress`].
 fn engine_error(engine: &str, phase: Phase, source: EngineError) -> SchedError {
     match source {
         EngineError::PromiseBroken { promised, at } => SchedError::PromiseBroken {
             engine: engine.to_string(),
             promised,
             at,
+        },
+        EngineError::NoProgress { at, detail } => SchedError::EngineNoProgress {
+            engine: engine.to_string(),
+            at,
+            detail,
         },
         source => SchedError::Engine {
             engine: engine.to_string(),

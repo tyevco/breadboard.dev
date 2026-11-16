@@ -398,3 +398,178 @@ recommended answers (plan section 10). For this ADR:
 **Not adopted:** compiling one assembly per platform at run time (one
 critique's alternative for D6). It costs a cold compile per platform,
 about 2 s each, for a residual that is now stated and narrowed.
+
+## Amendment 1: H1 as built (D1-D4, 2026-11-15)
+
+Milestone H1 implements D1-D4 and applies their `spec/` changes
+(`spec/time-grant.md` "What engines MUST NOT do", `spec/package.md`
+sections 8 and 11, `spec/project.md` section 6). What was built, what was
+measured, and where the build differs from the text above.
+
+### D1: the watchdog
+
+- **Where:** `NgspiceEngine` (`engines/analog-ngspice`), at every accepted
+  point (`GetSyncData`, `loc == 0`). `NgspiceConfig::watchdog` holds the
+  limits, with ADR's defaults (200 000 points per cell, 10 000 points
+  without progress). A point's cell is `ceil(point / L)`, so a point on
+  `kL` belongs to `((k-1)L, kL]`. Without a lattice only the
+  no-progress rule applies. `bb run --ngspice-watchdog <per cell>,<without
+  progress>` sets the limits, and `run.json` records them
+  (`options.ngspice_watchdog`).
+- **The error:** `EngineError::NoProgress { at, detail }`, which the
+  scheduler reports as `SchedError::EngineNoProgress`
+  (`NoProgress:<engine> at <time>: <detail>`). On a trip the solver thread
+  stays parked inside the callback until the engine is dropped, so it takes
+  no more points and no more memory. The outputs of every completed grant
+  stay written.
+- **The `Reference value` line is computed, not read** (a deviation from
+  "the message names ... the `Reference value` line"). ngspice prints that
+  line from `OUTpData` on a CPU-clock timer (every 0.25 s of `clock()`), so
+  whether and with what value it appears in the log depends on wall time.
+  The message gives the same text, `Reference value : 7.74300e-02`, from
+  the solver time, in C's `%.5e` format.
+- **G1, measured** (`make ngspice-stall`, `scripts/ngspice_stall.sh`): the
+  repro is `e3/board.cir` with `U10.P0.02` on the loading `saadc_se` view
+  (its `load=none` removed) and `homing_step.elf`, 100 ms. (ADR-008
+  Amendment 11 Finding 2 is a run that reads once and then stays quiet;
+  `homing.elf` keeps the PWM running through 100 ms and does not stall
+  there.) It trips the **cell rule**: 200 001 accepted points in
+  (77.43 ms, 77.44 ms], with the solver at 77.4300000592 ms. So the stall
+  is not a fixed point but a crawl of about 0.3 fs per accepted point. The
+  time rounded to fs keeps advancing, and the no-progress rule never
+  trips. `at` is therefore `77430000059213fs`, 59 ns past the lattice
+  point, whose reference value is 7.74300e-02 to ngspice's five digits.
+  The plan's "at 77.43 ms" holds to that precision.
+- **G1's bounds, measured** on a shared host (other tracks' gates running):
+  - bb's peak RSS was 35.8 MB in every run, against the 500 MB bound and
+    2.3 GB after 10 minutes before H1;
+  - the wall time was 77.9 s, 120.6 s and 85.7 s in three gate runs, at
+    1-minute loads of about 12, about 19 (24 over 5 minutes) and 4 to 13.
+    The 120.6 s run missed the 2-minute bound;
+  - the time is about 8 s to reach 77.43 ms, then the 200 000 points, at
+    2 000-3 000 points per second.
+
+  So G1's wall-time bound holds on an otherwise idle host and not under
+  heavy load. `make ngspice-stall` takes the measurement lock, which keeps
+  other measurements off the host but not other gates.
+
+  The rest of the gate passed in every run:
+  - the outputs written before the error equal a `--for 77430us` run
+    (`nets.csv`, `nets.vcd` and the non-grant records byte for byte; the
+    stalled run adds the failed grant's own record);
+  - at `--ngspice-watchdog 20000,10000` two runs fail with the same message
+    in the same cell;
+  - the negative control passes: the committed board (`load=none`) runs the
+    same 100 ms clean.
+- **Not caught:** a loop of rejected steps that never accepts a point.
+  ngspice itself ends that with "timestep too small" once the step falls
+  below `delmin`.
+
+### D2: the engine's `.save`
+
+- **The list:** every watched node (the analog outputs and probes, every
+  thresholded `digital_in` node and every `adc_in` node, which for a
+  loading `adc_in` is the view's hold node: exactly what `read_vectors`
+  and the early-stop watch copy), plus every input glue node, as D2 lists
+  them. `time` is saved by ngspice as the scale. The list goes on `.save`
+  cards of eight vectors each, before `.tran`. A netlist with its own
+  `.save` is refused; no committed deck had one. ADR-010's assertion
+  monitors are not built yet; they will reach the list as watched nodes.
+- **"The elaborated deck shows the line" (a deviation).** The `.save`
+  cards are engine-owned lines, like the glue and `.tran`. A project's
+  `deck.cir` stays the board body that `run.json`'s `deck_sha256` hashes,
+  and it shows none of them. `NgspiceEngine::deck()` returns the full deck
+  that ngspice gets, and a test reads the `.save` card from it.
+- **The tests:** the `.save` card names exactly the read vectors. The
+  negative control: without the watched node in the list, the run fails
+  and reads nothing else. A deck with `.save` is refused.
+- **G2, measured.** E3 `typ` over the full 2.7 s at bb's defaults had a
+  peak RSS of 336 356 kB. That is bb's own `VmHWM`, which `bb run` now
+  prints as `bb run: peak RSS`. Without `.save` the peak was 1.5 GB. The
+  outputs are identical from run to run, but the RSS is not: the
+  `make dms-home` gate's own `typ` run peaked at 316 608 kB, 6 % lower. The
+  outputs equal `tests/golden/dms-home/typ` byte for byte. The gate is
+  therefore **403 627 kB** (+20 %), checked by `make dms-home` on its `typ`
+  run and by `make dms-home-rss` alone. `bb pkg test --report` on every
+  first-party and example package is byte-identical before and after H1.
+  So is every committed hash: `make test`, `make dms-home` and
+  `make dms-vsense`.
+
+### D3: lint
+
+- **The tables** are taken from the installed ngspice 42 sources
+  (`~/src/ngspice-42`). The B-expression parser's table is
+  `src/spicelib/parser/inpptree.c`, `funcs[]` and `PT_mkfnode`. It also
+  has `ternary_fcn`, with three arguments, and the `pwl` family, with an
+  input and `x, y` pairs (`prepare_PTF_PWL`). Every other function takes
+  one argument, except `pow`, `pwr`, `min` and `max`, which take two.
+- **numparam is checked too.** Inside `{...}` numparam evaluates
+  (`src/frontend/numparam/xpressn.c`, `fmathS`). It never crashes, but it
+  is silently wrong: `min(a, b, c)` gives `min(a, c)`. So brace
+  expressions are checked against numparam's table.
+- **Where it runs:** `bbpkg::bexpr`, in `bb pkg lint` (each view file),
+  `bb pkg test` (each vector's deck) and `bb run` (the whole deck, before
+  ngspice reads it). It checks B `V=`/`I=`, E/G `value=`/`vol=`/`cur=` and
+  `.func` bodies, and a call of a `.func` must match its parameter count.
+  The three-argument `min()` was confirmed to segfault the ngspice 42 CLI
+  (exit 139).
+- **G3:** a three-argument `min`, an unknown function (`atan2`) and a
+  wrong arity are each refused (`bbpkg/tests/lint.rs`). Every committed
+  `.lib` and `.cir` under `packages/` and `examples/` passes (a test).
+- **Residual:** `.param` values and brace values of other elements are not
+  checked. They are numparam's, which never crashes.
+
+### D4: the operating point
+
+- **`bb_analog_ngspice::operating_point(cfg)`** builds the engine's deck
+  with `.op` and runs it synchronously, then reports
+  `EngineError::OperatingPoint { nodes, detail }`. The nodes are the ones
+  ngspice names: `trouble with node`, `check node(s)`, and the `*` rows of
+  "Last Node Voltages".
+- **Found while building: ngspice 42's transient-op fallback.** ngspice 42
+  makes `optran` its standard (`src/frontend/init.c`: `1 1 1 100n 10u 0`).
+  After gmin and source stepping fail, it runs a 10 µs transient of its
+  own. That transient is where a large deck spends its time before giving
+  up.
+  - In an `.op` analysis of the shared library, `optran` fails on a missing
+    `op1.time` vector, and the synchronous command never returns (a hung
+    test).
+  - So the check deselects `optran` for its own circuit
+    (`optran 1 1 1 0 10u 0`: a step size of 0) and restores the built-in
+    default before removing the circuit. A test shows that the transient's
+    own failure text is unchanged after a check.
+  - This is "the option set's iteration limits": Newton (`ITL1`), gmin
+    stepping and source stepping under the option set's card, and nothing
+    after them.
+- **Found too: `optran` calls `GetSyncData`.** `optran`'s transient calls
+  it with its own time while the transient's vectors are still empty.
+  - Before H1 the engine parked at that callback and failed with
+    `vector tran1.time is not real`. A deck whose operating point converges
+    only through `optran` could not start in bb, and a failing one was
+    misreported.
+  - The engine now lets those callbacks pass: only before the first park,
+    and only while the time vector is empty. A converged operating point
+    never gets there, so no committed result changes.
+  - A failure at t = 0 is now `EngineError::OperatingPoint`.
+- **`bb run`** names the views on those nodes. A subcircuit-internal node
+  names its instance's `.subckt`, and a top-level node every instance on
+  it, each with its package and view.
+- **`bb pkg test`** runs the check before every vector's transient, under
+  every pair the vector runs (its own and every recorded qualification).
+  ADR-009's named corners do not exist before milestone S. The check adds
+  no measurable time. `bb pkg test` on the three package roots took a
+  median 31.4 s with H1 against 34.0 s before it (N = 5, interleaved,
+  under the measurement lock, at load 23-60).
+- **The 31 s give-up** of the `pi` research pass was not retained as a
+  deck. The check's flat-region test deck (a B regulator with no
+  conductance above regulation) fails in milliseconds, naming `out`.
+
+### Budget
+
+`make test`'s addition is the new unit and lint tests, well under 1 s, and
+the operating-point checks inside `packages`, which are not measurable.
+That is within H1's +30 s. The new gates `make ngspice-stall` (about
+3.5 minutes) and `make dms-home-rss` (about 8.5 minutes beside other
+gates) are outside `make test`. Their tier is nightly (D11; H6 builds it).
+`make dms-home` (62 minutes beside other gates) and the full
+`make dms-vsense` pass with every committed hash unchanged.
