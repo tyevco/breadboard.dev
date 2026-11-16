@@ -1,0 +1,21 @@
+# BQ25180 input current limit, 100 mA code at its minimum (80 mA, the W1 case of the plan): 20 Ohm draws
+# it at 1.6 V.
+schema = "bb-pkgtest/0"
+view = "pp"
+circuit = "ilim100_min.cir"
+stop = "1ms"
+
+[params]
+ilim = "0.08"
+
+[ports]
+IN = "in"
+SYS = "sys"
+BAT = "bat"
+GND = "0"
+
+[[expect]]
+meas = { node = "sys", at = "1ms" }
+value = "1.6V"
+tol = "1mV"
+source = "SLUSE99C section 7.5: ILIM 100 mA code 80 mA min (VIN 5 V)"

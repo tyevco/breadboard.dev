@@ -46,6 +46,31 @@ fn project(name: &str, extra: &str) -> (Tmp, PathBuf) {
     (Tmp(d.clone()), d)
 }
 
+/// The fixture resolves against its own `packages` only: an empty
+/// first-party directory, so the synthetic RT9080-33GJ5 and BQ25180YBGR
+/// (pins that are not the real parts') stay unresolved whatever the
+/// first-party packages list (Phase 2 P1 added richtek/rt9080 and
+/// ti/bq25180).
+fn empty_first_party() -> PathBuf {
+    let d = std::env::temp_dir().join(format!(
+        "bb-kicad-import-no-first-party-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// The two-board fixture's own runs (the four tests that use its synthetic
+/// U1s): no first-party packages.
+fn run_fixture(args: &[&str], dir: &Path) -> Output {
+    Command::new(bb())
+        .args(args)
+        .current_dir(dir)
+        .env("BB_FIRST_PARTY_PACKAGES", empty_first_party())
+        .output()
+        .unwrap()
+}
+
 fn run(args: &[&str], dir: &Path) -> Output {
     Command::new(bb())
         .args(args)
@@ -94,7 +119,7 @@ fn a_bare_shared_ref_is_ambiguous_everywhere() {
         "inst",
         "\n[instances.\"U1\"]\npackage = \"none\"\nreason = \"x\"\n",
     );
-    let o = run(&["open", "."], &d);
+    let o = run_fixture(&["open", "."], &d);
     let t = text(&o);
     assert!(!o.status.success(), "{t}");
     assert!(
@@ -108,14 +133,14 @@ fn a_bare_shared_ref_is_ambiguous_everywhere() {
         "bind",
         "\n[[bind]]\npin = \"U1.EN\"\nmodel = \"digital_out\"\n",
     );
-    let o = run(&["open", "."], &d);
+    let o = run_fixture(&["open", "."], &d);
     let t = text(&o);
     assert!(!o.status.success(), "{t}");
     assert!(t.contains("a:U1 (RT9080-33GJ5), b:U1 (BQ25180YBGR)"), "{t}");
     // --probe on bb run: refused before anything starts.
     let (_t, d) = project("probe", "");
-    assert!(run(&["open", "."], &d).status.success());
-    let o = run(
+    assert!(run_fixture(&["open", "."], &d).status.success());
+    let o = run_fixture(
         &[
             "run",
             "--for",
@@ -138,7 +163,7 @@ fn a_bare_shared_ref_is_ambiguous_everywhere() {
         "bb run wrote outputs before refusing"
     );
     // A test point alias is qualified too: a bare TP1 is ambiguous.
-    let o = run(&["probe", "net:TP1"], &d);
+    let o = run_fixture(&["probe", "net:TP1"], &d);
     assert!(
         !o.status.success() && text(&o).contains("a:TP1, b:TP1"),
         "{}",
@@ -152,7 +177,7 @@ fn qualified_names_resolve() {
         "ok",
         "\n[instances.\"a:U1\"]\npackage = \"none\"\nreason = \"regulator: no model needed here\"\n",
     );
-    let o = run(&["open", "."], &d);
+    let o = run_fixture(&["open", "."], &d);
     assert!(o.status.success(), "{}", text(&o));
     let bbm = std::fs::read_to_string(d.join("board.bbm")).unwrap();
     // Nets and probe aliases are qualified in a system; SPICE names carry
@@ -179,7 +204,7 @@ fn qualified_names_resolve() {
         ("a:TP1", "a:VSYS"),
         ("VBUS", "b:VBUS"),
     ] {
-        let o = run(&["probe", &format!("net:{n}")], &d);
+        let o = run_fixture(&["probe", &format!("net:{n}")], &d);
         assert!(o.status.success(), "{n}: {}", text(&o));
         assert!(
             text(&o).contains(&format!(
@@ -201,21 +226,21 @@ fn qualified_names_resolve() {
         .iter()
         .map(|f| std::fs::read(d.join(f)).unwrap())
         .collect();
-    assert!(run(&["open", "."], &d).status.success());
+    assert!(run_fixture(&["open", "."], &d).status.success());
     for (f, b) in ["board.bbm", ".bb/resolution.json", ".bb/unresolved.toml"]
         .iter()
         .zip(before)
     {
         assert_eq!(std::fs::read(d.join(f)).unwrap(), b, "{f}");
     }
-    assert!(run(&["open", ".", "--check"], &d).status.success());
+    assert!(run_fixture(&["open", ".", "--check"], &d).status.success());
 }
 
 #[test]
 fn an_ordering_code_is_never_stripped() {
     // M4f: the package lists only RT9080; RT9080-33GJ5 must not bind to it.
     let (_t, d) = project("mpn", "");
-    let o = run(&["open", "."], &d);
+    let o = run_fixture(&["open", "."], &d);
     assert!(o.status.success(), "{}", text(&o));
     let r = std::fs::read_to_string(d.join(".bb/resolution.json")).unwrap();
     assert!(
@@ -234,7 +259,7 @@ fn an_ordering_code_is_never_stripped() {
         "mpn = [\"RT9080\"]\nmpn_patterns = [\"RT9080-33GJ[5]\"]",
     );
     std::fs::write(&p, s).unwrap();
-    let o = run(&["open", "."], &d);
+    let o = run_fixture(&["open", "."], &d);
     assert!(o.status.success(), "{}", text(&o));
     let bbm = std::fs::read_to_string(d.join("board.bbm")).unwrap();
     assert!(
@@ -249,7 +274,7 @@ fn a_minimal_bb_toml_is_written_for_a_net() {
     let sub = d.join("solo");
     std::fs::create_dir_all(&sub).unwrap();
     std::fs::copy(d.join("b.net"), sub.join("b.net")).unwrap();
-    let o = run(&["open", "b.net"], &sub);
+    let o = run_fixture(&["open", "b.net"], &sub);
     assert!(o.status.success(), "{}", text(&o));
     let t = std::fs::read_to_string(sub.join("bb.toml")).unwrap();
     assert!(

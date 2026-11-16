@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/bench.schema.json",
   "title": "bb-bench/0 and bb-bench/1: a bench (spec/project.md section 3; ADR-007 D5, ADR-010 D1-D3)",
-  "description": "The JSON form of a bench file (TOML converted to JSON as is). bb-bench/1 keeps every bb-bench/0 key and its meaning (ADR-010 D1) and adds seed, [[action]], [[playback]], [[fault]] and a [[load]] profile (milestone B1). The other bb-bench/1 keys of ADR-010 D2 (fidelity, corner, [[battery]], [[activity]], [[env]], [probes], a [[load]] replace) are described loosely here and refused by bb until their milestone implements them. A bb-bench/0 file has none of the bb-bench/1 keys.",
+  "description": "The JSON form of a bench file (TOML converted to JSON as is). bb-bench/1 keeps every bb-bench/0 key and its meaning (ADR-010 D1) and adds seed, [[action]], [[playback]], [[fault]] and a [[load]] profile (milestone B1), and fidelity, corner, [corners] and [[battery]] (milestone P1; ADR-009 D1, D8, Amendment 4). The other bb-bench/1 keys of ADR-010 D2 ([[activity]], [[env]], [probes], a [[load]] replace) are described loosely here and refused by bb until their milestone implements them. A bb-bench/0 file has none of the bb-bench/1 keys.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema"],
@@ -185,9 +185,30 @@
         }
       }
     },
-    "fidelity": { "type": "string", "description": "bb-bench/1, ADR-009 D1 (milestone P1; refused until then)" },
-    "corner": { "type": "string", "description": "bb-bench/1, ADR-009 D8 (milestone P1; refused until then)" },
-    "battery": { "type": "array", "items": { "type": "object" }, "description": "bb-bench/1, ADR-010 D2 (milestones P1, R2; refused until then)" },
+    "fidelity": { "enum": ["fast", "pi"], "description": "bb-bench/1, ADR-009 D1 (milestone P1): the run's rung; bb run --fidelity wins. si and em are Phase 3's" },
+    "corner": { "$ref": "#/$defs/corner", "description": "bb-bench/1, ADR-009 D8 (milestone P1): every instance whose view declares this corner runs at it" },
+    "corners": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/corner" },
+      "description": "bb-bench/1, ADR-009 D8 (milestone P1; ADR-009 Amendment 4): per-instance corners, \"<board>:<ref>\" (or <ref>) = corner, over corner; the instance's view must declare it"
+    },
+    "battery": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["net", "ocv", "soc", "r0"],
+        "properties": {
+          "net": { "type": "string" },
+          "ocv": { "type": "string", "description": "a CSV soc,volts (soc in 0..1, increasing), relative to the bench" },
+          "soc": { "type": "string", "description": "the state of charge, 0..1, for the whole run" },
+          "r0": { "type": "string", "description": "the series resistance (> 0)" },
+          "rc": { "type": "array", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 }, "description": "RC pairs [R, C], in series after R0" },
+          "temp_c": { "type": "string", "description": "informative: the temperature the OCV table is for" }
+        }
+      },
+      "description": "bb-bench/1, ADR-010 D2 (milestone P1; ADR-009 Amendment 4): a cell as the Norton current OCV(soc)/R0 behind R0, then the RC pairs"
+    },
     "activity": { "type": "array", "items": { "type": "object" }, "description": "bb-bench/1, ADR-009 D4 (milestone P3; refused until then)" },
     "env": { "type": "array", "items": { "type": "object" }, "description": "bb-bench/1, ADR-010 D2 (a later milestone; refused until then)" },
     "probes": { "type": "object", "description": "bb-bench/1, ADR-010 D2 per-probe rates (a later milestone; refused until then)" }
@@ -197,13 +218,14 @@
     "not": {
       "anyOf": [
         { "required": ["seed"] }, { "required": ["action"] }, { "required": ["playback"] }, { "required": ["fault"] },
-        { "required": ["fidelity"] }, { "required": ["corner"] }, { "required": ["battery"] }, { "required": ["activity"] },
+        { "required": ["fidelity"] }, { "required": ["corner"] }, { "required": ["corners"] }, { "required": ["battery"] }, { "required": ["activity"] },
         { "required": ["env"] }, { "required": ["probes"] }, { "required": ["assert"] },
         { "required": ["load"], "properties": { "load": { "contains": { "anyOf": [{ "not": { "required": ["amps"] } }, { "required": ["replace"] }] } } } }
       ]
     }
   },
   "$defs": {
+    "corner": { "type": "string", "pattern": "^(typ|min|max|suite_compat|worst_[a-z0-9_]+)$" },
     "interp": { "enum": ["linear", "hold"] },
     "edge_of": {
       "type": "object",

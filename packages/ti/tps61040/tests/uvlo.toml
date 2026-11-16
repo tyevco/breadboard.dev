@@ -1,0 +1,20 @@
+# TPS61040 undervoltage lockout (SLVS413L 5.5: VUVLO 1.5 V typ): at VIN 1.4 V the converter does not
+# switch, so no current flows through the sense resistor (the IC's own quiescent current is drawn at VIN,
+# not through the inductor).
+schema = "bb-pkgtest/0"
+view = "boost"
+circuit = "boost_uvlo.cir"
+stop = "1ms"
+
+[ports]
+VIN = "vin"
+SW = "sw"
+FB = "0"
+EN = "vin"
+GND = "0"
+
+[[expect]]
+meas = { node = "vl", at = "1ms" }
+value = "1.4V"
+tol = "0.01mV"
+source = "SLVS413L 5.5: VUVLO 1.5 V typ (undervoltage lockout threshold)"

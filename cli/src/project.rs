@@ -790,6 +790,118 @@ pub struct Bench {
     pub warnings: Vec<String>,
     /// `bb-bench/1` `[[assert]]` (ADR-010 D5): the nets as written.
     pub asserts: Vec<bbcore::assert::Spec>,
+    /// `bb-bench/1` (ADR-009 D1, milestone P1): the bench's rung; the
+    /// command line's `--fidelity` wins.
+    pub fidelity: Option<String>,
+    /// `bb-bench/1` (ADR-009 D8, milestone P1): the corner every instance
+    /// whose view declares it runs at.
+    pub corner: Option<String>,
+    /// `[corners]`: per-instance corners (`"main:U1" = "worst"`), over
+    /// `corner`.
+    pub corners: BTreeMap<String, String>,
+    /// `[[battery]]` (ADR-010 D2, milestone P1).
+    pub batteries: Vec<Battery>,
+}
+
+/// A `[[battery]]` (ADR-010 D2, ADR-009; milestone P1): an open-circuit
+/// voltage at the bench's state of charge behind R0 and RC pairs, written
+/// as one B conductance (the Norton form of the OCV behind R0), R and C
+/// elements: no branch-current unknown (ADR-009 D2). The state of charge is
+/// the bench's for the whole run (ADR-010 D2 gives the cell no capacity).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Battery {
+    pub path: String,
+    pub net: String,
+    /// The OCV table's file (`soc,volts`), relative to the bench.
+    pub ocv: String,
+    /// The state of charge, ppm (0..=1 000 000).
+    pub soc_ppm: i128,
+    /// µΩ (> 0).
+    pub r0_uohm: i128,
+    /// `rc = [["R", "C"], ...]`: µΩ and aF, each pair in series.
+    pub rc: Vec<(i128, i128)>,
+    /// m°C, informative (recorded; the OCV table is the cell's at it).
+    pub temp_mc: Option<i128>,
+}
+
+/// A bench's corner name (ADR-009 D8): the names a view may declare.
+fn corner_name(n: &str) -> Result<(), String> {
+    if bbpkg::package::corner_name_ok(n) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{n:?}: a corner is typ, min, max, suite_compat or worst_<x> (ADR-009 D8)"
+        ))
+    }
+}
+
+/// An OCV table (`soc,volts`, ADR-010 D2): `(soc ppm, µV)` rows, `soc`
+/// strictly increasing in 0..1, at least two rows.
+pub fn ocv_table(text: &str, what: &str) -> Result<Vec<(i128, i128)>, String> {
+    let mut rows = Vec::new();
+    let mut header = false;
+    for (i, raw) in text.lines().enumerate() {
+        let l = raw.trim();
+        if l.is_empty() || l.starts_with('#') {
+            continue;
+        }
+        if !header {
+            if l.replace(' ', "") != "soc,volts" {
+                return Err(format!(
+                    "{what}: line {}: expected the header soc,volts",
+                    i + 1
+                ));
+            }
+            header = true;
+            continue;
+        }
+        let (s, v) = l
+            .split_once(',')
+            .ok_or_else(|| format!("{what}: line {}: expected <soc>,<volts>", i + 1))?;
+        let soc = bbpkg::value::parse_number(s.trim())
+            .map_err(|e| format!("{what}: line {}: soc: {e}", i + 1))?
+            .to_int(6)
+            .ok_or_else(|| format!("{what}: line {}: soc finer than 1 ppm", i + 1))?;
+        let v = v.trim();
+        let uv = match bbpkg::value::parse_quantity(v, bbpkg::value::Dim::Voltage) {
+            Ok(x) => x,
+            Err(_) => bbpkg::value::parse_number(v)
+                .map_err(|e| format!("{what}: line {}: volts: {e}", i + 1))?
+                .to_int(6)
+                .ok_or_else(|| format!("{what}: line {}: volts finer than 1 uV", i + 1))?,
+        };
+        if !(0..=1_000_000).contains(&soc) {
+            return Err(format!("{what}: line {}: soc must be in 0..1", i + 1));
+        }
+        if rows.last().is_some_and(|(p, _): &(i128, i128)| soc <= *p) {
+            return Err(format!("{what}: line {}: soc must increase", i + 1));
+        }
+        rows.push((soc, uv));
+    }
+    if rows.len() < 2 {
+        return Err(format!("{what}: an OCV table needs at least two rows"));
+    }
+    Ok(rows)
+}
+
+/// The OCV at `soc` (ppm), µV: linear between the table's rows, rounded half
+/// away from zero; outside the table, its end values.
+pub fn ocv_at(rows: &[(i128, i128)], soc: i128) -> i128 {
+    if soc <= rows[0].0 {
+        return rows[0].1;
+    }
+    for w in rows.windows(2) {
+        let ((s0, v0), (s1, v1)) = (w[0], w[1]);
+        if soc <= s1 {
+            let num = (v1 - v0) * (soc - s0);
+            let den = s1 - s0;
+            let q = num / den;
+            let r = num % den;
+            let adj = if 2 * r.abs() >= den { num.signum() } else { 0 };
+            return v0 + q + adj;
+        }
+    }
+    rows[rows.len() - 1].1
 }
 
 fn q(text: &str, dim: bbpkg::value::Dim, at: &str) -> Result<i128, String> {
@@ -799,12 +911,6 @@ fn q(text: &str, dim: bbpkg::value::Dim, at: &str) -> Result<i128, String> {
 /// The `bb-bench/1` keys of ADR-010 D2 that another milestone implements:
 /// refused, never ignored (a bench that names one would not run as written).
 const LATER_TOP: &[(&str, &str)] = &[
-    ("fidelity", "the fidelity dial (ADR-009 D1, milestone P1)"),
-    ("corner", "corners (ADR-009 D8, milestone P1)"),
-    (
-        "battery",
-        "the battery element (ADR-009, milestones P1 and R2)",
-    ),
     (
         "activity",
         "bench-scheduled internal states (ADR-009 D4, milestone P3)",
@@ -830,6 +936,7 @@ impl Bench {
                     .iter()
                     .filter_map(|l| l.profile.as_ref().map(|p| p.0.clone())),
             )
+            .chain(b.batteries.iter().map(|x| x.ocv.clone()))
             .collect();
         for f in files {
             if b.data.contains_key(&f) {
@@ -891,6 +998,89 @@ impl Bench {
                     Value::Integer(n) if *n >= 0 => *n as u64,
                     _ => return Err("seed: expected a non-negative integer".into()),
                 };
+            }
+            // ADR-009 D1 and D8 (milestone P1): the rung and the corners.
+            if let Some(f) = o.str_opt("fidelity")? {
+                match f.as_str() {
+                    "fast" | "pi" => {}
+                    "si" | "em" => {
+                        return Err(format!(
+                            "fidelity = {f:?}: the {f} rung is not implemented (Phase 3)"
+                        ))
+                    }
+                    _ => return Err(format!("fidelity = {f:?}: expected fast or pi")),
+                }
+                b.fidelity = Some(f);
+            }
+            b.corner = o.str_opt("corner")?;
+            if let Some(c) = &b.corner {
+                corner_name(c).map_err(|e| format!("corner: {e}"))?;
+            }
+            for (k, v) in o.str_map("corners")? {
+                corner_name(&v).map_err(|e| format!("corners.{k:?}: {e}"))?;
+                b.corners.insert(k, v);
+            }
+            for mut t in o.tables("battery")? {
+                let at = t.path.clone();
+                let net = t.str_req("net")?;
+                let ocv = t.str_req("ocv")?;
+                let soc_ppm = bbpkg::value::parse_number(&t.str_req("soc")?)
+                    .map_err(|e| format!("{at}.soc: {e}"))?
+                    .to_int(6)
+                    .ok_or_else(|| format!("{at}.soc: finer than 1 ppm"))?;
+                if !(0..=1_000_000).contains(&soc_ppm) {
+                    return Err(format!("{at}.soc: must be in 0..1"));
+                }
+                let r0_uohm = q(&t.str_req("r0")?, Dim::Resistance, &format!("{at}.r0"))?;
+                if r0_uohm <= 0 {
+                    return Err(format!(
+                        "{at}.r0: must be > 0 (the cell is the Norton form of its OCV behind R0)"
+                    ));
+                }
+                let mut rc = Vec::new();
+                match t.get("rc") {
+                    None => {}
+                    Some(Value::Array(a)) => {
+                        for (i, pr) in a.iter().enumerate() {
+                            match pr.as_array().map(Vec::as_slice) {
+                                Some([Value::String(r), Value::String(c)]) => {
+                                    let w = format!("{at}.rc[{i}]");
+                                    let r = q(r, Dim::Resistance, &w)?;
+                                    let c = q(c, Dim::Capacitance, &w)?;
+                                    if r <= 0 || c <= 0 {
+                                        return Err(format!("{w}: R and C must be > 0"));
+                                    }
+                                    rc.push((r, c));
+                                }
+                                _ => {
+                                    return Err(format!(
+                                        "{at}.rc[{i}]: expected [\"<R>\", \"<C>\"]"
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                    Some(_) => return Err(format!("{at}.rc: expected [[\"<R>\", \"<C>\"], ...]")),
+                }
+                let temp_mc = match t.str_opt("temp_c")? {
+                    Some(tc) => Some(
+                        bbpkg::value::parse_number(&tc)
+                            .map_err(|e| format!("{at}.temp_c: {e}"))?
+                            .to_int(3)
+                            .ok_or_else(|| format!("{at}.temp_c: finer than 1 m°C"))?,
+                    ),
+                    None => None,
+                };
+                t.done()?;
+                b.batteries.push(Battery {
+                    path: at,
+                    net,
+                    ocv,
+                    soc_ppm,
+                    r0_uohm,
+                    rc,
+                    temp_mc,
+                });
             }
         }
         if let Some(tc) = o.str_opt("temp_c")? {
@@ -1560,5 +1750,61 @@ for = "1ms"
             .collect();
         let w = Bench::parse(&format!("{V1}[[pwl]]\nnet = \"X\"\npoints = [{mid}]\n")).unwrap();
         assert!(w.warnings[0].contains("short tables"), "{:?}", w.warnings);
+    }
+
+    #[test]
+    fn parses_bench_p1_keys() {
+        // ADR-009 D1, D8 and ADR-010 D2 (milestone P1): fidelity, corner,
+        // [corners] and [[battery]].
+        let top = |keys: &str| V1.replacen("seed = 3\n", &format!("seed = 3\n{keys}"), 1);
+        let b = Bench::parse(&format!(
+            "{}[corners]\n\"main:U1\" = \"worst_dropout\"\n\
+             [[battery]]\nnet = \"VBAT\"\nocv = \"cell.csv\"\nsoc = \"0.5\"\nr0 = \"250m\"\n\
+             rc = [[\"50m\", \"2\"]]\ntemp_c = \"-10\"\n",
+            top("fidelity = \"pi\"\ncorner = \"typ\"\n")
+        ))
+        .unwrap();
+        assert_eq!(b.fidelity.as_deref(), Some("pi"));
+        assert_eq!(b.corner.as_deref(), Some("typ"));
+        assert_eq!(b.corners["main:U1"], "worst_dropout");
+        let bt = &b.batteries[0];
+        assert_eq!((bt.soc_ppm, bt.r0_uohm), (500_000, 250_000));
+        assert_eq!(bt.rc, vec![(50_000, 2_000_000_000_000_000_000)]);
+        assert_eq!(bt.temp_mc, Some(-10_000));
+        // Refusals: si/em are Phase 3's, unknown corners and an R0 of 0.
+        let err = |s: String| Bench::parse(&s).unwrap_err();
+        assert!(err(top("fidelity = \"si\"\n")).contains("Phase 3"));
+        assert!(err(top("fidelity = \"slow\"\n")).contains("fast or pi"));
+        assert!(err(top("corner = \"worst\"\n")).contains("worst_<x>"));
+        assert!(err(format!(
+            "{V1}[[battery]]\nnet = \"VBAT\"\nocv = \"c.csv\"\nsoc = \"0.5\"\nr0 = \"0\"\n"
+        ))
+        .contains("r0: must be > 0"));
+        assert!(err(format!(
+            "{V1}[[battery]]\nnet = \"VBAT\"\nocv = \"c.csv\"\nsoc = \"1.5\"\nr0 = \"1\"\n"
+        ))
+        .contains("soc: must be in 0..1"));
+        // The /0 schema has none of them.
+        assert!(
+            err(BENCH0.replacen("\n[[supply]]", "\nfidelity = \"pi\"\n[[supply]]", 1))
+                .contains("fidelity: unknown key")
+        );
+        // The OCV table: linear between rows, ends held, rounded half away.
+        let t = ocv_table("# cell\nsoc,volts\n0,3.0V\n0.5,3.7\n1,4.2V\n", "t").unwrap();
+        assert_eq!(
+            t,
+            vec![(0, 3_000_000), (500_000, 3_700_000), (1_000_000, 4_200_000)]
+        );
+        assert_eq!(ocv_at(&t, 250_000), 3_350_000);
+        assert_eq!(ocv_at(&t, 750_000), 3_950_000);
+        assert_eq!(ocv_at(&t, 1_000_000), 4_200_000);
+        assert_eq!(ocv_at(&[(0, 0), (3, 1)], 1), 0);
+        assert_eq!(ocv_at(&[(0, 0), (3, 2)], 1), 1);
+        assert!(ocv_table("soc,volts\n0.5,3\n0.5,3.1\n", "t")
+            .unwrap_err()
+            .contains("increase"));
+        assert!(ocv_table("t,volts\n0,3\n1,4\n", "t")
+            .unwrap_err()
+            .contains("header"));
     }
 }

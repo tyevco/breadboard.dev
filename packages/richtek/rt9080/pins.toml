@@ -1,0 +1,28 @@
+# richtek/rt9080 pins (TSOT-23-5, the GJ5 package): numbers and names as DS9080-09 section 8 gives them.
+# No pin is bound to a co-simulation engine, so no pin offers a pin model: the part is an analog view only.
+schema = "bb-pins/1"
+
+[[pin]]
+number = "1"
+name = "VIN"
+role = "power_in"
+
+[[pin]]
+number = "2"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "3"
+name = "EN"
+role = "input"
+
+[[pin]]
+number = "4"
+name = "NC"
+role = "nc"
+
+[[pin]]
+number = "5"
+name = "VOUT"
+role = "power_out"

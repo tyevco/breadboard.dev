@@ -1,0 +1,6 @@
+* ilim100_min: ti/bq25180 view pp with the 100 mA code's minimum (80 mA), VIN 5 V, a 0 V cell, SYS
+* into 20 Ohm (which would draw 0.22 A).
+VIN in 0 5
+VBAT bat 0 0
+RL sys 0 20
+CS sys 0 10u

@@ -1,0 +1,18 @@
+# BQ25180 input current limit, 500 mA code (475 mA typ): SYS into 5 Ohm with no battery to supplement
+# settles where 5 Ohm draws the limit, 2.375 V.
+schema = "bb-pkgtest/0"
+view = "pp"
+circuit = "ilim500.cir"
+stop = "1ms"
+
+[ports]
+IN = "in"
+SYS = "sys"
+BAT = "bat"
+GND = "0"
+
+[[expect]]
+meas = { node = "sys", at = "1ms" }
+value = "2.375V"
+tol = "2mV"
+source = "SLUSE99C section 7.5: ILIM 500 mA code 475 mA typ (VIN 5 V)"

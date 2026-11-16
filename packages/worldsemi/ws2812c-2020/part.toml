@@ -10,7 +10,7 @@ schema = "bb-part/1"
 
 [part]
 id = "worldsemi/ws2812c-2020"
-version = "0.1.0"
+version = "0.2.0"
 kind = "discrete"
 manufacturer = "Worldsemi"
 mpn = ["WS2812C-2020-V6"]
@@ -28,8 +28,10 @@ file = "pins.toml"
 [[analog]]
 name = "pixel"
 purpose = "one pixel as a load: VDD quiescent and LED current, the DIN input capacitance and its clamp diodes to VDD and VSS (LED rail sequencing, phantom powering through DIN)"
-fidelity = ["fast"]
-default_for = ["fast"]
+# Phase 2 P1 (ADR-009 D1): valid, and the default, at pi too: re-qualified there (pi runs at the
+# phase0 option set, ADR-009 Amendment 1), and checked against ADR-009 D2's rules by bb pkg lint.
+fidelity = ["fast", "pi"]
+default_for = ["fast", "pi"]
 file = "analog/load_switches__ws2812c.lib"
 subckt = "WORLDSEMI_WS2812C_2020_LSW"
 ports = ["DIN", "VDD", "VSS"]

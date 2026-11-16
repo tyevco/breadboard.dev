@@ -1,0 +1,23 @@
+# RT9080 quiescent current at no load: IQ 2 uA typ, so the 1 kOhm sense resistor drops 2 mV.
+schema = "bb-pkgtest/0"
+view = "ldo"
+circuit = "iq_noload.cir"
+stop = "1ms"
+
+[ports]
+VIN = "vin"
+VOUT = "vout"
+EN = "sup"
+GND = "0"
+
+[[expect]]
+meas = { node = "vin", at = "1ms" }
+value = "4.298V"
+tol = "0.2mV"
+source = "DS9080-09 Electrical Characteristics: IQ 2 uA typ (ILOAD = 0 mA)"
+
+[[expect]]
+meas = { node = "vout", at = "1ms" }
+value = "3.3V"
+tol = "1mV"
+source = "DS9080-09 Electrical Characteristics: VOUT 3.3 V, accuracy +-2 % at 1 mA (the typical part)"

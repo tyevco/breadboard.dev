@@ -1,0 +1,4 @@
+* buvlo: ti/bq25180 view pp in battery-only mode (no input) with a 3.3 V cell, above BUVLO.
+VBAT bat 0 3.3
+RL sys 0 1k
+CS sys 0 1u

@@ -1,0 +1,13 @@
+# cj/b5819w pins (SOD-123): pin 1 the cathode (the marking bar), pin 2 the anode, as KiCad's
+# Diode_SMD:D_SOD-123 numbers them and the dial-me-spinner netlist uses them.
+schema = "bb-pins/1"
+
+[[pin]]
+number = "1"
+name = "K"
+role = "analog"
+
+[[pin]]
+number = "2"
+name = "A"
+role = "analog"

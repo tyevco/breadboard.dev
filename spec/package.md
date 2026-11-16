@@ -481,7 +481,12 @@ ngspice's transient-op fallback (`optran`, which ngspice 42 makes its
 default and which a large deck can spend tens of seconds in before it gives
 up). A failure is reported at once, naming the nodes ngspice names. Every
 pair a vector runs under (its own and every recorded qualification) gets
-this check. The engine's own `.save` (ADR-015 D2) is part of every deck:
+this check. **At every corner** (ADR-009 D2 rule 2, milestone P1): for a
+view with `[[analog.corners]]`, `bb pkg test` also solves each vector's
+operating point with each corner's `params` over the view's and the
+vector's, under every option set the view is run under, and a failure
+fails the view (a view qualified at a pair has its operating point solved
+at every corner too). The engine's own `.save` (ADR-015 D2) is part of every deck:
 a circuit or view with a `.save` card of its own is refused.
 
 **Qualification.** A view is lattice-qualified for (`L`, option set) when
@@ -725,6 +730,13 @@ Errors:
   three-argument `min()` segfaults libngspice 42; in numparam it is
   silently `min(a, c)`. `bb run` and `bb pkg test` run the same check on
   the whole deck before ngspice reads it;
+- **a view valid at `pi`** (ADR-009 D2 rule 1, milestone P1;
+  `bbpkg::pirules`): no branch-current unknown in its file. A V source (a
+  0 V ammeter too), an E, F or H source, a V-type B source, a W switch, a
+  transmission line (T, O, U) and an XSPICE code model (A) are errors; an
+  internal signal is an I-type B source into a 1 Ω conductance. R, C, G,
+  D, transistor primitives and I-type B sources are allowed. There is no
+  exemption for "signal nodes";
 - test vectors parse and name existing views and their ports;
 - the schema epoch's keys (`bb-part/1`, `bb-pins/1`): `[power] io_rail` and
   a `digital_out` set's `rail` name `power_in`/`power_out` pins; an idd
@@ -740,7 +752,9 @@ Errors:
 
 Warnings: the view-name rule without `--publish`, a previous-major file (the migration hint), a parameter set for a
 model no pin takes, a view without test vectors, a module whose chip
-package was not found, and a **conflict**: one parameter that several views
+package was not found, an inductor (L) or coupling (K) in a view valid at
+`pi` (ADR-009 D2 rule 5: ngspice gives it a branch current, and a series
+L of milliohms cost +68 % in the prototype), and a **conflict**: one parameter that several views
 of the package carry with different defaults (ADR-006 D9 rule 2; reported,
 never averaged, because each view is right for its own purpose).
 

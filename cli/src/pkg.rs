@@ -206,6 +206,7 @@ fn test_cmd(args: &[String]) -> Result<bool, String> {
     let reg = Registry::current();
     let mut ok_all = true;
     let mut nvec = 0;
+    let mut nop = 0;
     for dir in packages(args)? {
         let pkg = package::load(&dir, &reg)?;
         let Some(tdir) = &pkg.part.tests_dir else {
@@ -317,6 +318,41 @@ fn test_cmd(args: &[String]) -> Result<bool, String> {
                     );
                 }
             }
+            // ADR-009 D2 rule 2 (milestone P1): the operating point of every
+            // vector solves at every corner of the view, under every option
+            // set the view is run under (each run above solved it at the
+            // view's own parameters).
+            let mut opsets: Vec<&str> = tried.iter().map(|p| p.options.as_str()).collect();
+            opsets.sort();
+            opsets.dedup();
+            for c in &view.corners {
+                for os in &opsets {
+                    let mut ok = true;
+                    for v in &vs {
+                        nop += 1;
+                        if let Err(e) = pkgtest::operating_point_at(&pkg, view, v, os, Some(c)) {
+                            ok = false;
+                            println!(
+                                "FAIL    {} view {}: corner {}: {}: {e}",
+                                pkg.part.id,
+                                view.name,
+                                c.name,
+                                v.file.file_name().unwrap_or_default().to_string_lossy()
+                            );
+                        }
+                    }
+                    if ok {
+                        println!(
+                            "PASS    {} view {}: operating point at corner {} under {os} ({} vectors)",
+                            pkg.part.id,
+                            view.name,
+                            c.name,
+                            vs.len()
+                        );
+                    }
+                    view_ok &= ok;
+                }
+            }
             ok_all &= view_ok;
             if record && view_ok {
                 record_views.push((view.name.clone(), passed_pairs));
@@ -327,7 +363,7 @@ fn test_cmd(args: &[String]) -> Result<bool, String> {
         }
     }
     println!(
-        "bb pkg test: {nvec} vector runs, {}",
+        "bb pkg test: {nvec} vector runs, {nop} corner operating points, {}",
         if ok_all { "all passed" } else { "FAILURES" }
     );
     Ok(ok_all)

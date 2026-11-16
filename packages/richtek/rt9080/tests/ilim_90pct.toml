@@ -1,0 +1,18 @@
+# RT9080 current limit: 1.1 A typ at VOUT = 90 % of normal. 2.7 Ohm draws 1.1 A at 2.97 V, so the limit
+# holds VOUT there.
+schema = "bb-pkgtest/0"
+view = "ldo"
+circuit = "ilim_90pct.cir"
+stop = "1ms"
+
+[ports]
+VIN = "vin"
+VOUT = "vout"
+EN = "vin"
+GND = "0"
+
+[[expect]]
+meas = { node = "vout", at = "1ms" }
+value = "2.97V"
+tol = "20mV"
+source = "DS9080-09 Electrical Characteristics: current limit 1100 mA typ at VOUT = 90 % VOUT(normal)"

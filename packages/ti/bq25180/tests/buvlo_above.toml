@@ -1,0 +1,19 @@
+# BQ25180 battery-only mode above BUVLO: the battery FET connects BAT to SYS (3.3 mA through RON_BAT 55 mOhm,
+# 0.18 mV). The view's battery path is a smoothed ideal diode (a 0.5 mV softplus, no reverse current), which
+# at this light load puts SYS up to about 0.6 mV from the resistive value: the tolerance is that corner.
+schema = "bb-pkgtest/0"
+view = "pp"
+circuit = "buvlo.cir"
+stop = "1ms"
+
+[ports]
+IN = "0"
+SYS = "sys"
+BAT = "bat"
+GND = "0"
+
+[[expect]]
+meas = { node = "sys", at = "1ms" }
+value = "3.29982V"
+tol = "1mV"
+source = "SLUSE99C section 8.3.3: battery-only mode with VBAT > VBUVLO (3.0 V, b000); section 7.5 RON_BAT 55 mOhm typ"

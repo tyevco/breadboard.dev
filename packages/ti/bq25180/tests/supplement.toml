@@ -1,0 +1,22 @@
+# BQ25180 supplement mode: with the input at its limit (100 mA) and a 3.6 V cell above BUVLO, SYS settles
+# between VBAT - VBSUP1 (40 mV) and VBAT - VBSUP2 (20 mV), less the battery current through RON_BAT
+# 55 mOhm: about 3.6 V - 30 mV - 4.3 mV.
+schema = "bb-pkgtest/0"
+view = "pp"
+circuit = "supplement.cir"
+stop = "2ms"
+
+[params]
+ilim = "0.1"
+
+[ports]
+IN = "in"
+SYS = "sys"
+BAT = "bat"
+GND = "0"
+
+[[expect]]
+meas = { node = "sys", at = "2ms" }
+value = "3.5657V"
+tol = "11mV"
+source = "SLUSE99C section 7.5: VBSUP1 40 mV, VBSUP2 20 mV typ; RON_BAT 55 mOhm typ (the band between them is the tolerance)"

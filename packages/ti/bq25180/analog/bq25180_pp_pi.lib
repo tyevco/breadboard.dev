@@ -1,0 +1,46 @@
+* ti/bq25180 view "pp" (breadboard.dev, Apache-2.0): TI BQ25180 power path (IN -> SYS, BAT -> SYS), a `pi` power view
+* (ADR-009 D2; Phase 2 P0 spike view, packaged in P1). Datasheet-fitted from SLUSE99C (September 2021, revised January
+* 2023), section 7.5 and 8.3; none of the dial-me-spinner suite's load_switches__bq25180.lib (an
+* XSPICE ilimit block) is used. Written to ADR-009 D2's rules: I-type B sources of node voltages
+* only, two-argument min()/max(), internal signals as I-type sources into 1 Ohm conductances.
+*
+* SLUSE99C figures:
+*   ILIM codes (7.5): 100 mA code 80 / 90 / 98 mA, 500 mA code 450 / 475 / 498 mA min/typ/max -> ilim
+*   SYS_REG fixed 4.4..4.9 V (Table 8-3), accuracy +-2 % (7.5 VSYS_REG_ACCURACY)            -> vsysreg
+*   RON_IN 270 mOhm typ, 470 max (IN = 5 V, 1 A); RON_BAT 55 mOhm typ, 90 max                -> ronin, ronbat
+*   VIN_UVLOZ 3.0 V max (rising), VIN_UVLO 2.7 V max (falling); VSLEEPZ 135 mV typ (VIN - VBAT)
+*   supplement (8.3.3): BAT feeds SYS below VBAT - VBSUP1 (40 mV), stops above VBAT - VBSUP2
+*     (20 mV); only while VBAT > VBUVLO                                                      -> vbsup, sup_gate
+*   VBUVLO 3.0 V (setting b000), hysteresis 150 mV typ, tBUVLO 60 us                          -> buvlo, buvlo_hys, tbuvlo
+* ASSUMPTIONS: the SYS regulation loop is the input FET's RON_IN (pessimistic, no loop dynamics);
+*   the input current limit has a 10 uS slope through it (glim, a numerics floor worth < 15 uA here);
+*   the input enable is one smooth switch at 2.85 V (between 2.7 and 3.0 V) times the sleep
+*   comparator; the supplement path turns on smoothly at 30 mV below VBAT, between
+*   VBSUP2 and VBSUP1 (a 0.5 mV softplus), in series with RON_BAT; in battery-only mode (input disabled) the BAT FET is
+*   fully on (no offset); the BUVLO gate is a first-order 60 us lag of a comparator with 150 mV of
+*   hysteresis (the datasheet's deglitch is a delay).
+* Corners (ADR-009 D8): sup_gate = 1 is the datasheet behaviour; sup_gate = 0 is the `suite_compat`
+*   corner, which, as the suite does, supplements whatever VBAT is (the suite models a cell below
+*   BUVLO as a 0 V cell instead).
+* NOT modelled: charging (ICHG, DPPM's share of the input current), VINDPM, BATOCP, ship mode and
+*   RSYS_PD, battery tracking SYS_REG, input OVP, thermal regulation, I2C (ilim and vsysreg are
+*   instance parameters until a bus device exists; ADR-009 default 4).
+*
+* Ports: IN SYS BAT GNDP.
+.subckt TI_BQ25180_PP_PI IN SYS BAT GNDP params: vsysreg=4.5 ilim=0.475 ronin=0.27 ronbat=0.055
++ vbsup=0.03 buvlo=3.0 buvlo_hys=0.15 tbuvlo=60u sup_gate=1 glim=10u
+* input enable: UVLO and sleep, as one internal signal (V(bqen) = 0..1)
+B_EN    GNDP bqen I = (0.5 + 0.5*tanh((V(IN,GNDP) - 2.85)/0.02))*(0.5 + 0.5*tanh((V(IN,BAT) - 0.135)/0.01))
+R_EN    bqen GNDP 1
+* input FET IN -> SYS: regulation to min(SYS_REG, VIN) through RON_IN, limited at ILIM
+B_IN    IN SYS I = V(bqen,GNDP)*min((min({vsysreg}, V(IN,GNDP)) - V(SYS,GNDP))/{ronin},
++                  {ilim} + {glim}*({vsysreg} - V(SYS,GNDP)))
+* BUVLO gate: comparator with hysteresis, 60 us lag (V(bquv) = 0..1)
+B_UVC   GNDP bquv I = 0.5 + 0.5*tanh((V(BAT,GNDP) - {buvlo} - {buvlo_hys}*(1 - V(bquv,GNDP)))/0.005)
+R_UV    bquv GNDP 1
+C_UV    bquv GNDP {tbuvlo}
+* BAT -> SYS: supplement (offset vbsup while the input is enabled) or battery-only, through RON_BAT
+B_SUP   BAT SYS I = (1 - {sup_gate}*(1 - V(bquv,GNDP)))/{ronbat}*(
++         max(V(BAT,SYS) - {vbsup}*V(bqen,GNDP), 0)
++         + 0.0005*ln(1 + exp(-abs(V(BAT,SYS) - {vbsup}*V(bqen,GNDP))/0.0005)))
+.ends TI_BQ25180_PP_PI

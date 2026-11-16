@@ -1,0 +1,6 @@
+* supplement: ti/bq25180 view pp, VIN 5 V at a 100 mA limit, a 3.6 V cell, SYS into 20 Ohm (about
+* 180 mA): the battery supplements the difference.
+VIN in 0 5
+VBAT bat 0 3.6
+RL sys 0 20
+CS sys 0 10u

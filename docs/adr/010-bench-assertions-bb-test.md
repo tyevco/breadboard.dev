@@ -3,7 +3,9 @@
 - **Status:** Accepted (2026-11-15; see "Approver decisions
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
   (see "Review notes"). Amendments: 1, B1 as implemented; 2, the schema
-  epoch (milestone S); 3, B2 as implemented.
+  epoch (milestone S); 3, B2 as implemented; 4, the P1 bench keys
+  (`fidelity`, `corner`, `[corners]`, `[[battery]]`; numbered 3 on the
+  P1 branch, renumbered at the merge after B2's Amendment 3).
 - **Part of:** the Phase 2 plan, milestones B1-B4. P1-P5 and E5 use it.
   Its schema keys (`bb-bench/1`, the `switch` view kind) land in milestone
   S, the schema epoch.
@@ -812,3 +814,23 @@ message, and gated:
 
 **A3.11 Not changed.** `engine:bench@1` is still not locked (Amendment 2).
 B2 adds no engine and no bench stimulus.
+
+## Amendment 4 (2026-11-15): the P1 bench keys
+
+Milestone P1 implements four `bb-bench/1` keys that D2 named for it (ADR-009
+Amendment 4 is the record; `spec/project.md` section 3.2 states them):
+
+- `fidelity` (`fast` or `pi`; `--fidelity` wins) and `corner`, as D2 shows.
+- **`[corners]`**, `"<board>:<ref>" = "<name>"`: per-instance corners,
+  which ADR-009 D8 asks for ("globally, or per instance") without a
+  syntax. A table beside `corner` keeps `corner` a string, as S's schema
+  has it.
+- **`[[battery]]`** has D2's keys exactly (`net`, `ocv`, `soc`, `r0`,
+  `rc`, `temp_c`). D2 gives the cell no capacity, so the state of charge
+  holds for the run. It is written as a current `OCV/R0` beside a real
+  `R0`, then the RC pairs (`I`, `R` and `C` elements), not D2's comment
+  "B and C elements": a node held only by a B source fails ngspice's
+  source stepping (ADR-009 Amendment 4).
+
+`[[activity]]`, `[[env]]`, `[probes]` and a `[[load]] replace` stay
+refused, naming their milestones.

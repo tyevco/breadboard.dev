@@ -1,0 +1,5 @@
+* boost_uvlo: ti/tps61040 view boost at VIN 1.4 V (below VUVLO), 10 uH fed through a 0.1 Ohm sense
+* resistor.
+VIN vin 0 1.4
+RSENSE vin vl 0.1
+L1 vl sw 10u

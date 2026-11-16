@@ -87,7 +87,7 @@ use board::PinKind;
 const USAGE: &str = "\
 usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               --probe net:<NET> [--probe net:<NET> ...] --out <dir>
-       bb run [--project <dir>] --for <time> [--bench <bench.toml>] [--fidelity fast]
+       bb run [--project <dir>] --for <time> [--bench <bench.toml>] [--fidelity fast|pi]
               [--probe net:<name|alias|pin> ...] --out <dir> [--allow-unqualified <pkg:view>]
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
@@ -121,7 +121,8 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  verdict is an assert record of events.jsonl at its window's
                  close; a failing assertion does not fail the run. `bb assert`
                  evaluates the record-only kinds again on a finished run
-  --fidelity   the analog fidelity rung (Phase 1: fast)
+  --fidelity   the analog fidelity rung of a project's views: fast (the
+                 default) or pi (ADR-009 D1); wins over the bench's fidelity
   --elaborate-only
                  a project: elaborate (checks, deck, probes) and write
                  <out>/deck.cir and run.json, then stop without starting any
@@ -224,7 +225,8 @@ struct RunArgs {
     target: Option<String>,
     project: Option<PathBuf>,
     bench: Option<PathBuf>,
-    fidelity: String,
+    /// `--fidelity` as given; `None`: the bench's, else `fast` (ADR-009 D1).
+    fidelity: Option<String>,
     allow_unqualified: Vec<String>,
     /// `--elaborate-only`: write deck.cir and run.json, run nothing.
     elaborate_only: bool,
@@ -378,13 +380,25 @@ fn need<T>(o: Option<T>, n: &str) -> Result<T, String> {
     o.ok_or_else(|| format!("{n} is required"))
 }
 
+/// The rungs a run can be at (ADR-009 D1): `fast` and, from milestone P1,
+/// `pi`. `si` and `em` are Phase 3's.
+fn check_fidelity(f: &str) -> Result<(), String> {
+    match f {
+        "fast" | "pi" => Ok(()),
+        "si" | "em" => Err(format!(
+            "{f}: the {f} rung is not implemented (Phase 3); this build runs fast and pi"
+        )),
+        _ => Err(format!("{f:?}: expected fast or pi")),
+    }
+}
+
 fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut netlist = None;
     let mut firmware = None;
     let mut target = None;
     let mut project = None;
     let mut bench = None;
-    let mut fidelity = "fast".to_string();
+    let mut fidelity: Option<String> = None;
     let mut allow_unqualified = Vec::new();
     let mut elaborate_only = false;
     let mut duration = None;
@@ -421,7 +435,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--project" => project = Some(PathBuf::from(val(a)?)),
             "--bench" => bench = Some(PathBuf::from(val(a)?)),
             "--assert" => asserts.push(PathBuf::from(val(a)?)),
-            "--fidelity" => fidelity = val(a)?,
+            "--fidelity" => fidelity = Some(val(a)?),
             "--allow-unqualified" => allow_unqualified.push(val(a)?),
             "--elaborate-only" => elaborate_only = true,
             "--for" => duration = Some(val(a)?.parse::<Time>().map_err(|e| format!("--for: {e}"))?),
@@ -544,10 +558,14 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
                 .into(),
         );
     }
-    if fidelity != "fast" {
-        return Err(format!(
-            "--fidelity {fidelity}: Phase 1 runs fast only (ADR-006 D3)"
-        ));
+    if let Some(f) = &fidelity {
+        check_fidelity(f).map_err(|e| format!("--fidelity {e}"))?;
+        if netlist.is_some() && f != "fast" {
+            return Err(format!(
+                "--fidelity {f}: a board file's SPICE body has no views to choose a rung for \
+                 (the fidelity dial selects a project's package views, ADR-009 D1)"
+            ));
+        }
     }
     if lookahead == Some(true) && plugin == PluginMode::Never {
         return Err("--lookahead on needs the lookahead plugin (--lookahead-plugin never)".into());
@@ -1457,7 +1475,7 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
     let with_asserts = !assert_specs.is_empty();
     if with_asserts {
-        let a8s = bbcore::assert::Assertions::new(assert_specs, a.duration, &a.fidelity)?;
+        let a8s = bbcore::assert::Assertions::new(assert_specs, a.duration, &fe.fidelity)?;
         sched.set_assertions(a8s).map_err(|e| e.to_string())?;
     }
 
@@ -1594,7 +1612,7 @@ fn run(a: RunArgs) -> Result<(), String> {
                 bbcore::cjson::Json::Int(a.sample_period.as_fs() as i128),
             ),
             ("seed", bbcore::cjson::Json::Int(a.seed as i128)),
-            ("fidelity", bbcore::cjson::Json::str(&a.fidelity)),
+            ("fidelity", bbcore::cjson::Json::str(&fe.fidelity)),
             ("lookahead", bbcore::cjson::Json::Bool(lookahead)),
             ("lookahead_plugin", bbcore::cjson::Json::Bool(plugin)),
             (
@@ -1855,6 +1873,9 @@ struct FrontEnd {
     /// (resolved in `run`).
     asserts: Vec<bbcore::assert::Spec>,
     assert_nodes: Option<Vec<(String, String)>>,
+    /// The rung the run is at: `--fidelity`, else the bench's, else `fast`
+    /// (ADR-009 D1).
+    fidelity: String,
 }
 
 /// The `--assert` files: their assertions, and `(file name, text)` for
@@ -1914,6 +1935,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
             run_json: None,
             flagged: Vec::new(),
             stimulus: elab::Stimulus::default(),
+            fidelity: "fast".into(),
         });
     }
     // A project: read-only (ADR-007 D7). board.bbm and bb.lock must be what
@@ -1960,12 +1982,18 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         None => project::Bench::empty(),
     };
     let (extra, files_json) = assert_files(&a.asserts)?;
+    // ADR-009 D1: the command line wins over the bench's fidelity.
+    let fidelity = a
+        .fidelity
+        .clone()
+        .or_else(|| bench.fidelity.clone())
+        .unwrap_or_else(|| "fast".into());
     let plan = elab::plan(&elab::PlanArgs {
         project: &p,
         imp: &imp,
         bench: &bench,
         bench_name: a.bench.as_deref().map(elab::bench_label),
-        fidelity: &a.fidelity,
+        fidelity: &fidelity,
         lattice: a.renode_quantum,
         allow_unqualified: &a.allow_unqualified,
         cli_probes: &a.probes,
@@ -1992,6 +2020,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         run_json: Some(run_json),
         flagged: plan.flagged,
         stimulus: plan.stimulus,
+        fidelity,
     })
 }
 

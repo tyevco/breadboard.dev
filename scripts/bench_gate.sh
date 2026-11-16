@@ -160,11 +160,12 @@ volts = "3.3V"
 press = "SW1"
 at = "1ms"
 EOF
-  refuse later-key "battery: a bb-bench/1 key for the battery element" <<EOF
+  # A key a later milestone implements ([[battery]] is P1's since ADR-009 Amendment 4).
+  refuse later-key "activity: a bb-bench/1 key for bench-scheduled internal states" <<EOF
 schema = "bb-bench/1"
 $SUPPLIES
-[[battery]]
-net = "VSW"
+[[activity]]
+state = "U1#radio_tx"
 EOF
   refuse playback-on-supply "another bench source drives it" <<EOF
 schema = "bb-bench/1"

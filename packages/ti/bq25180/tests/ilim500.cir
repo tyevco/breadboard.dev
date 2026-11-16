@@ -1,0 +1,5 @@
+* ilim500: ti/bq25180 view pp, VIN 5 V, a 0 V cell, SYS into 5 Ohm (which would draw 0.9 A).
+VIN in 0 5
+VBAT bat 0 0
+RL sys 0 5
+CS sys 0 10u

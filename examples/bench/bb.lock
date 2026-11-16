@@ -16,15 +16,15 @@ tree = "sha256:9b59e032db216a128c06352f6c8b11f6a9bdb50effb7977cfd1add2565cd7970"
 
 [[package]]
 id = "generic/capacitor"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../packages/generic/capacitor"
-tree = "sha256:21a89d756d6bfad930bc936b240f42581cb1525705e76d7b90e0e79ca34bddc4"
+tree = "sha256:065d83ff66a82da321eafac531dc7ea94d378faf0d4bcae062b7b08c2bd1e9ef"
 
 [[package]]
 id = "generic/resistor"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../packages/generic/resistor"
-tree = "sha256:a654dc5331934af18317bcea38a8a44ca6599366e9872bac82d17c04e5ed832a"
+tree = "sha256:46eb1f932bcde305315ac95e50fd700df0493731cece37260822d18cf715ef36"
 
 [[package]]
 id = "st/stm32f103c8"

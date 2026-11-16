@@ -1,0 +1,71 @@
+# richtek/rt9080: Richtek RT9080 600 mA LDO, the 3.3 V fixed part in TSOT-23-5 (Phase 2 P1, ADR-009 D2).
+#
+# One view, `ldo`, valid at `pi` only (ADR-009 D2): at `fast` a project's bench stands in for its rail,
+# so the ladder finds no view there and the part stays out of the deck, as before P1. The view is
+# RESTATED from DS9080-09; the dial-me-spinner suite's RT9080 file is a reference only (ADR-009 D2's
+# table; no file is migrated). The corner worst_dropout is the datasheet's maximum dropout and load
+# regulation, the corner W1 gates at (decision D-W1, ADR-009 Amendment 2).
+schema = "bb-part/1"
+
+[part]
+id = "richtek/rt9080"
+version = "0.1.0"
+kind = "power"
+manufacturer = "Richtek"
+mpn = ["RT9080-33GJ5"]
+lcsc = ["C841192"]
+datasheet = { url = "https://www.richtek.com/assets/product_file/RT9080/DS9080-09.pdf", rev = "DS9080-09" }
+license = "Apache-2.0"
+description = "600 mA, 2 uA IQ low-dropout linear regulator, 3.3 V fixed output, TSOT-23-5"
+
+[footprints]
+kicad = ["Package_TO_SOT_SMD:SOT-23-5", "Package_TO_SOT_SMD:TSOT-23-5"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "ldo"
+purpose = "the +3V3 rail at pi: regulation, dropout, fold-back current limit, EN, quiescent current and the output discharge, averaged (no loop dynamics)"
+fidelity = ["pi"]
+default_for = ["pi"]
+file = "analog/rt9080_ldo_pi.lib"
+subckt = "RICHTEK_RT9080_LDO_PI"
+ports = ["VIN", "VOUT", "EN", "GND"]
+rails = ["VIN", "VOUT"]
+params = { vset = "3.3", rdrop = "0.516667", gm = "36.36", ilim = "1.1", ifold = "0.6", iq = "2u", ishdn = "0.1u", rdis = "80" }
+
+[[analog.corners]]
+name = "typ"
+params = { rdrop = "0.516667", gm = "36.36" }
+ref = "DS9080-09 Electrical Characteristics: dropout 0.31 V typ at 600 mA (VOUT >= 3 V), load regulation 0.5 % typ (1 to 600 mA)"
+
+[[analog.corners]]
+name = "worst_dropout"
+params = { rdrop = "0.883333", gm = "18.18" }
+ref = "DS9080-09 Electrical Characteristics: dropout 0.53 V max at 600 mA (VOUT >= 3 V), load regulation 1 % max (1 to 600 mA); the dropout the dial-me-spinner suite's ideal LDO uses (LDO_RDO 0.53 V / 0.6 A)"
+
+[analog.provenance]
+source = "datasheet"
+base = "breadboard.dev's own averaged LDO, restated from DS9080-09 (Phase 2 P0 spike view, packaged in P1); no vendor model exists and the dial-me-spinner suite's ldo_3v3__rt9080.lib is a reference only"
+refs = [
+  "DS9080-09 Electrical Characteristics: VOUT accuracy +-2 % at 1 mA; dropout 0.31 V typ, 0.53 V max at 600 mA (VOUT >= 3 V, Note 7: at 98 % of VOUT); load regulation 0.5 % typ, 1 % max; current limit 1.1 A typ at 90 % VOUT, 610 mA min; IQ 2 uA typ; ISHDN 0.1 uA typ; EN 0.9 V min rising, 0.4 V max falling; RDISCHG 80 Ohm",
+  "DS9080-09 section 18.3: fold-back current limit to about 0.6 A",
+  "DS9080-09 section 8: TSOT-23-5 pins 1 VIN, 2 GND, 3 EN, 4 NC, 5 VOUT",
+]
+deviations = [
+  "regulation as a transconductance gm (no loop dynamics), from the load regulation figure",
+  "fold-back linear in VOUT from 0 to 90 % of vset",
+  "half of IQ as the feedback divider's leak at vset, half as ground current",
+  "the channel conducts in reverse (VOUT > VIN) while enabled",
+]
+not_modelled = ["soft start (DS9080-09 gives no start-up time)", "PSRR and noise", "line regulation", "over-temperature protection", "temperature", "the SNS (adjustable) variant"]
+generated_by = "Claude (Phase 2 P0, packaged in P1)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

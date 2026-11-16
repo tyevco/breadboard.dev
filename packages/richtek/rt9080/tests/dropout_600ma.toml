@@ -1,0 +1,18 @@
+# RT9080 dropout at 600 mA (5.39 Ohm draws 600 mA at 3.234 V): DS9080-09 defines VDROP = VIN - VOUT where VOUT is 98 % of its normal value
+# (Note 7), 0.31 V typ for VOUT >= 3 V. So VIN = 0.98 x 3.3 V + 0.31 V = 3.544 V must give VOUT = 3.234 V.
+schema = "bb-pkgtest/0"
+view = "ldo"
+circuit = "dropout_600ma.cir"
+stop = "1ms"
+
+[ports]
+VIN = "vin"
+VOUT = "vout"
+EN = "vin"
+GND = "0"
+
+[[expect]]
+meas = { node = "vout", at = "1ms" }
+value = "3.234V"
+tol = "2mV"
+source = "DS9080-09 Electrical Characteristics: dropout 0.31 V typ at 600 mA, VOUT >= 3 V; Note 7 (VOUT at 98 % of normal)"

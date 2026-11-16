@@ -161,6 +161,7 @@ pooled-test:
 	+$(STEP) assert-test
 	+$(STEP) ec-reconnect
 	+$(STEP) packages
+	+$(STEP) pi-static-test
 	+$(STEP) gdb-test
 	+$(STEP) vscode-templates
 	+$(STEP) dms-system
@@ -896,6 +897,23 @@ measured-dms-s1-cost:
 .PHONY: pi-spike
 pi-spike:
 	DMS_REPO=$(DMS_REPO) bash scripts/pi_spike.sh gate
+
+# Phase 2 plan P1 (ADR-009 D1-D3, Amendment 4; decision D-W1, Amendment 2): the W1 and W2 static-load
+# decks assembled from the `pi` package views and examples/dial-me-spinner/system/board.bbm
+# (scripts/pi_static.py; examples/dial-me-spinner/pi/static_load.toml), run through NgspiceEngine with
+# deck_run: W1 at its labelled stress corner (55 mA, RT9080 worst_dropout) against the suite replica
+# with the stress corner's tolerances, its feasibility, the 50 mA margin check, the load sweep (30, 50,
+# 55, 60 mA), W2 (rule and old rule) with P0's tolerances, and every W1 check's rung (pi). The replica's
+# values are P0's recorded measurements, so nothing reads the dial-me-spinner repository.
+# pi-static-test (in make test) runs the seven cases on PI_STATIC_JOBS jobs; pi-static adds the stress
+# corner at 10 us and 10 ms grants and a second 1 ms run (consistency checks of deck_run's partitions).
+.PHONY: pi-static pi-static-test
+pi-static:
+	$(CARGO) build -q -p bb-analog-ngspice --example deck_run
+	DECK_RUN=$(CARGO_TARGET_DIR)/debug/examples/deck_run bash scripts/pi_static.sh gate
+pi-static-test:
+	$(CARGO) build -q -p bb-analog-ngspice --example deck_run
+	DECK_RUN=$(CARGO_TARGET_DIR)/debug/examples/deck_run bash scripts/pi_static.sh test
 
 # --- Phase 1 M4: KiCad import, board.bbm, projects (ADR-007) ---------------
 # examples/adc drawn in KiCad (examples/adc/kicad), as a bb.toml project. Its

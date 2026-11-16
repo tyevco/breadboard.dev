@@ -861,6 +861,20 @@ fn lint_views(pkg: &Package, ctx: &Context, o: &mut Out) {
                 for e in bexpr::check(&text) {
                     o.e(format!("{at}: {}: {e}", v.file));
                 }
+                // ADR-009 D2 (milestone P1): a view valid at pi has no
+                // branch-current unknown (rule 1); an inductor is a warning
+                // (rule 5). Rule 2 is pkg test's operating point at every
+                // corner.
+                if v.fidelity.iter().any(|r| r == "pi") {
+                    for f in crate::pirules::check(&text) {
+                        let m = format!("{at}: {} (valid at pi): {}", v.file, f.msg);
+                        if f.error {
+                            o.e(m);
+                        } else {
+                            o.w(m);
+                        }
+                    }
+                }
                 // A bare M in any number of the file is not checked here:
                 // view files are SPICE, where M is milli by definition; the
                 // D5 grammar applies to the package's TOML strings.

@@ -1,0 +1,44 @@
+# ti/bq25180 pins (DSBGA-8, YBG): balls and names as SLUSE99C section 6 (Pin Configuration and Functions)
+# gives them. No pin is bound to a co-simulation engine (the I2C bus is not modelled, ADR-009 default 4),
+# so no pin offers a pin model: the part is an analog view only.
+schema = "bb-pins/1"
+
+[[pin]]
+number = "A1"
+name = "~{INT}"
+role = "output"
+
+[[pin]]
+number = "A2"
+name = "IN"
+role = "power_in"
+
+[[pin]]
+number = "B1"
+name = "SCL"
+role = "input"
+
+[[pin]]
+number = "B2"
+name = "SYS"
+role = "power_out"
+
+[[pin]]
+number = "C1"
+name = "SDA"
+role = "io"
+
+[[pin]]
+number = "C2"
+name = "BAT"
+role = "power_in"
+
+[[pin]]
+number = "D1"
+name = "TS/MR"
+role = "analog"
+
+[[pin]]
+number = "D2"
+name = "GND"
+role = "ground"

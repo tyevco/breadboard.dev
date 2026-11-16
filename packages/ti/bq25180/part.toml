@@ -1,0 +1,74 @@
+# ti/bq25180: TI BQ25180 I2C linear battery charger with power path, the power path only (Phase 2 P1,
+# ADR-009 D2).
+#
+# One view, `pp`, valid at `pi` only: IN -> SYS through the input FET (SYS_REG, ILIM) and BAT -> SYS
+# (supplement, battery-only mode, the BUVLO gate). ILIM and SYS_REG are instance parameters, because no
+# bus device sets them in Phase 2 (ADR-009 default 4: a bench parameter, recorded as a deviation by
+# the worked example that uses it). The corner `suite_compat` turns off the supplement's BUVLO gate,
+# which the dial-me-spinner suite's ilimit block does not model (the suite models a cell below BUVLO as
+# a 0 V cell instead), so static-load mode compares like with like (ADR-009 D2, D8); the datasheet's
+# behaviour is the view's own parameters (`typ`).
+schema = "bb-part/1"
+
+[part]
+id = "ti/bq25180"
+version = "0.1.0"
+kind = "power"
+manufacturer = "Texas Instruments"
+mpn = ["BQ25180YBGR", "BQ25180YBGT"]
+lcsc = ["C3682423"]
+datasheet = { url = "https://www.ti.com/lit/ds/symlink/bq25180.pdf", rev = "SLUSE99C" }
+license = "Apache-2.0"
+description = "1-cell 1 A I2C linear battery charger with power path and ship mode (power path only)"
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "pp"
+purpose = "the power path at pi: the input FET to SYS (SYS_REG through RON_IN, the input current limit, UVLO and sleep), the battery FET (supplement, battery-only mode, the BUVLO gate); no charger"
+fidelity = ["pi"]
+default_for = ["pi"]
+file = "analog/bq25180_pp_pi.lib"
+subckt = "TI_BQ25180_PP_PI"
+ports = ["IN", "SYS", "BAT", "GND"]
+rails = ["IN", "SYS", "BAT"]
+params = { vsysreg = "4.5", ilim = "0.475", ronin = "0.27", ronbat = "0.055", vbsup = "0.03", buvlo = "3", buvlo_hys = "0.15", tbuvlo = "60u", sup_gate = "1", glim = "10u" }
+
+[[analog.corners]]
+name = "typ"
+params = { sup_gate = "1" }
+ref = "SLUSE99C section 8.3.3: the battery supplements SYS only while VBAT > VBUVLO (the datasheet's behaviour; the view's own parameters)"
+
+[[analog.corners]]
+name = "suite_compat"
+params = { sup_gate = "0" }
+ref = "dial-me-spinner@6854d25 hardware/sim/models/load_switches__bq25180.lib (an XSPICE ilimit block without the BUVLO gate; the suite models a cell below BUVLO as a 0 V cell): the supplement is not gated by BUVLO, so static-load mode compares like with like (ADR-009 D2)"
+
+[analog.provenance]
+source = "datasheet"
+base = "breadboard.dev's own averaged power path, fitted to SLUSE99C (Phase 2 P0 spike view, packaged in P1); none of the dial-me-spinner suite's load_switches__bq25180.lib is used"
+refs = [
+  "SLUSE99C section 7.5: ILIM 100 mA code 80 / 90 / 98 mA, 500 mA code 450 / 475 / 498 mA (VIN 5 V); VIN_UVLO 2.7 V (falling); VSLEEPZ 135 mV typ; VBSUP1 40 mV, VBSUP2 20 mV typ; RON_BAT 55 mOhm typ, 90 max; RON_IN 270 mOhm typ, 470 max; VBUVLO 3.0 V (b000)",
+  "SLUSE99C section 7.6: tBUVLO 60 us",
+  "SLUSE99C section 8.3.3 (supplement mode) and 8.3.5 (SYS_REG_CTRL, Table 8-3: 4.4 to 4.9 V)",
+]
+deviations = [
+  "the SYS regulation loop is the input FET's RON_IN (pessimistic, no loop dynamics)",
+  "the input current limit has a 10 uS slope through it (glim, a numerics floor worth < 15 uA)",
+  "the input enable is one smooth switch at 2.85 V (between VIN_UVLO 2.7 V and 3.0 V) times the sleep comparator",
+  "the supplement turns on smoothly 30 mV below VBAT, between VBSUP2 and VBSUP1 (a 0.5 mV softplus)",
+  "the battery path conducts forward only, as a smoothed ideal diode: at light load SYS can sit up to about 0.6 mV from the resistive value (the softplus corner)",
+  "the BUVLO gate is a first-order 60 us lag of a comparator with 150 mV of hysteresis (the datasheet's deglitch is a delay)",
+  "ILIM and SYS_REG are instance parameters (no I2C bus device, ADR-009 default 4)",
+]
+not_modelled = ["charging (ICHG, DPPM's share of the input current)", "VINDPM", "BATOCP", "ship mode and RSYS_PD", "battery tracking SYS_REG", "input OVP", "thermal regulation", "I2C"]
+generated_by = "Claude (Phase 2 P0, packaged in P1)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"
