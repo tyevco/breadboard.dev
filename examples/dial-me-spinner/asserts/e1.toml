@@ -1,0 +1,68 @@
+# examples/dial-me-spinner/asserts/e1.toml: E1's four checks (Phase 1 plan section 2 E1) as
+# assertions (ADR-010 D5, D10; Amendment 3), ported from scripts/check_dms_rail.py, which stays as
+# their cross-check for one milestone (make assert-test, scripts/assert_gate.sh). The limits are
+# the dial-me-spinner suite's (hardware/sim at 6854d25), never its measured values. Every case of
+# make dms-rail reads them: `bb run --project ... --bench bench/<cold|nominal>.toml --assert
+# asserts/e1.toml`. The correct-order firmware passes all six; the wrong-order firmware fails
+# exactly LSW-3.
+schema = "bb-bench/1"
+
+# LED-DATA-V4: VLED at every instant P0.06 (LED_DIN_MCU) goes high, at least FW_VLED_FRAME_MIN
+# (+3V3 max 3.366 V - 0.7 V).
+[[assert]]
+name = "LED-DATA-V4"
+kind = "at"
+net = "VLED"
+at = { edge = "U10.P0.06", level = 1 }
+min = "2.67V"
+msg = "VLED at each P0.06 rise (FW_VLED_FRAME_MIN)"
+
+# LSW-3: V(LED_DIN) - V(VLED) at most 0.7 V over the run (WS2812C-2020-V6 DS p.2, VI <= VDD +
+# 0.7 V), at every accepted solver point.
+[[assert]]
+name = "LSW-3"
+kind = "range"
+net = "LED_DIN"
+ref = "VLED"
+max = "0.7V"
+msg = "LED_DIN above VLED (the WS2812C DI absolute maximum)"
+
+# LSW-2: VLED below 10 % of its value at each LED_PWR_EN fall within 30 ms (FW_LED_OFF); a fall
+# whose 30 ms reach past the run's end is not evaluable.
+[[assert]]
+name = "LSW-2"
+kind = "settle"
+net = "VLED"
+event = { edge = "U10.P1.04", level = 0 }
+within = "30ms"
+max = "10%"
+msg = "VLED to 10 % after LED_PWR_EN falls (FW_LED_OFF)"
+
+# FW-6.4, the firmware rule's timing (firmware.md section 6.4), from the pin_edge records, as
+# three assertions; check_dms_rail.py's FW-6.4 passes exactly when all three do:
+#   every P0.06 rise while LED_PWR_EN is high,
+[[assert]]
+name = "FW-6.4-level"
+kind = "at"
+net = "U10.P1.04"
+at = { edge = "U10.P0.06", level = 1 }
+min = 1
+msg = "LED_PWR_EN high at each P0.06 rise (FW-6.4)"
+
+#   at least 10 ms after LED_PWR_EN's rise,
+[[assert]]
+name = "FW-6.4-on"
+kind = "edge_timing"
+start = { edge = "U10.P1.04", level = 1 }
+end = { edge = "U10.P0.06", level = 1 }
+min = "10ms"
+msg = "P0.06 rise after LED_PWR_EN's rise (FW-6.4)"
+
+#   and every LED_PWR_EN rise at least 30 ms after the fall before it (the first rise has none).
+[[assert]]
+name = "FW-6.4-off"
+kind = "edge_timing"
+start = { edge = "U10.P1.04", level = 0 }
+end = { edge = "U10.P1.04", level = 1 }
+min = "30ms"
+msg = "LED_PWR_EN off before it rises again (FW-6.4)"

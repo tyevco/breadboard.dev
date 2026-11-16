@@ -1,0 +1,45 @@
+# examples/dial-me-spinner/e3/asserts/typ.toml: E3's HOME_N latency gate (ADR-008 Amendments 10 and
+# 12) as assertions (ADR-010 D5, D10; Amendment 3), ported from scripts/check_dms_home.py (its
+# "HOME_N assert latency" check, which passes exactly when these three do). For homing.elf on
+# board.cir (`bb run --netlist e3/board.cir ... --assert e3/asserts/typ.toml`): the DRV5032FA at its
+# typical corner, tS 50 ms and tACTIVE 40 us, so the worst sample phase's latency is tS + tACTIVE
+# = 50.04 ms, within the 75 ms limit. make dms-home's negative controls neg-fb200 and neg-fb286 (M1
+# as the DRV5032FB, tS 200 / 286 ms; their seeded phase gives the FA run's HOME_N instant) fail
+# exactly HOME_N-tS here, as they fail exactly the latency check of the script.
+schema = "bb-bench/1"
+
+# The device is the DRV5032FA at the corner (its start record).
+[[assert]]
+name = "HOME_N-tS"
+kind = "log"
+source = "devices"
+match = "^M1: DRV5032 tS "
+field = "tS"
+min = "50ms"
+max = "50ms"
+msg = "M1's sample period tS (DRV5032FA typical)"
+
+[[assert]]
+name = "HOME_N-tACTIVE"
+kind = "log"
+source = "devices"
+match = "^M1: DRV5032 tS "
+field = "tactive"
+min = "40us"
+max = "40us"
+msg = "M1's active time tACTIVE"
+
+# The run's own latency (one seeded sample phase): from the device's field crossing BOP (its first
+# "field above BOP" record since HOME_N last changed) to HOME_N's fall, for the first fall after
+# H1 (the H2 assert; H3 releases HOME again), at most tS + tACTIVE (which is within 75 ms).
+[[assert]]
+name = "HOME_N-latency"
+kind = "edge_timing"
+after = { log = "^uart0: homing: H1 skipped", source = "U10" }
+until = { edge = "M1.HOME_N", level = 1 }
+start = { log = "^M1: field above BOP", source = "devices" }
+end = { edge = "M1.HOME_N", level = 0 }
+pair = "first"
+min = "0s"
+max = "50.04ms"
+msg = "HOME_N assert latency after the BOP crossing"

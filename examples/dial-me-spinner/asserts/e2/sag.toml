@@ -1,0 +1,85 @@
+# examples/dial-me-spinner/asserts/e2/sag.toml: E2's LED shed and its timing (Phase 1 plan section 2 E2, ADR-008
+# Amendments 4-6) as assertions (ADR-010 D5, D10; Amendment 3), for `bb run ... --assert` on the
+# case sag of scripts/dms_vsense.sh. Written by scripts/dms_asserts.py from check_dms_vsense.py's
+# results on the committed runs; make assert-gate rewrites it from its own runs and requires this
+# file byte for byte. Do not edit by hand.
+schema = "bb-bench/1"
+
+[[assert]]
+name = "E2-before-shed"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n="
+field = "code"
+until = { edge = "U10.P1.04", level = 0 }
+min = 1283
+msg = "every reading before the shed above the threshold code (VBAT_est >= 3.53 V)"
+
+[[assert]]
+name = "E2-shed"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n="
+field = "code"
+after = { edge = "U10.P1.04", level = 0 }
+until = { log = "^uart0: vsense: n=", source = "U10" }
+max = 1282
+msg = "the shedding reading at or below 1282"
+
+[[assert]]
+name = "E2-on-before"
+kind = "log"
+source = "U10"
+match = "leds=off$"
+until = { edge = "U10.P1.04", level = 0 }
+present = false
+msg = "the LEDs on in every reading before the shed"
+
+[[assert]]
+name = "E2-off-after"
+kind = "log"
+source = "U10"
+match = "leds=on$"
+after = { edge = "U10.P1.04", level = 0 }
+present = false
+msg = "no reading with the LEDs on after the shed"
+
+[[assert]]
+name = "E2-en-rises"
+kind = "count"
+net = "U10.P1.04"
+level = 1
+min = 1
+max = 1
+msg = "LED_PWR_EN rises once (boot)"
+
+[[assert]]
+name = "E2-en-falls"
+kind = "count"
+net = "U10.P1.04"
+level = 0
+min = 1
+max = 1
+msg = "LED_PWR_EN falls once (the shed)"
+
+[[assert]]
+name = "E2-leds-off-line"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: leds off"
+min = 1
+max = 1
+msg = "one leds off line"
+
+# The shed timing: the boundary 1127197.265625 uV (1282.5 LSB) less the modelled mean
+# sampling error 243.604819 uV, rounded up to 1126954 uV.
+
+[[assert]]
+name = "E2-shed-timing"
+kind = "edge_timing"
+start = { cross = "VSYS_SENSE", below = "1126954uV" }
+end = { edge = "U10.P1.04", level = 0 }
+pair = "first"
+min = "1fs"
+max = "1s"
+msg = "LED_PWR_EN falls within one burst period after the threshold crossing"

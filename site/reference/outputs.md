@@ -33,7 +33,7 @@ The normative description is
 | `pin_edge` | A digital net changed level. One record per change. | `t_fs`, `net`, `driver`, `level` |
 | `net_sample` | A probed net's value at a fixed-rate sample instant. | `t_fs`, `net`, `uv` or `level` (optional) |
 | `log` | A line from an engine (for example firmware UART) or the kernel. | `t_fs`, `source`, `level`, `msg` |
-| `assert` | The result of a check (emitted by benches and tests, not by the scheduler). | `t_fs`, `name`, `pass`, `msg` |
+| `assert` | The result of a check: one per `[[assert]]` of the run, at its window's close (event stream version 2). | `t_fs`, `name`, `outcome`, `pass` (absent when not evaluable), `value`, `limit`, `unit`, `rung`, `msg` |
 
 `limited_by` names what bounded the grant: `engine:<name>`, `sample`,
 `loop_quantum` (the board has a feedback loop), `max_quantum`, `t_end`, or

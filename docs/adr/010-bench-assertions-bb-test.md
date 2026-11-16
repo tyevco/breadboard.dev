@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-11-15; see "Approver decisions
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
   (see "Review notes"). Amendments: 1, B1 as implemented; 2, the schema
-  epoch (milestone S).
+  epoch (milestone S); 3, B2 as implemented.
 - **Part of:** the Phase 2 plan, milestones B1-B4. P1-P5 and E5 use it.
   Its schema keys (`bb-bench/1`, the `switch` view kind) land in milestone
   S, the schema epoch.
@@ -581,3 +581,234 @@ version 2. ADR-011 Amendment 1 is the record.
   it in every project lock would relock all of them on every `bbbench`
   edit, which is the churn H4 removed for plugins. Which projects lock it,
   and when, is decided in track B. `run.json` keeps recording the identity.
+
+## Amendment 3: milestone B2 as implemented (2026-11-15)
+
+Milestone B2 (plan section 4: assertions and `assert` v2, the closed
+kinds, analog monitors at solver points, windows) is implemented in
+`bbcore::assert` (the kinds, the windows, the evaluator and the replay),
+`bbcore::Engine::solver_points` (implemented by `NgspiceEngine`), the
+scheduler (`Scheduler::set_assertions`) and `cli` (`asserts.rs`: the
+`[[assert]]` tables, `bb run --assert`, `bb assert`). It is gated by `make
+assert-test` (in `make test`), the replay step of `dms-vsense-test`, and
+`make assert-gate`. `spec/project.md` section 3.4, `spec/event-stream.md`,
+`spec/pin-model.md` glue rule 10 and `spec/schema/bench.schema.json` state
+the result. Where the implementation decides something D5-D7 leave open, or
+departs from their wording, it is recorded here.
+
+**A3.1 Where the monitors run.** D6 says the analog monitors run "inside
+the producing analog engine at every accepted solver point". They run in
+the kernel's evaluator, over the accepted solver points that the producing
+engine hands over for each exchange window (`Engine::solver_points`: a pure
+read, like `sample_output`; the window `[prev, now]`, the point at `prev`
+first). It is the same function of the same points. A crossing is
+interpolated in the solver's own seconds and rounded up to whole fs, kept
+strictly after the earlier point (the `digital_in` rule, ADR-003 D3). A
+value at an instant is `bbcore::assert::value_at`, bit for bit the
+interpolation `NgspiceEngine::sample` uses. One evaluator then serves every
+analog engine and `bb assert`'s replay (A3.5), and no engine gains state.
+Nothing in `spec/time-grant.md` changes: no element, no input and no grant
+boundary is added. An analog net that an assertion reads and nothing probes
+becomes an output of the analog engine, bound to its kernel net and absent
+from every output file (`spec/pin-model.md` rule 10). Gated: with the
+assertions on, every committed one-cell hash of E1, E2 and E3 (nets.csv,
+nets.vcd, the non-grant records without the `assert` records) holds.
+
+**A3.2 One record per assertion, at its window's close.** D5 and D7 leave
+open how the instances of one check (several edges in a window) become
+records. Each assertion gives exactly one `assert` record, at the close of
+its window: its `to`, its `until` event, or the run's end. The record
+reports the worst instance (the one past a limit, else the one nearest a
+limit) and counts the instances in `msg`. B3's `test.json` and JUnit map
+one `testcase` to one assertion (D9). At equal `t_fs` the kernel's `assert`
+records come after its `net_sample` records, in the run's assertion order
+(the bench's, then each `--assert` file's).
+
+Two details keep this partition independent. Both were found by the gate
+(`bb assert` on E2's s50-none disagreed with the run on one record's
+`msg`).
+
+- A `log` record can sit at its exchange window's start. A UART line that
+  ends on a lattice point is reported at the next exchange, with its own
+  time. The evaluator reads every record at its own time; it reads a
+  window's records in `[prev, now]`, not `(prev, now]`.
+- A window that closes exactly at a boundary is decided at the next
+  exchange, which may still bring a log at that instant. Its record keeps
+  the close's time, so it sorts as it would where that instant falls
+  inside a window.
+
+A unit test runs both at three partitions.
+
+**A3.3 Windows.** D5's windows are built as follows.
+
+- `from` and `to` are times.
+- `after = { edge | log, delay }` opens the window at the first such event
+  at or after `from`, plus the delay.
+- `until = { edge | log }` closes it at the first such event at or after
+  the opening. D5's "until the run's end" is the default.
+- `while = { net, level }` keeps only the parts where a digital net is at a
+  level.
+
+The window is the closed interval between the opening and the close. A
+window that never opens fails. `edge_timing` takes a third kind of event,
+an analog crossing (`{ cross, ref, below | above }`). E2's shed timing
+needs it: LED_PWR_EN must fall within one burst period after V(VSYS_SENSE)
+crosses the code boundary.
+
+**A3.4 Kind details that D5 leaves open.**
+
+- `settle`. Each change of the event net to its level opens an instance.
+  - The instance passes if the quantity is inside the band by `within` and
+    stays inside until the net changes again (or the window closes).
+  - The band is in volts, or `"10%"` of the value at the event (LSW-2:
+    10 % of VLED at the LED_PWR_EN fall).
+  - D5's run-end rule applies to an instance that is still open at the
+    run's end and whose deadline is after it: that instance is
+    `not_evaluable`. The other instances are decided.
+  - The assertion fails if any instance failed. It passes if at least one
+    instance passed and none failed (as `check_dms_rail.py`'s LSW-2 does
+    for E1's second fall, 4.6 ms before the run's end). Otherwise it is
+    `not_evaluable`.
+- `edge_timing` pairs each `end` event in one of two ways:
+  - `last` (the default): with the last `start` event at or before it.
+    FW-6.4 needs this.
+  - `first`: with the first `start` event since the `end` net last
+    changed. E3's latency is measured from the first `field above BOP`
+    record, and E2's shed from the first crossing.
+- `log`.
+  - A pattern is a literal, anchored with `^` and `$` or neither. Every
+    other regular-expression metacharacter is refused, so a later full
+    regex cannot change what a pattern written today means.
+  - `field = "<name>"` reads the number after `<name>=` or `<name> ` (a
+    whole word) in each matching record: an integer, or a decimal with a
+    unit, converted exactly. That is how a code or a device parameter is
+    read without an expression language.
+- `event` counts `reset` records and `warn` and `error` log records. D5
+  lists `PromiseBroken` as an event, but a broken promise fails the run, so
+  no completed run has one to count. It is not a countable event.
+- A kind with no instance in its window fails. Negative controls therefore
+  cannot pass vacuously (plan section 7).
+- `rung` is the run's rung (`fast` until P1), and `requires` above it gives
+  `not_evaluable`. `nA` and `udegC` are not used yet.
+
+**A3.5 Where assertions live: `--assert` and `bb assert`.** D5 puts
+assertions in a bench or a test case. B2 implements `[[assert]]` in a
+bench. It also adds two things D5 does not name.
+
+- **Assertion files.** An assertion file is a `bb-bench/1` file of
+  `[[assert]]` tables only. `bb run --assert` adds it to a run, for a
+  project and for a board file alike. E3's homing runs are board files,
+  which take no bench.
+  - The ported checks are assertion files. So the Phase 1 benches and every
+    committed hash stay unchanged, and the cases whose codes differ (E2's
+    eight) need no copies of their benches.
+  - Gated: a bench's own `[[assert]]` and the same tables in an `--assert`
+    file give a byte-identical `events.jsonl`.
+  - B3 decides where its test cases take their assertions from.
+- **`bb assert <run>`.** It evaluates assertions again on a finished run's
+  `events.jsonl`.
+  - Every kind that reads only records gives the record the run gave,
+    since it is a pure function of the records. Gated on every gate run.
+  - A kind that reads solver points is `not_evaluable` there.
+  - It is how Phase 1's FW-6.4 negative controls carry over: they move
+    `pin_edge` records of a finished run. It is also how `dms-vsense-test`
+    checks E2's codes on its own runs without a second run.
+
+**A3.6 G3, "the same integer values", as gated.** D6 and G3 conflict where
+the scripts read samples rather than solver points: E1's every 10 µs, E2's
+every 100 µs, each rounded to whole µV in `nets.csv`. An extremum between
+two samples, or a crossing between them, is not on the scripts' data, and
+evaluating from `nets.csv` is the rejected alternative. Measured on the
+committed runs:
+
+- **LSW-3:** the assertion is 6 µV above the script on wrong-cold (the
+  maximum is at the P0.06 fall, 45.26175 ms, 1.75 µs after the script's
+  sample) and 9 µV above on wrong-nominal. It equals the script on the ok
+  cases.
+- **LSW-2:** the settle time is within 15 ns of the script's on every case.
+- **E2's shed:** the crossing is 174.4 µs before the script's first sample
+  below. The script compares µV-rounded samples (`round(v) + e < B`), which
+  is 0.5 µV further down a ramp of 3.5 µV/ms.
+
+The gate, `scripts/check_asserts.py`, is the closest correct one:
+
+- **Verdicts** equal everywhere.
+- **Exact values** where both read the same data:
+  - every edge time and gap (FW-6.4's, exact in fs);
+  - every level, count and log field (E2's 36 reading codes and its shed
+    and restore codes; E3's tS, tACTIVE and latencies, exact in fs);
+  - the value at an instant (LED-DATA-V4's VLED at each P0.06 rise, in µV).
+- **An extremum** within [−1 µV, its change over one script sample period
+  at the script's extremum + 1 µV].
+- **A settle time** equal at the scripts' printed resolution (1 µs).
+- **The shed crossing**, moved by 0.5 µV divided by the ramp's slope (from
+  the script's own samples 1 ms either side), within one script sample
+  period of the script's crossing. Measured: +31.5 µs, against 100 µs.
+
+**A3.7 How the scripts' checks became assertions.**
+
+- **E1** is `examples/dial-me-spinner/asserts/e1.toml`: LED-DATA-V4 (`at`),
+  LSW-3 (`range` of `V(LED_DIN) - V(VLED)`), LSW-2 (`settle`) and FW-6.4
+  as three assertions: LED_PWR_EN high at each P0.06 rise, P0.06 at least
+  10 ms after the LED_PWR_EN rise, and LED_PWR_EN off at least 30 ms. The
+  script's FW-6.4 passes exactly when all three do.
+- **E2's codes** are `asserts/e2/<case>.toml`, written by
+  `scripts/dms_asserts.py` from `check_dms_vsense.py`'s results. Each
+  reading's code equals the code the script's model predicts (loaded
+  cases) or the unloaded pad's code (the `-none` twins), and the number of
+  readings is fixed.
+  - The model stays in the script, since D5 has no expression language;
+    the assertion carries its result for this bench as exact integers.
+  - `assert-gate` regenerates the files from its own runs and requires
+    them byte for byte.
+  - The shed (`sag`) and the restore (`rec`) are thresholds: codes ≥ 1283
+    before the shed and ≤ 1282 at it, the LEDs' state in each reading, the
+    restoring reading's VBAT_est ≥ 3.58 V, LED_PWR_EN's edge counts, and
+    the off time ≥ 30 ms.
+  - The shed timing's threshold is the script's code boundary less its
+    modelled mean sampling error, rounded up to whole µV.
+- **E3's HOME_N latency check** is three assertions in
+  `e3/asserts/<corner>.toml`: the device's tS and tACTIVE (`log` fields of
+  its start record), and the latency from the first `field above BOP`
+  record to HOME_N's fall after H1, at most tS + tACTIVE. The worst-phase
+  bound tS + tACTIVE ≤ the limit then follows from the constants. Park
+  adds H1's release latency. The script's check passes exactly when all
+  three pass.
+
+**A3.8 Negative controls (plan section 7).** Every Phase 1 negative control
+of the ported checks fails as before:
+
+- E1's wrong-order firmware fails exactly LSW-3, at both benches, in-run.
+- The FW-6.4 controls (ok-cold's `pin_edge` records moved): `bb assert`
+  fails exactly FW-6.4-on (on-wait) and FW-6.4-off (off-wait), as
+  `check_dms_rail.py` fails exactly FW-6.4 on the same files. The analog
+  assertions are `not_evaluable` in the replay; the script read them from
+  `nets.csv`.
+- E3's neg-fb200 fails exactly HOME_N-tS: its seeded phase gives the FA
+  run's HOME_N instant.
+- E3's neg-fb286 fails HOME_N-tS and HOME_N-latency (108.302 ms, the
+  script's number).
+- E3's neg-fast fails none of the three. The script fails it on its step
+  rate, park-stop and H3 checks, which are not ported.
+
+**A3.9 Partition independence.**
+
+- A synthetic run in `bbcore`'s unit tests gives identical records at three
+  partitions, including one of one-cell windows.
+- E1 is acyclic, with 10 ms grants. Each case at `--max-quantum` 10 µs (its
+  one-cell reference, a true equivalence) and 1 ms gives the same `assert`
+  records and every non-grant record. ok-cold with `--engine-order
+  analog-first` is byte-identical, and 10 runs are byte-identical.
+- E2's s50 and sag as their every-lattice-point references (`--lookahead
+  off --adc-push every`: other partitions) give the same records.
+- E3's partitions coincide (ADR-008 Amendment 12), so it adds a consistency
+  check only and is not part of the partition gate.
+
+**A3.10 Honesty (D6, G6).** Both refusals are implemented, each with its
+message, and gated:
+
+- a check on a net that an ideal bench source forces;
+- a branch current (`i(...)`, `#branch`). No kind reads a current yet.
+
+**A3.11 Not changed.** `engine:bench@1` is still not locked (Amendment 2).
+B2 adds no engine and no bench stimulus.

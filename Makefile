@@ -98,7 +98,7 @@ WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
                   nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test \
-                  bench-test bench-gate dms-home-project
+                  bench-test bench-gate dms-home-project assert-test assert-gate
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -158,6 +158,7 @@ pooled-test:
 	+$(STEP) dms-vsense-test
 	+$(STEP) dms-home-test
 	+$(STEP) bench-test
+	+$(STEP) assert-test
 	+$(STEP) ec-reconnect
 	+$(STEP) packages
 	+$(STEP) gdb-test
@@ -988,6 +989,24 @@ BENCH_STIM_ARGS = $(BENCH_ARGS) --bench $(BENCH_WORK)/p/bench/stimulus.toml --fo
 BENCH_TRIG_ARGS = $(BENCH_ARGS) --bench $(BENCH_WORK)/p/bench/trigger.toml --for 70ms
 BENCH_SET_ARGS  = $(BENCH_ARGS) --bench $(BENCH_WORK)/p/bench/digital-set.toml --for 100ms
 BENCH_GOLD := tests/golden/bench
+
+# --- Phase 2 B2: assertions and assert v2 (ADR-010 D5-D7, Amendment 3) -----
+# E1's four checks (examples/dial-me-spinner/asserts/e1.toml), E2's codes and shed timing
+# (asserts/e2/, written by scripts/dms_asserts.py) and E3's HOME_N latency (e3/asserts/) as
+# [[assert]] tables, against check_dms_rail.py, check_dms_vsense.py and check_dms_home.py on the same
+# runs (scripts/check_asserts.py; scripts/assert_gate.sh describes every check). assert-test (in make
+# test): E1's four cases with the assertions, the cross-check, passivity (the committed hashes), the
+# replay by `bb assert`, the FW-6.4 negative controls, a bench's own [[assert]] against an --assert
+# file, the refusals (G6). assert-gate (about 15 min fresh): that, E1's partitions and engine order
+# and determinism, E2's eight cases and two references, E3's corners and dms-home's negative controls.
+.PHONY: assert-test assert-gate pooled-assert-test pooled-assert-gate
+ASSERT_OUT ?= out/assert
+ASSERT_ENV  = DMS_RAIL_WORK=$(BB_SCRATCH)/bb-assert-rail DMS_VSENSE_WORK=$(BB_SCRATCH)/bb-assert-vsense \
+              BENCH_WORK=$(BB_SCRATCH)/bb-assert-bench
+pooled-assert-test: bb
+	$(ASSERT_ENV) bash scripts/assert_gate.sh test $(BB) $(ASSERT_OUT)-test
+pooled-assert-gate: bb
+	$(ASSERT_ENV) bash scripts/assert_gate.sh gate $(BB) $(ASSERT_OUT)
 
 # ADR-006 G1 and the package gates of `make test`: every part.toml, pins.toml,
 # test vector and bb.lock validates against spec/schema (python3-jsonschema);

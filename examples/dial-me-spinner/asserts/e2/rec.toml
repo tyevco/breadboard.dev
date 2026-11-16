@@ -1,0 +1,101 @@
+# examples/dial-me-spinner/asserts/e2/rec.toml: E2's LED shed and restore (Phase 1 plan section 2 E2, ADR-008
+# Amendments 4-6) as assertions (ADR-010 D5, D10; Amendment 3), for `bb run ... --assert` on the
+# case rec of scripts/dms_vsense.sh. Written by scripts/dms_asserts.py from check_dms_vsense.py's
+# results on the committed runs; make assert-gate rewrites it from its own runs and requires this
+# file byte for byte. Do not edit by hand.
+schema = "bb-bench/1"
+
+[[assert]]
+name = "E2-before-shed"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n="
+field = "code"
+until = { edge = "U10.P1.04", level = 0 }
+min = 1283
+msg = "every reading before the shed above the threshold code"
+
+[[assert]]
+name = "E2-shed"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n="
+field = "code"
+after = { edge = "U10.P1.04", level = 0 }
+until = { log = "^uart0: vsense: n=", source = "U10" }
+max = 1282
+msg = "the shedding reading at or below 1282"
+
+[[assert]]
+name = "E2-off-between"
+kind = "log"
+source = "U10"
+match = "leds=on$"
+after = { edge = "U10.P1.04", level = 0 }
+until = { log = "^uart0: vsense: leds on", source = "U10" }
+present = false
+msg = "the LEDs off in every reading between the shed and the restore"
+
+[[assert]]
+name = "E2-restore"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n="
+field = "vbat_est"
+after = { log = "^uart0: vsense: leds on", source = "U10" }
+until = { log = "^uart0: vsense: n=", source = "U10" }
+min = "3.58V"
+msg = "the restoring reading's VBAT_est >= 3.58 V"
+
+[[assert]]
+name = "E2-on-after"
+kind = "log"
+source = "U10"
+match = "leds=off$"
+after = { log = "^uart0: vsense: leds on", source = "U10" }
+present = false
+msg = "the LEDs on in every reading after the restore"
+
+[[assert]]
+name = "E2-en-rises"
+kind = "count"
+net = "U10.P1.04"
+level = 1
+min = 2
+max = 2
+msg = "LED_PWR_EN rises twice (boot, restore)"
+
+[[assert]]
+name = "E2-en-falls"
+kind = "count"
+net = "U10.P1.04"
+level = 0
+min = 1
+max = 1
+msg = "LED_PWR_EN falls once (the shed)"
+
+[[assert]]
+name = "E2-off-time"
+kind = "edge_timing"
+start = { edge = "U10.P1.04", level = 0 }
+end = { edge = "U10.P1.04", level = 1 }
+min = "30ms"
+msg = "restored no sooner than 30 ms after the shed"
+
+[[assert]]
+name = "E2-leds-off-line"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: leds off"
+min = 1
+max = 1
+msg = "one leds off line"
+
+[[assert]]
+name = "E2-leds-on-line"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: leds on"
+min = 1
+max = 1
+msg = "one leds on line"

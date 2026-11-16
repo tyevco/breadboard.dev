@@ -8,9 +8,10 @@ Changing a record's fields, their order, or their meaning requires an ADR.
 Version 2 adds the `reset` record and gives `assert` its version 2 keys
 (`outcome`, `value`, `limit`, `unit`, `rung`). No other record changes,
 and the stream carries no version field, so every version 1 file is a
-version 2 file. Nothing in this build emits `reset` (milestone P5) or
-`assert` (milestone B2); their shapes are fixed here so that the
-milestones that emit them do not change the format again.
+version 2 file. `assert` records are emitted since milestone B2, for a
+run's assertions (`spec/project.md` section 3.4; ADR-010 Amendment 3);
+nothing in this build emits `reset` (milestone P5). A run without
+assertions gives exactly the stream it gave before.
 
 Net names (ADR-007 D6, Phase 1 M4): `net` in `pin_edge` and `net_sample`
 is the net's **display name** (a project's KiCad net name, or the kernel
@@ -39,9 +40,10 @@ never by the advance (plan) order. No record gains or loses a field.
   sorted by `(t_fs, registration index of the producing engine, pin)`: at
   equal `t_fs`, engines in registration order, within an engine its `log`
   records (in emission order) before its `pin_edge` records (in
-  output-binding order), and the kernel's `net_sample` records (in configured
-  net order) last. The order never depends on the order in which engines
-  advance.
+  output-binding order), and the kernel's records last: its `net_sample`
+  records (in configured net order), then its `assert` records (in the
+  order of the run's assertions: the bench's, then each `--assert` file's).
+  The order never depends on the order in which engines advance.
 - Consumers must ignore unknown keys and unknown `type` values, which keeps
   forward compatibility. Producers must not emit them without an ADR.
 
@@ -117,7 +119,9 @@ Result of a check (ADR-010 D5-D7): an assertion of a bench or a test case,
 evaluated deterministically. The scheduler itself never emits one; the
 kernel emits the verdict at the verdict time, after the `net_sample`
 records of equal `t_fs` (the kernel's records come last). It is part of
-the non-grant equivalence comparison.
+the non-grant equivalence comparison. One record per assertion of the
+run, at its window's close (`spec/project.md` section 3.4). In this build
+`rung` is the run's rung, `fast`, and `nA` and `udegC` are not used yet.
 
 | key | type | meaning |
 | --- | --- | --- |

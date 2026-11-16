@@ -50,7 +50,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense`, the E3 cases `typ` and `step` of `make dms-home` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 5 min alone, most of it the E3 homing: 305 s in the M10 review, 450 s in M10 beside other gates). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, from B1 `bench-test`, from E4 `vscode-templates`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, from B1 `bench-test`, from B2 `assert-test`, from E4 `vscode-templates`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -126,6 +126,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make baseline` | H0: the runtime baseline. `make check` (`BASELINE_ARGS`) `BASELINE_N` = 3 times after one uncounted warm-up, on an idle ext4 worktree, under the measurement lock; wall times, load before each run and `make test`'s per-step times (`out/test-timing.tsv`, written by every `make test`) in `out/baseline` (`scripts/baseline.sh`). Its result is the table in "Gate budgets" |
 | `make bench-test` / `make bench-gate` | Phase 2 B1 (ADR-010 D1-D4, Amendment 1): `bb-bench/1` and the bench engine on `examples/bench` (a synthetic STM32F103 project with examples/feedback's firmware; a copy in `$(BB_SCRATCH)/bb-bench`, `scripts/bench_gate.sh`). `bench-test` (in `make test`): seven cases at bb's defaults through `scripts/check_bench.py` (the switch view's analytic RC settling and open-state divider, G8; the current profile; the analog playback equal to its CSV; the faults; the seeded bounce; the sets; the triggers' times; a digital playback into U1.PB0 with the edge times of an equivalent `[[pwl]]` gives the same edges to the fs and the same response, applied at `ceil_L`), the committed one-cell reference hashes (`tests/golden/bench`), G2 (a 601-point playback equals the same points as an inline `[[pwl]]`), eight refusals, and G1 (the Phase 1 benches as `bb-bench/0` and `/1` build byte-identical decks; `bb pkg migrate --bench`). `bench-gate`: that, plus every case at `--max-quantum` 10 µs, 1 ms and 10 ms and `--engine-order analog-first`, and determinism (about 6.5 min). `make bench-update` rewrites the goldens from one-cell references |
 | `make bench-perf` | Phase 2 B1 cost gate (measurement lock; idle host): `bench/playback-long.toml` (1 s, 100 001 points every 10 µs) against `bench/playback-base.toml` (AIN on a constant supply), interleaved, N = `BENCH_PERF_N` (5), medians: the playback adds at most 2.0 s of wall time |
+| `make assert-test` / `make assert-gate` | Phase 2 B2 (ADR-010 D5-D7, G3, G4, G6, Amendment 3): `[[assert]]` (`spec/project.md` section 3.4), evaluated by the kernel over the engines' accepted solver points (`bbcore::assert`, `Engine::solver_points`) and the records, one `assert` record per assertion at its window's close; `bb run --assert <file>` (an assertion file, for projects and board files) and `bb assert <run>` (the record-only kinds again on a finished run). The ported checks are assertion files: `examples/dial-me-spinner/asserts/e1.toml`, `asserts/e2/<case>.toml` (`scripts/dms_asserts.py` writes them from `check_dms_vsense.py`'s results) and `e3/asserts/<corner>.toml`; `scripts/check_asserts.py` compares every record with the script it ports on the same run (verdicts equal; values exact where both read the same data, the stated bounds for an extremum and a crossing between the scripts' samples, Amendment 3 A3.6). `assert-test` (in `make test`; copies in `$(BB_SCRATCH)/bb-assert-*`, `scripts/assert_gate.sh`): E1's four cases with the assertions against `check_dms_rail.py` (the wrong order fails exactly LSW-3), the committed hashes hold with the assertions on (passive), `bb assert` gives the run's records again, the FW-6.4 negative controls (moved `pin_edge` records) fail exactly FW-6.4-on and -off, a bench's own `[[assert]]` equals an `--assert` file, five refusals (G6: an ideal-source net, a branch current; an analog check on a pin, an unknown kind, a stimulus key in an assertion file); `dms-vsense-test` replays E2's code assertions on its four runs. `assert-gate` (about 20 min): that, E1 at `--max-quantum` 10 µs and 1 ms and analog-first and 10-run determinism (the same verdicts), E2's eight cases with the assertions (and s50, sag as their every-lattice-point references: the same verdicts; `dms_asserts.py` rewrites `asserts/e2` byte for byte), E3's typ, worst and park and dms-home's negative controls (neg-fb200 fails exactly HOME_N-tS, neg-fb286 HOME_N-tS and HOME_N-latency, neg-fast none) |
 | `make vcd-check` / `make vcd-check-fixture` | Phase 2 E4 gate G1 (ADR-016 D1, Amendment 1; CI job `dms-rail`, 16 s with the demo): `tools/vcd-check` (wellen 0.25.7, Surfer's waveform library, outside the workspace) loads `make demo`'s two `nets.vcd` and the committed fixture `tests/fixtures/vcd/mixed.vcd`: timescale 1 fs, every `$var` present with its type (`real` as Real, `wire 1` as a 1-bit Wire), every change, the `$comment` name map, and every real net equal to the run's `nets.csv` at every row; then six negative controls on edited copies of the fixture each fail with their own message (`scripts/vcd_check.sh`). `vcd-check-fixture` skips the demo. The docs page is `site/guide/viewing.md` |
 | `make vscode-templates` / `make vscode-test` | Phase 2 E4 gate G2 (ADR-016 D2, Amendment 1). `vscode-templates` (in `make test`, 0.1 s): `docs/templates/vscode/{tasks,launch}.json` statically against D2 (attach, `servertype: external`, `overrideAttachCommands: []`, no `svdFile`, the port, the `endsPattern` against bb's listening line in `cli/src/main.rs`, a `beginsPattern` that does not swallow it). `vscode-test` (local only: downloads a pinned VS Code 1.145.3 and cortex-debug 1.12.1 with its four dependencies from Open VSX once into `~/.cache/bb/vscode-test`, sha256-checked; needs `xvfb` and unprivileged user namespaces; about 2 min): the templates copied verbatim into a copy of the dial-me-spinner project, run in a headless VS Code in a network namespace with only loopback; attach, reads and stop give all four `tests/golden/dms-rail/ok-cold` hashes, and the negative control (a breakpoint through cortex-debug) marks the run and changes its outputs (`scripts/vscode_test.sh`) |
 
@@ -231,7 +232,7 @@ milestone may add to `make test` (wall time, on the baseline host). The
 | H6 | — (removes: `fresh` to nightly, `adc-stock`, split `cargo-test`) | | |
 | S | — | under 1 s (`bbpkg/tests/epoch.rs`: 0.01 s; the `packages` step 8.4 s against 7.2 s at the baseline, with `--publish` lint and the new schemas) in a pooled `make check` of 453 s | `make schema-epoch` 39 s with the base `bb` built, about 4 min from a cold base target |
 | B1 | +40 s | `bench-test` 5.0 s in an idle pooled `make check` (456 s in all, load 1.2-5.5); alone 10.6 s pooled (with the pool's start), 15.2 s `POOL=0`; in a `make check` beside other tracks (load 4-26) 20.6 s and 27.1 s | `make bench-gate` 6.5 min (load 30-60); `make bench-perf` 31 s (idle: the 1 s, 100 ksps playback adds −0.01 s) |
-| B2 | +20 s | | |
+| B2 | +20 s | `assert-test` 9.8 s in a pooled `make check` (908 s in all) and 18.1 s with `POOL=0` (1021 s in all), both beside other tracks (load 8-50, so to be re-measured idle); the E2 code replay in `dms-vsense-test` about 1 s; the unit tests (`bbcore::assert`, `cli` `asserts`) under 0.1 s | `make assert-gate` 23 min 52 s pooled (load 8-50; E3's six homing runs are most of it) |
 | B3 | +0 s (replaces scripts) | | |
 | R1 | +15 s | +4.8 s (`project-step` beside `step` in `dms-home-test`; N = 3 under load 16-48 from other tracks, so to be re-measured idle) | `make dms-home-project` 9 min 0 s (same load) |
 | R2 | +30 s | | |
@@ -254,7 +255,9 @@ needs at least 110 s of H6's named savings.
 
 ```
 bbcore/                 kernel: Time, PinSignal, Engine trait, Scheduler, EventSink, CsvWriter, VcdWriter;
-                        board.rs (board.bbm types, ADR-007 D6), cjson.rs (integer-only canonical JSON)
+                        board.rs (board.bbm types, ADR-007 D6), cjson.rs (integer-only canonical JSON);
+                        Phase 2 B2: assert.rs (ADR-010 D5-D7: the assertion kinds, windows, the
+                        kernel's evaluator over Engine::solver_points, and bb assert's replay)
 importers/kicad/        bb-kicad (ADR-007 D1-D3): S-expression reader, the netlist model and its version
                         gates, schematic gates, the kicad-cli runner (on a temporary copy, never in the project)
 bbpkg/                  component packages (ADR-006, spec/package.md): value grammar and integer units,
@@ -323,6 +326,10 @@ examples/dial-me-spinner/e3/ Phase 1 M10 (E3, route A): board.cir (typ), board-t
                         projects (bb.toml with M1 a virtual [[device]], bench.toml, board.bbm,
                         bb.lock), and packages/dial-me-spinner/detent-stepper (J40's motor
                         phases, views coils and step_emf; a project-local package)
+examples/dial-me-spinner/asserts/ Phase 2 B2 (ADR-010 D10, Amendment 3): the ported checks as
+                        assertion files (bb run --assert): e1.toml (E1's four checks), e2/<case>.toml
+                        (E2's codes, shed and restore; written by scripts/dms_asserts.py); E3's
+                        HOME_N latency is in e3/asserts/ (typ, worst, park)
 examples/dial-me-spinner/system/ Phase 1 M11 (ADR-007 Amendment 5): main + base as one project
                         (both vendored netlists, qualified names), [[connection]] main:J1 - base:J3
                         through the harness view of packages/dial-me-spinner/link-harness (a
@@ -393,7 +400,8 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         dms_home.sh (+ dms_home_boards.py, check_dms_home.py; Phase 2 R1:
                         compare_project_run.py); Phase 2 H0:
                         worktree.sh (+ worktree_test.sh), measure_lock.sh (+ measure_lock_test.sh),
-                        baseline.sh, step_time.sh; B1: bench_gate.sh (+ check_bench.py);
+                        baseline.sh, step_time.sh; B1: bench_gate.sh (+ check_bench.py); B2:
+                        assert_gate.sh (+ check_asserts.py, dms_asserts.py);
                         P0: pi_spike.sh (+ pi_spike.py); Phase 2 E4: vcd_check.sh, vscode_test.sh
                         (+ vscode_templates.py, vscode_test/: the extension test run inside VS Code)
 tools/vcd-check/        Phase 2 E4 (ADR-016 D1): the VCD loader of make vcd-check (wellen 0.25.7,
@@ -594,6 +602,13 @@ feedback board).
   `nets.csv` alone.** Compare `nets.csv`, `nets.vcd` and the non-grant
   records (`grep -v '"type":"grant"'`); grant records differ by design
   between partitions and lookahead settings.
+- **An assertion that is not passive** (ADR-010 D6, Amendment 3): one that
+  adds an element, an input or a grant boundary, or that reads anything but
+  the records and the engines' accepted solver points. A run's outputs
+  other than its `assert` records must be those of the same run without
+  the assertions (`make assert-test` checks the committed hashes with the
+  `assert` records removed). And a check that does not fit a kind stays a
+  script: no expression language (D5).
 - **Sending more than about 500 000 messages on one External Control
   connection.** Renode 1.17.0's server leaks 16 bytes of its receive
   thread's stack per message received (`stackalloc` inside the

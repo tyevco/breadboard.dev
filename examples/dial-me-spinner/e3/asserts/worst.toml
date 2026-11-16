@@ -1,0 +1,38 @@
+# examples/dial-me-spinner/e3/asserts/worst.toml: E3's HOME_N latency gate at the suite's DRV5032FA
+# worst corner (homing.elf on board-ts75.cir: tS 75 ms, BOP 4.8 mT, BRP 0.5 mT, at its worst sample
+# phase), as assertions (ADR-010 D5, D10; Amendment 3), ported from scripts/check_dms_home.py
+# --corner worst: tS + tACTIVE = 75.04 ms, within the suite's 97.42 ms window (75 ms + 10 steps at
+# 446 PPS, ADR-008 Amendment 10). See typ.toml.
+schema = "bb-bench/1"
+
+[[assert]]
+name = "HOME_N-tS"
+kind = "log"
+source = "devices"
+match = "^M1: DRV5032 tS "
+field = "tS"
+min = "75ms"
+max = "75ms"
+msg = "M1's sample period tS (DRV5032FA maximum, Table 6.5)"
+
+[[assert]]
+name = "HOME_N-tACTIVE"
+kind = "log"
+source = "devices"
+match = "^M1: DRV5032 tS "
+field = "tactive"
+min = "40us"
+max = "40us"
+msg = "M1's active time tACTIVE"
+
+[[assert]]
+name = "HOME_N-latency"
+kind = "edge_timing"
+after = { log = "^uart0: homing: H1 skipped", source = "U10" }
+until = { edge = "M1.HOME_N", level = 1 }
+start = { log = "^M1: field above BOP", source = "devices" }
+end = { edge = "M1.HOME_N", level = 0 }
+pair = "first"
+min = "0s"
+max = "75.04ms"
+msg = "HOME_N assert latency after the BOP crossing"

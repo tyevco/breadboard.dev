@@ -1,0 +1,51 @@
+# examples/dial-me-spinner/e3/asserts/park.toml: E3's HOME_N latency gate for homing.elf on
+# board-park.cir (from inside the park zone, so H1 runs; tS 50 ms, BOP/BRP 4.8/0.5 mT), as
+# assertions (ADR-010 D5, D10; Amendment 3), ported from scripts/check_dms_home.py --corner typ
+# --start park: the assert latency after H1, and H1's release (BRP) latency. See typ.toml.
+schema = "bb-bench/1"
+
+[[assert]]
+name = "HOME_N-tS"
+kind = "log"
+source = "devices"
+match = "^M1: DRV5032 tS "
+field = "tS"
+min = "50ms"
+max = "50ms"
+msg = "M1's sample period tS (DRV5032FA typical)"
+
+[[assert]]
+name = "HOME_N-tACTIVE"
+kind = "log"
+source = "devices"
+match = "^M1: DRV5032 tS "
+field = "tactive"
+min = "40us"
+max = "40us"
+msg = "M1's active time tACTIVE"
+
+[[assert]]
+name = "HOME_N-latency"
+kind = "edge_timing"
+after = { log = "^uart0: homing: H1 done: HOME released after", source = "U10" }
+until = { edge = "M1.HOME_N", level = 1 }
+start = { log = "^M1: field above BOP", source = "devices" }
+end = { edge = "M1.HOME_N", level = 0 }
+pair = "first"
+min = "0s"
+max = "50.04ms"
+msg = "HOME_N assert latency after the BOP crossing"
+
+# H1's release: from the field falling below BRP to HOME_N's rise, between H0's energise and the
+# end of H2, at most tS + tACTIVE.
+[[assert]]
+name = "HOME_N-release"
+kind = "edge_timing"
+after = { log = "^uart0: homing: H0 energise", source = "U10" }
+until = { log = "^uart0: homing: H2 done", source = "U10" }
+start = { log = "^M1: field below BRP", source = "devices" }
+end = { edge = "M1.HOME_N", level = 1 }
+pair = "first"
+min = "0s"
+max = "50.04ms"
+msg = "HOME_N release latency after the BRP crossing (H1)"

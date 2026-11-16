@@ -85,12 +85,22 @@ def self_test():
         ("lock", {"schema": "bb-lock/1", "platform": [{"id": "renode:x@1", "content": "sha256:" + "0" * 64, "engine": "renode"}]}),
         ("lock", {"schema": "bb-lock/1", "platform": [{"id": "renode:x@1", "content": "sha256:" + "0" * 64, "renode": "1.17.0"}]}),
         ("project", {"schema": "bb-project/1", "board": [{"id": "main", "netlist": "a.net"}], "run": {"cpu": "mcu"}}),
+        # ADR-010 D5 (milestone B2): [[assert]] is bb-bench/1's, of the closed kinds, an event one of three.
+        ("bench", {"schema": "bb-bench/0", "assert": [{"name": "a", "kind": "count", "net": "X", "min": 1}]}),
+        ("bench", {"schema": "bb-bench/1", "assert": [{"name": "a", "kind": "maximum", "net": "X", "max": "1V"}]}),
+        ("bench", {"schema": "bb-bench/1", "assert": [{"name": "a b", "kind": "range", "net": "X", "max": "1V"}]}),
+        ("bench", {"schema": "bb-bench/1", "assert": [{"name": "a", "kind": "edge_timing", "max": "1ms",
+                                                       "start": {"edge": "X", "level": 1, "log": "^b"}, "end": {"edge": "Y", "level": 0}}]}),
     ]
     good = [
         ("part", {"schema": "bb-part/0", "part": {"id": "x/y", "version": "1.0.0", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"}}),
         ("part", {"schema": "bb-part/1", "part": {"id": "x/y", "version": "1.0.0", "kind": "mechanical", "license": "MIT"}, "pins": {"file": "p"},
                   "analog": [{"name": "c", "kind": "switch", "fidelity": ["fast"], "ports": [{"role": "pin", "pin": "1"}, {"role": "pin", "pin": "2"}], "params": {"ron": "1k"}}]}),
         ("bench", {"schema": "bb-bench/1", "action": [{"press": "SW1", "at": "1ms", "for": "2ms", "bounce": {"count": 2}}]}),
+        ("bench", {"schema": "bb-bench/1", "assert": [
+            {"name": "LSW-2", "kind": "settle", "net": "VLED", "event": {"edge": "U10.P1.04", "level": 0}, "within": "30ms", "max": "10%"},
+            {"name": "S", "kind": "edge_timing", "start": {"cross": "V", "below": "1V"}, "end": {"edge": "E", "level": 0}, "pair": "first",
+             "max": "1s", "after": {"log": "^x", "source": "U10", "delay": "1ms"}, "until": {"edge": "E", "level": 1}}]}),
         ("part", {"schema": "bb-part/1", "part": {"id": "x/y", "version": "1.0.0", "kind": "soc", "license": "MIT"}, "pins": {"file": "p"},
                   "power": {"vdd_min": "1.7V", "io_rail": "VDD", "idd": {"run": {"typ": "3.3mA", "ref": "PS"}}},
                   "document": [{"id": "ps", "sha256": "0" * 64, "fetched_by": "user:x"}], "claims": {"file": "claims.toml"},
@@ -177,6 +187,9 @@ def main(argv):
             if bench.name == "bb.toml":
                 continue  # a project named bench (examples/bench), checked above
             check("bench", bench)
+        # Assertion files (bb run --assert; ADR-010 Amendment 3): bb-bench/1 files of [[assert]].
+        for af in sorted(root.rglob("asserts/**/*.toml")):
+            check("bench", af)
         for bbm in sorted(root.rglob("board.bbm")):
             checked += 1
             try:
