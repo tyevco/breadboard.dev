@@ -572,9 +572,17 @@ its sha256 is in `run.json`.
 - **`bb run [--project <dir>] --for <t> [--bench <file>] [--fidelity
   fast|pi] [--probe net:<name>]… --out <dir> [--allow-unqualified
   <pkg:view>]…`** (`--fidelity` over the bench's `fidelity`, default
-  `fast`; a board file runs at `fast` only)
+  `fast`; a board file runs at `fast` only, except for
+  `--operating-point` below)
   (with every Phase 0 option except `--netlist`, `--firmware` and
-  `--target`). **Read-only on the project:** `board.bbm` must equal what
+  `--target`). At `pi` every MCU `digital_out` gets the rail-tracking,
+  tristate glue of `spec/pin-model.md` (ADR-009 D5); `--pi-oe pin-cnf`
+  (the default) drives its `oe` from `PIN_CNF.DIR` on the nRF52840,
+  `--pi-oe fixed` holds it at 1. `--operating-point` (a project or a
+  board file) builds the deck and the glue, solves the DC operating point
+  with every input at its initial value and, at `pi`, every `oe` at 0,
+  without the transient-op fallback (ADR-015 D4), prints the result and
+  stops: no CPU engine starts and nothing is written (ADR-009 gate G9). **Read-only on the project:** `board.bbm` must equal what
   the import gives now (for a `kicad =` board, from `.bb/<board>.net`
   after checking every source's sha256 against `.bb/import.json`) and
   `bb.lock` must match, else it fails with "run `bb open`"; the image hash
@@ -623,7 +631,11 @@ an `adc_in` binding is recorded the same way, with `view = "none"` and only
 reasons); `devices`, only when the project has a `[[device]]` (per device
 `ref`, `package`, `version`, `device` (its id), `virtual` and `params` as
 written; ADR-013 D1); `digital_only`, only when a net is (its display
-names, sorted; ADR-014 D4); `assert_files`, only when `bb run --assert`
+names, sorted; ADR-014 D4); `pi_glue`, only at `pi` (ADR-009 D5,
+milestone P2): per MCU `digital_out` on a circuit net, in binding order,
+`pin` (its kernel net), `rail` (the package pin) and `rail_net`, `rhiz`
+(Ω, a decimal string), `vss_net` (when the ground pins are on a net) and
+`oe` (`"pin_cnf_dir"` or `"fixed"`); `assert_files`, only when `bb run --assert`
 names any (each file's name and text, in order; ADR-010 Amendment 3);
 `packages` (each one's id, version, `source`: `path` for a local package,
 else its `registry+<url>` source, ADR-011; and tree) and `platforms` (the

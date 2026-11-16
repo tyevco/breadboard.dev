@@ -212,7 +212,8 @@ migration() { # G1 on the Phase 1 benches of examples/dial-me-spinner
   cp "$src/firmware/prebuilt/$elf" "$d/firmware/prebuilt/"
   "$BB" flash --project "$d" --target U10 "$d/firmware/prebuilt/$elf" > /dev/null
   local n=0
-  for b in "$d"/bench/*.toml; do
+  # The Phase 1 benches only: a Phase 2 bench (P2's cold-pi*.toml) uses bb-bench/1-only keys.
+  for b in "$d"/bench/{nominal,cold,vsense,sag,sag-recover}.toml; do
     local name cur other
     name=$(basename "$b" .toml)
     cur=$(sed -n 's/^schema = "bb-bench\/\([01]\)".*/\1/p' "$b")

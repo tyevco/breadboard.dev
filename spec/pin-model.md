@@ -77,6 +77,45 @@ arguments.
 Phase 0 STM32F103 GPIO (`DigitalOut::STM32_GPIO_3V3`):
 `voh = 3.3, vol = 0.0, rise = fall = 5 ns, zout = 25 Ω`.
 
+#### At `pi`: rail-tracking and tristate (ADR-009 D5, milestone P2)
+
+At the `pi` rung (`bb run --fidelity pi`, or the bench's `fidelity`) an
+MCU `digital_out` on a circuit net drives from its own rail and can be
+high-Z. `s` is the level ramp above normalised to 0..1 (0 V / 1 V over
+`rise`/`fall`), and `oe` the output enable, ramped the same way:
+
+```
+  V_bb_<id>     __pi_s_<id>  0 dc 0 external       ; s in 0..1
+  V_bb_<id>_oe  __pi_oe_<id> 0 dc 0 external       ; oe: 1 = driving, 0 = high-Z
+  B_bb_<id>_hi  <rail> <net> I = V(__pi_oe_<id>)*V(__pi_s_<id>)*(V(<rail>)-V(<net>))/{zout}
+  B_bb_<id>_lo  <net> <vss>  I = V(__pi_oe_<id>)*(1-V(__pi_s_<id>))*(V(<net>)-V(<vss>))/{zout}
+  R_bb_<id>_hz  <net> <vss>  {rhiz}
+```
+
+- `<id>` is `<part>_<pin>` with every character other than an ASCII
+  letter or digit replaced by `_`. With `<vss>` the ground node `0`, the
+  low side's term is `V(<net>)`.
+- **`rail`** is the net of the package pin the binding's `rail` names, by
+  default the package's `[power] io_rail`; a pin with neither is refused
+  at `pi`. The rail's net must be in the analog scope. `<vss>` is the net
+  of the package's ground pins (the board's ground when they are on none).
+  `voh` and `vol` are not used (a binding that sets them gets a warning).
+- **`rhiz`** (default 100 MΩ, a numerics floor: 33 nA at 3.3 V) gives the
+  net a DC path in every state, so the operating point solves with every
+  output high-Z.
+- **`oe`** is the pin's `PIN_CNF.DIR` on the nRF52840: the CPU engine's
+  output `<pin>#oe`, each `PIN_CNF`/`DIR`/`DIRSET`/`DIRCLR` write that
+  changes the bit at the write's virtual time by the lattice rule of GPIO
+  edges (the hook and a GPIO event read the same clock), low after reset
+  (`PIN_CNF = 0x2`), so a pin is high-Z until firmware makes it an output.
+  On every other platform, or with `bb run --pi-oe fixed`, `oe = 1` (a
+  `dc 1` source). While a CPU is held in reset `oe` is 0 (milestone P5).
+- A board file names no rail: only `bb run --operating-point --fidelity
+  pi` builds its glue, with a stand-in rail `V_bb_<id>_rail
+  __pi_rail_<id> 0 dc <voh>` (gate G9). `--operating-point` solves the DC
+  operating point with every `oe` at 0.
+- A device's `digital_out` keeps the form above at every rung.
+
 ### `digital_in{vih, vil, cin}`
 
 When an analog net feeds a digital engine, the **producing** analog engine
@@ -261,3 +300,9 @@ boundary; the analog engine handles it entirely.
     the engine (bound to its kernel net, in no output file) when no probe
     does. A run's outputs other than its `assert` records are those of the
     same run without the assertions.
+11. At `pi` an MCU `digital_out` on a circuit net gets the rail-tracking,
+    tristate glue of the `digital_out` section (ADR-009 D5) in place of
+    rule 1, after the board body and the loads of rule 9. Its `oe` source
+    is driven by the CPU engine's `<pin>#oe` trace (kernel net
+    `<part>.<pin>#oe`) on the nRF52840, else it is `dc 1`. At `fast` no
+    such glue exists and no `#oe` output is bound.

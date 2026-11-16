@@ -510,6 +510,166 @@ fn nrf_pin_cnf_audit_findings() {
     assert_eq!(on.findings, reference.findings);
 }
 
+/// `nrf-oe` (ADR-009 D5, milestone P2's prototype): the `#oe` outputs, each
+/// pin's `PIN_CNF.DIR` from the engine's `PIN_CNF` write hook, on
+/// `nrf_pincnf.c`. P0.17's DIRSET in the first RTC0 compare's ISR, and its
+/// `PIN_CNF` input write in the second, come a few instructions after that
+/// ISR's P0.13 toggle: in program order, within one cell (here the next
+/// slice; `nrf_oe_same_clock_as_gpio` checks adjacent stores, which share a
+/// slice and a time). The boot writes (before the first WFI) are at
+/// 1 fs (stamp 0, lattice rule 1); a pin configured as an input has no
+/// `#oe` edge. Partition independent (one-cell, 10 ms grants, lookahead
+/// on), the GPIO edges unchanged by the `#oe` pins, and the audit's
+/// mid-run record for P0.17 at its `#oe` rise when both run.
+#[test]
+fn nrf_oe_trace_exact() {
+    let Some(cfg) = config("nrf_pincnf", &["P0.13", "P0.14", "P0.15"]) else {
+        return;
+    };
+    let mut with_oe = cfg.clone();
+    for p in [
+        "P0.11", "P0.12", "P0.13", "P0.14", "P0.15", "P0.17", "P0.20", "P0.21",
+    ] {
+        with_oe
+            .pins
+            .push(PinSpec::nrf_oe(&format!("{p}#oe")).unwrap());
+    }
+    let t_end = Time::from_ms(30);
+    let plain = drive(&cfg, Mode::Reference, t_end, None);
+    let reference = drive(&with_oe, Mode::Reference, t_end, None);
+    let long = drive(&with_oe, Mode::Long, t_end, None);
+    let on = drive(&with_oe, Mode::On, t_end, None);
+    for d in [&plain, &reference, &long, &on] {
+        assert!(d.err.is_none(), "{:?}", d.err);
+    }
+    for e in &reference.edges {
+        eprintln!("nrf-oe: {} {} {}", e.0, e.1, u8::from(e.2));
+    }
+    // The #oe pins change no GPIO edge.
+    let gpio = |d: &Drive| -> Vec<(Time, String, bool)> {
+        d.edges
+            .iter()
+            .filter(|e| !e.1.ends_with("#oe"))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(gpio(&reference), plain.edges, "#oe changed the GPIO edges");
+    assert_eq!(long.edges, reference.edges, "10 ms grants changed #oe");
+    assert_eq!(on.edges, reference.edges, "lookahead changed #oe");
+    check_honest("nrf-oe", &reference, &on);
+    let oe: Vec<(Time, &str, bool)> = reference
+        .edges
+        .iter()
+        .filter(|e| e.1.ends_with("#oe"))
+        .map(|e| (e.0, e.1.as_str(), e.2))
+        .collect();
+    let boot = Time::from_fs(1);
+    // The boot configuration, in write order: P0.14, P0.13, P0.11, P0.15,
+    // P0.20 outputs; P0.12, P0.21, P0.17 inputs (no change).
+    assert_eq!(
+        oe[..5],
+        [
+            (boot, "P0.14#oe", true),
+            (boot, "P0.13#oe", true),
+            (boot, "P0.11#oe", true),
+            (boot, "P0.15#oe", true),
+            (boot, "P0.20#oe", true),
+        ]
+    );
+    let p13 = edges_of(&reference, "P0.13");
+    let p17: Vec<_> = oe.iter().filter(|e| e.1 == "P0.17#oe").collect();
+    assert_eq!(p17.len(), 2, "{p17:?}");
+    assert!(p17[0].2 && !p17[1].2);
+    // The ISR toggles P0.13 a few instructions before it writes P0.17's
+    // direction: program order is kept, within one cell.
+    for k in 0..2 {
+        assert!(
+            p17[k].0 >= p13[k].0 && p17[k].0 - p13[k].0 < L,
+            "P0.17#oe at {} against the P0.13 edge at {}",
+            p17[k].0,
+            p13[k].0
+        );
+    }
+    assert_eq!(oe.len(), 7, "{oe:?}");
+    // With the audit as well: its mid-run record for P0.17 is at the rise.
+    let mut both = with_oe.clone();
+    both.pin_cnf_audit = vec![PinCnfAudit {
+        pin: "P0.17".into(),
+        expect: PinCnfExpect::DigitalIn,
+    }];
+    let b = drive(&both, Mode::On, t_end, None);
+    assert!(b.err.is_none(), "{:?}", b.err);
+    assert_eq!(b.edges, reference.edges, "the audit changed #oe");
+    assert_eq!(b.logs.len(), 1, "{:?}", b.logs);
+    assert_eq!(b.logs[0].0, p17[0].0);
+    eprintln!(
+        "nrf-oe: P0.17#oe {} / {}, P0.13 {} / {}; reference {:.2} s, plain {:.2} s",
+        p17[0].0, p17[1].0, p13[0].0, p13[1].0, reference.wall_s, plain.wall_s
+    );
+}
+
+/// `nrf-oe` exactness (ADR-009 D5): `nrf_oe.c` writes P0.17's direction
+/// and the GPIO outputs in adjacent stores. A `#oe` edge and a GPIO edge read
+/// the same clock (the sync point that opened the write's slice) by the same
+/// lattice rule, so the stores of one slice get one time and program order
+/// is never inverted: `#oe` rises at or before the P0.14 / P0.17 rise of its
+/// ISR and falls at or after their fall. Partition independent.
+#[test]
+fn nrf_oe_same_clock_as_gpio() {
+    let Some(mut cfg) = config("nrf_oe", &["P0.14", "P0.17"]) else {
+        return;
+    };
+    cfg.pins.push(PinSpec::nrf_oe("P0.17#oe").unwrap());
+    let t_end = Time::from_ms(60);
+    let reference = drive(&cfg, Mode::Reference, t_end, None);
+    let long = drive(&cfg, Mode::Long, t_end, None);
+    let on = drive(&cfg, Mode::On, t_end, None);
+    for d in [&reference, &long, &on] {
+        assert!(d.err.is_none(), "{:?}", d.err);
+    }
+    assert_eq!(
+        long.edges, reference.edges,
+        "10 ms grants changed the edges"
+    );
+    assert_eq!(on.edges, reference.edges, "lookahead changed the edges");
+    check_honest("nrf-oe", &reference, &on);
+    let oe = edges_of(&reference, "P0.17#oe");
+    let p14 = edges_of(&reference, "P0.14");
+    let p17 = edges_of(&reference, "P0.17");
+    assert!(oe.len() >= 5, "{oe:?}");
+    assert_eq!(oe.len(), p14.len());
+    assert_eq!(oe.len(), p17.len());
+    let mut equal = 0;
+    for k in 0..oe.len() {
+        let (o, a, b) = (oe[k], p14[k], p17[k]);
+        assert_eq!(o.2, a.2, "edge {k}: {o:?} {a:?}");
+        assert_eq!(a.0, b.0, "one OUTSET/OUTCLR store: {a:?} {b:?}");
+        if o.2 {
+            assert!(
+                o.0 <= a.0 && a.0 - o.0 < L,
+                "rise {k}: #oe {} after P0.14 {}",
+                o.0,
+                a.0
+            );
+        } else {
+            assert!(
+                o.0 >= a.0 && o.0 - a.0 < L,
+                "fall {k}: #oe {} before P0.14 {}",
+                o.0,
+                a.0
+            );
+        }
+        equal += usize::from(o.0 == a.0);
+    }
+    eprintln!(
+        "nrf-oe: {} #oe edges, {equal} at the same time as their ISR's GPIO edge (the rest \
+         one slice apart, in program order); first rise {} / P0.14 {}",
+        oe.len(),
+        oe[0].0,
+        p14[0].0
+    );
+}
+
 /// The prebuilt Zephyr gate image (`tests/firmware/nrf52840/zephyr/`).
 fn zephyr_elf() -> Option<PathBuf> {
     let elf = fw_dir().join("zephyr/prebuilt/nrf_zephyr_gate.elf");

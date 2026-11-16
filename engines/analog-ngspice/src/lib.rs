@@ -1145,6 +1145,28 @@ unsafe extern "C" fn cb_bg_thread(exited: bool, _id: c_int, _u: *mut c_void) -> 
     0
 }
 
+/// An `EXTERNAL` source's name, lower case, for the source maps: on the stack
+/// for an ASCII name of up to 64 bytes (every generated name), so the
+/// callbacks, which ngspice makes for every source at every load of every
+/// Newton iteration, allocate nothing (milestone P2: the `pi` glue's `oe`
+/// sources made this path measurable). The same key as before, so no result
+/// changes.
+fn source_key(p: *const c_char, buf: &mut [u8; 64]) -> std::borrow::Cow<'_, str> {
+    if p.is_null() {
+        return std::borrow::Cow::Borrowed("");
+    }
+    // SAFETY: ngspice passes NUL-terminated strings.
+    let b = unsafe { CStr::from_ptr(p) }.to_bytes();
+    if b.len() <= buf.len() && b.is_ascii() {
+        let s = &mut buf[..b.len()];
+        s.copy_from_slice(b);
+        s.make_ascii_lowercase();
+        std::borrow::Cow::Borrowed(std::str::from_utf8(s).expect("ASCII"))
+    } else {
+        std::borrow::Cow::Owned(cstr_lossy(p).to_ascii_lowercase())
+    }
+}
+
 unsafe extern "C" fn cb_get_vsrc(
     value: *mut f64,
     time: f64,
@@ -1152,9 +1174,11 @@ unsafe extern "C" fn cb_get_vsrc(
     _id: c_int,
     _u: *mut c_void,
 ) -> c_int {
-    let name = cstr_lossy(name).to_ascii_lowercase();
+    let mut buf = [0u8; 64];
+    let name = source_key(name, &mut buf);
+    let name: &str = name.as_ref();
     let mut st = state();
-    let v = match (st.sources.get(&name), st.tables.get(&name)) {
+    let v = match (st.sources.get(name), st.tables.get(name)) {
         (Some(w), _) => w.value_at(time),
         (None, Some(t)) => t.value_at(time),
         (None, None) => {
@@ -1180,9 +1204,11 @@ unsafe extern "C" fn cb_get_isrc(
     _id: c_int,
     _u: *mut c_void,
 ) -> c_int {
-    let name = cstr_lossy(name).to_ascii_lowercase();
+    let mut buf = [0u8; 64];
+    let name = source_key(name, &mut buf);
+    let name: &str = name.as_ref();
     let mut st = state();
-    let v = match st.tables.get(&name) {
+    let v = match st.tables.get(name) {
         Some(t) => t.value_at(time),
         None => {
             st.fail(format!("EXTERNAL current source {name} has no bench table"));

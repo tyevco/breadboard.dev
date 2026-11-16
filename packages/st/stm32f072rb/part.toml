@@ -3,7 +3,7 @@ schema = "bb-part/1"
 
 [part]
 id = "st/stm32f072rb"
-version = "0.1.0"
+version = "0.2.0"
 kind = "soc"
 manufacturer = "STMicroelectronics"
 mpn = ["STM32F072RBT6", "STM32F072RBT7"]
@@ -25,6 +25,11 @@ file = "pins.toml"
 [behavioral]
 engine = "renode"
 platform = "stm32f072-bb@1"
+
+# ADR-009 D5 (milestone P2): at pi a digital_out drives from VDD. A pin on another I/O supply
+# (VDDIO2 on the STM32F072) sets rail on its binding.
+[power]
+io_rail = "VDD"
 
 # The pin models are the ones Phase 0's examples/adc board.cir states
 # (digital_out 3.3 V, 5 ns, 25 ohm; adc_in 3.3 V, 12 bits) plus the Phase 0

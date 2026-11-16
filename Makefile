@@ -162,6 +162,7 @@ pooled-test:
 	+$(STEP) ec-reconnect
 	+$(STEP) packages
 	+$(STEP) pi-static-test
+	+$(STEP) pi-glue-test
 	+$(STEP) gdb-test
 	+$(STEP) vscode-templates
 	+$(STEP) dms-system
@@ -915,6 +916,35 @@ pi-static-test:
 	$(CARGO) build -q -p bb-analog-ngspice --example deck_run
 	DECK_RUN=$(CARGO_TARGET_DIR)/debug/examples/deck_run bash scripts/pi_static.sh test
 
+# Phase 2 plan P2 (ADR-009 D5, gates G8 and G9, Amendment 5): rail-tracking, tristate digital_out
+# at pi, with the high-Z leakage rhiz and oe from PIN_CNF.DIR (scripts/pi_glue.sh, pi_glue.py; project
+# copies in $(PI_GLUE_WORK)). pi-glue-test (in make test, about 12 s): G9, every Phase 1 deck's DC
+# operating point at pi with every MCU digital_out high-Z (`bb run --operating-point`); E1 cold at pi
+# (bench/cold-pi.toml) with both firmwares: check_dms_rail.py, LSW-3 re-reported without the voh =
+# 3.3 V pessimism, the oe edges; G8, LED_PWR_EN's VOH at the PS's 0.5 mA (bench/cold-pi-ioh.toml); the
+# default runs against tests/golden/pi-glue. pi-glue adds the oe prototype's Renode tests (exactness:
+# tests/nrf52840.rs nrf_oe_*), partition independence (one-cell, 1 ms, default), analog-first, a
+# second run, the fast side-by-side and --pi-oe fixed's report. pi-oe-cost (a measurement, under the
+# lock): the PIN_CNF.DIR oe against the fallback oe = 1 on E1 cold pi, N = PI_OE_COST_N (9) interleaved,
+# medians; B / A at most 1.05 (ADR-009 D5 5 %).
+PI_GLUE_OUT  ?= out/pi-glue
+PI_GLUE_WORK ?= $(BB_SCRATCH)/bb-pi-glue
+export PI_GLUE_WORK
+.PHONY: pi-glue pi-glue-test pi-glue-update
+pi-glue: firmware bb
+	BB_REQUIRE_RENODE=1 $(CARGO) test --release -p bb-cpu-renode --test nrf52840 -- --nocapture nrf_oe_
+	bash scripts/pi_glue.sh gate $(BB) $(PI_GLUE_OUT)
+pi-glue-test: firmware bb
+	bash scripts/pi_glue.sh test $(BB) $(PI_GLUE_OUT)-test
+pi-glue-update: firmware bb
+	bash scripts/pi_glue.sh update $(BB) $(PI_GLUE_OUT)-update
+PI_OE_COST_N ?= 9
+measured-pi-oe-cost: firmware bb
+	bash scripts/pi_glue.sh prepare $(BB)
+	PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) out/pi-oe-cost $(PI_OE_COST_N) "--pi-oe fixed" "" - - 1.05 -- \
+	    --project $(PI_GLUE_WORK)/proj-ok --bench $(PI_GLUE_WORK)/proj-ok/bench/cold-pi.toml --for 120ms \
+	    --renode-pool off
+
 # --- Phase 1 M4: KiCad import, board.bbm, projects (ADR-007) ---------------
 # examples/adc drawn in KiCad (examples/adc/kicad), as a bb.toml project. Its
 # runs use a copy off /mnt/c with the firmware recorded by `bb flash`
@@ -1496,7 +1526,7 @@ MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-tabl
                    adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
                    setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \
-                   ngspice-stall bench-perf bb-test-cost
+                   ngspice-stall bench-perf bb-test-cost pi-oe-cost
 .PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
 $(MEASURE_TARGETS):
 	@bash scripts/measure_lock.sh $@ $(MAKE) --no-print-directory measured-$@
