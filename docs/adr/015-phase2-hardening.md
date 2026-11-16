@@ -2,7 +2,9 @@
 
 - **Status:** Accepted (2026-11-15; see "Approver decisions
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
-  (see "Review notes").
+  (see "Review notes"). Amendment 1: H1 as built (D1-D4). Amendment 2: H3
+  as built (D5; it corrects D5's claim that a Renode client reconnects by
+  itself).
 - **Part of:** the Phase 2 plan, milestones H1-H4 and H6. H2 is the
   SAADC-stall spike that D1 makes bounded.
 - **Normative changes when implemented:**
@@ -573,3 +575,219 @@ That is within H1's +30 s. The new gates `make ngspice-stall` (about
 gates) are outside `make test`. Their tier is nightly (D11; H6 builds it).
 `make dms-home` (62 minutes beside other gates) and the full
 `make dms-vsense` pass with every committed hash unchanged.
+
+## Amendment 2: H3 as built (D5, 2026-11-15)
+
+Milestone H3 implements D5: Renode's External Control is a client of
+`bb`'s listener, and that listener admits only `bb`'s own Renode. D5
+changes no protocol message of the kernel and no file under `spec/`. What
+was verified, what was built, where the build differs from D5's text, and
+what was measured.
+
+### Facts verified (Renode 1.17.0)
+
+Against the sources at the `v1.17.0` tag
+(`src/Renode/Network/ExternalControl/`) and a running Renode 1.17.0 (a
+Python prototype first, then the engine):
+
+- **Client mode connects to loopback only.** `RestartConnection` calls
+  `Connect(new IPEndPoint(IPAddress.Loopback, port))` for a client
+  (`ExternalControlSocket.cs` line 174) and never binds or listens.
+- **The handshake runs the other way.** `ExternalControlClient`'s
+  constructor sends `CHECK_VERSION` from the monitor thread and blocks the
+  monitor until it is answered (`ExternalControlClient.cs` line 15). That
+  thread is not the default handler thread, so the request comes from the
+  handler with bit 15 set: its id is `0x8001`.
+- **Message ids.** Renode routes an incoming message by id bit 15
+  (`GetHandlerForMessage`, line 342). In client mode its default handler
+  thread serves the handler of ids with bit 15 *clear*
+  (`GetHandlerForCurrentThread`, lines 345-353). So `bb`'s requests carry
+  ids with bit 15 clear (`Client::accept_reverse`, `Client::reverse`); a
+  request with bit 15 set would be queued for a handler nobody serves.
+  GPIO events from the emulation thread carry bit 15 (`0x8002`, ...).
+  `bb` still classifies by message type (ADR-003 D1.3).
+- **A client does not reconnect.** This corrects D5, which says that
+  "in client mode Renode reconnects to `bb`'s listener". When the peer
+  closes, `RxThreadBody` calls `Disconnect(isClient ? State.Disposed :
+  State.Unconnected)` (line 295). A client is disposed: its handlers are
+  set to `null` and its threads end, and nothing re-opens it.
+- **A second client object is no way out.** A GPIO event registration adds
+  a hook to the pin (`GPIOPort.cs` line 76, `AddStateChangedHook`) that is
+  never removed and that sends through the object it was registered on.
+  After `DisposeHandlers` that object's handlers are `null`, so the next
+  edge would throw a `NullReferenceException` on the emulation thread.
+- **The stack leak applies to the client too.** `RxThreadBody`'s
+  `stackalloc` loop is shared, so the reconnect of ADR-004 Amendment 8 is
+  still needed.
+
+### What was built
+
+- **`bb_cpu_renode::ec`** holds the listener, the owner check, the
+  reconnect command and the thread checks.
+- **`bb` listens.** The engine binds `127.0.0.1:0` before Renode starts.
+  `session.resc` ends with `emulation CreateExternalControlClient "bb"
+  <port>`, where the server line was before. The listener lives as long as
+  the engine, because a reconnect goes to the same port. The engine no
+  longer takes a port from `free_port` for External Control; the GDB stub
+  still does.
+- **The owner check.** For each accepted connection, the engine reads
+  `/proc/net/tcp`. It takes the entry whose local address is the peer's
+  and whose remote address is the listener's, and so finds the peer
+  socket's inode. It admits the connection only if
+  `socket:[<inode>]` is among `/proc/<pid>/fd` of its Renode: its child, or
+  the leased process whose pid the pool's `OK` names. Any other
+  connection is shut down and closed before a byte is read. The engine
+  counts it (`RenodeEngine::ec_refused`), prints a line on stderr, and
+  keeps waiting. Without `/proc` (not Linux) nothing is admitted, so the
+  check fails closed.
+- **The handshake.** `Client::accept_reverse` answers Renode's
+  `CHECK_VERSION`: success for version 0, and an error otherwise.
+- **The reconnect** (ADR-004 Amendment 8, unchanged in when it happens):
+  1. The engine closes the connection.
+  2. It waits until Renode's client threads are gone
+     (`ExternalControlClient_RxHandler` and `…_DefaultHandlerThread`,
+     `comm` `ExternalControl…` in `/proc/<pid>/task`). That takes about
+     4 ms.
+  3. It has Renode run `ec::RECONNECT_PY`, a monitor `python` command. The
+     command calls the private `ExternalControlSocket.RestartConnection` by
+     reflection on the one External Control object of the emulation and
+     prints `bb-ec-reconnect 1`. That is a new socket, `Connect`, new
+     handlers and a new receive thread, on the same object. So the hooks of
+     the first registration send through the new connection, as they did
+     through the server's restart before.
+  4. It accepts the new connection, with the owner check.
+  5. `Client::reverse` checks the version with a request of `bb`'s own,
+     because a restart sends nothing first.
+
+  Like the lookahead plugin, this reads a 1.17.0 internal by reflection.
+  If the method is missing, the command fails with a Python error and
+  prints no `bb-ec-reconnect 1`. Renode then never connects, the
+  reconnect fails at its deadline (the I/O timeout, at most 30 s) with
+  Renode's log tail, and the run fails. A pool reports `ERR` at once. No
+  result changes silently. A Renode upgrade (D8) re-runs `make
+  ec-exposure`, `make ec-reconnect` and `make ec-long`.
+- **The monitor channel of a fresh Renode.** A reconnect needs a monitor
+  command. So a fresh child now starts with `--console` and its stdin a
+  pipe, instead of `/dev/null` and no console. It still has `--port -1`,
+  so it has no TCP monitor, and the pipe is the only way in. Renode exits
+  when the pipe closes. The script is still Renode's argument (the console
+  runs it as `i @session.resc`), so startup is unchanged. Four interleaved
+  pairs of fresh spike runs, before and after, gave 1.33-1.40 s and
+  1.31-1.41 s of engine startup. That was a check, not a gated
+  measurement.
+- **Pool protocol 2** (`pool.rs`):
+  - The `RUN` line's port is now the engine's listener. The script's last
+    line blocks the console until the engine has answered
+    `CHECK_VERSION`, so the engine sends `RUN`, accepts (watching the lease
+    stream for an early `ERR`), answers, and only then reads `READY`.
+  - `RECONNECT` (any number of times before `END`) has the manager run
+    `RECONNECT_PY` on the console. It answers `RECONNECTING` when the
+    output has `bb-ec-reconnect 1`, else `ERR`, and the process is then
+    discarded.
+  - Pre-warm runs each platform through a client connection to the pool's
+    own listener, with the owner check against the console's pid. Once per
+    process it also runs a reconnect, so a broken reflection fails at
+    pre-warm, not in a run.
+- **Teardown.** The end of a lease (the manager's `end_session`) and a
+  gathering engine's `SIGTERM` (ADR-004 Amendments 6 and 9) now wait until
+  the client's threads are gone, instead of waiting for the server to
+  listen again. The re-listen race of ADR-004 Amendments 2 and 9 cannot
+  happen any more, because nothing re-listens. Disposing a client that is
+  still closing is the same class of race, hence the wait. `end_session`
+  still requires no listener after `Clear`, and now also no External
+  Control thread. `ec_server_accepting` and its test are removed.
+- **The test hook** `RenodeConfig::ec_hook` (`#[doc(hidden)]`, never set
+  by `bb`) is called with the listener's port before Renode is started or
+  the lease runs the script, and before each reconnect. The gate uses it.
+
+### G4, measured
+
+`make ec-exposure` (`engines/cpu-renode/tests/ec_exposure.rs`, also in
+`cargo-test`) ran 20 engine starts on the spike's blinky, 60 ms in 5 ms
+grants, with a reconnect every 8 messages: 4 fresh starts in parallel and
+16 leases from a 2-process pool. Before each start, and before each
+reconnect, a separate `bash` process connected to `bb`'s listener with
+`/dev/tcp` and waited for one byte. The hook returns only when that
+connection is established, so it is queued before Renode's. Result:
+
+- **20/20 starts**, each with 4 connections (the start and 3 reconnects):
+  80 foreign clients, every one refused. Every foreign client read 0
+  bytes, and every run admitted its own Renode.
+- **Nothing listened on Renode's side.** The Renode process listened on no
+  TCP port (`listening_ports`, its fds against `/proc/net/tcp{,6}`: the
+  exact form of a port scan) after start, after each of the 12 grants and
+  at the end of every run.
+- **No result changed.** The PA5 edges of every run equal a reference run
+  without foreign clients and without reconnects.
+- **No process was discarded.** The pool discarded none and leaked no
+  listener.
+
+The test takes 8.2 s alone. Its negative controls:
+
+- the unit test `ec::tests::listener_admits_only_the_owner` (a foreign
+  `bash` queued first is refused and reads nothing; the owner is
+  admitted; another pid never matches);
+- `protocol::tests::reverse_connection_wire_format` (ids, the event, the
+  reconnect's version check, a wrong version refused).
+
+**The rest of the row.** The row's other gates are re-proven unchanged
+because the reconnect is new code:
+
+- `make ec-reconnect`, fresh and pooled, gave its committed hashes
+  (86 reconnects on the ADC board and 25 on the feedback board, every 2 000 messages; fresh and leased alike);
+- `make ec-long` passed in 130 s: the 1 500 ms every-lattice-point reference ran 150 000 grants across 9 reconnects (every 100 000 messages), passed `check_adc.py` and equals the lookahead run except grant records;
+- `make pool-equiv` passed in 1 602 s (beside nothing else): 30 configurations, 2 rounds in alternating order, all 60 pooled runs leased from one Renode process, each byte-identical to its fresh run and to the committed hashes; 60 leases kept, none discarded, no listener leaked;
+- `make jit-profile-stress` (the gathering teardown changed; under the
+  measurement lock) passed: 32 of 32 gathers left one profile, 4 rounds of
+  8 parallel runs beside 48 busy loops, at a 1-minute load of 66.
+
+### Residuals, stated
+
+- **The Renode-only model tests still open a server.**
+  `examples/adc/bb_adc_test.py`, `examples/adc/renode_adc_test.py`,
+  `examples/nrf-saadc/bb_saadc_test.py` and `tests/console.rs` drive Renode
+  with their own clients through `CreateExternalControlServer`. They are
+  test harnesses, not `bb` runs. For them the exposure is as ADR-004
+  documents (milliseconds, loopback-reachable on a shared host).
+- **The GDB stub** of `bb run --gdb` still listens inside Renode on an
+  internal port, behind ADR-008 Amendment 8's accept check. That is
+  unchanged.
+- **The threat model is D5's.** The check is a local, unprivileged process
+  posing as Renode or racing for the slot. A process of the same user that
+  can `ptrace` Renode or read its memory is outside the model, as it was
+  for the GDB fix.
+- **A foreign client may sit in the backlog.** One that connects while a
+  connection is in use stays in the listener's backlog until the next
+  accept (a reconnect), which refuses it. It never gets a byte.
+
+### H1 follow-up: ngspice failure text in any case
+
+`NgspiceEngine`'s failure report (`failure_lines`, Amendment 1) matched
+"timestep too small" and "singular matrix" in lower case only. ngspice's
+`doAnalyses` prints "Timestep too small", so a collapsed step with no
+error line was reported as "(ngspice printed no error or warning)". Every
+match of that function now ignores ASCII case: the error and warning
+prefixes and both texts. The regression test
+`failure_text_matches_ignore_case` fails on the old matching (checked by
+reverting it) and passes now. No committed hash depends on the text; it
+only reaches the message of a failed run.
+
+### Budget
+
+`make test`'s addition is `ec_exposure` and unit tests well under a
+second: within H3's +10 s.
+
+- **`ec_exposure`** took 8.2 s alone, 8.93 s inside a pooled `make check`
+  and 8.44 s inside `make check POOL=0`.
+- **The two `make check` runs** were both green, one after the other in
+  this worktree with nothing else running: 481 s pooled (the H0 baseline
+  is 470 s; main has gained B1, R1, E4 and P0 since) and 581 s with
+  `POOL=0`.
+- **`ec-reconnect`** took 34.9 s pooled and 36.6 s with `POOL=0` in those
+  runs, against 37.0 s in the H0 baseline.
+
+The full gates are outside `make test`:
+
+- `make ec-long`: 130 s;
+- `make pool-equiv`: 1 602 s;
+- `make jit-profile-stress`: 194 s.

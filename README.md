@@ -727,7 +727,8 @@ Almost all of it is Renode's own start: .NET, Renode init and the platform
 load (ADR-004). A fresh run sets `DOTNET_TieredPGO=0` on Renode, plays
 back a cached .NET multi-core JIT startup profile (`~/.cache/bb/renode-jit`;
 the first run for a Renode install, platform and plugin setting gathers
-it), polls its External Control server every 5 ms, and hands Renode a copy
+it), waits for Renode to connect to its External Control listener (polled every 5 ms;
+Renode connects out, so it listens on no port: ADR-015 D5), and hands Renode a copy
 of the firmware in its temp workdir, read once (Renode's `LoadELF` opens
 the file about a dozen times, each costly on `/mnt/c`). Together these cut
 fresh startup by 0.58–1.17 s against the stock runtime (`make
