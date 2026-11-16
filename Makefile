@@ -870,6 +870,18 @@ DMS_S1_N ?= 5
 measured-dms-s1-cost:
 	DMS_REPO=$(DMS_REPO) bash scripts/dms_s1.sh cost $(DMS_S1_N)
 
+# Phase 2 plan P0 (ADR-009 D2, gate G3; ADR-009 Amendment 1 is the report, Amendment 2 the approver's
+# decision D-W1): the W1 and W2 suite replicas and the first RT9080, BQ25180 and TPS61040 `pi` views
+# (examples/dial-me-spinner/pi-spike/views) in static-load mode, through NgspiceEngine (deck_run), at
+# phase0 and at the suite's option sets: the option set, the model difference, the tolerances
+# (pi-spike/tolerances.toml), W1's feasibility row at its labelled stress corner (55 mA) and the
+# 50 mA margin check. Every
+# deck is local-only (the TI-derived TPS22917, the suite's netlist extraction) and stays in
+# $(BB_SCRATCH)/bb-pi-spike. A spike: not in make test (about 1 min on 8 jobs, PI_SPIKE_JOBS).
+.PHONY: pi-spike
+pi-spike:
+	DMS_REPO=$(DMS_REPO) bash scripts/pi_spike.sh gate
+
 # --- Phase 1 M4: KiCad import, board.bbm, projects (ADR-007) ---------------
 # examples/adc drawn in KiCad (examples/adc/kicad), as a bb.toml project. Its
 # runs use a copy off /mnt/c with the firmware recorded by `bb flash`

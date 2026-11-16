@@ -1,0 +1,39 @@
+* rt9080_ldo_pi.lib: Richtek RT9080 LDO, a `pi` power view (Phase 2 P0 spike, ADR-009 D2).
+*
+* Restated from the datasheet DS9080-09 (December 2024), not migrated from any other model; the
+* dial-me-spinner suite's ldo_3v3__rt9080.lib is a reference only and none of its text is used.
+* Written to ADR-009 D2's rules: every current is an I-type B source of node voltages (no branch-
+* current unknown, no V-type B, E, F, G or H element, no 0 V source), min()/max() take exactly two
+* arguments, and the output has a DC conductance in every state (the regulation slope, the
+* dropout slope, the discharge resistor, the feedback-divider leak).
+*
+* DS9080-09 figures (Electrical Characteristics, VOUT + 1 V < VIN < 5.5 V, 25 C):
+*   VOUT accuracy +-2 % at 1 mA                                    -> vset (3.3 V part: 3.234..3.366)
+*   dropout at 600 mA, VOUT >= 3 V: 0.31 V typ, 0.53 V max         -> rdrop 0.517 typ, 0.883 max
+*   load regulation 1..600 mA: 0.5 % typ, 1 % max                  -> gm = 0.6 A / (x % of vset):
+*                                                                     36.4 S typ, 18.2 S max
+*   current limit 1.1 A typ (610 mA min), fold-back to about 0.6 A (18.3) -> ilim, ifold
+*   IQ 2 uA typ; shutdown 0.1 uA typ                               -> iq, ishdn
+*   EN rising 0.9 V min, falling 0.4 V max                         -> the EN switch is centred at 0.65 V
+*   discharge resistor 80 Ohm with EN = 0 V (17.7)                 -> rdis
+* ASSUMPTIONS (no datasheet figure): the regulation is a transconductance gm (no loop dynamics);
+*   the fold-back limit is linear in VOUT between 0 and 90 % of vset; the feedback-divider leak is
+*   iq at vset (rleak = vset/iq); in dropout the channel also conducts in reverse (VOUT > VIN) while
+*   enabled; no soft start (DS9080-09 gives no start-up time).
+* NOT modelled: PSRR and noise, over-temperature protection, line regulation, the SNS variant.
+*
+* Ports: VIN VOUT EN GNDP.
+.subckt RT9080_LDO_PI VIN VOUT EN GNDP params: vset=3.3 rdrop=0.517 gm=36.4 ilim=1.1 ifold=0.6
++ iq=2u ishdn=0.1u rdis=80
+* the EN switch as an internal signal: an I-type source into a 1 Ohm conductance (V(rten) = 0..1)
+B_EN    GNDP rten I = 0.5 + 0.5*tanh((V(EN,GNDP) - 0.65)/0.05)
+R_EN    rten GNDP 1
+* the pass element VIN -> VOUT: min(regulation, dropout, fold-back limit); never sinks into VOUT
+* from the regulation term, conducts in reverse through the channel only while enabled
+B_PASS  VIN VOUT I = max(min(min({gm}*({vset}*V(rten,GNDP) - V(VOUT,GNDP)), V(VIN,VOUT)/{rdrop}),
++                   {ifold} + ({ilim} - {ifold})*min(1, max(0, V(VOUT,GNDP)/(0.9*{vset})))),
++                   min(V(VIN,VOUT)/{rdrop}, 0)*V(rten,GNDP))
+B_IQ    VIN GNDP I = ({iq}*V(rten,GNDP) + {ishdn}*(1 - V(rten,GNDP)))*min(1, max(0, V(VIN,GNDP)))
+B_DIS   VOUT GNDP I = (1 - V(rten,GNDP))*V(VOUT,GNDP)/{rdis}
+R_LEAK  VOUT GNDP {vset/iq}
+.ends RT9080_LDO_PI

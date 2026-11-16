@@ -1,0 +1,67 @@
+# Phase 2 plan P0 (ADR-009 D2, gate G3): the option set, the replica, W1's gated corner and the
+# static-load tolerances fixed from the measured model difference (scripts/pi_spike.sh, make pi-spike).
+# ADR-009 Amendment 1 is the report; Amendment 2 records the approver's decision D-W1.
+
+[replica]
+# The suite's own deck through NgspiceEngine (deck_run) with the S1-fixed TPS22917 view (ADR-006
+# Amendment 2), the local-only package of `make dms-local-packages`, at Breadboard's default option set.
+variant = "suitefix"
+options = "phase0"
+
+[option_set]
+# The option set at which the static-load decks converge, qualified by grant-partition independence
+# (10 us, 1 ms, 10 ms byte for byte) and by the converged reference (TMAX 1 us): the gated quantities
+# (VSYS min, +3V3 min) within converged_mV, the threshold windows within converged_us, and the whole
+# VSYS and +3V3 waveforms within waveform_mV (measured 1.08 mV at most, at U2's turn-on knee, where
+# the committed TPS22917 view's limiter has a corner; ADR-009 Amendment 1).
+name = "phase0"
+converged_mV = 1.0
+converged_us = 10.0
+waveform_mV = 2.0
+
+[w1]
+# W1's gated corner. At the suite's 50 mA the static-load deck's +3V3 never crosses 2.94 V (the board's
+# 37.6 uF on +3V3, which the suite's ideal LDO does not have). The approver invoked Q1's fallback:
+# W1's firmware-in-the-loop checks run at a LABELLED STRESS CORNER, the smallest whole mA with at least
+# 0.5 ms below 2.94 V at the RT9080 worst corner (make pi-spike re-derives it from the 50-60 mA sweep
+# and requires this value), and the suite's 50 mA is a gated margin check (no POFWARN at the +5 %
+# corner). Every W1 report and run.json names the stress corner.
+decision = "D-W1 (approver, 2026-11-15, round 2b; ADR-009 Amendment 2)"
+label = "stress corner"
+stress_load_mA = 55
+margin_load_mA = 50
+rt9080_corner = "worst"
+threshold_V = 2.94               # POFWARN V28 at VPOFTOL +5 %
+min_below_ms = 0.5
+blanking_ms = 10.0               # the firmware rule (R8): POFWARN ignored for 10 ms after LED_PWR_EN
+recover_before_blanking_end_ms = 2.0
+
+# W1 at its stress corner (55 mA, RT9080 worst): fixed by the rule (1.5 x |difference|, rounded up in
+# the 1-2-5 series, at least 1 mV / 10 us) from the measured difference of the static-load deck
+# against the replica at the same 55 mA: VSYS min +102.5 mV, +3V3 min +111.1 mV, the 2.94 V window's
+# start +21.1 us and end -2858 us (static-load 3.255-4.089 ms after LED_PWR_EN, replica 3.234-6.947 ms).
+# The replica is near its cliff there (it collapses at 60 mA, and its window is 4.4 times as long as
+# the static-load deck's), so these tolerances are wide: they bound the model difference, they do not
+# discriminate the window's end. The firmware checks (the cue held, pofwarn fired, the negative
+# controls) are what W1 decides on at this corner.
+[static_load.w1_stress]
+vsys_min_mV = 200
+p3v3_min_mV = 200
+v28p5_start_us = 50
+v28p5_end_us = 5000
+
+# W2 (conditional, plan section 2): fixed by the rule from the measured difference of the static-load
+# deck (the spike's views, the committed TPS22917 and WS2812C views, the board's +3V3 capacitors)
+# against the replica. Measured: w2rule VSYS min -4.52 mV, +3V3 min +6.94 mV; w2old VSYS min +8.36 mV,
+# +3V3 min +17.69 mV, the VBOR crossings +192..+207 us. D-W1 changes only W1's load, so the W2 decks
+# and these values stand.
+[static_load.w2rule]
+vsys_min_mV = 10
+p3v3_min_mV = 20
+
+[static_load.w2old]
+vsys_min_mV = 20
+p3v3_min_mV = 50
+vbor_min_cross_us = 500
+vbor_typ_cross_us = 500
+vbor_max_cross_us = 500

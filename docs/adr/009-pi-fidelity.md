@@ -4,6 +4,12 @@
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
   (see "Review notes"). Written before implementation, because it changes
   the package schema, the pin model and the event stream (AGENTS.md).
+- **Amendments:** 1 (2026-11-15), the P0 report: replicas, option set
+  `phase0`, the model difference, W2's tolerances; W1's feasibility row
+  fails, so P0 stops for the approver's Q1 choice. 2 (2026-11-15), the
+  approver's decision D-W1: W1 at a labelled stress corner (55 mA, RT9080
+  worst) with its own tolerances, plus a gated 50 mA margin check; P0
+  closed.
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
@@ -452,8 +458,8 @@ other Phase 2 majors.
 | --- | --- |
 | G1 | Every committed `fast` hash unchanged (`make test`, `make dms-rail`, `make dms-vsense`, `make dms-home`) |
 | G2 | Every `pi` view: lint clean; operating point at every corner; lattice-qualified at the qualified option set through the engine (ADR-006 D6); vectors from datasheet tables. Every existing view on W1/W2's nets re-qualified at `pi` |
-| G3 | P0: the suite replicas reproduce `results.json` (1 mV, 10 µs); the static-load tolerances fixed from the measured difference; W1's feasibility row (plan section 2) |
-| G4 | W1 with the firmware in the loop: the rule passes with `pofwarn` fired; both negative controls fail exactly `cue-held`; every W1 assertion reports `rung: pi`. W2, or its fallback (plan section 5) |
+| G3 | P0: the suite replicas reproduce `results.json` (1 mV, 10 µs); the static-load tolerances fixed from the measured difference; W1's feasibility row (plan section 2), at the labelled stress corner, and the 50 mA margin check (Amendment 2) |
+| G4 | W1 with the firmware in the loop, at the stress corner (Amendment 2): the rule passes with `pofwarn` fired; both negative controls fail exactly `cue-held`; every W1 assertion reports `rung: pi`. W2, or its fallback (plan section 5) |
 | G5 | Partition independence: each worked example at 10 µs, 1 ms and 10 ms grants; one-cell reference equality except grant records; analog-first byte-identical; 10-run determinism |
 | G6 | Lookahead: a sleeping nRF with state outputs keeps long grants (≤ 2× its grants without them); no `PromiseBroken`; a firmware that wakes every 1 ms gives the predicted grant count. idd: the total VDD current of a gate firmware with a known WFI duty equals a hand calculation of the duty-weighted average within 1 % (not a check of the view against its own table) |
 | G7 | `BbNrf52Power` register and timing tests (every code, hysteresis, enable-while-below, refused codes, NVMC block); `make pool-equiv` with the `@4` configurations and a reset case |
@@ -563,3 +569,274 @@ recommended answers (plan section 10). For this ADR:
 **Not adopted:** a lint exemption for V-type B sources on internal signal
 nodes (one critique offered it as an option). Restating the RT9080 avoids
 the need, and the exemption could not be checked.
+
+## Amendment 1 (2026-11-15): P0 report (the numerics and feasibility spike); stopped for the approver
+
+**Status: W1's feasibility row fails** at the suite's 50 mA budget
+(the approver's answer, D-W1, is Amendment 2). Under
+Q1 (approver decisions) invoking the stress-corner fallback is the
+approver's choice, so P0 stops here with the measurements below. Every
+other P0 item is done. `make pi-spike` (`scripts/pi_spike.sh`,
+`scripts/pi_spike.py`) runs 82 configurations through `NgspiceEngine`
+(`deck_run`, lattice 10 µs) in about 100 s on 8 jobs. The decks are built
+by the suite's own functions from a `git archive` export of `6854d25` and
+stay in `$BB_SCRATCH/bb-pi-spike`: they hold the TI-derived TPS22917 or the
+suite's netlist extraction, so they are local-only.
+
+**The first `pi` views** are in `examples/dial-me-spinner/pi-spike/views`.
+They are this repository's own text, from DS9080-09, SLUSE99C and SLVS413L;
+no suite model is migrated:
+
+- `RT9080_LDO_PI`: regulation transconductance, dropout resistance,
+  fold-back limit, EN, discharge;
+- `BQ25180_PP_PI`: ILIM, SYS_REG through RON_IN, supplement, the BUVLO
+  gate; `sup_gate = 0` is the `suite_compat` corner;
+- `TPS61040_BOOST_PI`: an averaged PFM cycle, soft start by cycle count,
+  UVLO.
+
+The spike's lint of rules 1 and 4 passes on all three, and its negative
+control fires 5 findings. P1 turns them into packages. Not yet modelled:
+charging, VINDPM, BATOCP, the RT9080 soft start (no datasheet figure).
+
+**1. Replicas (pass).** The suite's decks through the engine at `phase0`
+with the S1-fixed TPS22917 (ADR-006 Amendment 2; the local-only package of
+`make dms-local-packages`) against `results.json`:
+
+| Case | VSYS min | +3V3 min | Other values |
+| --- | --- | --- | --- |
+| W1 `[ILIM80min-SYSREG4.4-2pct]` | 2.910883 V (+0.077 mV) | +0.077 mV | last below 3.045 V 5.8285 ms (+4.4 µs); +3V3 after blanking, OLED_VIN exact |
+| W2 rule `[ILIM100-SYSREG4.5]` | 3.266628 V (+0.040 mV) | +0.040 mV | exact |
+| W2 old rule (5 ms) | 1.461121 V (−0.246 mV) | −0.246 mV | — |
+
+The suite's unfixed view, on the suite's own fallback ladder, comes within
+0.14 mV. W1 and W2 old ran at reltol 1e-4, W2 rule at 1e-3. **Finding:**
+through the engine the unfixed view fails at `phase0` and at `phase0` with
+Gear (`Timestep too small` on `b.xu2.x_u1_u2_u4.beout#branch` at 200.05 µs,
+or no end in 240 s). That is ADR-006 Context 3: the review's standalone
+Gear run does not predict the engine. The engine's failure text misses it,
+because `failure_lines` matches only lower-case `timestep too small` (for
+H1).
+
+**2. Option set: `phase0`, named and qualified.** Every static-load deck
+converges at plain `phase0` with trapezoidal integration, so no new option
+set is needed:
+
+- grants of 10 µs, 1 ms and 10 ms give byte-identical samples;
+- against TMAX 1 µs the gated quantities differ by at most 0.62 mV and
+  0.56 µs;
+- the whole VSYS and +3V3 waveforms differ by at most 1.08 mV, at U2's
+  turn-on knee (the committed TPS22917 view's limiter corner). The
+  waveform bound is therefore 2 mV (`tolerances.toml`), a deviation from
+  S1's 1 mV.
+
+`phase0` with Gear and `suite_fallback` differ from `phase0` by at most
+0.41 mV on W1 and W2 rule. On W2 old, `suite_l1` (reltol 1e-3) moves +3V3
+min by +17.8 mV and `suite_fallback` by −8.9 mV, so W2's collapse needs
+`phase0`.
+
+**3. Model difference.** The static-load deck uses the spike's views, the
+committed `ti/tps22917` and `worldsemi/ws2812c-2020` views, the board's
++3V3 capacitors (37.6 µF nominal, from the netlist), the 50 mA budget as a
+bench load on +3V3, and LED_PWR_EN as `digital_out` glue at 3.3 V
+(rail-tracking is P2). Each value is the static-load deck minus the
+replica:
+
+| Case | VSYS min | +3V3 min | Windows / crossings |
+| --- | --- | --- | --- |
+| W1 | +87.8 mV | +97.3 mV | 2.94 V never crossed (replica 3.295-4.447 ms); 3.045 V window ends 1.08 ms earlier |
+| W2 rule | −4.5 mV | +6.9 mV | none crossed (as the replica) |
+| W2 old | +8.4 mV | +17.7 mV | VBOR,ON 1.57/1.60/1.63 V crossed +207/+199/+192 µs later |
+
+Attribution on W1, each variant against the replica:
+
+- without the +3V3 capacitors: −7.5 mV, window −117/−152 µs. The BQ25180
+  and RT9080 views reproduce the suite's ideal LDO and ilimit block, and
+  the rest is the TPS22917 view. The suite's deck with only the fitted
+  TPS22917 swapped in gives −6.9 mV;
+- with the +3V3 capacitors halved (a DC-bias stand-in): +48.7 mV;
+- the fitted TPS22917 replaced by the S1-fixed one: +96.0 mV.
+
+So the W1 difference is the +3V3 rail's capacitance. The suite's ideal
++3V3 has none. In dropout those capacitors carry part of the 50 mA, which
+in effect adds 46 % to VSYS's 82 µF.
+
+**4. Tolerances.** The rule: 1.5 × |measured difference|, rounded up in the
+1-2-5 series, and at least 1 mV / 10 µs.
+
+- W2 rule: VSYS min 10 mV, +3V3 min 20 mV.
+- W2 old: VSYS min 20 mV, +3V3 min 50 mV, VBOR crossings 500 µs.
+- W1: **pending**. Its difference depends on the static-load
+  configuration, which is the approver's choice. By the rule, the 50 mA
+  deck would get 200 mV and 2 ms, which would not discriminate.
+
+The W2 values hold for this deck definition and are measured again if
+the answer changes the deck.
+
+**5. W1's feasibility row fails.** At 50 mA, +3V3 min is 2.9640 V (RT9080
+worst corner: dropout 0.53 V at 600 mA, load regulation 1 %), and 2.9768 V
+at the typical corner. Both are above 2.94 V, so there is no window. The
+same row on the variants:
+
+- without the +3V3 capacitors: passes (3.178-4.295 ms, 1.12 ms);
+- with them halved: fails (0.38 ms);
+- with the S1-fixed TPS22917: fails.
+
+Load sweep against the plan's table: 30 mA, no crossing (as the suite);
+60 mA, collapse (as the suite); 50 mA, no crossing where the suite crosses
+and recovers. The verdict at 50 mA differs.
+
+**6. Data for Q1's stress corner** (static-load deck, +3V3 below 2.94 V
+for at least 0.5 ms, recovered by 8 ms):
+
+| Static load | 53 | 54 | 55 | 56 | 57 | 58 | 59 | 60 mA |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Below 2.94 V, RT9080 worst (ms) | 0.15 | 0.44 | **0.83** (3.255-4.089) | 1.41 | 2.37 | 4.29 (to 7.51) | 10.16 (to 13.36) | no recovery |
+| Below 2.94 V, RT9080 typ (ms) | 0 | 0 | 0.27 | **0.70** (3.247-3.950) | 1.41 | 2.83 | 7.14 (to 10.35) | OP failed |
+
+- The smallest whole mA is **55 mA** at the worst corner and 56 mA at the
+  typical one.
+- At 55 mA the replica crosses 2.94 V from 3.234 to 6.947 ms, near its
+  cliff. The difference there is +102.5 mV in VSYS min and −2.86 ms at the
+  window's end. A stress corner therefore needs its own tolerances.
+- The OP failure at 60 mA, typical corner, is "singular matrix at
+  `xu2.lsf_vinf`" after 31 s. That node of the committed TPS22917 view
+  has only a 1 µS path. It is an R1 instance for P1 and H1's fail-fast.
+
+**Needs approval (Q1).** Raising the static load is the stated fallback.
+The measurements also show that the outcome turns on the +3V3
+capacitance, which the suite does not model. The approver decides.
+P1-P4's W1 work waits for that decision. W2's tolerances are fixed.
+
+**Findings for P1:**
+
+- the committed TPS22917 view uses V-type B sources (rule 1), so it must
+  be restated before it can declare `pi`;
+- the B5819W rectifier has no package (the spike borrows the suite's
+  model, in the scratch decks only);
+- the RT9080's corner for W1 is to be stated in P1 (worst: the suite's
+  dropout).
+
+## Amendment 2 (2026-11-15): W1 at a labelled stress corner (approver decision D-W1); P0 closed
+
+**Decision (approver, round 2b, 2026-11-15, "D-W1").** On Amendment 1's
+report the approver invoked Q1's fallback, with a margin check added:
+
+- **W1 is gated at a labelled stress corner:** 55 mA static +3V3 load at
+  the RT9080 worst corner. That is the smallest whole mA that gives at
+  least 0.5 ms below 2.94 V: 0.83 ms, from 3.255 to 4.089 ms after
+  LED_PWR_EN rises.
+- Every firmware-in-the-loop check of W1 runs there: the rule firmware,
+  both negative controls, the 5 ms report, and the nominal and −5 %
+  corners.
+- The static-load checks at the stress corner have **their own
+  tolerances**. They are fixed from P0's measured model difference at
+  55 mA. The replica is near its cliff at that load (below).
+- **A gated margin check at the suite's 50 mA:**
+  - no POFWARN at the +5 % corner;
+  - +3V3 min reported with its margin to 2.94 V;
+  - the same reported at the nominal and the halved +3V3 capacitance
+    (the DC-bias-derated stand-in).
+- **Every W1 report and `run.json` labels the stress corner.**
+- The 50 mA feasibility row of the plan (section 2 W1, section 4 P0,
+  section 5 item 1) is replaced by the stress-corner row and the margin
+  check.
+
+D-W1 changes only W1's load. The W2 decks are unchanged, so W2's
+tolerances (Amendment 1, item 4) stand.
+
+**What `make pi-spike` now gates** (37 gates, all pass):
+
+- `tolerances.toml` has a new `[w1]` table: the stress load, the margin
+  load, the RT9080 corner, the threshold, the 0.5 ms / 2 ms / 10 ms
+  limits and the decision. Every W1 line of the output carries the label
+  "W1 stress corner: 55 mA static +3V3 load (suite budget 50 mA), RT9080
+  worst". The summary carries it as `w1_corner`.
+- **The stress load is re-derived on every run.** The smallest whole mA
+  from 50 to 60 mA, at the RT9080 worst corner, with at least 0.5 ms below
+  2.94 V must equal `[w1] stress_load_mA`. A missing run below that load
+  fails the gate.
+- **The option set is qualified at the stress corner too.** Grants of
+  10 µs, 1 ms and 10 ms give byte-identical samples. Against TMAX 1 µs
+  the gated quantities differ by at most 0.022 mV and 0.14 µs, and the
+  waveforms by at most 0.97 mV (bound 2 mV).
+- **Each tolerance table is checked against the rule:** a table must
+  equal the stated rule applied to the measured difference. This now
+  holds for W2 as well as for W1's stress corner.
+
+**1. The stress corner** (static-load deck, RT9080 worst, the board's
++3V3 capacitors at their netlist values):
+
+| Quantity | Static-load (`pi`) | Replica at 55 mA | Difference | Tolerance (the rule) |
+| --- | --- | --- | --- | --- |
+| VSYS min | 2.9589 V | 2.8564 V | +102.5 mV | 200 mV |
+| +3V3 min | 2.9189 V | 2.8078 V | +111.1 mV | 200 mV |
+| 2.94 V window start (after LED_PWR_EN) | 3.2552 ms | 3.2341 ms | +21.1 µs | 50 µs |
+| 2.94 V window end | 4.0893 ms | 6.9472 ms | −2858 µs | 5000 µs |
+
+- **Feasibility (gated, passes).** +3V3 is below 2.94 V for 0.834 ms and
+  recovers at 4.089 ms. The limit is 8 ms: 2 ms before the 10 ms blanking
+  ends. +3V3 min after the blanking is 3.114 V (flash VCC min 2.7 V).
+- **The replica is near its cliff at 55 mA.** It collapses at 60 mA, and
+  at 55 mA its window is 3.71 ms long, 4.4 times the static-load deck's.
+  The tolerances therefore bound the model difference without
+  discriminating the window's end: 5 ms against a 10 ms blanking. At this
+  corner W1 decides on the firmware checks (the cue held, `pofwarn`
+  fired, the two negative controls), not on the window's end against the
+  suite.
+- **Data for P4 and W-fw (not a gate here).** The window's midpoint is
+  3.672 ms. The window-midpoint negative control (the whole ms nearest it,
+  plan section 2) is therefore 4 ms, only 89 µs before the window ends.
+  P4 derives the control from its own measured window. If that window
+  ends before 4 ms, or within one lattice cell after it, the control
+  stops testing the re-enable rule. P4 then reports it and stops. It does
+  not move the control by its own choice.
+- The 5 ms blanking ends after the window, so the 5 ms report is
+  expected to pass.
+- At the RT9080 typical corner the smallest whole mA is 56 mA (0.70 ms).
+  This is reported only, because W1 gates the worst corner.
+
+**2. The margin check at 50 mA** (gated: RT9080 worst, nominal
+capacitance):
+
+| +3V3 capacitance (corner) | +3V3 min | Margin to 2.94 V | Below 2.94 V |
+| --- | --- | --- | --- |
+| **nominal, 37.6 µF (worst): gated** | 2.9640 V | **+24.0 mV** | never: no POFWARN (pass) |
+| halved, DC-bias stand-in (worst) | 2.9188 V | −21.2 mV | 0.381 ms (3.253-3.634 ms, inside the blanking) |
+| nominal (RT9080 typ) | 2.9768 V | +36.8 mV | never |
+| none, as the suite's ideal LDO (worst) | 2.8592 V | −80.8 mV | 1.116 ms (inside the blanking) |
+| nominal, S1-fixed TPS22917 (worst) | 2.9661 V | +26.1 mV | never |
+
+The margin is 24 mV at the nominal capacitance. Halving the capacitance,
+which stands in for DC-bias derating, removes it: +3V3 then crosses
+2.94 V for 0.38 ms. That dip is still inside the 10 ms blanking, so the
+rule firmware would hold the cue. So whether the real board raises
+POFWARN at the suite's budget depends on capacitance that the suite does
+not model. That is a finding for the user, alongside Q12's.
+
+**3. The load sweep** (report; P1 gates it), as verdicts at 2.94 V:
+
+| Load | Static-load (`pi`) | Replica |
+| --- | --- | --- |
+| 30 mA | no crossing | no crossing |
+| 40 mA | no crossing | no crossing |
+| 50 mA (margin) | no crossing | cross and recover |
+| 55 mA (stress) | cross and recover | cross and recover |
+| 60 mA | collapse | collapse |
+
+The plan's sweep row demanded the suite's verdict at 50 mA. D-W1 makes
+50 mA a no-POFWARN margin check, so the row now gates 30 mA (no
+crossing), 50 mA (the margin check's verdict), 55 mA (cross and recover)
+and 60 mA (collapse). The 50 mA row is the one case where the verdict
+differs from the suite's, and it is recorded.
+
+**Labels from P1 on.** W1's stress-corner bench names the corner in its
+file name (`bench/w1-stress.toml`). It holds the 55 mA `[[load]]`, which
+`run.json` records with the bench. Every W1 report also names the corner:
+the `bb test` report and JUnit suite names, and P1's summaries. A
+dedicated `run.json` key would be a schema change and is not made here.
+
+**P0 is closed.** Its remaining finding goes to P1: the committed
+`ti/tps22917` view is restated to D2's rules (approver decision D-TPS).
+The singular matrix at `xu2.lsf_vinf` at 60 mA, typical corner, is the
+same finding (Amendment 1, item 6). `make pi-spike` runs 85
+configurations in 84 s on 8 jobs (74 s of runs, host load 0.3-3.9).

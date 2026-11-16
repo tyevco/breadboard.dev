@@ -1,0 +1,84 @@
+* tps61040_boost_pi.lib: TI TPS61040 boost converter, AVERAGED input and start-up, a `pi` power
+* view (Phase 2 P0 spike, ADR-009 D2 rule 3: switching converters are averaged). Datasheet-fitted
+* from SLVS413L (October 2002, revised August 2026), sections 5.5, 6.3 and 6.4; none of the
+* dial-me-spinner suite's models is used. Written to ADR-009 D2's rules: I-type B sources of node
+* voltages only, two-argument min()/max(), internal signals as I-type sources into 1 Ohm.
+*
+* SLVS413L figures:
+*   VUVLO 1.5 V typ / 1.7 V max (5.5); EN VIH 1.3 V min, VIL 0.4 V max; IQ 28 uA typ (not switching),
+*     ISD 0.1 uA typ                                                         -> uvlo, iq, isd
+*   switch current limit ILIM 350 / 400 / 450 mA; Ipeak = ILIM + VIN/L x 100 ns (6.3.1, Eq. 1) -> ilim
+*   minimum off time 250 / 400 / 550 ns; maximum on time 4 / 6 / 7.5 us (5.5)   -> toffmin, tonmax
+*   PFM (6.4.1): the switch turns on while VFB < VREF (1.233 V typ, 1.208..1.258 V), off at Ipeak or
+*     the maximum on time, and stays off for at least toffmin                 -> vref
+*   soft start (6.3.2): current limit ILIM/4 for 256 cycles, ILIM/2 for the next 256, then ILIM
+* The average of one switching cycle, from those rules: on time ton = L Ipk / VIN (at most tonmax),
+*   fall time tf = L Ipk / VD with VD = VOUT + vdf - VSW the off-time inductor voltage; if tf <=
+*   toffmin the cycle is discontinuous (Iavg = Ipk/2 (ton + tf)/(ton + toffmin), period ton +
+*   toffmin), otherwise the next cycle starts at Ipk - VD toffmin / L (Iavg = Ipk - VD toffmin/(2 L),
+*   period VD toffmin / VIN + toffmin). The two forms meet at tf = toffmin.
+* ASSUMPTIONS: efficiency eta = 0.85 (inside Figures 5-1..5-4, not fitted); vdf = 0.4 V, the
+*   rectifier's forward drop at the start-up currents; the UVLO hysteresis 50 mV (none is given);
+*   the EN switch centred at 0.85 V; the averaged current filtered with 2 us; the regulation fades
+*   the average over a 30 mV FB band below VREF (a proportional stand-in for the PFM loop); the
+*   soft-start steps smoothed over 4 cycles; the cycle counter V(tbnc) = cycles / 1000.
+* NOT modelled: switching ripple, the regulation loop's dynamics and accuracy, IFB, thermal
+*   shutdown, RDS(on) loss (in eta), SW leakage.
+*
+* Ports: VIN SW FB EN GNDP OUT. OUT is a modelling port: the output node (the rectifier's cathode)
+* into which the averaged power is delivered; the inductor and the rectifier are the board's parts.
+.subckt TPS61040_BOOST_PI VIN SW FB EN GNDP OUT params: lind=10u ilim=0.4 toffmin=400n tonmax=6u
++ vref=1.233 uvlo=1.5 uvlo_hys=0.05 iq=28u isd=0.1u eta=0.85 vdf=0.4 tfilt=2u
+* enable (EN high) and UVLO with hysteresis: V(tben), V(tbuv) = 0..1
+B_EN    GNDP tben I = 0.5 + 0.5*tanh((V(EN,GNDP) - 0.85)/0.02)
+R_EN    tben GNDP 1
+B_UV    GNDP tbuv I = 0.5 + 0.5*tanh((V(VIN,GNDP) - {uvlo} + {uvlo_hys}*V(tbuv,GNDP))/0.005)
+R_UV    tbuv GNDP 1
+C_UV    tbuv GNDP 10n
+* soft-start factor from the cycle counter: 0.25, 0.5, then 1
+B_SS    GNDP tbss I = 0.25 + 0.125*(1 + tanh((V(tbnc,GNDP) - 0.256)/0.004))
++                   + 0.25*(1 + tanh((V(tbnc,GNDP) - 0.512)/0.004))
+R_SS    tbss GNDP 1
+* clamped inductor voltages (divisors): on-time VIN, off-time VD
+B_VI    GNDP tbvi I = min(max(V(VIN,GNDP), 0.3), 10)
+R_VI    tbvi GNDP 1
+B_VD    GNDP tbvd I = min(max(V(OUT,GNDP) + {vdf} - V(SW,GNDP), 0.02), 40)
+R_VD    tbvd GNDP 1
+* peak current and on time (ton in us, Ipk in A)
+B_TON   GNDP tbton I = 1e6*min({tonmax}, {lind}*({ilim}*V(tbss,GNDP) + V(tbvi,GNDP)/{lind}*100n)/V(tbvi,GNDP))
+R_TON   tbton GNDP 1
+B_IPK   GNDP tbipk I = 1e-6*V(tbton,GNDP)*V(tbvi,GNDP)/{lind}
+R_IPK   tbipk GNDP 1
+* fall time (us), then the cycle's average current (A) and period (us)
+B_TF    GNDP tbtf I = 1e6*{lind}*V(tbipk,GNDP)/V(tbvd,GNDP)
+R_TF    tbtf GNDP 1
+B_IAV   GNDP tbiav I = V(tbtf,GNDP) <= 1e6*{toffmin}
++                     ? V(tbipk,GNDP)/2*(V(tbton,GNDP) + V(tbtf,GNDP))/(V(tbton,GNDP) + 1e6*{toffmin})
++                     : V(tbipk,GNDP) - V(tbvd,GNDP)*{toffmin}/(2*{lind})
+R_IAV   tbiav GNDP 1
+B_TC    GNDP tbtc I = V(tbtf,GNDP) <= 1e6*{toffmin}
++                    ? V(tbton,GNDP) + 1e6*{toffmin}
++                    : 1e6*(V(tbvd,GNDP)*{toffmin}/V(tbvi,GNDP) + {toffmin})
+R_TC    tbtc GNDP 1
+* regulation gate (PFM stops at VREF), enabled average, filtered
+B_GR    GNDP tbgr I = min(1, max(0, ({vref} - V(FB,GNDP))/0.03))
+R_GR    tbgr GNDP 1
+B_IT    GNDP tbit I = V(tben,GNDP)*V(tbuv,GNDP)*V(tbgr,GNDP)*V(tbiav,GNDP)
+R_IT    tbit GNDP 1
+B_ITF   GNDP tbif I = V(tbit,GNDP)
+R_ITF   tbif GNDP 1
+C_ITF   tbif GNDP {tfilt}
+* cycle counter: integrates the switching frequency while enabled (1 nF: 1e-12 A per Hz gives
+* 1 mV per cycle), discharged while disabled
+B_NC    GNDP tbnc I = V(tben,GNDP)*V(tbuv,GNDP)*V(tbgr,GNDP)*1e-6/min(max(V(tbtc,GNDP), 0.1), 1000)
+B_NCR   tbnc GNDP I = (1 - V(tben,GNDP)*V(tbuv,GNDP))*V(tbnc,GNDP)/1k
+C_NC    tbnc GNDP 1n
+R_NC    tbnc GNDP 1G
+* the averaged switch: the inductor current drawn at SW, the power delivered into OUT
+B_SW    SW GNDP I = V(tbif,GNDP)*min(1, max(0, V(SW,GNDP)/0.3))
+B_OUT   GNDP OUT I = min(V(tbif,GNDP)*min(1, max(0, V(SW,GNDP)/0.3)),
++                  {eta}*min(max(V(SW,GNDP), 0), 10)*V(tbif,GNDP)*min(1, max(0, V(SW,GNDP)/0.3))
++                  /min(max(V(OUT,GNDP), 0.5), 40))
+B_IQ    VIN GNDP I = ({iq}*V(tben,GNDP) + {isd}*(1 - V(tben,GNDP)))*min(1, max(0, V(VIN,GNDP)/1.5))
+R_FB    FB GNDP 1G
+.ends TPS61040_BOOST_PI
