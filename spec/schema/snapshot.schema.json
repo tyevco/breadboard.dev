@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://breadboard.dev/spec/schema/snapshot.schema.json",
+  "title": "A registry's snapshot.json (spec/registry.md section 3, ADR-011 D1-D3)",
+  "description": "Canonical JSON, signed by the registry's CI with minisign (snapshot.json.minisig, prehashed). files maps config.json and every index file to its sha256; serial grows with every snapshot, and a client refuses a lower serial than it has seen (D2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["serial", "files"],
+  "properties": {
+    "serial": { "type": "integer", "minimum": 1 },
+    "files": {
+      "type": "object",
+      "required": ["config.json"],
+      "propertyNames": { "pattern": "^(config\\.json|index/[a-z0-9._-]+/[a-z0-9._-]+\\.jsonl)$" },
+      "additionalProperties": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+    }
+  }
+}

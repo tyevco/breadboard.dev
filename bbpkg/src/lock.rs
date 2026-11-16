@@ -107,13 +107,13 @@ pub fn tree_hash(dir: &Path) -> Result<String, String> {
 
 /// The prefix of a path source (ADR-011 D5).
 pub const PATH_SOURCE: &str = "path+";
-/// The prefix of a registry source (ADR-011 D5; resolved from milestone E1).
+/// The prefix of a registry source (ADR-011 D5, `spec/registry.md` section 6).
 pub const REGISTRY_SOURCE: &str = "registry+";
 
 /// A locked package. Its `source` (`bb-lock/1`, ADR-011 D5) is
 /// `path+<path relative to the lock's directory>` for a local package (every
-/// package this build resolves), or `registry+<url>` (milestone E1: read and
-/// kept, never resolved by this build).
+/// package found on the search path), or `registry+<url>` (one a registry
+/// supplied, `crate::registry`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LockedPackage {
     pub id: String,
@@ -165,8 +165,8 @@ pub struct LockedPlatform {
 }
 
 /// A vendor file fetched at use, never redistributed (`bb-lock/1`
-/// `[[vendor_file]]`, ADR-011 D5, D7). Read, checked and kept; nothing in
-/// this build fetches one (milestone E1).
+/// `[[vendor_file]]`, ADR-011 D5, D7): one per `[behavioral] svd` of a
+/// resolved package, fetched and checked by `bb open`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VendorFile {
     pub url: String,
@@ -425,6 +425,31 @@ pub enum Drift {
         locked: LockedPlatform,
         now: LockedPlatform,
     },
+    /// The same version and tree from another kind of source (`path+` and
+    /// `registry+`, or another registry): refused unless `--update-lock`
+    /// (ADR-011 D5). A `path+` source with another path is only a warning
+    /// ([`path_warnings`]).
+    Source {
+        locked: LockedPackage,
+        now: LockedPackage,
+    },
+    /// A vendor file a package declares that the lock does not record yet.
+    NewVendorFile(VendorFile),
+    /// A vendor file whose declaration (sha256, licence) differs from the
+    /// lock's: refused unless `--update-lock`.
+    VendorFile {
+        locked: VendorFile,
+        now: VendorFile,
+    },
+}
+
+/// What a source is, for the source-change rule: `path` for every `path+`
+/// source, else the registry source itself (its URL with one trailing `/`).
+pub fn source_kind(s: &str) -> String {
+    match s.strip_prefix(REGISTRY_SOURCE) {
+        Some(u) => format!("{REGISTRY_SOURCE}{}/", u.trim_end_matches('/')),
+        None => "path".into(),
+    }
 }
 
 fn engine_note(p: &LockedPlatform) -> String {
@@ -436,7 +461,13 @@ fn engine_note(p: &LockedPlatform) -> String {
 
 impl Drift {
     pub fn is_mismatch(&self) -> bool {
-        matches!(self, Drift::Package { .. } | Drift::Platform { .. })
+        matches!(
+            self,
+            Drift::Package { .. }
+                | Drift::Platform { .. }
+                | Drift::Source { .. }
+                | Drift::VendorFile { .. }
+        )
     }
 
     pub fn describe(&self) -> String {
@@ -455,13 +486,51 @@ impl Drift {
                 now.content,
                 engine_note(now)
             ),
+            Drift::Source { locked, now } => format!(
+                "package {} {}: locked from {}, resolved now from {} (the same tree; a change of \
+                 source needs --update-lock, ADR-011 D5)",
+                now.id,
+                now.version,
+                source_kind(&locked.source),
+                source_kind(&now.source)
+            ),
+            Drift::NewVendorFile(v) => {
+                format!("vendor file {} of {} not in bb.lock", v.url, v.used_by)
+            }
+            Drift::VendorFile { locked, now } => format!(
+                "vendor file {} of {}: locked sha256 {} ({}), declared {} ({})",
+                now.url, now.used_by, locked.sha256, locked.license, now.sha256, now.license
+            ),
         }
     }
 }
 
+/// The vendor files `vendor` (what the resolved packages declare) against
+/// the lock's (ADR-011 D5). An entry is matched by `(used_by, url)`.
+pub fn vendor_drift(lock: Option<&Lock>, vendor: &[VendorFile]) -> Vec<Drift> {
+    let empty = Lock::default();
+    let lock = lock.unwrap_or(&empty);
+    let mut out = Vec::new();
+    for v in vendor {
+        match lock
+            .vendor_files
+            .iter()
+            .find(|l| l.used_by == v.used_by && l.url == v.url)
+        {
+            None => out.push(Drift::NewVendorFile(v.clone())),
+            Some(l) if l != v => out.push(Drift::VendorFile {
+                locked: l.clone(),
+                now: v.clone(),
+            }),
+            Some(_) => {}
+        }
+    }
+    out
+}
+
 /// Compare what is resolved now with the lock (`None`: no lock yet). A
-/// package's `source` is not compared (a `path+` source is informative,
-/// [`path_warnings`]; a change of registry source is E1's to refuse).
+/// package's `path+` source is informative ([`path_warnings`]); a change of
+/// the kind of source, or of registry, is [`Drift::Source`] (ADR-011 D5).
 pub fn drift(
     lock: Option<&Lock>,
     packages: &[LockedPackage],
@@ -477,6 +546,12 @@ pub fn drift(
                 locked: l.clone(),
                 now: p.clone(),
             }),
+            Some(l) if source_kind(&l.source) != source_kind(&p.source) => {
+                out.push(Drift::Source {
+                    locked: l.clone(),
+                    now: p.clone(),
+                })
+            }
             Some(_) => {}
         }
     }
@@ -508,8 +583,18 @@ pub fn apply(lock: Option<&Lock>, drift: &[Drift]) -> Lock {
     for d in drift {
         match d {
             Drift::NewPackage(p) => l.packages.push(p.clone()),
-            Drift::Package { now, .. } => {
+            Drift::Package { now, .. } | Drift::Source { now, .. } => {
                 if let Some(e) = l.packages.iter_mut().find(|e| e.id == now.id) {
+                    *e = now.clone();
+                }
+            }
+            Drift::NewVendorFile(v) => l.vendor_files.push(v.clone()),
+            Drift::VendorFile { now, .. } => {
+                if let Some(e) = l
+                    .vendor_files
+                    .iter_mut()
+                    .find(|e| e.used_by == now.used_by && e.url == now.url)
+                {
                     *e = now.clone();
                 }
             }
@@ -522,6 +607,8 @@ pub fn apply(lock: Option<&Lock>, drift: &[Drift]) -> Lock {
         }
     }
     l.packages.sort_by(|a, b| a.id.cmp(&b.id));
+    l.vendor_files
+        .sort_by(|a, b| (&a.used_by, &a.url).cmp(&(&b.used_by, &b.url)));
     l.platforms.sort_by(|a, b| a.id.cmp(&b.id));
     l
 }
@@ -782,6 +869,51 @@ mod tests {
         let mut other = renode("renode:x@1", &h('3'));
         other.engine_version = Some("1.16.0".into());
         assert!(drift(Some(&pl), &[], &[other])[0].is_mismatch());
+    }
+
+    #[test]
+    fn a_change_of_source_and_a_changed_vendor_file_are_mismatches() {
+        // ADR-011 D5: path+ -> registry+ (same tree) needs --update-lock; a
+        // path+ source with another path is not drift (only a warning).
+        let lock = Lock {
+            packages: vec![pkg("a/x", &h('1'))],
+            ..Lock::default()
+        };
+        let mut moved = pkg("a/x", &h('1'));
+        moved.source = "path+elsewhere/a/x".into();
+        assert!(drift(Some(&lock), &[moved], &[]).is_empty());
+        let mut reg = pkg("a/x", &h('1'));
+        reg.source = "registry+https://r.example/".into();
+        let d = drift(Some(&lock), std::slice::from_ref(&reg), &[]);
+        assert!(
+            matches!(d[0], Drift::Source { .. }) && d[0].is_mismatch(),
+            "{d:?}"
+        );
+        assert!(d[0].describe().contains("--update-lock"));
+        let updated = apply(Some(&lock), &d);
+        assert_eq!(updated.packages[0].source, reg.source);
+        // Another registry, or the same one spelled with a trailing slash.
+        let mut reg2 = reg.clone();
+        reg2.source = "registry+https://r.example".into();
+        assert!(drift(Some(&updated), &[reg2], &[]).is_empty());
+        let mut reg3 = reg.clone();
+        reg3.source = "registry+https://other.example/".into();
+        assert!(drift(Some(&updated), &[reg3], &[])[0].is_mismatch());
+        // Vendor files: a new one is added, a changed declaration refused.
+        let v = VendorFile {
+            url: "https://v.example/a.svd".into(),
+            sha256: "a".repeat(64),
+            license: "LicenseRef-ST-EULA".into(),
+            used_by: "a/x".into(),
+        };
+        let d = vendor_drift(Some(&lock), std::slice::from_ref(&v));
+        assert!(matches!(d[0], Drift::NewVendorFile(_)) && !d[0].is_mismatch());
+        let with = apply(Some(&lock), &d);
+        assert_eq!(with.vendor_files, vec![v.clone()]);
+        assert!(vendor_drift(Some(&with), std::slice::from_ref(&v)).is_empty());
+        let mut changed = v.clone();
+        changed.sha256 = "b".repeat(64);
+        assert!(vendor_drift(Some(&with), &[changed])[0].is_mismatch());
     }
 
     #[test]

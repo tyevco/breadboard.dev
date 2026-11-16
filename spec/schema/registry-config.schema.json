@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://breadboard.dev/spec/schema/registry-config.schema.json",
+  "title": "A registry's config.json (spec/registry.md section 1, ADR-011 D1)",
+  "description": "format: the registry format (1; a client refuses another with \"update bb\"). dl: the archive URL template with {id} and {vers}, absolute or relative to the registry's URL. keys: the registry's minisign public keys (informative; the trusted key is compiled into bb or written in bb.toml).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "dl", "keys"],
+  "properties": {
+    "format": { "const": 1 },
+    "dl": { "type": "string", "pattern": "\\{id\\}.*\\{vers\\}" },
+    "keys": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^RW[A-Za-z0-9+/=]+$" } }
+  }
+}

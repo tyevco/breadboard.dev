@@ -1,0 +1,34 @@
+# The registry's PR checks (ADR-011 D8). Written by breadboard.dev's Phase 2 E1; it has never run
+# on GitHub (nothing was published by the agents; docs/registry-publish.md in breadboard.dev).
+name: pr
+on:
+  pull_request:
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: head
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Build bb at BB_REV
+        id: bb
+        run: echo "bb=$(bash head/ci/bb.sh)" >> "$GITHUB_OUTPUT"
+      - name: Approvals
+        id: approvals
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "logins=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+            --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | join(" ")')" >> "$GITHUB_OUTPUT"
+      - name: Registry checks
+        run: |
+          bash head/ci/pr-check.sh "${{ steps.bb.outputs.bb }}" head base \
+            "${{ github.event.pull_request.user.login }}" ${{ steps.approvals.outputs.logins }}

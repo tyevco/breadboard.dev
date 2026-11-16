@@ -32,6 +32,9 @@ if [ "${MODE}" != demo ]; then
   check uv               uv --version
   # The GDB passthrough gates (make gdb-test, ADR-008 D10).
   check gdb-multiarch    gdb-multiarch --version
+  # The registry tests' throwaway keys and certificate (make registry-test, ADR-011).
+  check minisign         minisign -v
+  check openssl          openssl version
 fi
 check bb               sh -c 'command -v bb'
 check pkg-config       pkg-config --version

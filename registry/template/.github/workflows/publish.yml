@@ -1,0 +1,46 @@
+# The registry's publish job (ADR-011 D8, "On merge"): archives, index lines, serial, signature,
+# build-provenance attestations, Pages. The signing key is the environment secret
+# MINISIGN_SECRET_KEY of the environment "registry-signing", which needs a required reviewer
+# (ADR-011 D3). Written by breadboard.dev's Phase 2 E1; it has never run on GitHub.
+name: publish
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: publish
+  cancel-in-progress: false
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  attestations: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: registry-signing
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build bb at BB_REV
+        id: bb
+        run: echo "bb=$(bash ci/bb.sh)" >> "$GITHUB_OUTPUT"
+      - name: Publish and sign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: bash ci/publish.sh "${{ steps.bb.outputs.bb }}" . "$(date -u +%F)"
+      - name: Commit the index
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "bb-registry-bot"
+            git config user.email "bb-registry-bot@users.noreply.github.com"
+            git add -A index dl snapshot.json snapshot.json.minisig
+            git commit -m "publish: serial $(python3 -c 'import json; print(json.load(open("snapshot.json"))["serial"])')"
+            git push
+          fi
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dl/**/*.tar'
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - uses: actions/deploy-pages@v4

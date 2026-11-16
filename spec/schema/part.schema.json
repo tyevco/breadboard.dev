@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/part.schema.json",
   "title": "bb-part/0 and bb-part/1: a component package's part.toml (spec/package.md, ADR-006 D2-D4, ADR-009, ADR-010 D2, ADR-012)",
-  "description": "The JSON form of part.toml (TOML converted to JSON as is). Unknown keys are an error; the keys still reserved (layers, thermal, rtl; pins.ibis; behavioral.cpu, behavioral.svd) are not accepted. bb-part/1 (the Phase 2 schema epoch, milestone S) keeps every bb-part/0 key and its meaning and adds [power] (ADR-009 D4, D5), a view's rails and [[analog.corners]] (ADR-009, D8), the switch (ADR-010 D2) and supply_load (ADR-009 D4) view kinds, [[document]], [claims] and a provenance's upstream_license (ADR-012 D3, D4; ADR-011 D7). The new keys are accepted and inert until their milestones use them; a bb-part/0 file has none of them.",
+  "description": "The JSON form of part.toml (TOML converted to JSON as is). Unknown keys are an error; the keys still reserved (layers, thermal, rtl; pins.ibis; behavioral.cpu) are not accepted; behavioral.svd is a bb-part/1 key since milestone E1 (ADR-011 Amendment 2). bb-part/1 (the Phase 2 schema epoch, milestone S) keeps every bb-part/0 key and its meaning and adds [power] (ADR-009 D4, D5), a view's rails and [[analog.corners]] (ADR-009, D8), the switch (ADR-010 D2) and supply_load (ADR-009 D4) view kinds, [[document]], [claims] and a provenance's upstream_license (ADR-012 D3, D4; ADR-011 D7). The new keys are accepted and inert until their milestones use them; a bb-part/0 file has none of them.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "part", "pins"],
@@ -66,7 +66,18 @@
       "properties": {
         "engine": { "enum": ["renode", "device"] },
         "platform": { "$ref": "#/$defs/engine_id" },
-        "device": { "$ref": "#/$defs/engine_id" }
+        "device": { "$ref": "#/$defs/engine_id" },
+        "svd": {
+          "description": "bb-part/1 (ADR-011 D5, D7, Amendment 2): the vendor SVD, fetched at use by bb open and locked as a [[vendor_file]]; never part of the package.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "sha256", "license"],
+          "properties": {
+            "url": { "type": "string", "pattern": "^https://" },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "license": { "type": "string", "pattern": "^\\S+$" }
+          }
+        }
       },
       "oneOf": [
         { "properties": { "engine": { "const": "renode" } }, "required": ["platform"], "not": { "required": ["device"] } },

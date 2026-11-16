@@ -45,11 +45,14 @@ APT_PACKAGES=(
 )
 # Developer additions: the ARM toolchain for the firmware and the gate
 # firmware, cmake, python3-jsonschema for the package schema validation
-# (`make packages`, ADR-006 G1), and gdb-multiarch for the GDB passthrough
-# gates (`make gdb-test`, ADR-008 D10).
+# (`make packages`, ADR-006 G1), gdb-multiarch for the GDB passthrough
+# gates (`make gdb-test`, ADR-008 D10), and minisign and openssl for the
+# registry tests' throwaway signing keys and local HTTPS certificate
+# (`make registry-test`, ADR-011; bb itself only verifies, with the
+# minisign-verify crate).
 if [ "${MODE}" != demo ]; then
   APT_PACKAGES+=(cmake gcc-arm-none-eabi libnewlib-arm-none-eabi binutils-arm-none-eabi python3-jsonschema
-    gdb-multiarch)
+    gdb-multiarch minisign openssl)
 fi
 # The Zephyr host tools a west build of the E1 firmware uses (ninja, gperf, a venv for west).
 if [ "${MODE}" = zephyr ]; then

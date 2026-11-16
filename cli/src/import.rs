@@ -19,9 +19,10 @@ use bbcore::board::{
     Platform, ProbeAlias, Resolution,
 };
 use bbcore::cjson::Json;
-use bbpkg::lock::{self, LockedPackage, LockedPlatform};
+use bbpkg::lock::{self, LockedPackage, LockedPlatform, VendorFile};
 use bbpkg::package::{self, Package};
 use bbpkg::pattern::Pattern;
+use bbpkg::registry::Resolver;
 use bbpkg::schema::Registry;
 use bbpkg::value::{parse_kicad_value, PassiveKind};
 
@@ -50,6 +51,9 @@ pub enum Mode {
 pub struct Packages {
     pub list: Vec<Package>,
     trees: BTreeMap<String, String>,
+    /// Why a registry could not supply an id (ADR-011 D4), for the
+    /// not-found message.
+    missing: BTreeMap<String, String>,
 }
 
 impl Packages {
@@ -84,7 +88,47 @@ impl Packages {
         Ok(Packages {
             list,
             trees: BTreeMap::new(),
+            missing: BTreeMap::new(),
         })
+    }
+
+    /// Add the packages a registry supplies for `specs`, the ids no local
+    /// source provides (ADR-011 D4: local sources first), and their
+    /// modules' chips. `lock` decides a locked id's version (and, for `bb
+    /// run`, its cached tree). A failure is kept for the id's not-found
+    /// message, so an unused stale lock entry costs nothing.
+    pub fn add_from_registries(
+        &mut self,
+        specs: &[String],
+        lock: Option<&bbpkg::lock::Lock>,
+        res: &mut Resolver,
+    ) {
+        let reg = Registry::current();
+        let mut todo: Vec<String> = specs.to_vec();
+        let mut tried: BTreeSet<String> = BTreeSet::new();
+        while let Some(spec) = todo.pop() {
+            let id = spec
+                .split_once('@')
+                .map(|(i, _)| i)
+                .unwrap_or(&spec)
+                .to_string();
+            if self.list.iter().any(|p| p.part.id == id) || !tried.insert(id.clone()) {
+                continue;
+            }
+            let locked = lock.and_then(|l| l.packages.iter().find(|p| p.id == id));
+            match res.resolve(&spec, locked, &reg) {
+                Ok(pkg) => {
+                    if let Some(m) = &pkg.part.module {
+                        todo.push(m.chip.clone());
+                    }
+                    self.list.push(pkg);
+                }
+                Err(e) => {
+                    self.missing.insert(id, e);
+                }
+            }
+        }
+        self.list.sort_by(|a, b| a.part.id.cmp(&b.part.id));
     }
 
     pub fn get(&self, spec: &str) -> Result<&Package, String> {
@@ -92,11 +136,12 @@ impl Packages {
             Some((i, v)) => (i, Some(v)),
             None => (spec, None),
         };
-        let p = self
-            .list
-            .iter()
-            .find(|p| p.part.id == id)
-            .ok_or_else(|| format!("package {id} not found on the search path"))?;
+        let p = self.list.iter().find(|p| p.part.id == id).ok_or_else(|| {
+            match self.missing.get(id) {
+                Some(e) => format!("package {id} not found on the search path; {e}"),
+                None => format!("package {id} not found on the search path"),
+            }
+        })?;
         if let Some(v) = want {
             if p.part.version != v {
                 return Err(format!(
@@ -173,6 +218,8 @@ pub struct Imported {
     /// The resolved packages by id.
     pub packages: BTreeMap<String, Package>,
     pub locked_packages: Vec<LockedPackage>,
+    /// The vendor files the resolved packages declare (ADR-011 D5).
+    pub vendor_files: Vec<VendorFile>,
     pub locked_platforms: Vec<LockedPlatform>,
     pub resolution: Json,
     pub unresolved_toml: String,
@@ -188,6 +235,16 @@ pub struct Imported {
     /// Per `[[connection]]`, what `bb open` prints: a header line, then one
     /// line per mated pin pair.
     pub connections: Vec<Vec<String>>,
+}
+
+impl Imported {
+    /// Every difference from `lock`: packages (with sources), vendor files
+    /// and platforms.
+    pub fn drift(&self, lock: Option<&bbpkg::lock::Lock>) -> Vec<lock::Drift> {
+        let mut d = lock::drift(lock, &self.locked_packages, &self.locked_platforms);
+        d.extend(lock::vendor_drift(lock, &self.vendor_files));
+        d
+    }
 }
 
 /// What [`resolve_connection`] reports besides the resolved connection.
@@ -612,11 +669,15 @@ struct Tried {
 }
 
 /// Import a project. `lock` is its `bb.lock`, which decides how a platform
-/// is pinned (`PlatformDef::locked_for`, ADR-015 Amendment 3).
+/// is pinned (`PlatformDef::locked_for`, ADR-015 Amendment 3) and which
+/// version of a registry package is used; `res` supplies the ids no local
+/// source provides (ADR-011 D4: `bb open` fetches, `bb run` only reads the
+/// lock's trees from the cache).
 pub fn import(
     p: &Project,
     mode: Mode,
     lock: Option<&bbpkg::lock::Lock>,
+    res: &mut Resolver,
 ) -> Result<Imported, String> {
     let mut warnings = Vec::new();
     let mut pk = Packages::load(&p.search_path())?;
@@ -670,6 +731,50 @@ pub fn import(
     }
     let mut fields_wanted: Vec<String> = D3_FIELDS.iter().map(|s| s.to_string()).collect();
     fields_wanted.extend(p.extra_fields.iter().cloned());
+
+    // ADR-011 D4: the ids a registry may supply are the ones this project
+    // names (an [instances] override, a bb:part field, a [[device]], a
+    // connection's harness) and the ones its lock pins; local sources come
+    // first, so only an id no local directory provides is asked for. MPN
+    // and LCSC matching run over the packages found this way.
+    let mut specs: Vec<String> = Vec::new();
+    for (_, ov) in &p.instances {
+        if let Some(s) = ov.package.as_ref().filter(|s| *s != "none") {
+            specs.push(s.clone());
+        }
+    }
+    for (_, n) in &lists {
+        for c in &n.components {
+            if let Some(v) = c
+                .fields
+                .get("bb:part")
+                .filter(|v| !v.is_empty() && *v != "~")
+            {
+                specs.push(v.clone());
+            }
+        }
+    }
+    for d in &p.devices {
+        specs.push(d.package.clone());
+    }
+    for c in &p.connections {
+        if let Some(m) = &c.model {
+            specs.push(m.split(':').next().unwrap_or(m).to_string());
+        }
+    }
+    // A locked registry package (a path+ entry whose directory is gone is
+    // not looked for on a registry: that would be a change of source).
+    if let Some(l) = lock {
+        specs.extend(
+            l.packages
+                .iter()
+                .filter(|x| x.source.starts_with(lock::REGISTRY_SOURCE))
+                .map(|x| x.id.clone()),
+        );
+    }
+    specs.sort();
+    specs.dedup();
+    pk.add_from_registries(&specs, lock, res);
 
     // Nets.
     let mut board = Board::default();
@@ -1442,15 +1547,10 @@ pub fn import(
         std::fs::canonicalize(&p.dir).map_err(|e| format!("{}: {e}", p.dir.display()))?;
     let mut locked_packages = Vec::new();
     for (id, pkg) in &used {
-        let dir =
-            std::fs::canonicalize(&pkg.dir).map_err(|e| format!("{}: {e}", pkg.dir.display()))?;
-        locked_packages.push(LockedPackage::at_path(
-            id,
-            &pkg.part.version,
-            &lock::relative_path(&proj_abs, &dir),
-            &pk.tree(id)?,
-        ));
+        let tree = pk.tree(id)?;
+        locked_packages.push(crate::registry::locked_entry(res, pkg, &proj_abs, &tree)?);
     }
+    let vendor_files = crate::registry::vendor_files(used.values());
 
     board.sort();
 
@@ -1503,6 +1603,7 @@ pub fn import(
         board,
         packages: used,
         locked_packages,
+        vendor_files,
         locked_platforms,
         resolution,
         unresolved_toml,

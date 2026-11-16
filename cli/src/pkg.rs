@@ -40,6 +40,8 @@ usage: bb pkg lint [--publish] [<dir>...]     lint packages (default: first-part
        bb pkg migrate --board <board.bbm>...  rewrite board.bbm files to the current bb-board major
        bb pkg migrate --lock <bb.lock>...     rewrite lockfiles to the current bb-lock major
        bb pkg tree <package dir>              print a package's tree hash
+       bb pkg pack <package dir> [-o <file>]  write its deterministic archive (ADR-011 D6)
+       bb pkg unpack <archive> <dir>          extract an archive (strictly) and print its tree hash
        bb pkg value [--kicad R|C|L] [--dim voltage|time|resistance|capacitance|inductance|current|temperature|count|percent] <text>...";
 
 pub fn main(args: &[String]) -> ExitCode {
@@ -48,6 +50,8 @@ pub fn main(args: &[String]) -> ExitCode {
         Some("test") => test_cmd(&args[1..]),
         Some("migrate") => migrate_cmd(&args[1..]),
         Some("tree") => tree_cmd(&args[1..]),
+        Some("pack") => pack_cmd(&args[1..]),
+        Some("unpack") => unpack_cmd(&args[1..]),
         Some("value") => value_cmd(&args[1..]),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
@@ -676,6 +680,48 @@ fn tree_cmd(args: &[String]) -> Result<bool, String> {
     let [dir] = args else {
         return Err("usage: bb pkg tree <package dir>".into());
     };
+    println!("{}", bbpkg::lock::tree_hash(Path::new(dir))?);
+    Ok(true)
+}
+
+/// `bb pkg pack <dir> [-o <file>]` (ADR-011 D6): the deterministic ustar of
+/// a package (default `<namespace>_<name>-<version>.tar` in the current
+/// directory); prints the file, its size, its sha256 and the tree hash.
+fn pack_cmd(args: &[String]) -> Result<bool, String> {
+    let (dir, out) = match args {
+        [d] => (d, None),
+        [d, o, f] if o == "-o" => (d, Some(PathBuf::from(f))),
+        _ => return Err("usage: bb pkg pack <package dir> [-o <file>]".into()),
+    };
+    let dir = Path::new(dir);
+    let pkg = package::load(dir, &Registry::current())?;
+    let tar = bbpkg::archive::pack(dir)?;
+    let out = out.unwrap_or_else(|| {
+        PathBuf::from(format!(
+            "{}-{}.tar",
+            pkg.part.id.replace('/', "_"),
+            pkg.part.version
+        ))
+    });
+    std::fs::write(&out, &tar).map_err(|e| format!("write {}: {e}", out.display()))?;
+    println!(
+        "{} {} bytes sha256:{} tree {}",
+        out.display(),
+        tar.len(),
+        bbpkg::sha256::hex_digest(&tar),
+        bbpkg::lock::tree_hash(dir)?
+    );
+    Ok(true)
+}
+
+/// `bb pkg unpack <archive> <dir>`: the strict reader (ADR-011 D6); prints
+/// the extracted tree's hash.
+fn unpack_cmd(args: &[String]) -> Result<bool, String> {
+    let [tar, dir] = args else {
+        return Err("usage: bb pkg unpack <archive> <dir>".into());
+    };
+    let bytes = std::fs::read(tar).map_err(|e| format!("read {tar}: {e}"))?;
+    bbpkg::archive::extract(&bytes, Path::new(dir))?;
     println!("{}", bbpkg::lock::tree_hash(Path::new(dir))?);
     Ok(true)
 }

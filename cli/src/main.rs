@@ -61,6 +61,7 @@ mod platforms;
 mod pool;
 mod probe_cmd;
 mod project;
+mod registry;
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -93,10 +94,11 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
               [--ngspice-watchdog 200000,10000]
        bb pool run|start|stop|status ...   (bb pool --help)
-       bb open [<dir>|<.kicad_pro>|<.net>|<board.cir>] [--check] [--update-lock]   (bb open --help)
+       bb open [<dir>|<.kicad_pro>|<.net>|<board.cir>] [--check] [--update-lock] [--offline]   (bb open --help)
        bb flash --target <instance> <file.elf> [--kind elf] [--project <dir>]
        bb probe [--list] [net:<name> ...] [--project <dir>]
-       bb pkg lint|test|migrate|tree|value ...         (bb pkg --help)
+       bb pkg lint|test|migrate|tree|pack|unpack|value ...   (bb pkg --help)
+       bb registry init|publish|yank|remove|snapshot|check|verify ...   (bb registry --help)
 
   --netlist    board file: SPICE body plus *bb directives (examples/spike/board.cir).
                  Parts given by package= need a current bb.lock next to it
@@ -1767,11 +1769,13 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         // Parts may come from packages (ADR-006): resolved on the search
         // path, and checked against the board's bb.lock, which bb run never
         // writes.
-        let board = open::parse_board(netlist, true)?;
+        // A registry package comes from the cache by its locked tree hash;
+        // bb run never fetches (ADR-011 D4).
+        let (board, lock_warnings) = open::board_for_run(netlist)?;
         for w in &board.warnings {
             eprintln!("bb run: warning: {}: {w}", netlist.display());
         }
-        for w in open::check_lock(netlist, &board)? {
+        for w in lock_warnings {
             eprintln!("bb run: warning: {w}");
         }
         let firmware = a.firmware.clone().expect("checked");
@@ -1806,8 +1810,9 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
     if let Some(h) = lock.as_ref().and_then(bbpkg::lock::Lock::hint) {
         eprintln!("bb run: warning: {h}");
     }
-    let imp = import::import(&p, import::Mode::Run, lock.as_ref())?;
-    for w in &imp.warnings {
+    let mut res = registry::resolver(Some(&p), bbpkg::registry::Access::Locked)?;
+    let imp = import::import(&p, import::Mode::Run, lock.as_ref(), &mut res)?;
+    for w in imp.warnings.iter().chain(&res.warnings) {
         eprintln!("bb run: warning: {w}");
     }
     let bbm_path = dir.join(import::BOARD_FILE);
@@ -1822,7 +1827,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
     for w in open::project_path_warnings(&dir, lock.as_ref(), &imp.locked_packages) {
         eprintln!("bb run: warning: {w}");
     }
-    let d = bbpkg::lock::drift(lock.as_ref(), &imp.locked_packages, &imp.locked_platforms);
+    let d = imp.drift(lock.as_ref());
     if !d.is_empty() {
         return Err(format!(
             "{} does not match the packages and platforms (ADR-006 D8): {}; run `bb open`",
@@ -1887,6 +1892,7 @@ fn main() -> ExitCode {
         Some("flash") => flash::main(&args[1..]),
         Some("probe") => probe_cmd::main(&args[1..]),
         Some("pkg") => pkg::main(&args[1..]),
+        Some("registry") => registry::main(&args[1..]),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             ExitCode::SUCCESS
