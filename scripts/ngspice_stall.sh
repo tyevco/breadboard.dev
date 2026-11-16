@@ -5,9 +5,11 @@
 #
 #   scripts/ngspice_stall.sh <bb> <out>
 #
-# The repro (ADR-008 Amendment 11 Finding 2, ADR-015 Context): examples/dial-me-spinner/e3/board.cir
+# The repro (ADR-008 Amendment 11 Finding 2, ADR-015 Context): E3's typical homing board as it was
+# before Phase 2 H5, examples/dial-me-spinner/e3/board-glued.cir (the five driver nets glued into
+# ngspice with their pull-downs; H5's board.cir makes them digital-only, ADR-014 D4, a different deck),
 # with P0.02 bound through the loading saadc_se view (its `load=none` removed), homing_step.elf (one
-# full step, then quiet). The stall's cause (H2): in a quiet stretch ngspice steps exactly TMAX = L,
+# full step, then quiet). Below, "the committed board" is board-glued.cir. The stall's cause (H2): in a quiet stretch ngspice steps exactly TMAX = L,
 # those steps drift off the lattice by rounding until one lands just outside the grant tolerance,
 # the step clamp then adds a sub-femtosecond step to the lattice point, and the integration
 # restarted at about 1e-16 s falls into a trapezoidal Newton limit cycle.
@@ -23,8 +25,11 @@
 #   - within STALL_MAX_S (default 120 s) of wall time and STALL_MAX_RSS_KB (default 500 MB) of bb's
 #     own peak RSS (ADR-015 G1);
 #   - the outputs written before the error are those of a run that ends at the last completed
-#     grant (--for 77430us): nets.csv, nets.vcd and the non-grant records byte for byte (the grant
-#     records add the failed grant's own record);
+#     grant: nets.csv, nets.vcd and the non-grant records byte for byte (the grant records add the
+#     failed grant's own record). Before Phase 2 H5 every grant of this board was one cell, so that
+#     was 77.43 ms; since H5 (ADR-014 D1) U10's own promise gives quiet grants while it sleeps after
+#     the step (`Q = {U10}`, M1 stopping early), so the stall falls inside a longer grant, and the
+#     shorter run ends where that grant began (read from the stalled run's last grant record);
 #   - deterministic: at a lower limit (--ngspice-watchdog 20000,10000, which trips in the same cell)
 #     two runs give the same message;
 #   - the negative control: the committed board (load=none) runs the same 100 ms with no error, so
@@ -61,12 +66,13 @@ fail() { echo "ngspice-stall: FAIL: $*"; status=1; }
 unset BB_RENODE_POOL
 
 rm -rf "$OUT" && mkdir -p "$W"
-# The repro board: a copy of the e3 directory (its bb.lock pins the same packages and platform) with
-# P0.02 on the loading view.
-cp "$E3"/board.cir "$E3"/bb.lock "$W/"
-sed 's/^\(\*bb pin U10\.P0\.02 .*\) load=none$/\1/' "$E3/board.cir" > "$W/stall.cir"
+# The repro board: a copy of the e3 directory's pre-H5 board (its bb.lock pins the same packages and
+# platform) with P0.02 on the loading view.
+cp "$E3"/board-glued.cir "$W/board.cir"
+cp "$E3"/bb.lock "$W/"
+sed 's/^\(\*bb pin U10\.P0\.02 .*\) load=none$/\1/' "$E3/board-glued.cir" > "$W/stall.cir"
 if cmp -s "$W/board.cir" "$W/stall.cir" || grep -q '^\*bb pin U10\.P0\.02 .*load=none' "$W/stall.cir"; then
-  fail "could not remove load=none from P0.02 in $E3/board.cir"; exit 1
+  fail "could not remove load=none from P0.02 in $E3/board-glued.cir"; exit 1
 fi
 
 run() { # <name> <board> <for> [extra bb run args...]: wall seconds into $OUT/<name>.wall
@@ -117,8 +123,13 @@ fi
 if (( $(echo "$wall < $MAX_S" | bc) )); then pass "within ${MAX_S} s of wall time (${wall} s)"; else fail "wall ${wall} s >= ${MAX_S} s"; fi
 if [[ -n $rss ]] && (( rss < MAX_RSS_KB )); then pass "bounded memory: bb's peak RSS ${rss} kB < ${MAX_RSS_KB} kB"; else fail "bb's peak RSS ${rss:-unknown} kB (limit ${MAX_RSS_KB} kB)"; fi
 
+# The last completed grant: where the failed grant (the stalled run's last grant record) began.
+upto_fs=$(grep '"type":"grant"' "$OUT/stall/events.jsonl" | tail -1 | sed -n 's/.*"t_fs":\([0-9]*\),.*/\1/p')
+upto_us=$(( ${upto_fs:-0} / 1000000000 ))
+echo "ngspice-stall: the failed grant began at ${upto_us} us: the shorter run ends there"
+
 # The untimed runs of both parts.
-batch "upto stall.cir 77430us $OFF" \
+batch "upto stall.cir ${upto_us}us $OFF" \
       "low1 stall.cir 100ms $OFF --ngspice-watchdog 20000,10000" \
       "low2 stall.cir 100ms $OFF --ngspice-watchdog 20000,10000" \
       "healthy board.cir 100ms $OFF" \
@@ -136,15 +147,18 @@ if [[ $(cat "$OUT/upto.rc") -eq 0 ]]; then
   cmp -s <(grep -v '"type":"grant"' "$OUT/stall/events.jsonl") <(grep -v '"type":"grant"' "$OUT/upto/events.jsonl") \
     || { ok=0; echo "ngspice-stall:   the non-grant records differ"; }
   # The grant records differ by design: the stalled run also records the grant it failed in
-  # (77.43 -> 77.44 ms), and the shorter run's last grant is limited by its end.
+  # (from the last completed boundary, past 77.43 ms), and the shorter run's last grant is limited
+  # by its end.
   gs=$(grep -c '"type":"grant"' "$OUT/stall/events.jsonl")
   gu=$(grep -c '"type":"grant"' "$OUT/upto/events.jsonl")
-  grep '"type":"grant"' "$OUT/stall/events.jsonl" | tail -1 | grep -q '"t_fs":77430000000000,"until_fs":77440000000000' \
-    && [[ $gs -eq $((gu + 1)) ]] || { ok=0; echo "ngspice-stall:   grants: $gs in the stalled run, $gu in the shorter one"; }
-  [[ $ok -eq 1 ]] && pass "the outputs written before the error equal a --for 77430us run (nets.csv, nets.vcd and the non-grant records byte for byte; $gu completed grants, then the failed one's record)" \
-    || fail "the outputs before the error differ from a run that ends at 77.43 ms"
+  last=$(grep '"type":"grant"' "$OUT/stall/events.jsonl" | tail -1)
+  until_fs=$(sed -n 's/.*"until_fs":\([0-9]*\),.*/\1/p' <<<"$last")
+  [[ $gs -eq $((gu + 1)) ]] && (( upto_fs <= 77430000000000 && until_fs >= 77440000000000 )) \
+    || { ok=0; echo "ngspice-stall:   grants: $gs in the stalled run, $gu in the shorter one; the failed one: $last"; }
+  [[ $ok -eq 1 ]] && pass "the outputs written before the error equal a --for ${upto_us}us run, the last completed grant (nets.csv, nets.vcd and the non-grant records byte for byte; $gu completed grants, then the failed one's record, which holds 77.43 ms)" \
+    || fail "the outputs before the error differ from a run that ends at the last completed grant (${upto_us} us)"
 else
-  fail "the run to 77430us failed"; tail -3 "$OUT/upto.log"
+  fail "the run to ${upto_us}us failed"; tail -3 "$OUT/upto.log"
 fi
 
 # Deterministic: a lower limit trips in the same cell, twice with the same message.

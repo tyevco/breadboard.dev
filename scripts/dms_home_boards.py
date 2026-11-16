@@ -55,7 +55,16 @@ CASES = {
                        f"s0=150 ts=50ms {FA_LAST}", None),
     "board-step.cir": ("one full step at 446 PPS (homing_step.elf), mid-stroke, with the bridges, the coils "
                        "and the suite's back-EMF", "s0=400 ts=50ms", STEP_EMF),
+    # The typical homing board as it was before Phase 2 H5 (ADR-014 D4): the MOT nets glued into ngspice
+    # with the detent sheet's input side. make ngspice-stall's deck (the SAADC stall repro of H1 and
+    # H2), and the base of ADR-014 G0's measurement; its one-cell results are the pre-H5 typ goldens.
+    "board-glued.cir": ("homing from the click end, DRV5032FA typical corner (tS 50 ms), with the five driver "
+                        "nets glued into ngspice and loaded by U40/U41's input pull-downs and R70: the typ "
+                        "board before Phase 2 H5 (ADR-014 D4), kept as make ngspice-stall's deck",
+                        "s0=500 ts=50ms", None),
 }
+# The board that keeps the MOT nets' glue and pull-downs although it has no power stage.
+GLUED = {"board-glued.cir"}
 
 HEADER = """\
 * examples/dial-me-spinner/e3/{name}: E3, {title}.
@@ -75,7 +84,7 @@ HEADER = """\
 * U10 is the Raytac module's chip, bound directly (nordic/nrf52840-qiaa, as examples/nrf-saadc): a module
 * pad has no VDD adc_in in a board file.
 *
-* M1 (dms/detent-mechanism, device dms/mechanism@1) is the lead screw, carriage, magnet and U42
+* M1 (dms/detent-mechanism, device dms/mechanism@2) is the lead screw, carriage, magnet and U42
 * DRV5032FA as one device: it reads the five driver commands and drives HOME_N (push-pull, low = magnet
 * present). Its parameters here: {params} (the rest at their defaults: die 2.6 mm, BOP/BRP 3/1.5 mT
 * unless set, phase seeded from the run seed and "M1").
@@ -170,8 +179,12 @@ RCOILA MOT_A_OUT1 COILA_L 20
 RCOILB MOT_B_OUT1 COILB_L 20
 """
 
-# The homing boards: the detent sheet's input side only (the DRV8837 inputs' 100 kOhm pull-downs, RPD of
-# SLVSBA4F Table 6.5, and R70 on the shared nSLEEP).
+# The homing boards (Phase 2 H5, ADR-014 D4, a recorded model change): the five driver nets are
+# digital-only. Until H5 they carried the detent sheet's input side (U40/U41's 100 kOhm RPD on IN1, IN2
+# and the shared nSLEEP, and R70), which loaded only U10's own outputs and which no E3 check reads; with
+# them, the CPU's PWM edges fed ngspice through the pins' glue, a loop no quiet grant could cut.
+DIGITAL_NETS = ("MOT_A_IN1", "MOT_A_IN2", "MOT_B_IN1", "MOT_B_IN2", "MOT_NSLEEP")
+DIGITAL = "".join(f"*bb digital {n}\n" for n in DIGITAL_NETS)
 INPUTS = """\
 * ---- the detent sheet's input side: U40/U41's RPD (100 kOhm, SLVSBA4F Table 6.5) on IN1, IN2 and the
 *      shared nSLEEP (two in parallel), and R70
@@ -189,14 +202,36 @@ ANALOG_FULL = """\
 * edges at their exact instants through the pins' glue, and J40's coils, 20 Ohm + 4.3 mH each
 * (motor_drive__stepper.lib r25 and lph at 25 C), {emf_text}"""
 
-ANALOG_INPUTS = """\
+ANALOG_GLUED = """\
 * The analog side of this board is the detent sheet's input side (U40/U41's input pull-downs and R70)
 * and the bench; the bridges' power stage and J40's coils are on board-step.cir only. With them, ngspice
 * takes about 0.4 s of wall time per simulated ms while the PWM runs (the ideal-switch view at phase0:
 * about 60 solver points per edge, 100 000 edges per second; measured in M10, ADR-008 Amendment 11),
 * about 20 minutes for one homing, and it keeps every solver point in memory. The homing checks read
 * the device, the firmware and the pins, none of which the analog side feeds back into (the device
-* reads the driver commands, ADR-008 Amendment 9), so the homing runs leave the power stage out."""
+* reads the driver commands, ADR-008 Amendment 9), so the homing runs leave the power stage out.
+*
+* This is board.cir as it was before Phase 2 H5 (ADR-014 D4), with the five driver nets glued into
+* ngspice: make ngspice-stall's deck (H1's SAADC stall repro and H2's lattice-snap gates) and the base
+* case of ADR-014 G0 (scripts/dms_home_g0.sh). Its one-cell results are the pre-H5 typ goldens (the
+* device dms/mechanism@2 gives @1's, ADR-014 G2)."""
+
+ANALOG_INPUTS = """\
+* The analog side of this board is the bench, the VSYS reading and HOME_N; the bridges' power stage and
+* J40's coils are on board-step.cir only. With them, ngspice takes about 0.4 s of wall time per
+* simulated ms while the PWM runs (the ideal-switch view at phase0: about 60 solver points per edge,
+* 100 000 edges per second; measured in M10, ADR-008 Amendment 11), about 20 minutes for one homing, and
+* it keeps every solver point in memory. The homing checks read the device, the firmware and the pins,
+* none of which the analog side feeds back into (the device reads the driver commands, ADR-008
+* Amendment 9), so the homing runs leave the power stage out.
+*
+* The five driver nets are digital-only (`*bb digital`, Phase 2 H5, ADR-014 D4: a recorded model
+* change): U10's PWM and nSLEEP edges reach M1 through the kernel nets only, with no glue into ngspice,
+* and the detent sheet's input side (U40/U41's 100 kOhm RPD on IN1, IN2 and the shared nSLEEP, and R70),
+* which loaded only those outputs and which no check reads, is not in the deck. With the CPU's edges out
+* of ngspice the binding graph is ngspice -> U10 -> M1 once M1's promise cuts its outputs, so the
+* kernel's quiet grants (ADR-014 D1-D3) run between M1's samples. The probes read U10.P1.15 for
+* nSLEEP's level."""
 
 
 def emf_lines(emf):
@@ -220,9 +255,14 @@ def emf_text(emf):
 def board(name):
     title, params, emf = CASES[name]
     full = emf is not None
-    analog = ANALOG_FULL.format(emf_text=emf_text(emf)) if full else ANALOG_INPUTS
+    glued = name in GLUED
+    if full:
+        analog = ANALOG_FULL.format(emf_text=emf_text(emf))
+    else:
+        analog = ANALOG_GLUED if glued else ANALOG_INPUTS
     out = HEADER.format(name=name, title=title, params=params, analog_text=analog)
-    out += "*\n" + PINS.format(params=params) + "\n* Circuit body. Node 0 is the main board's GND.\n"
+    out += "*\n" + PINS.format(params=params) + ("" if full or glued else DIGITAL)
+    out += "\n* Circuit body. Node 0 is the main board's GND.\n"
     out += BENCH
     for ref, v in P3V3_CAPS:
         out += f"R{ref}_ESR P3V3 P3V3_{ref} 0.01\nC{ref} P3V3_{ref} 0 {v}\n"
@@ -233,7 +273,8 @@ def board(name):
         out += VIEW.read_text()
         out += "\n* phase0 (spec/package.md section 8), the set ti/drv8837:bridge is qualified at.\n"
     else:
-        out += INPUTS
+        if glued:
+            out += INPUTS
         out += "\n* phase0 (spec/package.md section 8).\n"
     out += ".options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13\n.end\n"
     return out

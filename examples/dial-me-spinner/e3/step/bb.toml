@@ -97,7 +97,7 @@ pin = "main:U10.VDD"
 model = "adc_in"
 vref = "3.6V"
 
-# M1: the lead screw, carriage, magnet and U42 DRV5032FA as one device (dms/mechanism@1), mid-stroke
+# M1: the lead screw, carriage, magnet and U42 DRV5032FA as one device (dms/mechanism@2), mid-stroke
 # (s0 = 400 steps) at the typical tS, as in ../board-step.cir. Its reference is M1, so its seeded
 # sample phase is the same.
 [[device]]

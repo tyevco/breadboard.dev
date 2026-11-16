@@ -9,7 +9,7 @@
 # ../../bb.toml does. What the board file hand-writes, the project takes from the board:
 #   - U10 is the Raytac module (raytac/mdbt50q-u1mv2, its chip nordic/nrf52840-qiaa), bound by pad;
 #   - the detent sheet's parts are the schematic's: U40, U41 (ti/drv8837), R70 and the capacitors;
-#   - M1 (dms/detent-mechanism, device dms/mechanism@1) has no schematic symbol: a virtual device
+#   - M1 (dms/detent-mechanism, device dms/mechanism@2) has no schematic symbol: a virtual device
 #     (board.bbm records it with virtual: true), bound to the five driver commands and HOME_N;
 #   - U42, the DRV5032FA on HOME_N, is inside M1, so it is excluded below;
 #   - J40, the motor connector, is the motor's two phases (../packages, dial-me-spinner/detent-stepper).
@@ -106,7 +106,7 @@ pin = "main:U10.VDD"
 model = "adc_in"
 vref = "3.6V"
 
-# M1: the lead screw, carriage, magnet and U42 DRV5032FA as one device (dms/mechanism@1), from the
+# M1: the lead screw, carriage, magnet and U42 DRV5032FA as one device (dms/mechanism@2), from the
 # click end (s0 = 500 steps) at the typical tS. Its reference is M1 as in ../board.cir, so its seeded
 # sample phase is the same.
 [[device]]

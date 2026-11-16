@@ -15,7 +15,7 @@
 * U10 is the Raytac module's chip, bound directly (nordic/nrf52840-qiaa, as examples/nrf-saadc): a module
 * pad has no VDD adc_in in a board file.
 *
-* M1 (dms/detent-mechanism, device dms/mechanism@1) is the lead screw, carriage, magnet and U42
+* M1 (dms/detent-mechanism, device dms/mechanism@2) is the lead screw, carriage, magnet and U42
 * DRV5032FA as one device: it reads the five driver commands and drives HOME_N (push-pull, low = magnet
 * present). Its parameters here: s0=400 ts=50ms (the rest at their defaults: die 2.6 mm, BOP/BRP 3/1.5 mT
 * unless set, phase seeded from the run seed and "M1").

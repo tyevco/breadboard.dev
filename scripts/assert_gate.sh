@@ -81,7 +81,8 @@ e2_args() { # <case>
     sag) f=4300ms bench=sag ;; rec) f=2300ms bench=sag-recover ;; esac
   echo "--project $p --bench $p/bench/$bench.toml --for $f --probe net:VSYS_SENSE --sample-rate 10kHz --assert $A/e2/$1.toml"
 }
-E3_PINS="--probe net:VSYS --probe net:HOME_N --probe net:MOT_NSLEEP --probe net:U10.P0.26 --probe net:U10.P0.05 \
+# MOT_NSLEEP is digital-only on the homing boards since Phase 2 H5 (ADR-014 D4): U10.P1.15 is its level.
+E3_PINS="--probe net:VSYS --probe net:HOME_N --probe net:U10.P0.26 --probe net:U10.P0.05 \
 --probe net:U10.P0.07 --probe net:U10.P0.11 --probe net:U10.P1.15 --probe net:M1.HOME_N --sample-rate 10kHz"
 e3_args() { # <case>: dms_home.sh's arguments, and the corner's assertions
   local n=$OUT/e3-neg

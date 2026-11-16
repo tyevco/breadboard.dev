@@ -507,7 +507,7 @@ fn a_virtual_device_is_board_content_and_runs_beside_the_mcu() {
     assert!(o.status.success(), "{}", text(&o));
     assert!(
         text(&o)
-            .contains("device main:M1 -> dms/detent-mechanism (dms/mechanism@1, virtual), 2 pins"),
+            .contains("device main:M1 -> dms/detent-mechanism (dms/mechanism@2, virtual), 2 pins"),
         "{}",
         text(&o)
     );
@@ -522,12 +522,12 @@ fn a_virtual_device_is_board_content_and_runs_beside_the_mcu() {
         "{\"name\":\"HOME_N\",\"net\":\"LED\",\"number\":\"6\"}",
         "{\"name\":\"NSLEEP\",\"number\":\"5\"}",
         "{\"pin\":\"1\",\"ref\":\"M1\"}",
-        "\"id\":\"device:dms/mechanism@1\"",
+        "\"id\":\"device:dms/mechanism@2\"",
     ] {
         assert!(bbm.contains(s), "{s} not in {bbm}");
     }
     let lock = std::fs::read_to_string(d.join("bb.lock")).unwrap();
-    assert!(lock.contains("id = \"device:dms/mechanism@1\""), "{lock}");
+    assert!(lock.contains("id = \"device:dms/mechanism@2\""), "{lock}");
     assert!(lock.contains("id = \"dms/detent-mechanism\""), "{lock}");
     assert!(run(&["open", ".", "--check"], &d).status.success());
     assert!(run(&["flash", "--target", "U1", "fw.elf"], &d)
@@ -540,8 +540,8 @@ fn a_virtual_device_is_board_content_and_runs_beside_the_mcu() {
     let rj = std::fs::read_to_string(d.join("out/run.json")).unwrap();
     assert!(
         rj.contains(
-            "\"devices\":[{\"device\":\"dms/mechanism@1\",\"package\":\"dms/detent-mechanism\",\
-             \"params\":{\"s0\":\"250\",\"ts\":\"75ms\"},\"ref\":\"main:M1\",\"version\":\"0.1.0\",\
+            "\"devices\":[{\"device\":\"dms/mechanism@2\",\"package\":\"dms/detent-mechanism\",\
+             \"params\":{\"s0\":\"250\",\"ts\":\"75ms\"},\"ref\":\"main:M1\",\"version\":\"0.2.0\",\
              \"virtual\":true}]"
         ),
         "{rj}"

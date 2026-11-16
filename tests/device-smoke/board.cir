@@ -1,5 +1,5 @@
 * Device-route smoke board (ADR-006 D7, Amendment 6; Phase 1 M10): the
-* feedback example's MCU and firmware with the dms/mechanism@1 device in
+* feedback example's MCU and firmware with the dms/mechanism@2 device in
 * the loop, on Renode's STM32F103 (no new platform).
 *
 *   U1.PA5 -> R2 1k -> SENSE; C1 1 uF SENSE -> GND (the feedback RC, analog)

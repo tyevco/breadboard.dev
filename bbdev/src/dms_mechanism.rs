@@ -1,6 +1,15 @@
-//! `dms/mechanism@1`: the dial-me-spinner detent mechanism and its home
+//! `dms/mechanism@2`: the dial-me-spinner detent mechanism and its home
 //! switch (ADR-008 Amendment 9; `docs/firmware.md` §5.1 and §5.4 of
 //! dial-me-spinner at `6854d25`).
+//!
+//! **@2 (ADR-014 D2).** The sample timer is an *output timer*
+//! ([`Ctx::schedule_output`]) and the wake timer an internal one, and the
+//! device declares promise-independent inputs: HOME_N changes only at a
+//! sample, `on_pin_change` sets no pin and schedules only the wake timer.
+//! Its quiet promise is therefore its next sample, which the five driver
+//! inputs cannot end, so a CPU driving them is not a producer of its quiet
+//! grant. `@1` promised its next timer of any kind (the wake timer
+//! included); the behaviour, and so every result, is `@1`'s (ADR-014 G2).
 //!
 //! One device holds the micro linear stepper's rotor, the lead screw and
 //! carriage, the detent magnet's field at U42 and the DRV5032FA itself,
@@ -93,7 +102,7 @@ const PINS: [DevicePin; 6] = [
 const T_SAMPLE: u32 = 1;
 const T_WAKE: u32 = 2;
 
-/// The parameters of a `dms/mechanism@1` part (the board file's keys).
+/// The parameters of a `dms/mechanism@2` part (the board file's keys).
 pub const PARAMS: &[ParamSpec] = &[
     ParamSpec {
         key: "s0",
@@ -280,7 +289,7 @@ pub struct Mechanism {
     at_stop: i8,
 }
 
-/// Build a `dms/mechanism@1` from its parameters.
+/// Build a `dms/mechanism@2` from its parameters.
 pub fn build(p: &Params) -> Result<Box<dyn Device>, String> {
     Mechanism::new(p).map(|m| Box::new(m) as Box<dyn Device>)
 }
@@ -577,7 +586,7 @@ impl Device for Mechanism {
             Some(p) => (false, p),
             None => (true, Time::from_fs(1 + ctx.rng().below(self.ts.as_fs()))),
         };
-        ctx.schedule(phase + self.tactive, T_SAMPLE);
+        ctx.schedule_output(phase + self.tactive, T_SAMPLE);
         (self.above_bop, self.below_brp, self.at_stop) = self.position_state();
         ctx.log(
             LogLevel::Info,
@@ -630,6 +639,13 @@ impl Device for Mechanism {
         self.update_polarity();
     }
 
+    /// ADR-014 D2: HOME_N changes only in the sample timer (an output
+    /// timer); `on_pin_change` sets no pin and schedules only `T_WAKE`, an
+    /// internal timer.
+    fn promise_independent_inputs(&self) -> bool {
+        true
+    }
+
     fn on_timer(&mut self, ctx: &mut Ctx, id: u32, t: Time) {
         self.advance(t);
         self.watch(ctx);
@@ -655,7 +671,7 @@ impl Device for Mechanism {
                     );
                 }
                 ctx.set_pin(HOME_N, self.home_level());
-                ctx.schedule(t + self.ts, T_SAMPLE);
+                ctx.schedule_output(t + self.ts, T_SAMPLE);
             }
             _ => ctx.fail(format!("unknown timer {id}")),
         }
@@ -669,7 +685,7 @@ mod tests {
     use bbcore::{Engine, PinSignal, PinSignals, Transition};
 
     fn params(given: &[(&str, ParamValue)]) -> Params {
-        let d = find("dms/mechanism@1").unwrap();
+        let d = find("dms/mechanism@2").unwrap();
         let g: Vec<(String, ParamValue)> = given.iter().map(|(k, v)| (k.to_string(), *v)).collect();
         d.params(&g).unwrap()
     }
@@ -687,7 +703,8 @@ mod tests {
         m: Mechanism,
         rng: Rng,
         out: Vec<(Time, Level)>,
-        timers: std::collections::BTreeMap<u32, Time>,
+        /// id -> (time, output timer).
+        timers: std::collections::BTreeMap<u32, (Time, bool)>,
     }
 
     impl Rig {
@@ -698,7 +715,7 @@ mod tests {
                 out: Vec::new(),
                 timers: Default::default(),
             };
-            let mut ctx = Ctx::new(Time::ZERO, false, &mut r.rng);
+            let mut ctx = Ctx::new(Time::ZERO, false, false, &mut r.rng);
             r.m.start(&mut ctx);
             let cmds = ctx.cmds;
             r.apply(Time::ZERO, cmds);
@@ -707,8 +724,8 @@ mod tests {
         fn apply(&mut self, t: Time, cmds: Vec<crate::Cmd>) {
             for c in cmds {
                 match c {
-                    crate::Cmd::Schedule(id, at) => {
-                        self.timers.insert(id, at);
+                    crate::Cmd::Schedule(id, at, output) => {
+                        self.timers.insert(id, (at, output));
                     }
                     crate::Cmd::Cancel(id) => {
                         self.timers.remove(&id);
@@ -724,12 +741,13 @@ mod tests {
                 let next = self
                     .timers
                     .iter()
-                    .map(|(id, at)| (*at, *id))
+                    .map(|(id, (at, _))| (*at, *id))
                     .min()
                     .filter(|(at, _)| *at <= t);
                 let Some((at, id)) = next else { break };
-                self.timers.remove(&id);
-                let mut ctx = Ctx::new(at, false, &mut self.rng);
+                let (_, output) = self.timers.remove(&id).unwrap();
+                // ADR-014 D2: an internal timer must not set a pin.
+                let mut ctx = Ctx::new(at, false, !output, &mut self.rng);
                 self.m.on_timer(&mut ctx, id, at);
                 assert!(ctx.error.is_none(), "{:?}", ctx.error);
                 let cmds = ctx.cmds;
@@ -739,7 +757,7 @@ mod tests {
         }
         fn set(&mut self, t: Time, pin: usize, level: Level) {
             self.run_to(t);
-            let mut ctx = Ctx::new(t, true, &mut self.rng);
+            let mut ctx = Ctx::new(t, true, false, &mut self.rng);
             self.m.on_pin_change(&mut ctx, pin, level, t);
             assert!(ctx.error.is_none(), "{:?}", ctx.error);
             let cmds = ctx.cmds;
@@ -992,7 +1010,7 @@ mod tests {
         let p = [("s0", real(0.0)), ("phase", ParamValue::Time(ms(10)))];
         let mut r = Rig::new(mech(&p));
         assert_eq!(r.out, vec![(Time::ZERO, Level::Low)]);
-        assert_eq!(r.timers[&T_SAMPLE], ms(10) + Time::from_us(40));
+        assert_eq!(r.timers[&T_SAMPLE].0, ms(10) + Time::from_us(40));
         r.run_to(ms(200));
         // Every sample sets the (unchanged) level at phase + tactive + k ts.
         let times: Vec<Time> = r.out.iter().skip(1).map(|(t, _)| *t).collect();
@@ -1005,8 +1023,8 @@ mod tests {
         // reference.
         let a = Rig::new(mech(&[]));
         let b = Rig::new(mech(&[]));
-        assert_eq!(a.timers[&T_SAMPLE], b.timers[&T_SAMPLE]);
-        let first = a.timers[&T_SAMPLE] - Time::from_us(40);
+        assert_eq!(a.timers[&T_SAMPLE].0, b.timers[&T_SAMPLE].0);
+        let first = a.timers[&T_SAMPLE].0 - Time::from_us(40);
         assert!(first > Time::ZERO && first <= ms(50));
         // At the click end (|B| 1.22 mT < BRP): HOME_N high.
         assert_eq!(a.out, vec![(Time::ZERO, Level::High)]);
@@ -1024,7 +1042,7 @@ mod tests {
 
     #[test]
     fn parameters_are_checked() {
-        let d = find("dms/mechanism@1").unwrap();
+        let d = find("dms/mechanism@2").unwrap();
         for bad in [
             ("s0", real(501.0)),
             ("dir", real(0.0)),
@@ -1063,7 +1081,7 @@ mod tests {
         end: Time,
         seed: u64,
     ) -> (Vec<Transition>, u64) {
-        let def = find("dms/mechanism@1").unwrap();
+        let def = find("dms/mechanism@2").unwrap();
         let dev = def.instantiate(&[("s0".to_string(), real(330.0))]).unwrap();
         let mut e = DeviceEngine::new(
             DeviceEngineConfig {

@@ -3,7 +3,7 @@
 # hand-written board files of examples/dial-me-spinner/e3 (route A, approver decision 1, 2026-11-14;
 # ADR-006 Amendment 6, ADR-008 Amendments 9-11): the Zephyr firmware (firmware/prebuilt/homing.elf,
 # homing_step.elf) on the nRF52840 with Breadboard's PWM, TEMP and SAADC, the mechanism and DRV5032 device
-# M1 (dms/mechanism@1), and ngspice.
+# M1 (dms/mechanism@2 since Phase 2 H5: @1's results, ADR-014 G2), and ngspice.
 #
 # Cases (scripts/dms_home_boards.py writes the boards):
 #   step   homing_step.elf on board-step.cir, 45 ms: one full step at 446 PPS through the bridges and coils,
@@ -25,12 +25,17 @@
 # non-grant records byte-identical, every shared digital column identical, the analog columns reported.
 #
 # The boards are cyclic (U10 -> M1 -> U10, and ngspice -> U10 through VSYS_SENSE), so bb loads the
-# lookahead plugin and runs lookahead by default; the kernel finds no quiet grant on them (two producers
-# feed U10, ADR-003 D5 allows one; ADR-008 Amendment 11), so bb's defaults are one-cell grants too. The
-# one-cell reference is --lookahead off. bb's defaults, --lookahead off and --max-quantum 1ms therefore
-# build the SAME partition here (every grant record identical): their equality is a consistency check,
-# not a partition-equivalence gate. The device's partition independence is gated by bbdev's G6
-# (bbdev/tests/scheduler.rs) and make device-smoke (ADR-008 Amendment 12).
+# lookahead plugin and runs lookahead by default; the one-cell reference is --lookahead off.
+# Phase 2 H5 (ADR-014): on the homing boards (typ, worst, park and the negative controls) the five
+# driver nets are digital-only (D4, a recorded model change: no glue, no pull-downs), so with M1's
+# promise (its next DRV5032 sample; its inputs cannot end it, D2) the kernel cuts M1's out-edges and
+# ngspice -> U10 -> M1 remains: every engine advances to M1's next sample or max_quantum while the PWM
+# runs (D1, D3). bb's defaults therefore build a DIFFERENT partition from the one-cell reference
+# there, and their equality (nets.csv, nets.vcd, the non-grant records) is a true equivalence (plan
+# section 7). The step case keeps the bridges' power stage, so U10's edges feed ngspice and only U10's
+# own promise (asleep: Q = {U10}, M1 stopping early) lifts the cap; where its partitions coincide the
+# gate says so (a consistency check). The project route (project-typ) leaves the MOT nets out of
+# [analog] nets and takes the same long grants.
 #
 # Negative controls (make dms-home; ADR-008 Amendment 12): check_dms_home.py must FAIL
 #   neg-fast   homing_fast.elf (the 446 PPS phases at 3125 PPS) on board.cir: exactly the step rate
@@ -82,6 +87,9 @@ DET_RUNS=${DET_RUNS:-10}
 # H1, ADR-015 Amendment 1; 1.5 GB without .save), plus 20 %.
 RSS_MAX_KB=${DMS_HOME_RSS_MAX_KB:-403627}
 PY=${PYTHON:-python3}
+# ADR-014 G3: the most grants E3 typ may take at bb's defaults (from 270 000 one-cell grants).
+TYP_MAX_GRANTS=${DMS_HOME_TYP_MAX_GRANTS:-5000}
+TYP_MIN_GAIN=${DMS_HOME_TYP_MIN_GAIN:-3}
 CASES=(step typ worst park)
 PCASES=(project-step project-typ)
 NEGS=(neg-fast neg-fb200 neg-fb286)
@@ -90,11 +98,15 @@ status=0
 pass() { echo "dms-home: PASS: $*"; }
 fail() { echo "dms-home: FAIL: $*"; status=1; }
 
-PINS="--probe net:VSYS --probe net:HOME_N --probe net:MOT_NSLEEP --probe net:U10.P0.26 --probe net:U10.P0.05 \
+# The step board keeps MOT_NSLEEP analog (its bridges load it); on the homing boards it is digital-only
+# (ADR-014 D4), and U10.P1.15 is its level.
+PINS_STEP="--probe net:VSYS --probe net:HOME_N --probe net:MOT_NSLEEP --probe net:U10.P0.26 --probe net:U10.P0.05 \
+--probe net:U10.P0.07 --probe net:U10.P0.11 --probe net:U10.P1.15 --probe net:M1.HOME_N"
+PINS="--probe net:VSYS --probe net:HOME_N --probe net:U10.P0.26 --probe net:U10.P0.05 \
 --probe net:U10.P0.07 --probe net:U10.P0.11 --probe net:U10.P1.15 --probe net:M1.HOME_N"
 args_of() { # <case>: bb run arguments
   case $1 in
-    step) echo "--netlist $E3/board-step.cir --firmware $FWD/homing_step.elf --target U10 --for 45ms $PINS \
+    step) echo "--netlist $E3/board-step.cir --firmware $FWD/homing_step.elf --target U10 --for 45ms $PINS_STEP \
 --probe net:MOT_A_OUT1 --probe net:COILA_L --probe net:MOT_B_OUT1 --probe net:COILB_L --probe net:NB_VBAT \
 --probe net:NB_VSYS --sample-rate 1MHz" ;;
     typ) echo "--netlist $E3/board.cir --firmware $FWD/homing.elf --target U10 --for 2700ms $PINS --sample-rate 10kHz" ;;
@@ -185,6 +197,45 @@ same() { # <a> <b> <what> <files...>
   return 0
 }
 
+# bb's defaults against the one-cell reference: nets.csv, nets.vcd and the non-grant records byte for
+# byte. A true equivalence where the partitions differ (ADR-014 on the homing boards); where every
+# grant record is equal too, one partition: a consistency check (plan section 7), named as such.
+equiv() { # <defaults dir> <reference dir> <case>
+  local d=$1 r=$2 c=$3 gd gr
+  gd=$(grep -c '"type":"grant"' "$d/events.jsonl")
+  gr=$(grep -c '"type":"grant"' "$r/events.jsonl")
+  if cmp -s "$d/events.jsonl" "$r/events.jsonl"; then
+    same "$d" "$r" "$c: bb's defaults equal the one-cell reference, grant records included (one partition, \
+$gd grants: a consistency check)" nets.csv nets.vcd events.jsonl
+  else
+    same "$d" "$r" "$c: bb's defaults ($gd grants) equal the one-cell reference ($gr grants) except grant \
+records (a true equivalence: the partitions differ)" nets.csv nets.vcd non-grant-records
+  fi
+}
+
+# ADR-014 G3: E3 typ at bb's defaults takes at most TYP_MAX_GRANTS grants (from 270 000) and at least
+# TYP_MIN_GAIN (3) times less simulation time than its one-cell reference, the model change alone (D4
+# at one cell). Here both run beside the gate's other jobs, so this is a sanity bound; the protocol
+# measurement (interleaved, idle host, medians) is make dms-home-g0. The quiet sets bb used are
+# printed (the {devices} grants have no early stop: P is empty, D1).
+grants_typ() { # <typ dir> <typ-ref dir>
+  local g sd sr
+  g=$(grep -c '"type":"grant"' "$1/events.jsonl")
+  if (( g <= TYP_MAX_GRANTS )); then
+    pass "typ: $g grants at bb's defaults <= $TYP_MAX_GRANTS (the one-cell reference: $(grep -c '"type":"grant"' "$2/events.jsonl"); ADR-014 G3)"
+  else
+    fail "typ: $g grants at bb's defaults > $TYP_MAX_GRANTS (ADR-014 G3)"
+  fi
+  sd=$(sed -n 's/.*, \([0-9.]*\) s simulation).*/\1/p' "$1.log")
+  sr=$(sed -n 's/.*, \([0-9.]*\) s simulation).*/\1/p' "$2.log")
+  if [[ -n $sd && -n $sr ]] && awk -v d="$sd" -v r="$sr" -v m="$TYP_MIN_GAIN" 'BEGIN { exit !(r >= m * d) }'; then
+    pass "typ: simulation $sd s at bb's defaults against $sr s one-cell (D4 alone): $(awk -v d="$sd" -v r="$sr" 'BEGIN { printf "%.1f", r / d }')x >= ${TYP_MIN_GAIN}x (ADR-014 G3; beside the gate's other jobs)"
+  else
+    fail "typ: simulation ${sd:-?} s at bb's defaults against ${sr:-?} s one-cell: under ${TYP_MIN_GAIN}x (ADR-014 G3)"
+  fi
+  sed -n 's/^bb run: lookahead: /dms-home:   typ: lookahead: /p' "$1.log"
+}
+
 check() { # <dir> <case>
   # shellcheck disable=SC2046
   if "$PY" "$ROOT/scripts/check_dms_home.py" "$1" $(check_args "$2") > "$1.check.txt"; then
@@ -261,12 +312,13 @@ do_project() { # <bb> <out>
   run_jobs "$bb" "$out/step||" "$out/typ||" "$out/project-step||" "$out/project-step-ref|project-step|--lookahead off" \
     "$out/project-step-order|project-step|--engine-order analog-first" "$out/project-typ||" \
     "$out/project-typ-ref|project-typ|--lookahead off" "$out/neg-seed|project-step|--seed 2"
-  hashes "$out/step" step all
-  hashes "$out/typ" typ all
+  # bb's defaults: a different partition from the one-cell goldens since H5 (ADR-014), so the
+  # non-grant hashes.
+  hashes "$out/step" step nongrant
+  hashes "$out/typ" typ nongrant
   for c in "${PCASES[@]}"; do
     [[ -d $out/$c && -d $out/$c-ref ]] || continue
-    same "$out/$c" "$out/$c-ref" "$c: bb's defaults equal the one-cell reference (grant records included)" \
-      nets.csv nets.vcd events.jsonl
+    equiv "$out/$c" "$out/$c-ref" "$c"
     hashes "$out/$c-ref" "$c" all
     grep -q '0 promises broken' "$out/$c.log" && pass "$c: 0 promises broken" \
       || fail "$c: a lookahead promise was broken"
@@ -286,7 +338,8 @@ do_project() { # <bb> <out>
   else
     fail "neg-seed: compare_project_run.py failed a run at --seed 2, but not on M1's first record"
   fi
-  # ADR-014's long grants (H5) need the MOT nets out of the analog engine: report what the project does.
+  # ADR-014's long grants (H5) need the MOT nets out of the analog engine: report what the project does
+  # and the grants it takes (measured and reported, plan H5).
   "$PY" - "$out/project-typ" "$out/typ" <<'EOF'
 import json, sys
 from pathlib import Path
@@ -294,7 +347,7 @@ p, t = Path(sys.argv[1]), Path(sys.argv[2])
 rj = json.loads((p / "run.json").read_text())
 g = lambda d: sum(1 for ln in (d / "events.jsonl").open() if '"type":"grant"' in ln)
 print(f"dms-home:   project-typ: digital-only nets (no glue, ADR-014 D4): {', '.join(rj.get('digital_only', [])) or 'none'}")
-print(f"dms-home:   project-typ: {g(p)} grants (the board file's typ: {g(t)}); quiet grants need H5 (ADR-014 D1-D3)")
+print(f"dms-home:   project-typ: {g(p)} grants at bb's defaults (the board file's typ: {g(t)}; one cell: 270000)")
 EOF
   grep -h 'bb run: lookahead' "$out/project-typ.log" | sed 's/^/dms-home:   project-typ: /'
 }
@@ -322,19 +375,21 @@ do_gate() { # <bb> <out>
   for c in "${CASES[@]}"; do
     [[ -d $out/$c && -d $out/$c-ref ]] || continue
     check "$out/$c" "$c"
-    same "$out/$c" "$out/$c-ref" "$c: bb's defaults equal the one-cell reference (grant records included)" \
-      nets.csv nets.vcd events.jsonl
+    equiv "$out/$c" "$out/$c-ref" "$c"
     hashes "$out/$c-ref" "$c" all
     grep -q '0 promises broken' "$out/$c.log" && pass "$c: 0 promises broken" \
       || fail "$c: a lookahead promise was broken"
   done
+  grants_typ "$out/typ" "$out/typ-ref"
   rss_check "$out/typ"
   for c in typ step; do
     same "$out/$c" "$out/$c-order" "$c: --engine-order analog-first byte-identical" nets.csv events.jsonl nets.vcd
     hashes "$out/$c-q1ms" "$c" nongrant
     # One partition (ADR-008 Amendment 12): say so instead of calling it partition equivalence.
     if cmp -s <(grep '"type":"grant"' "$out/$c/events.jsonl") <(grep '"type":"grant"' "$out/$c-q1ms/events.jsonl"); then
-      echo "dms-home:   $c: --max-quantum 1ms builds the same partition as the defaults ($(grep -c '"type":"grant"' "$out/$c/events.jsonl") grants, no quiet grant)"
+      echo "dms-home:   $c: --max-quantum 1ms builds the same partition as the defaults ($(grep -c '"type":"grant"' "$out/$c/events.jsonl") grants)"
+    else
+      echo "dms-home:   $c: --max-quantum 1ms: $(grep -c '"type":"grant"' "$out/$c-q1ms/events.jsonl") grants (the defaults: $(grep -c '"type":"grant"' "$out/$c/events.jsonl")), another partition"
     fi
   done
   negcheck "$out/neg-fast" "step rate from the PWM edges" "no park-stop contact before H4" "H3 ends"

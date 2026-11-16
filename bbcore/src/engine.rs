@@ -229,6 +229,20 @@ pub trait Engine {
         false
     }
 
+    /// Whether a change on input pin `pin` can end this engine's
+    /// [`Engine::quiet_until`] promise (ADR-014 D2, `spec/time-grant.md`).
+    /// An engine returns `false` only when a change on that input can never
+    /// make an output change before the promise its `quiet_until` last
+    /// returned (a `bbdev` device whose outputs change only at its own
+    /// output timers). The kernel then does not count the input's driver as
+    /// a producer of a quiet grant (ADR-014 D1). The promise audit
+    /// (invariant 8, `PromiseBroken`) enforces it. A pure query of the
+    /// engine's configuration. Default `true`.
+    fn input_ends_promise(&self, pin: &str) -> bool {
+        let _ = pin;
+        true
+    }
+
     /// Whether this engine implements [`Engine::advance_until`] (ADR-003
     /// D5): it can stop at the first lattice point at or after the first
     /// change on a watched output. Default `false` (Renode: there is no

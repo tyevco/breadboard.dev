@@ -209,9 +209,9 @@ mod tests {
 
     #[test]
     fn device_identities() {
-        let d = bbdev::find("dms/mechanism@1").unwrap();
+        let d = bbdev::find("dms/mechanism@2").unwrap();
         let l = device_locked(d);
-        assert_eq!(l.id, "device:dms/mechanism@1");
+        assert_eq!(l.id, "device:dms/mechanism@2");
         assert!(l.content.starts_with("sha256:") && l.content.len() == 71);
         assert!(l.engine.is_none() && l.engine_version.is_none());
         assert!(PLATFORMS.iter().all(|p| p.content() != l.content));
@@ -371,7 +371,7 @@ mod tests {
         // drift still reports it) and keeps device entries.
         let a = find("stm32f103-offline@1").unwrap();
         let b = find("nrf52840-bb@3").unwrap();
-        let dev = device_locked(bbdev::find("dms/mechanism@1").unwrap());
+        let dev = device_locked(bbdev::find("dms/mechanism@2").unwrap());
         let stale = LockedPlatform {
             content: format!("sha256:{}", "1".repeat(64)),
             ..b.locked()

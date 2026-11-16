@@ -305,7 +305,7 @@ def check_home(a, ck):
     t_idle = at.get(get("homing: IDLE"))
     ck(t_h5 is not None and level_at(home, t_h5) == 0, "HOME asserted after H4 (M1.HOME_N low when H5 reads it)")
     # The step rate of every phase, from the PWM edges (the device has no pull-out or maximum speed, a
-    # stated limit of dms/mechanism@1, so a wrong rate would move the rotor all the same: the check, not
+    # stated limit of dms/mechanism@2, so a wrong rate would move the rotor all the same: the check, not
     # the device, has to catch it; ADR-008 Amendment 12).
     runs, err = pwm_runs(edges)
     ck(runs is not None, f"the PWM edges on the PWM grid {err}".rstrip())

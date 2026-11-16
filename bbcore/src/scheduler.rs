@@ -25,13 +25,16 @@
 //! every grant at `loop_quantum` (default: the lattice, one cell).
 //!
 //! With `lookahead` on (ADR-003 D5) the loop cap is lifted for a grant while
-//! CPU engines promise to stay quiet ([`Engine::quiet_until`]): the kernel
+//! engines promise to stay quiet ([`Engine::quiet_until`]): the kernel
 //! cuts the out-edges of the quiet set `Q`, and if the rest of the graph is
-//! acyclic with exactly one producer feeding `Q` that can stop early and is
-//! first in its topological order, that producer runs
+//! acyclic with at most one producer feeding `Q` through an input that can
+//! end a promise (ADR-014 D1: not sampled, not promise-independent), which
+//! can stop early and is first in its topological order, that producer runs
 //! [`Engine::advance_until`] on the pins feeding `Q` and every later engine
-//! advances to where it stopped (a per-grant plan). Otherwise the grant is
-//! the one-cell grant of the static plan.
+//! advances to where it stopped (a per-grant plan); with no such producer
+//! every engine advances to `G` in that order. `Q` is the valid set that
+//! gives the longest grant (ADR-014 D3). Otherwise the grant is the
+//! one-cell grant of the static plan.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
@@ -140,11 +143,16 @@ struct QuietGrant {
     /// `G`, on the lattice.
     g: Time,
     limiter: Limiter,
-    /// Advance order of the remaining graph; `order[0]` stops early.
+    /// Advance order of the remaining graph; with a producer `stop`, it is
+    /// `order[0]`.
     order: Vec<usize>,
+    /// The producer `p` that stops early (`|P| = 1`), or `None` (`|P| = 0`,
+    /// ADR-014 D1: every engine runs `advance_to(G)`).
+    stop: Option<usize>,
     /// `Q` with each promise, in registration order.
     promises: Vec<(usize, Time)>,
-    /// Output pins of `order[0]` that feed `Q`.
+    /// Output pins of `stop` that feed `Q` through inputs that can end a
+    /// promise.
     watch: Vec<String>,
     /// Nets of those pins.
     watch_nets: Vec<String>,
@@ -291,6 +299,9 @@ pub struct Scheduler {
     driver: BTreeMap<String, usize>,
     /// The binding graph `(j, i)`: an output of j drives a net i reads.
     edges: BTreeSet<(usize, usize)>,
+    /// The edges `(j, i)` where i reads a net j drives through an input that
+    /// can end i's quiet promise (ADR-014 D1): a subset of `edges`.
+    ending: BTreeSet<(usize, usize)>,
     /// The cap on a grant of a cyclic graph, fixed at the first `run`.
     loop_quantum: Option<Time>,
     /// Lookahead candidates (ADR-003 D5): engines in a feedback loop for
@@ -347,6 +358,7 @@ impl Scheduler {
             plan: None,
             driver: BTreeMap::new(),
             edges: BTreeSet::new(),
+            ending: BTreeSet::new(),
             loop_quantum: None,
             candidate: Vec::new(),
             backoff: Vec::new(),
@@ -614,8 +626,10 @@ impl Scheduler {
             }
             self.grants += 1;
             // A quiet grant's record waits for the early stop (below); no
-            // other record of this grant is emitted before Exchange.
-            if quiet.is_none() {
+            // other record of this grant is emitted before Exchange. Without
+            // a producer that stops early (ADR-014 D1, |P| = 0) it is
+            // labelled by G's bound at once.
+            if quiet.as_ref().is_none_or(|qg| qg.stop.is_none()) {
                 self.emit_grant(sink, now, g, limiter)?;
             }
 
@@ -638,7 +652,7 @@ impl Scheduler {
                 }
                 let e = &mut self.engines[i];
                 match &quiet {
-                    Some(qg) if pos == 0 => {
+                    Some(qg) if qg.stop == Some(i) => {
                         let r = e
                             .advance_until(g, &qg.watch)
                             .map_err(|source| engine_error(e.name(), Phase::Advance, source))?;
@@ -665,7 +679,7 @@ impl Scheduler {
                 }
                 self.collect(i, now, g, false, &mut records, &mut changes)?;
                 if let Some(qg) = &quiet {
-                    if pos == 0 {
+                    if qg.stop == Some(i) {
                         self.check_stop(i, qg, now, g, &changes)?;
                     }
                     if let Some(&(_, promised)) = qg.promises.iter().find(|(c, _)| *c == i) {
@@ -683,7 +697,7 @@ impl Scheduler {
                         .as_ref()
                         .map(|qg| qg.promises.iter().map(|(c, _)| *c).collect())
                         .unwrap_or_default(),
-                    stop: quiet.as_ref().map(|qg| qg.order[0]),
+                    stop: quiet.as_ref().and_then(|qg| qg.stop),
                     queried,
                 });
             }
@@ -762,9 +776,13 @@ impl Scheduler {
     fn build_plan(&mut self) -> Result<(), SchedError> {
         let n = self.engines.len();
         let mut edges = BTreeSet::new();
+        let mut ending = BTreeSet::new();
         for o in &self.outputs {
             for i in self.inputs.iter().filter(|i| i.net == o.net) {
                 edges.insert((o.engine, i.engine));
+                if self.input_ends(i) {
+                    ending.insert((o.engine, i.engine));
+                }
             }
         }
         let bound: Vec<bool> = self
@@ -773,6 +791,7 @@ impl Scheduler {
             .map(|e| e.grant_lattice().is_some())
             .collect();
         let plan = plan_order(n, &edges, &bound);
+        let plan_pos = positions(&plan.order);
         self.driver = self
             .outputs
             .iter()
@@ -787,11 +806,12 @@ impl Scheduler {
             .map(|c| {
                 let mut q = vec![false; n];
                 q[c] = true;
-                cyc[c] && quiet_order(n, &edges, &q, &can_stop).is_some()
+                cyc[c] && quiet_order(n, &edges, &ending, &q, &can_stop, &plan_pos).is_some()
             })
             .collect();
         self.backoff = vec![Backoff::default(); n];
         self.edges = edges;
+        self.ending = ending;
         self.loop_quantum = if plan.cyclic {
             match self.config.loop_quantum.or(self.lattice) {
                 Some(q) => Some(q),
@@ -897,42 +917,80 @@ impl Scheduler {
         if promises.is_empty() {
             return None;
         }
-        let (mut big_g, mut lim) = (g, limiter);
-        for &(c, q) in &promises {
-            consider(q, Limiter::Engine(c), &mut big_g, &mut lim);
-        }
-        let big_g = self.floor_l(big_g);
-        // Q = {c : floor_L(quiet_until_c) >= G}.
-        promises.retain(|&(_, q)| self.floor_l(q) >= big_g);
-        let mut in_q = vec![false; n];
-        for &(c, _) in &promises {
-            in_q[c] = true;
-        }
+        // ADR-014 D3: Q is chosen to maximise the grant. The useful promises
+        // by floor_L(q) descending (ties by registration index); for each
+        // distinct G_k = floor_L(min(g', q_k)), Q_k = {c : floor_L(q_c) >=
+        // G_k}; the first Q_k that passes the structure check (D1) wins.
+        // ADR-003 D5's rule (Q = every useful promise, G its minimum) is the
+        // last candidate of this sequence.
+        let mut sorted: Vec<(usize, Time)> = promises.clone();
+        sorted.sort_by_key(|&(c, q)| (std::cmp::Reverse(self.floor_l(q)), c));
         let can_stop: Vec<bool> = self.engines.iter().map(|e| e.can_stop_early()).collect();
-        let (order, p) = quiet_order(n, &self.edges, &in_q, &can_stop)?;
-        // The producer's output pins whose nets an engine in Q reads through
-        // an input that is not sampled (ADR-005 D3): a sampled input reads
-        // its value only at sample instants at or after the promise, so a
-        // change of it cannot end the quiet window.
-        let mut watch = Vec::new();
-        let mut watch_nets = Vec::new();
-        for o in self.outputs.iter().filter(|o| o.engine == p) {
-            let feeds_q = self.inputs.iter().any(|i| {
-                i.net == o.net && in_q[i.engine] && !self.engines[i.engine].input_is_sampled(&i.pin)
-            });
-            if feeds_q && !watch.contains(&o.pin) {
-                watch.push(o.pin.clone());
-                watch_nets.push(o.net.clone());
+        let mut tried: Vec<Time> = Vec::new();
+        for &(_, qk) in &sorted {
+            let gk = self.floor_l(g.min(qk));
+            if tried.contains(&gk) {
+                continue;
             }
+            tried.push(gk);
+            let set: Vec<(usize, Time)> = promises
+                .iter()
+                .copied()
+                .filter(|&(_, q)| self.floor_l(q) >= gk)
+                .collect();
+            let mut in_q = vec![false; n];
+            for &(c, _) in &set {
+                in_q[c] = true;
+            }
+            let plan_pos = positions(&self.plan.as_ref().expect("plan built at Init").order);
+            let Some((order, p)) =
+                quiet_order(n, &self.edges, &self.ending, &in_q, &can_stop, &plan_pos)
+            else {
+                continue;
+            };
+            let (mut big_g, mut lim) = (g, limiter);
+            for &(c, q) in &set {
+                consider(q, Limiter::Engine(c), &mut big_g, &mut lim);
+            }
+            let big_g = self.floor_l(big_g);
+            debug_assert_eq!(big_g, gk);
+            // The producer's output pins whose nets an engine in Q reads
+            // through an input that can end its promise (ADR-014 D1): not
+            // sampled (ADR-005 D3: read only at sample instants at or after
+            // the promise) and not promise-independent (ADR-014 D2).
+            let mut watch = Vec::new();
+            let mut watch_nets = Vec::new();
+            if let Some(p) = p {
+                for o in self.outputs.iter().filter(|o| o.engine == p) {
+                    let feeds_q = self
+                        .inputs
+                        .iter()
+                        .any(|i| i.net == o.net && in_q[i.engine] && self.input_ends(i));
+                    if feeds_q && !watch.contains(&o.pin) {
+                        watch.push(o.pin.clone());
+                        watch_nets.push(o.net.clone());
+                    }
+                }
+            }
+            return Some(QuietGrant {
+                g: big_g,
+                limiter: lim,
+                order,
+                stop: p,
+                promises: set,
+                watch,
+                watch_nets,
+            });
         }
-        Some(QuietGrant {
-            g: big_g,
-            limiter: lim,
-            order,
-            promises,
-            watch,
-            watch_nets,
-        })
+        None
+    }
+
+    /// Whether input binding `i` can end its engine's quiet promise (ADR-014
+    /// D1): not a sampled input (ADR-005 D3) and not declared
+    /// promise-independent (ADR-014 D2). A pure query of the configuration.
+    fn input_ends(&self, i: &Binding) -> bool {
+        let e = &self.engines[i.engine];
+        !e.input_is_sampled(&i.pin) && e.input_ends_promise(&i.pin)
     }
 
     /// ADR-003 D5.3: the early stop `r` of the first engine must be the first
@@ -1469,29 +1527,38 @@ fn cyclic_members(n: usize, edges: &BTreeSet<(usize, usize)>) -> Vec<bool> {
         .collect()
 }
 
-/// ADR-003 D5.2: the advance order of a quiet grant with quiet set `q`, and
-/// the engine that stops early, or `None` if the grant must fall back to one
-/// cell. With the out-edges of every engine in `q` removed, the remaining
-/// graph must be acyclic; exactly one engine outside `q` may drive a net
-/// read by an engine in `q`; it must be able to stop early; and it must be
-/// first in the remaining graph's Kahn order (ties by registration index).
-/// A pure function of its arguments.
+/// ADR-003 D5.2 with ADR-014 D1: the advance order of a quiet grant with
+/// quiet set `q`, and the engine that stops early (if any), or `None` if the
+/// grant must fall back to one cell. With the out-edges of every engine in
+/// `q` removed, the remaining graph must be acyclic. The producers `P` are
+/// the engines outside `q` with an `ending` edge (an input that can end a
+/// promise) into `q`; `|P| <= 1`. With `P = {p}`, `p` must be able to stop
+/// early and be first in the remaining graph's Kahn order, which prefers `p`
+/// among ready engines (then registration index); with `P` empty every
+/// engine advances to `G` in the Kahn order with ties broken by the static
+/// plan order (`plan_pos`: each engine's position in it), so that an engine
+/// of `Q` whose output changes exactly at `G` (allowed by its promise) reaches
+/// its consumers as in the one-cell run: before they advance if the plan
+/// puts them after it, at the boundary otherwise (ADR-014 Amendment 1). A
+/// pure function of its arguments.
 fn quiet_order(
     n: usize,
     edges: &BTreeSet<(usize, usize)>,
+    ending: &BTreeSet<(usize, usize)>,
     q: &[bool],
     can_stop: &[bool],
-) -> Option<(Vec<usize>, usize)> {
-    let producers: BTreeSet<usize> = edges
+    plan_pos: &[usize],
+) -> Option<(Vec<usize>, Option<usize>)> {
+    let producers: BTreeSet<usize> = ending
         .iter()
         .filter(|&&(j, i)| q[i] && !q[j])
         .map(|&(j, _)| j)
         .collect();
-    if producers.len() != 1 {
+    if producers.len() > 1 {
         return None;
     }
-    let p = *producers.first()?;
-    if !can_stop[p] {
+    let p = producers.first().copied();
+    if p.is_some_and(|p| !can_stop[p]) {
         return None;
     }
     let mut succ = vec![Vec::new(); n];
@@ -1503,18 +1570,31 @@ fn quiet_order(
         succ[j].push(i);
         indeg[i] += 1;
     }
-    let mut ready: BTreeSet<usize> = (0..n).filter(|&k| indeg[k] == 0).collect();
+    // The ready set, keyed for the tie-break: registration index with a
+    // producer (ADR-003 D5), the static plan position without one.
+    let key = |k: usize| if p.is_some() { k } else { plan_pos[k] };
+    let mut ready: BTreeSet<(usize, usize)> = (0..n)
+        .filter(|&k| indeg[k] == 0)
+        .map(|k| (key(k), k))
+        .collect();
     let mut order = Vec::with_capacity(n);
-    while let Some(k) = ready.pop_first() {
+    loop {
+        let k = match p {
+            Some(p) if ready.remove(&(key(p), p)) => p,
+            _ => match ready.pop_first() {
+                Some((_, k)) => k,
+                None => break,
+            },
+        };
         order.push(k);
         for &s in &succ[k] {
             indeg[s] -= 1;
             if indeg[s] == 0 {
-                ready.insert(s);
+                ready.insert((key(s), s));
             }
         }
     }
-    if order.len() < n || order[0] != p {
+    if order.len() < n || p.is_some_and(|p| order[0] != p) {
         return None; // a cycle remains, or the producer is not first
     }
     Some((order, p))

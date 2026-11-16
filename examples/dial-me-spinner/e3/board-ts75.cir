@@ -15,18 +15,26 @@
 * U10 is the Raytac module's chip, bound directly (nordic/nrf52840-qiaa, as examples/nrf-saadc): a module
 * pad has no VDD adc_in in a board file.
 *
-* M1 (dms/detent-mechanism, device dms/mechanism@1) is the lead screw, carriage, magnet and U42
+* M1 (dms/detent-mechanism, device dms/mechanism@2) is the lead screw, carriage, magnet and U42
 * DRV5032FA as one device: it reads the five driver commands and drives HOME_N (push-pull, low = magnet
 * present). Its parameters here: s0=500 ts=75ms bop=4.8 brp=0.5 phase=27171562500ps (the rest at their defaults: die 2.6 mm, BOP/BRP 3/1.5 mT
 * unless set, phase seeded from the run seed and "M1").
 *
-* The analog side of this board is the detent sheet's input side (U40/U41's input pull-downs and R70)
-* and the bench; the bridges' power stage and J40's coils are on board-step.cir only. With them, ngspice
-* takes about 0.4 s of wall time per simulated ms while the PWM runs (the ideal-switch view at phase0:
-* about 60 solver points per edge, 100 000 edges per second; measured in M10, ADR-008 Amendment 11),
-* about 20 minutes for one homing, and it keeps every solver point in memory. The homing checks read
-* the device, the firmware and the pins, none of which the analog side feeds back into (the device
-* reads the driver commands, ADR-008 Amendment 9), so the homing runs leave the power stage out.
+* The analog side of this board is the bench, the VSYS reading and HOME_N; the bridges' power stage and
+* J40's coils are on board-step.cir only. With them, ngspice takes about 0.4 s of wall time per
+* simulated ms while the PWM runs (the ideal-switch view at phase0: about 60 solver points per edge,
+* 100 000 edges per second; measured in M10, ADR-008 Amendment 11), about 20 minutes for one homing, and
+* it keeps every solver point in memory. The homing checks read the device, the firmware and the pins,
+* none of which the analog side feeds back into (the device reads the driver commands, ADR-008
+* Amendment 9), so the homing runs leave the power stage out.
+*
+* The five driver nets are digital-only (`*bb digital`, Phase 2 H5, ADR-014 D4: a recorded model
+* change): U10's PWM and nSLEEP edges reach M1 through the kernel nets only, with no glue into ngspice,
+* and the detent sheet's input side (U40/U41's 100 kOhm RPD on IN1, IN2 and the shared nSLEEP, and R70),
+* which loaded only those outputs and which no check reads, is not in the deck. With the CPU's edges out
+* of ngspice the binding graph is ngspice -> U10 -> M1 once M1's promise cuts its outputs, so the
+* kernel's quiet grants (ADR-014 D1-D3) run between M1's samples. The probes read U10.P1.15 for
+* nSLEEP's level.
 *
 * The VSYS reading binds P0.02 with load=none (an ideal input): the firmware reads VSYS once, at idle,
 * before H0, so the SAADC's charge sharing (E2's subject, a few hundred uV) does not reach the duty; with
@@ -61,6 +69,11 @@
 *bb pin M1.IN_B2 net=MOT_B_IN2 model=digital_in
 *bb pin M1.NSLEEP net=MOT_NSLEEP model=digital_in
 *bb pin M1.HOME_N net=HOME_N model=digital_out
+*bb digital MOT_A_IN1
+*bb digital MOT_A_IN2
+*bb digital MOT_B_IN1
+*bb digital MOT_B_IN2
+*bb digital MOT_NSLEEP
 
 * Circuit body. Node 0 is the main board's GND.
 * ---- bench: the suite's power path at VBAT3.7, 25 C (node NB_GND is the base board's ground)
@@ -127,14 +140,6 @@ CC75 P3V3_C75 0 100n
 R1 VSYS VSYS_SENSE 2.2Meg
 R2 VSYS_SENSE 0 1Meg
 C5 VSYS_SENSE 0 100n
-* ---- the detent sheet's input side: U40/U41's RPD (100 kOhm, SLVSBA4F Table 6.5) on IN1, IN2 and the
-*      shared nSLEEP (two in parallel), and R70
-RPD_A1 MOT_A_IN1 0 100k
-RPD_A2 MOT_A_IN2 0 100k
-RPD_B1 MOT_B_IN1 0 100k
-RPD_B2 MOT_B_IN2 0 100k
-RPD_NS MOT_NSLEEP 0 50k
-R70 MOT_NSLEEP 0 100k
 
 * phase0 (spec/package.md section 8).
 .options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
