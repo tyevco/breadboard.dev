@@ -178,8 +178,15 @@ set = "phase0"                       # a named option set
 - **Option set.** It must be one every in-scope view is lattice-qualified for,
   unless `--allow-unqualified` names the view.
 
-A fuller bench (CSV playback, timed actions, assertions) is a Phase 2 item,
-to be defined in its own ADR.
+The Phase 2 bench, `bb-bench/1` (ADR-010), adds CSV playback, current
+profiles, timed and triggered actions, faults, and assertions: `[[assert]]`
+tables of a closed set of kinds (`range`, `at`, `settle`, `edge_timing`,
+`count`, `frequency`, `log`, `event`), in a bench or in an assertion file
+given to `bb run --assert`. The kernel evaluates them at every accepted
+solver point and on the edge and log records, and writes one `assert`
+record per assertion; `bb assert <run>` evaluates the record-only kinds
+again on a finished run. The normative text is section 3 of
+`spec/project.md` in the repository.
 
 ## The elaborated board (`board.bbm`)
 

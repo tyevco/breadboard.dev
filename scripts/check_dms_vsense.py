@@ -290,8 +290,10 @@ def check_fw_codes(c, case, run, ref, an):
     cext = C5 / 10 if case.startswith("c5") else C5
     model = model_errors(acq, [x[0] / FS for b in bl for x in b], vth_uv * 1e-6, R1 * R2 / (R1 + R2), cext, VDD_BENCH)
     worst = 0.0
+    an["pred_codes"] = []  # exported for the assertions (ADR-010 Amendment 3); the check is unchanged
     for b, r in enumerate(rd):
         pred = mean_code([code_of(round(vth_uv + model[8 * b + k] * 1e6)) for k in range(8)])
+        an["pred_codes"].append(pred)
         c.check(r["code"] == pred, case, f"burst {b}: code {r['code']}, the model predicts {pred}")
         # code = V / 2.8125 mV within the model's stated error: the burst's mean sampling error, and
         # the rounding of each sample and of the mean (at most 1 LSB together).
@@ -366,7 +368,9 @@ def check_sag(c, run):
                  f"(V(VSYS_SENSE) + {e * 1e6:.0f} uV < {boundary * 1e6:.0f} uV); 0.979 x V(VSYS) < 3.53 V from "
                  f"{t_an / 1e12 if t_an else float('nan'):.1f} ms")
     return dict(shed_reading=shed, t_fall_fs=t_fall, t_cross_fs=t_x, after_cross_ms=(t_fall - t_x) / 1e12,
-                t_analog_cross_fs=t_an, codes=[r["code"] for r in rd])
+                t_analog_cross_fs=t_an, codes=[r["code"] for r in rd],
+                # exported for the assertions (ADR-010 Amendment 3): the crossing's threshold terms
+                e_uv=e * 1e6, boundary_uv=boundary * 1e6, sample_period_fs=ts[1] - ts[0])
 
 
 def check_rec(c, run):
@@ -411,7 +415,8 @@ def check_rec(c, run):
                  f"{(en[2]['t_fs'] - en[1]['t_fs']) / 1e12:.3f} ms after the shed; P0.06 high "
                  f"{(din[2]['t_fs'] - en[2]['t_fs']) / 1e12:.3f} ms later)")
     return dict(shed_reading=shed, restore_reading=rest, codes=codes, t_shed_fs=en[1]["t_fs"],
-                t_restore_fs=en[2]["t_fs"], p006_after_en_ms=(din[2]["t_fs"] - en[2]["t_fs"]) / 1e12)
+                t_restore_fs=en[2]["t_fs"], p006_after_en_ms=(din[2]["t_fs"] - en[2]["t_fs"]) / 1e12,
+                restore_est_uv=rd[rest]["est"])  # exported for the assertions (ADR-010 Amendment 3)
 
 
 def main():
@@ -428,7 +433,8 @@ def main():
     runs = {k: load(f"{a.out}/{k}{a.suffix}") for k in cases}
     for k, r in runs.items():
         check_run(c, k, r)
-    res = {}
+    # Every case's reading codes, exported for the assertions (ADR-010 Amendment 3).
+    res = {"readings": {k: [x["code"] for x in readings(r["lines"])] for k, r in runs.items()}}
     for base in ("s1", "s50", "c5"):
         if base in runs and base + "-none" in runs:
             an = check_analog(c, base, runs[base], runs[base + "-none"], suite)

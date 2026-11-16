@@ -1,0 +1,146 @@
+# examples/dial-me-spinner/asserts/e2/s50.toml: E2's reading codes (Phase 1 plan section 2 E2, ADR-008
+# Amendments 4-6) as assertions (ADR-010 D5, D10; Amendment 3), for `bb run ... --assert` on the
+# case s50 of scripts/dms_vsense.sh. Written by scripts/dms_asserts.py from check_dms_vsense.py's
+# results on the committed runs; make assert-gate rewrites it from its own runs and requires this
+# file byte for byte. Do not edit by hand.
+schema = "bb-bench/1"
+# Each reading's burst code: the code check_dms_vsense.py's model predicts from the unloaded pad and the run's acquisition instants (the suite's charge-sharing arithmetic).
+
+[[assert]]
+name = "E2-readings"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n="
+min = 13
+max = 13
+msg = "the number of readings"
+
+[[assert]]
+name = "E2-code-n0"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=0 "
+field = "code"
+min = 1067
+max = 1067
+msg = "reading 0's code"
+
+[[assert]]
+name = "E2-code-n1"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=1 "
+field = "code"
+min = 1067
+max = 1067
+msg = "reading 1's code"
+
+[[assert]]
+name = "E2-code-n2"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=2 "
+field = "code"
+min = 1067
+max = 1067
+msg = "reading 2's code"
+
+[[assert]]
+name = "E2-code-n3"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=3 "
+field = "code"
+min = 1067
+max = 1067
+msg = "reading 3's code"
+
+[[assert]]
+name = "E2-code-n4"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=4 "
+field = "code"
+min = 1067
+max = 1067
+msg = "reading 4's code"
+
+[[assert]]
+name = "E2-code-n5"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=5 "
+field = "code"
+min = 1068
+max = 1068
+msg = "reading 5's code"
+
+[[assert]]
+name = "E2-code-n6"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=6 "
+field = "code"
+min = 1068
+max = 1068
+msg = "reading 6's code"
+
+[[assert]]
+name = "E2-code-n7"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=7 "
+field = "code"
+min = 1068
+max = 1068
+msg = "reading 7's code"
+
+[[assert]]
+name = "E2-code-n8"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=8 "
+field = "code"
+min = 1068
+max = 1068
+msg = "reading 8's code"
+
+[[assert]]
+name = "E2-code-n9"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=9 "
+field = "code"
+min = 1068
+max = 1068
+msg = "reading 9's code"
+
+[[assert]]
+name = "E2-code-n10"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=10 "
+field = "code"
+min = 1068
+max = 1068
+msg = "reading 10's code"
+
+[[assert]]
+name = "E2-code-n11"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=11 "
+field = "code"
+min = 1068
+max = 1068
+msg = "reading 11's code"
+
+[[assert]]
+name = "E2-code-n12"
+kind = "log"
+source = "U10"
+match = "^uart0: vsense: n=12 "
+field = "code"
+min = 1068
+max = 1068
+msg = "reading 12's code"

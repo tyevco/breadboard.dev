@@ -49,6 +49,11 @@ pub struct RunPlan {
     pub flagged: Vec<String>,
     /// What the bench drives at run time (ADR-010 D3, D4).
     pub stimulus: Stimulus,
+    /// The run's assertions (the bench's, then the `--assert` files'), their
+    /// nets the kernel's (ADR-010 D5).
+    pub asserts: Vec<bbcore::assert::Spec>,
+    /// The analog nets they read: `(kernel net, SPICE node)`.
+    pub assert_nodes: Vec<(String, String)>,
 }
 
 /// What a `bb-bench/1` bench drives at run time (ADR-010 D3, D4).
@@ -474,6 +479,8 @@ pub struct PlanArgs<'a> {
     pub lattice: Time,
     pub allow_unqualified: &'a [String],
     pub cli_probes: &'a [String],
+    /// `--assert` files' assertions (ADR-010 Amendment 3), after the bench's.
+    pub extra_asserts: &'a [bbcore::assert::Spec],
 }
 
 fn sha(bytes: &[u8]) -> String {
@@ -2026,6 +2033,80 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         probes.push(spec);
     }
 
+    // --- Assertions (ADR-010 D5, D6): their nets as the kernel names them.
+    // A digital net is a bound MCU or device pin (its kernel net, or
+    // `<instance>.<pin>`); an analog net is a net of the deck.
+    let kernel_digital: BTreeSet<String> =
+        bound.values().chain(dev_bound.values()).cloned().collect();
+    let all_asserts: Vec<bbcore::assert::Spec> = a
+        .bench
+        .asserts
+        .iter()
+        .chain(a.extra_asserts.iter())
+        .cloned()
+        .collect();
+    let (asserts, assert_nodes) = crate::asserts::resolve(all_asserts, |n, u| {
+        use crate::asserts::Use;
+        if u == Use::Digital && kernel_digital.contains(n) {
+            return Ok((n.to_string(), None));
+        }
+        match (u, probe_target(board, sim, n)?) {
+            (Use::Digital, ProbeTarget::Pin(b, r, pin)) => (b == tb && r == tref)
+                .then(|| bound.get(&pin).cloned())
+                .flatten()
+                .or_else(|| {
+                    (b == sim)
+                        .then(|| dev_bound.get(&(r.clone(), pin.clone())).cloned())
+                        .flatten()
+                })
+                .map(|k| (k, None))
+                .ok_or_else(|| {
+                    format!(
+                        "pin {b}:{r}.{pin} has no [[bind]] on the target MCU or [[device.bind]]"
+                    )
+                }),
+            (Use::Digital, ProbeTarget::Net(d)) => Err(format!(
+                "{d} is an analog net; an edge, a level or a count reads a bound MCU or device pin"
+            )),
+            (Use::Analog, ProbeTarget::Pin(b, r, pin)) => Err(format!(
+                "{b}:{r}.{pin} is a pin (a digital level); an analog check reads a net"
+            )),
+            (Use::Analog, ProbeTarget::Net(d)) => {
+                let node = node_of(&d);
+                if node == "0" {
+                    return Err(format!("{d} is the ground (node 0)"));
+                }
+                if digital_only_names.contains(&d) || !nodes_used.contains(&node) {
+                    return Err(format!(
+                        "net {d} has nothing in the analog deck (outside the bench's [analog] \
+                         nets, or only unmodelled parts on it)"
+                    ));
+                }
+                Ok((d, Some(node)))
+            }
+        }
+    })?;
+    // D6: a net an ideal bench source forces is a tautology to check.
+    let mut forced: Vec<(String, String)> = Vec::new();
+    for s in a.bench.supplies.iter().filter(|s| s.rs_uohm == 0) {
+        forced.push((
+            net_by(&s.net, "[[supply]]")?,
+            format!("[[supply]] on {} (rs = 0)", s.net),
+        ));
+    }
+    for pw in a.bench.pwl.iter().filter(|p| p.rs_uohm == 0) {
+        forced.push((
+            net_by(&pw.net, "[[pwl]]")?,
+            format!("[[pwl]] on {} (rs = 0)", pw.net),
+        ));
+    }
+    for pb in a.bench.playback.iter().filter(|p| p.rs_uohm == 0) {
+        if let Ok(d) = net_by(&pb.net, "[[playback]]") {
+            forced.push((d, format!("[[playback]] on {} (rs = 0)", pb.net)));
+        }
+    }
+    crate::asserts::check_forced(&asserts, &forced)?;
+
     // --- run.json (static part).
     let not_simulated: Vec<Json> = board
         .instances
@@ -2198,6 +2279,8 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         warnings,
         flagged,
         stimulus: stim,
+        asserts,
+        assert_nodes,
     })
 }
 

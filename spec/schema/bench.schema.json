@@ -148,6 +148,43 @@
         "else": { "not": { "required": ["pin"] } }
       }
     },
+    "assert": {
+      "type": "array",
+      "description": "bb-bench/1, ADR-010 D5-D7 (milestone B2): the closed set of assertion kinds (spec/project.md section 3.4); in a bench, or in an assertion file (schema and [[assert]] only, bb run --assert)",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "kind"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]+$" },
+          "kind": { "enum": ["range", "at", "settle", "edge_timing", "count", "frequency", "log", "event"] },
+          "msg": { "type": "string" },
+          "requires": { "enum": ["fast", "pi", "si", "em"] },
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "after": { "$ref": "#/$defs/assert_event" },
+          "until": { "$ref": "#/$defs/assert_event" },
+          "while": { "$ref": "#/$defs/level_of" },
+          "net": { "type": "string" },
+          "ref": { "type": "string" },
+          "min": { "$ref": "#/$defs/assert_limit" },
+          "max": { "$ref": "#/$defs/assert_limit" },
+          "at": { "oneOf": [{ "type": "string" }, { "$ref": "#/$defs/edge_of" }] },
+          "event": { "oneOf": [{ "enum": ["reset", "warn", "error"] }, { "$ref": "#/$defs/edge_of" }] },
+          "within": { "type": "string" },
+          "start": { "$ref": "#/$defs/assert_event" },
+          "end": { "$ref": "#/$defs/assert_event" },
+          "pair": { "enum": ["last", "first"] },
+          "level": { "enum": [0, 1] },
+          "period": { "type": "string" },
+          "tol": { "type": "string" },
+          "match": { "type": "string" },
+          "source": { "type": "string" },
+          "field": { "type": "string" },
+          "present": { "type": "boolean" }
+        }
+      }
+    },
     "fidelity": { "type": "string", "description": "bb-bench/1, ADR-009 D1 (milestone P1; refused until then)" },
     "corner": { "type": "string", "description": "bb-bench/1, ADR-009 D8 (milestone P1; refused until then)" },
     "battery": { "type": "array", "items": { "type": "object" }, "description": "bb-bench/1, ADR-010 D2 (milestones P1, R2; refused until then)" },
@@ -161,12 +198,49 @@
       "anyOf": [
         { "required": ["seed"] }, { "required": ["action"] }, { "required": ["playback"] }, { "required": ["fault"] },
         { "required": ["fidelity"] }, { "required": ["corner"] }, { "required": ["battery"] }, { "required": ["activity"] },
-        { "required": ["env"] }, { "required": ["probes"] },
+        { "required": ["env"] }, { "required": ["probes"] }, { "required": ["assert"] },
         { "required": ["load"], "properties": { "load": { "contains": { "anyOf": [{ "not": { "required": ["amps"] } }, { "required": ["replace"] }] } } } }
       ]
     }
   },
   "$defs": {
-    "interp": { "enum": ["linear", "hold"] }
+    "interp": { "enum": ["linear", "hold"] },
+    "edge_of": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edge", "level"],
+      "properties": { "edge": { "type": "string" }, "level": { "enum": [0, 1] } }
+    },
+    "level_of": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["net", "level"],
+      "properties": { "net": { "type": "string" }, "level": { "enum": [0, 1] } }
+    },
+    "assert_limit": {
+      "description": "a quantity in the value grammar (volts or seconds), or an integer (a count or a level)",
+      "type": ["string", "integer"]
+    },
+    "assert_event": {
+      "description": "an edge { edge, level }, a log record { log, source }, or (edge_timing's start and end) an analog crossing { cross, ref, below | above }; delay only in after",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "edge": { "type": "string" },
+        "level": { "enum": [0, 1] },
+        "log": { "type": "string" },
+        "source": { "type": "string" },
+        "delay": { "type": "string" },
+        "cross": { "type": "string" },
+        "ref": { "type": "string" },
+        "below": { "type": "string" },
+        "above": { "type": "string" }
+      },
+      "oneOf": [
+        { "required": ["edge", "level"], "not": { "anyOf": [{ "required": ["log"] }, { "required": ["cross"] }] } },
+        { "required": ["log"], "not": { "anyOf": [{ "required": ["edge"] }, { "required": ["cross"] }] } },
+        { "required": ["cross"], "not": { "anyOf": [{ "required": ["edge"] }, { "required": ["log"] }] } }
+      ]
+    }
   }
 }

@@ -24,7 +24,10 @@
 #                                           defaults, check_dms_vsense.py on them, their committed
 #                                           one-cell hashes (non-grant records, nets.csv, nets.vcd), and
 #                                           run.json's record of each binding's load (view saadc_se,
-#                                           or "none" for an explicit load = "none")
+#                                           or "none" for an explicit load = "none"); and (milestone
+#                                           B2) E2's code assertions (asserts/e2/<case>.toml, record-
+#                                           only, so `bb assert` evaluates them on these runs) against
+#                                           check_dms_vsense.py's codes (scripts/check_asserts.py)
 #   scripts/dms_vsense.sh gate <bb> <out>   the M8 gate (make dms-vsense): every case at bb's defaults
 #                                           and as its one-cell reference, check_dms_vsense.py (the
 #                                           analog side against load = "none", the firmware-visible
@@ -206,6 +209,16 @@ do_test() { # <bb> <out>
   checks "$out" "$out/checks.json" --cases "$(IFS=,; echo "${TEST_CASES[*]}")"
   for c in "${TEST_CASES[@]}"; do
     [[ -d $out/$c ]] || continue
+    # Milestone B2: E2's codes as assertions (asserts/e2/<case>.toml read only log records, so `bb
+    # assert` evaluates them on this run exactly as `bb run --assert` would; make assert-gate runs
+    # them in-run) against check_dms_vsense.py's codes on the same run.
+    if "$bb" assert "$out/$c" --assert "$PROJ/asserts/e2/$c.toml" --out "$out/$c/asserts.jsonl" 2> "$out/$c/asserts.txt" \
+        && "$PY" "$ROOT/scripts/check_asserts.py" e2 "$out/$c" "$out/checks.json" --case "$c" \
+           --records "$out/$c/asserts.jsonl" >> "$out/$c/asserts.txt"; then
+      pass "$c: E2's code assertions give check_dms_vsense.py's codes ($(sed -n 's/^bb assert: //p' "$out/$c/asserts.txt"))"
+    else
+      fail "$c: E2's code assertions"; grep -v ': ok ' "$out/$c/asserts.txt"
+    fi
     hashes "$out/$c" "$c" nongrant
     loads "$out/$c" "$c"
   done

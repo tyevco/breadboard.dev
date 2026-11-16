@@ -215,8 +215,14 @@ def main():
     # 10 ms wait shortened to anything VLED has settled by, about 4 ms).
     on_wait, off_wait = int(round(FW_LED_ON_WAIT_S * 1e15)), int(round(FW_LED_OFF_S * 1e15))
     bad, notes = [], []
+    # The gaps, exported for the assertions' cross-check (ADR-010 Amendment 3); the check is unchanged.
+    on_gaps, off_gaps, while_low = [], [], 0
     for t in rises:
         prev = [(te, lv) for te, lv in en if te <= t]
+        if prev and prev[-1][1] == 1:
+            on_gaps.append(t - prev[-1][0])
+        else:
+            while_low += 1
         if not prev or prev[-1][1] != 1:
             bad.append(f"P0.06 rose at {t / 1e12:.6f} ms while LED_PWR_EN was low")
         elif t - prev[-1][0] < on_wait:
@@ -227,6 +233,7 @@ def main():
         before = [f for f in falls if f <= t]
         if not before:
             continue
+        off_gaps.append(t - before[-1])
         if t - before[-1] < off_wait:
             bad.append(f"LED_PWR_EN rose {(t - before[-1]) / 1e12:.3f} ms after it fell (at {t / 1e12:.6f} ms)")
         else:
@@ -235,7 +242,8 @@ def main():
     msg = "; ".join(bad or notes) or "P0.06 never went high"
     msg += f" (limits: P0.06 >= {FW_LED_ON_WAIT_S * 1e3:g} ms after LED_PWR_EN; off >= {FW_LED_OFF_S * 1e3:g} ms)"
     report("FW-6.4", ok, msg, {"on_wait_limit_s": FW_LED_ON_WAIT_S, "off_wait_limit_s": FW_LED_OFF_S,
-                               "violations": bad})
+                               "violations": bad, "on_gaps_fs": on_gaps, "off_gaps_fs": off_gaps,
+                               "rises_while_low": while_low})
 
     failed = sorted(n for n, c in res["checks"].items() if not c["pass"])
     if a.expect_fail:

@@ -787,6 +787,8 @@ pub struct Bench {
     pub data: BTreeMap<String, String>,
     /// Parse warnings (a long `[[pwl]]`).
     pub warnings: Vec<String>,
+    /// `bb-bench/1` `[[assert]]` (ADR-010 D5): the nets as written.
+    pub asserts: Vec<bbcore::assert::Spec>,
 }
 
 fn q(text: &str, dim: bbpkg::value::Dim, at: &str) -> Result<i128, String> {
@@ -1215,6 +1217,8 @@ impl Bench {
                 for_fs,
             });
         }
+        // The checks (ADR-010 D5, milestone B2).
+        self.asserts = crate::asserts::parse_tables(o)?;
         Ok(())
     }
 }

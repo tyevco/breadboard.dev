@@ -2710,6 +2710,26 @@ impl Engine for NgspiceEngine {
         self.sample(node, t).ok().map(PinSignal::analog)
     }
 
+    /// An analog output's solver points since the previous boundary (ADR-010
+    /// D6): the retained window, with the fs times `sample` uses.
+    fn solver_points(&self, pin: &str) -> Option<Vec<bbcore::SolverPoint>> {
+        let node = self.outputs.get(pin)?;
+        let i = self.watch_index(node).ok()?;
+        let h = &self.hist;
+        Some(
+            h.times_fs
+                .iter()
+                .zip(&h.times_s)
+                .zip(&h.values[i])
+                .map(|((&t, &secs), &v)| bbcore::SolverPoint {
+                    t: Time::from_fs(t),
+                    secs,
+                    v,
+                })
+                .collect(),
+        )
+    }
+
     fn apply_inputs(&mut self, inputs: &PinSignals) -> Result<(), EngineError> {
         let now = self.now;
         for (pin, sig) in inputs {

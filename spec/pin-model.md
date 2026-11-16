@@ -206,7 +206,7 @@ ADC inputs use `adc_in`.
 ### `power{vmin, vmax, imax}`
 
 A supply pin. Later phases check rail voltage and current against these limits
-and emit `assert` records.
+and emit `assert` records (the kinds of `spec/project.md` section 3.4).
 
 ### `passive`
 
@@ -254,3 +254,10 @@ boundary; the analog engine handles it entirely.
    `__hold_<part>_<pin>`, and a `pin` port on the net of that package pin's
    binding (the nRF52840's `VDD` input). The analog engine pushes the
    `observe` node.
+10. An analog monitor is not glue (ADR-010 D6, milestone B2). An assertion
+    on an analog net (`spec/project.md` section 3.4) adds no element, no
+    input and no grant boundary: the kernel reads the analog engine's
+    accepted solver points of the net, which an assertion makes an output of
+    the engine (bound to its kernel net, in no output file) when no probe
+    does. A run's outputs other than its `assert` records are those of the
+    same run without the assertions.

@@ -63,6 +63,16 @@ fn op_nodes(nodes: &[String]) -> String {
     }
 }
 
+/// An accepted solver point of an analog output (ADR-010 D6): its time in
+/// whole fs (a lattice point or a boundary exactly), the solver's own time
+/// in seconds, and the value (V).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct SolverPoint {
+    pub t: Time,
+    pub secs: f64,
+    pub v: f64,
+}
+
 /// A simulation engine (CPU emulator, analog solver, ...).
 ///
 /// The kernel drives every engine through this loop and nothing else:
@@ -164,6 +174,19 @@ pub trait Engine {
     /// not be grant boundaries. Default: `None` (the kernel falls back to the
     /// boundary values and, for digital pins, `edge_time`).
     fn sample_output(&self, _pin: &str, _t: Time) -> Option<PinSignal> {
+        None
+    }
+
+    /// The accepted solver points of analog output pin `pin` in the last
+    /// window `[prev, now]`, in time order: the point at the previous
+    /// boundary `prev` first, the point at `now` last (ADR-010 D6: the
+    /// analog monitors of assertions). A pure read of the engine state,
+    /// like [`Engine::sample_output`], whose interpolation
+    /// ([`crate::assert::value_at`]) reproduces it from these points. It
+    /// adds no element, no input and no grant boundary, so it changes
+    /// nothing the engine computes. Default: `None` (no solver points; an
+    /// assertion that reads such an output fails the run's start).
+    fn solver_points(&self, _pin: &str) -> Option<Vec<SolverPoint>> {
         None
     }
 

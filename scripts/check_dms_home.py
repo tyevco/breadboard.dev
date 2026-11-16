@@ -377,7 +377,11 @@ def check_home(a, ck):
     ck.summary = {"case": f"home-{a.corner}-{a.start}", "h1_steps": n1, "h2_steps": n2, "u_end": u_end,
                   "s_end": s_end, "s_h3_end": s_h3, "overdrive_steps": over, "ts_s": ts_dev, "slips": slips, "sample_phase_fs": phase_fs,
                   "assert_latency_s": lat, "release_latency_s": rel_lat, "limit_s": lim,
-                  "idle_s": (t_idle or 0) * FS}
+                  "idle_s": (t_idle or 0) * FS,
+                  # exact fs, exported for the assertions (ADR-010 Amendment 3); the checks are unchanged
+                  "assert_latency_fs": t_edge - t_cross if t_cross and t_edge else None,
+                  "release_latency_fs": t_e2 - t_c2 if park and t_c2 and t_e2 else None,
+                  "ts_fs": round(ts_dev * 1e15) if mt else None, "tactive_fs": round(tact * 1e15) if mt else None}
 
 
 def main():

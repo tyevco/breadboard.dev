@@ -9,6 +9,7 @@
 //!
 //! Protocol: `docs/adr/002-time-grant-protocol.md`, `spec/time-grant.md`.
 
+pub mod assert;
 pub mod board;
 pub mod cjson;
 pub mod engine;
@@ -19,7 +20,7 @@ pub mod scheduler;
 pub mod signal;
 pub mod time;
 
-pub use engine::{Engine, EngineError};
+pub use engine::{Engine, EngineError, SolverPoint};
 pub use event::{Event, EventSink, LogLevel, LogRecord};
 pub use pin::{AdcIn, AdcKey, DigitalIn, DigitalOut, PinModel, Power};
 pub use probe::{format_volts, CsvWriter, NetSampler, Probe, VcdKind, VcdWriter};

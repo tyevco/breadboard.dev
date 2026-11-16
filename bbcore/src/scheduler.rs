@@ -36,6 +36,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 
+use crate::assert::{Assertions, EdgeRec, LogRec, WindowInput};
 use crate::engine::{Engine, EngineError};
 use crate::event::{Event, EventSink};
 use crate::probe::{NetSampler, Probe};
@@ -301,6 +302,8 @@ pub struct Scheduler {
     plan_log: Option<Vec<GrantPlan>>,
     /// Changes of each net in the last grant (for sampled probes).
     changes: NetChanges,
+    /// The run's assertions (ADR-010 D5-D7), evaluated at every exchange.
+    assertions: Option<Assertions>,
 }
 
 /// What bounded a grant, in tie-break order.
@@ -349,7 +352,23 @@ impl Scheduler {
             backoff: Vec::new(),
             plan_log: None,
             changes: NetChanges::new(),
+            assertions: None,
         })
+    }
+
+    /// The run's assertions (ADR-010 D5-D7): the kernel evaluates them at
+    /// every exchange and emits each verdict as an `assert` record at its
+    /// verdict time, after the other records of equal `t_fs`. Every analog
+    /// net they read must be an output of an engine with solver points
+    /// ([`Engine::solver_points`]); that is checked at the first exchange.
+    /// They read the records and the solver points only, so they change no
+    /// other output. Set before the first `run`.
+    pub fn set_assertions(&mut self, a: Assertions) -> Result<(), SchedError> {
+        if self.phase != Phase::Init {
+            return Err(SchedError::AlreadyStarted);
+        }
+        self.assertions = Some(a);
+        Ok(())
     }
 
     /// Record the plan of every grant from now on ([`Scheduler::plan_log`]),
@@ -1202,6 +1221,15 @@ impl Scheduler {
             }
         }
 
+        // 3b. Assertions (ADR-010 D6): the verdicts whose time falls in this
+        //     window, after the net samples of equal t_fs.
+        if self.assertions.is_some() {
+            let verdicts = self.assert_window(prev, now, &records)?;
+            for (k, ev) in verdicts.into_iter().enumerate() {
+                records.push(((ev.time(), usize::MAX, 1, k), ev));
+            }
+        }
+
         // 4. Emit sorted by (t_fs, registration index, pin): never by plan
         //    order (ADR-003 D3).
         records.sort_by_key(|r| r.0);
@@ -1221,6 +1249,82 @@ impl Scheduler {
             p.on_window(prev, now, &self.nets, &sampler)?;
         }
         Ok(())
+    }
+
+    /// Hand one window to the assertions: its edge, log and reset records,
+    /// and the solver points of every analog net they read (from the engine
+    /// driving it). Records keep their own times: a `log` reported at a
+    /// boundary sits at the window's start `prev`.
+    fn assert_window(
+        &mut self,
+        prev: Time,
+        now: Time,
+        records: &[Record],
+    ) -> Result<Vec<Event>, SchedError> {
+        let nets = match &self.assertions {
+            Some(a) => a.analog_nets().to_vec(),
+            None => return Ok(Vec::new()),
+        };
+        let mut points: BTreeMap<String, Vec<crate::engine::SolverPoint>> = BTreeMap::new();
+        for net in nets {
+            let b = self.outputs.iter().find(|b| b.net == net).ok_or_else(|| {
+                SchedError::Config(format!(
+                    "assertion net {net}: no engine drives it (an analog net the assertions read \
+                     must be an engine output)"
+                ))
+            })?;
+            let e = &self.engines[b.engine];
+            let pts = e.solver_points(&b.pin).ok_or_else(|| {
+                SchedError::Config(format!(
+                    "assertion net {net}: engine {} has no solver points for it (ADR-010 D6)",
+                    e.name()
+                ))
+            })?;
+            points.insert(net, pts);
+        }
+        let initial = prev == now;
+        let mut sorted: Vec<&Record> = records.iter().collect();
+        sorted.sort_by_key(|r| r.0);
+        let mut edges = Vec::new();
+        let mut logs = Vec::new();
+        for (_, ev) in sorted {
+            match ev {
+                Event::PinEdge {
+                    t_fs, net, level, ..
+                } => edges.push(EdgeRec {
+                    t: *t_fs,
+                    net,
+                    level: *level,
+                }),
+                Event::Log {
+                    t_fs,
+                    source,
+                    level,
+                    msg,
+                } => logs.push(LogRec {
+                    t: *t_fs,
+                    source,
+                    level: Some(*level),
+                    msg,
+                }),
+                Event::Reset { t_fs, source, .. } => logs.push(LogRec {
+                    t: *t_fs,
+                    source,
+                    level: None,
+                    msg: "",
+                }),
+                _ => {}
+            }
+        }
+        let a = self.assertions.as_mut().expect("checked");
+        Ok(a.window(&WindowInput {
+            prev,
+            now,
+            edges,
+            logs,
+            points: &points,
+            initial: initial.then_some(&self.nets),
+        }))
     }
 }
 

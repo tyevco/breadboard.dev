@@ -48,6 +48,7 @@
 //! (`bb open <board.cir>`), which `bb run` checks and never writes. `bb pkg`
 //! lints and tests packages.
 
+mod asserts;
 mod board;
 mod devices;
 mod elab;
@@ -91,7 +92,9 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
               [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
               [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
-              [--ngspice-watchdog 200000,10000]
+              [--ngspice-watchdog 200000,10000] [--assert <file.toml> ...]
+       bb assert <run-dir> --assert <file.toml> [--assert ...] [--bench <bench.toml>]
+              [--out <file>]
        bb pool run|start|stop|status ...   (bb pool --help)
        bb open [<dir>|<.kicad_pro>|<.net>|<board.cir>] [--check] [--update-lock]   (bb open --help)
        bb flash --target <instance> <file.elf> [--kind elf] [--project <dir>]
@@ -109,6 +112,13 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
   --bench      bench file (supplies, loads, temperature, analog scope, option
                  set; ADR-007 D5). Default: no sources, every net in scope,
                  option set phase0
+  --assert     an assertion file: a bb-bench/1 file of [[assert]] tables only
+                 (ADR-010 D5, Amendment 3), added to the bench's assertions;
+                 for a board file too (its nets are the board file's, MCU and
+                 device pins as <ref>.<pin>). Repeatable. Each assertion's
+                 verdict is an assert record of events.jsonl at its window's
+                 close; a failing assertion does not fail the run. `bb assert`
+                 evaluates the record-only kinds again on a finished run
   --fidelity   the analog fidelity rung (Phase 1: fast)
   --elaborate-only
                  a project: elaborate (checks, deck, probes) and write
@@ -243,6 +253,8 @@ struct RunArgs {
     gdb_wait: bool,
     /// `--ngspice-watchdog` (ADR-015 D1).
     watchdog: Watchdog,
+    /// `--assert` files (ADR-010 Amendment 3).
+    asserts: Vec<PathBuf>,
 }
 
 /// `--ngspice-watchdog <points per cell>,<points without progress>`.
@@ -392,6 +404,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut gdb = None;
     let mut gdb_wait = None;
     let mut watchdog = Watchdog::default();
+    let mut asserts = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -405,6 +418,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--target" => target = Some(val(a)?),
             "--project" => project = Some(PathBuf::from(val(a)?)),
             "--bench" => bench = Some(PathBuf::from(val(a)?)),
+            "--assert" => asserts.push(PathBuf::from(val(a)?)),
             "--fidelity" => fidelity = val(a)?,
             "--allow-unqualified" => allow_unqualified.push(val(a)?),
             "--elaborate-only" => elaborate_only = true,
@@ -574,6 +588,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         gdb,
         gdb_wait: gdb_wait.unwrap_or(true),
         watchdog,
+        asserts,
     })
 }
 
@@ -878,6 +893,8 @@ fn run(a: RunArgs) -> Result<(), String> {
     let board = fe.board;
     let firmware = fe.firmware;
     let probes = fe.probes;
+    let assert_specs = fe.asserts;
+    let fe_assert_nodes = fe.assert_nodes;
     let part = board
         .parts
         .iter()
@@ -1039,6 +1056,33 @@ fn run(a: RunArgs) -> Result<(), String> {
     // net through a rule-1 EXTERNAL source; the package's pin_load view sits
     // on the pad, and the pushed value is the view's observe node (V(hold)).
     let loads = load_glue(&board, &mcu_pins)?;
+    // The assertions' nets (ADR-010 D5): a project's are resolved by its
+    // elaboration; a board file's are its own names (an MCU or device pin's
+    // kernel net `<ref>.<pin>` is digital, any other name a circuit node).
+    let (assert_specs, assert_nodes) = match fe_assert_nodes {
+        Some(n) => (assert_specs, n),
+        None => {
+            let digital: Vec<&String> = digital_nets
+                .iter()
+                .chain(loads.iter().map(|l| &l.kernel_net))
+                .collect();
+            let is_pin =
+                |n: &str| digital.iter().any(|d| *d == n) || adc_nets.iter().any(|d| d == n);
+            asserts::resolve(assert_specs, |n, u| match u {
+                asserts::Use::Digital if digital.iter().any(|d| *d == n) => {
+                    Ok((n.to_string(), None))
+                }
+                asserts::Use::Digital => Err("not a digital net of the board file (an edge, a \
+                                              level or a count reads a bound MCU or device pin, \
+                                              <ref>.<pin>)"
+                    .to_string()),
+                asserts::Use::Analog if is_pin(n) => {
+                    Err("a pin's net; an analog check reads a circuit node".to_string())
+                }
+                asserts::Use::Analog => Ok((n.to_string(), Some(n.to_string()))),
+            })?
+        }
+    };
     for l in &loads {
         rcfg.pins
             .push(PinSpec::adc_sample(&l.cpu_pin, adc_name, l.channel));
@@ -1277,9 +1321,21 @@ fn run(a: RunArgs) -> Result<(), String> {
         .filter(|p| !digital_nets.contains(&p.name) && !adc_nets.contains(&p.name))
         .map(|p| (&p.name, p.node.clone().unwrap_or_else(|| p.name.clone())))
         .collect();
+    // An analog net an assertion reads and nothing probes: an output of the
+    // analog engine for its solver points (ADR-010 D6), in no output file.
+    let assert_outputs: Vec<&(String, String)> = assert_nodes
+        .iter()
+        .filter(|(k, _)| !analog_probes.iter().any(|(n, _)| *n == k))
+        .collect();
     for (n, node) in &analog_probes {
         ncfg.outputs.push(OutputBinding {
             pin: (*n).clone(),
+            node: node.clone(),
+        });
+    }
+    for (k, node) in &assert_outputs {
+        ncfg.outputs.push(OutputBinding {
+            pin: k.clone(),
             node: node.clone(),
         });
     }
@@ -1393,6 +1449,14 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
     for (n, _) in &analog_probes {
         bind(&mut sched, an_id, n, n, Direction::Output)?;
+    }
+    for (k, _) in &assert_outputs {
+        bind(&mut sched, an_id, k, k, Direction::Output)?;
+    }
+    let with_asserts = !assert_specs.is_empty();
+    if with_asserts {
+        let a8s = bbcore::assert::Assertions::new(assert_specs, a.duration, &a.fidelity)?;
+        sched.set_assertions(a8s).map_err(|e| e.to_string())?;
     }
 
     let mut sink = EventSink::new(create(&a.out.join("events.jsonl"))?);
@@ -1656,6 +1720,30 @@ fn run(a: RunArgs) -> Result<(), String> {
             );
         }
     }
+    if with_asserts {
+        // The verdicts (ADR-010 D7), read back from the stream.
+        let text = fs::read_to_string(a.out.join("events.jsonl"))
+            .map_err(|e| format!("read events.jsonl: {e}"))?;
+        let recs: Vec<bbcore::Event> = text
+            .lines()
+            .filter(|l| l.starts_with("{\"type\":\"assert\""))
+            .filter_map(|l| bbcore::Event::from_line(l).ok())
+            .collect();
+        for r in &recs {
+            if let bbcore::Event::Assert {
+                name, outcome, msg, ..
+            } = r
+            {
+                let o = match outcome {
+                    bbcore::event::AssertOutcome::Pass => "pass",
+                    bbcore::event::AssertOutcome::Fail => "FAIL",
+                    bbcore::event::AssertOutcome::NotEvaluable => "not evaluable",
+                };
+                let _ = writeln!(so, "bb run: assert {name}: {o}: {msg}");
+            }
+        }
+        let _ = writeln!(so, "bb run: assertions: {}", assert_summary(&recs));
+    }
     let _ = writeln!(
         so,
         "bb run: wall time {total_s:.2} s total ({startup_s:.2} s engine startup, {run_s:.2} s simulation); outputs in {}",
@@ -1760,6 +1848,32 @@ struct FrontEnd {
     /// What a project's bench drives (ADR-010 D3, D4); empty for a board
     /// file.
     stimulus: elab::Stimulus,
+    /// The run's assertions (ADR-010 D5); a project's with the kernel's
+    /// nets (`assert_nodes` the analog ones), a board file's as written
+    /// (resolved in `run`).
+    asserts: Vec<bbcore::assert::Spec>,
+    assert_nodes: Option<Vec<(String, String)>>,
+}
+
+/// The `--assert` files: their assertions, and `(file name, text)` for
+/// run.json.
+fn assert_files(
+    paths: &[PathBuf],
+) -> Result<(Vec<bbcore::assert::Spec>, Vec<bbcore::cjson::Json>), String> {
+    let mut specs = Vec::new();
+    let mut json = Vec::new();
+    for p in paths {
+        let (s, text) = asserts::read_file(p)?;
+        specs.extend(s);
+        json.push(bbcore::cjson::Json::Obj(vec![
+            (
+                "file".into(),
+                bbcore::cjson::Json::str(elab::bench_label(p)),
+            ),
+            ("text".into(), bbcore::cjson::Json::str(text)),
+        ]));
+    }
+    Ok((specs, json))
 }
 
 fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
@@ -1778,7 +1892,10 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         if !firmware.is_file() {
             return Err(format!("firmware {} not found", firmware.display()));
         }
+        let (asserts, _) = assert_files(&a.asserts)?;
         return Ok(FrontEnd {
+            asserts,
+            assert_nodes: None,
             board,
             target: a.target.clone().expect("checked"),
             firmware,
@@ -1837,6 +1954,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         Some(b) => project::Bench::read(b)?,
         None => project::Bench::empty(),
     };
+    let (extra, files_json) = assert_files(&a.asserts)?;
     let plan = elab::plan(&elab::PlanArgs {
         project: &p,
         imp: &imp,
@@ -1846,19 +1964,134 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         lattice: a.renode_quantum,
         allow_unqualified: &a.allow_unqualified,
         cli_probes: &a.probes,
+        extra_asserts: &extra,
     })?;
     for w in &plan.warnings {
         eprintln!("bb run: warning: {w}");
     }
+    let mut run_json = plan.run_json;
+    if !files_json.is_empty() {
+        // The assertion files (ADR-010 Amendment 3), like the bench's text.
+        run_json.push((
+            "assert_files".to_string(),
+            bbcore::cjson::Json::Arr(files_json),
+        ));
+    }
     Ok(FrontEnd {
+        asserts: plan.asserts,
+        assert_nodes: Some(plan.assert_nodes),
         board: plan.board,
         target: plan.target,
         firmware: plan.firmware,
         probes: plan.probes,
-        run_json: Some(plan.run_json),
+        run_json: Some(run_json),
         flagged: plan.flagged,
         stimulus: plan.stimulus,
     })
+}
+
+/// `bb assert <run-dir> --assert <file> ... [--bench <file>] [--out <file>]`
+/// (ADR-010 Amendment 3): evaluate assertions again on a finished run's
+/// `events.jsonl`. The kinds that read only records (edges, logs, resets)
+/// give what the run would give; the kinds that read solver points are
+/// `not_evaluable` here. The nets are the kernel's as written (an MCU pin
+/// is `<ref>.<pin>`). Prints the `assert` records (or writes them to
+/// `--out`) and a summary line on stderr.
+fn assert_main(args: &[String]) -> Result<(), String> {
+    let mut dir = None;
+    let mut files = Vec::new();
+    let mut bench = None;
+    let mut out = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let mut val = || {
+            it.next()
+                .cloned()
+                .ok_or_else(|| format!("{a} needs a value"))
+        };
+        match a.as_str() {
+            "--assert" => files.push(PathBuf::from(val()?)),
+            "--bench" => bench = Some(PathBuf::from(val()?)),
+            "--out" => out = Some(PathBuf::from(val()?)),
+            s if !s.starts_with("--") && dir.is_none() => dir = Some(PathBuf::from(s)),
+            s => return Err(format!("unknown argument {s:?}")),
+        }
+    }
+    let dir = dir.ok_or("bb assert: give the run directory")?;
+    let mut specs = match &bench {
+        Some(b) => project::Bench::read(b)?.asserts,
+        None => Vec::new(),
+    };
+    specs.extend(assert_files(&files)?.0);
+    if specs.is_empty() {
+        return Err("bb assert: no assertion (give --assert or a --bench with [[assert]])".into());
+    }
+    let path = dir.join("events.jsonl");
+    let text = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let mut events = Vec::new();
+    for (k, l) in text.lines().enumerate() {
+        let ev = bbcore::Event::from_line(l)
+            .map_err(|e| format!("{}:{}: {e}", path.display(), k + 1))?;
+        events.push(ev);
+    }
+    // The run's end: its last grant's end.
+    let t_end = events
+        .iter()
+        .filter_map(|e| match e {
+            bbcore::Event::Grant { until_fs, .. } => Some(*until_fs),
+            _ => None,
+        })
+        .max()
+        .ok_or_else(|| {
+            format!(
+                "{}: no grant record (not a bb run's events)",
+                path.display()
+            )
+        })?;
+    let recs = bbcore::assert::replay(specs, &events, t_end, "fast")?;
+    let mut sink = EventSink::new(Vec::new());
+    for r in &recs {
+        sink.emit(r).map_err(|e| e.to_string())?;
+    }
+    let buf = sink.into_inner();
+    match &out {
+        Some(o) => fs::write(o, &buf).map_err(|e| format!("write {}: {e}", o.display()))?,
+        None => std::io::stdout()
+            .write_all(&buf)
+            .map_err(|e| e.to_string())?,
+    }
+    eprintln!("bb assert: {}", assert_summary(&recs));
+    Ok(())
+}
+
+/// `3 pass, 1 fail (LSW-3), 0 not evaluable`.
+fn assert_summary(recs: &[bbcore::Event]) -> String {
+    use bbcore::event::AssertOutcome;
+    let mut n = [0usize; 3];
+    let mut failed = Vec::new();
+    for r in recs {
+        if let bbcore::Event::Assert { outcome, name, .. } = r {
+            match outcome {
+                AssertOutcome::Pass => n[0] += 1,
+                AssertOutcome::Fail => {
+                    n[1] += 1;
+                    failed.push(name.as_str());
+                }
+                AssertOutcome::NotEvaluable => n[2] += 1,
+            }
+        }
+    }
+    format!(
+        "{} pass, {} fail{}, {} not evaluable",
+        n[0],
+        n[1],
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", failed.join(", "))
+        },
+        n[2]
+    )
 }
 
 fn main() -> ExitCode {
@@ -1881,6 +2114,13 @@ fn main() -> ExitCode {
                     ExitCode::FAILURE
                 }
             },
+        },
+        Some("assert") => match assert_main(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("bb: {e}");
+                ExitCode::FAILURE
+            }
         },
         Some("pool") => pool::main(&args[1..]),
         Some("open") => open::main(&args[1..]),

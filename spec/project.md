@@ -378,6 +378,103 @@ digital stream. Lines starting with `#` and empty lines are ignored. Each
 value becomes an `f64` once, from its exact decimal. A bench reads only this
 CSV; capture formats never enter a run (`bb capture import`, ADR-010 D3).
 
+### 3.4 Assertions (`[[assert]]`, ADR-010 D5-D7, Amendment 3)
+
+A `bb-bench/1` bench may hold `[[assert]]` tables. So may an **assertion
+file**: a `bb-bench/1` file of `schema` and `[[assert]]` tables and nothing
+else, which `bb run --assert <file>` (repeatable) adds after the bench's,
+for a project and for a board file alike. The kernel evaluates every
+assertion of a run; each gives exactly one `assert` record
+(`spec/event-stream.md`) at its **verdict time**, its window's close. A
+failing assertion does not fail the run.
+
+```toml
+[[assert]]
+name = "LSW-3"                       # required: letters, digits, _ . : - ; unique in the run
+kind = "range"                       # the closed set below
+msg = "LED_DIN above VLED"           # optional: the start of the record's msg
+requires = "pi"                      # optional: a rung; below it, not_evaluable
+# the window (every kind; all optional):
+from = "10ms"                        # opens at from (default 0) ...
+after = { edge = "U10.P1.04", level = 1, delay = "1ms" }   # ... or at the first such event at or after from, plus delay
+until = { log = "^uart0: done", source = "U10" }           # closes at the first such event at or after the opening ...
+to = "100ms"                         # ... or at to, or at the run's end, whichever is first
+while = { net = "U10.P1.04", level = 1 }                   # only while a digital net is at a level
+```
+
+An **event** is `{ edge = "<net>", level = 0|1 }` (a change of a digital
+net to the level) or `{ log = "<pattern>", source = "<engine>" }` (a `log`
+record; `source` optional) and, in `edge_timing` only, `{ cross =
+"<net>", ref = "<net>", below = "<V>" }` or `above` (a crossing of an
+analog quantity, `ref` optional). A **pattern** is a literal, anchored with
+`^` at the start of the message and `$` at its end, or neither (a
+substring); every other regular-expression metacharacter (`. * + ? [ ] ( )
+{ } | \`) is refused, so a later full regular expression cannot change what
+a pattern means.
+
+| `kind` | keys | value (unit) |
+| --- | --- | --- |
+| `range` | `net`, `ref` (optional: `V(net) - V(ref)`), `min`/`max` (volts) | the extremum that bounds it (`uV`) |
+| `at` | `net`, `ref`; `at = "<t>"` or `at = { edge, level }` (each such edge in the window); `min`/`max` in volts for an analog net, integers for a digital net's level | the worst instance (`uV`, or `count`) |
+| `settle` | `net`, `ref`, `event = { edge, level }`, `within = "<t>"`, a band `min`/`max` (volts, or `"10%"`: of the value at the event) | the worst settle time (`fs`) |
+| `edge_timing` | `start`, `end` (events), `pair = "last"` (default) or `"first"`, `min`/`max` (times) | the worst gap (`fs`) |
+| `count` | `net`, `level` (optional), `min`/`max` (integers) | the number of changes (`count`) |
+| `frequency` | `net`, `level` (default 1), `period` with `tol` (`"2%"`), or `min`/`max` (times) | the worst period between changes to `level` (`fs`) |
+| `log` | `match` (a pattern), `source`; `present = true` or `false`, or `min`/`max` counts, or `field = "<name>"` with `min`/`max` | the number of matching records (`count`), or the worst field value (integer limits: `count`; otherwise `fs` or `uV` by the limits' unit) |
+| `event` | `event = "reset"`, `"warn"` or `"error"`; `min`/`max` | the number of `reset` records, or of `log` records of that level (`count`) |
+
+- **What a check reads.** Analog values are the producing engine's
+  accepted solver points (`Engine::solver_points`, in the kernel's
+  evaluator): an extremum is taken over the linear interpolant of the
+  window's points (the points inside it and its two interpolated ends); a
+  crossing is interpolated between the two straddling points and rounded up
+  to whole fs, as for `digital_in`; a value at an instant is the
+  interpolation `sample_output` uses. The monitors are passive: no element,
+  no input, no grant boundary. A glitch narrower than one solver step (at
+  most TMAX = L) is missed, as it is by `digital_in`. Digital checks read
+  the `pin_edge` stream; `log` and `event` checks the `log` and `reset`
+  records. Values and limits are integers in base units: a voltage is
+  rounded half away from zero to whole µV before it is compared.
+- **Instances.** `at`, `settle`, `edge_timing`, `frequency` and a `log`
+  `field` check every instance in the window and report the worst (one past
+  a limit, else the one nearest a limit). A kind with no instance in its
+  window fails, as does a window that never opens.
+- **`settle`.** After each change of `event`'s net to its level, the
+  quantity must be inside the band by `within` after it, and stay inside
+  until the net changes again (or the window closes). An instance still
+  open at the run's end whose deadline is after the run's end is
+  `not_evaluable`. The assertion fails if an instance failed, passes if at
+  least one passed and none failed, and is otherwise `not_evaluable`; the
+  record's `msg` lists every instance.
+- **`edge_timing` pairs** each `end` event with the last `start` event at or
+  before it (`last`), or with the first `start` event since the `end` net
+  last changed (`first`; for a `log` or crossing `end`: since the previous
+  `end` event). Both lie in the window. An `end` without a `start` is
+  unpaired, counted in `msg`.
+- **`log` fields.** `field = "code"` reads the number after `code=` or
+  `code ` (a whole word) in each matching record: an integer, or a decimal
+  with a unit (`50 ms`, `40 us`, `3.58 V`), converted exactly.
+- **Names.** In a project an analog net is a net or an alias of the deck
+  (section 2), a digital net a bound MCU or device pin (`U10.P1.04`,
+  `main:U10.P1.04`) or its kernel net; in a board file they are the board
+  file's names (an MCU or device pin's kernel net `<ref>.<pin>` is digital,
+  any other name a circuit node). An analog net no probe names is read all
+  the same: the analog engine reports it to the kernel, in no output file.
+- **Honesty (ADR-010 D6).** A check on a net that an ideal bench source
+  forces (a `[[supply]]`, `[[pwl]]` or analog `[[playback]]` without `rs`)
+  is refused: a tautology. A branch current (`i(...)`, `#branch`) is
+  refused: a current is computable only from node voltages. The record's
+  `rung` is the run's (`fast` in this build); `requires` above it gives
+  `not_evaluable`.
+- **`bb assert <run> --assert <file> ...`** evaluates assertions again on a
+  finished run's `events.jsonl` (the run's end is its last grant's end):
+  every kind that reads only records gives the record the run gave, a pure
+  function of the records (a net's initial level is inferred from its first
+  edge); a kind that reads solver points is `not_evaluable` there. Its nets
+  are the kernel's, as written.
+- `run.json` records the assertion files as `assert_files`, `[{ "file",
+  "text" }]`, when a run has any.
+
 ## 4. The elaborated deck
 
 `bb run` builds the analog deck from `board.bbm`, the bench and the locked
@@ -455,7 +552,12 @@ its sha256 is in `run.json`.
   (`--netlist`, milestone S) writes `deck.cir` as the analog engine's
   netlist (the board's SPICE, its package views and the glue). `bb run`
   reads a `bb-lock/0` lock with the migration hint (`spec/package.md`
-  section 9).
+  section 9). `--assert <file>` (repeatable, a board file too) adds an
+  assertion file's checks (section 3.4); the summary prints every verdict.
+- **`bb assert <run dir> --assert <file>… [--bench <file>] [--out <file>]`.**
+  Evaluates assertions again on a finished run's `events.jsonl` and prints
+  (or writes) their `assert` records (section 3.4). Reads nothing else and
+  writes nothing but `--out`.
 - **`bb probe [--list] [net:<name>]… [--project <dir>]`.** Lists every net
   (display name, board, SPICE name, leaf name) and alias, or adds probes
   to `[probes] nets` after resolving them.
@@ -478,7 +580,9 @@ an `adc_in` binding is recorded the same way, with `view = "none"` and only
 reasons); `devices`, only when the project has a `[[device]]` (per device
 `ref`, `package`, `version`, `device` (its id), `virtual` and `params` as
 written; ADR-013 D1); `digital_only`, only when a net is (its display
-names, sorted; ADR-014 D4); `packages` and `platforms` (the locked hashes); `deck_sha256`;
+names, sorted; ADR-014 D4); `assert_files`, only when `bb run --assert`
+names any (each file's name and text, in order; ADR-010 Amendment 3);
+`packages` and `platforms` (the locked hashes); `deck_sha256`;
 `options` (every run option that can change results, the probes, and
 `ngspice_watchdog`: `max_points_per_cell` and
 `max_points_without_progress`, the progress watchdog's limits, which decide
