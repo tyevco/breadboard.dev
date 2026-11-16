@@ -1,0 +1,80 @@
+# examples/dial-me-spinner/e1-system/bench/nominal.toml: E1's nominal corner on the system (Phase 2
+# R2, ADR-013 D2): the dial-me-spinner suite's `led_rail_sequence` at corner bat3.7, 25 C
+# (hardware/sim/tests/test_load_switches.py at 6854d25). It is ../../bench/nominal.toml with the
+# bench's power path (an ideal 3.7 V VSYS source behind 0.3192 Ohm) replaced by the base board's views, as the
+# suite's own `vsys_network` has it:
+#
+#   * The cell: a [[battery]] at the base board's VBAT (J2), the suite's terminal voltage before the
+#     event (3.7 V) behind RPACK at 25 C (0.25 Ohm: cell, PCM and leads). It returns to the base board's ground. The suite's cell has no capacity either.
+#   * base:U1, the BQ25180 (ti/bq25180:pp, RON_BAT 55 mOhm as the suite's), at its `suite_compat`
+#     corner, as at the cold corner (bench/cold.toml): the suite's battery-only block has no BUVLO
+#     gate. At 3.7 V the gate is on at either corner.
+#   * No USB: VBUS is a bench port held at 0 V through 1 kOhm (the connector unplugged; the
+#     BQ25180's input is then disabled, battery-only mode): a [[supply]] with rs, a Norton B
+#     conductance against the base board's ground. Not a [[pwl]] with rs: its voltage source would
+#     be a branch-current unknown on base_GND, which the harness's milliohm GND wires tie to node 0
+#     (AGENTS.md's known bad idea; measured: the nominal corner stalled, NoProgress at 70.26 ms).
+#   * The base board's VSYS capacitors (C2, C4) and VBAT capacitor (C3), and the harness
+#     (dial-me-spinner/link-harness:wires: 28.4 mOhm on VSYS, 18.9 mOhm on GND, contacts included;
+#     the suite lumps 14.2 mOhm without them on VSYS).
+#
+# +3V3 stays E1's bench stand-in, the suite's ideal LDO (min(3.3 V, V(VSYS) - 44.167 mV), the 50 mA
+# +3V3 budget drawn from VSYS), because the reference deck has exactly that; main:U1 (the RT9080,
+# richtek/rt9080:ldo, a `pi` view) is therefore excluded. Recorded in ADR-013 Amendment 3: with the
+# RT9080 in the deck instead, the nominal corner's operating point does not converge from ngspice's
+# zero start (gmin and source stepping fail; P1's decks give it a .nodeset, which a bench cannot).
+#
+# The analog scope is E1's (../../bench/nominal.toml), qualified where both boards have the name
+# (ADR-013 D2), plus the power path's nets on both boards. base:U1 enters the deck only with every
+# connected pin's net in scope, so its I2C, INT and TS/MR nets are listed, and with them their mates
+# on the main board (a harness wire joins each pair: list both ends or neither). USB_DM, USB_DP and
+# BTN_N stay out at both ends (their wires carry nothing).
+schema = "bb-bench/1"
+temp_c = "25"
+fidelity = "pi"
+
+[corners]
+"base:U1" = "suite_compat"
+
+[[battery]]
+net = "base:VBAT"
+ocv = "cell-3v7.csv"
+soc = "0.5"
+r0 = "0.25"
+temp_c = "25"
+
+[[supply]]
+net = "base:VBUS"
+volts = "0V"
+rs = "1k"
+
+# As ../../bench/nominal.toml: the suite's ideal LDO behind 10 mOhm (a Norton source), and the 50 mA
+# +3V3 budget on VSYS.
+[[supply]]
+net = "+3V3"
+volts = "3.3V"
+rs = "10m"
+track = { net = "main:VSYS", drop = "44.167mV" }
+
+[[load]]
+net = "main:VSYS"
+amps = "50mA"
+
+[analog]
+exclude = ["main:U1"]
+nets = [
+  "main:GND", "main:VSYS", "+3V3", "VSYS_SENSE", "VLED", "LED_PWR_EN", "LSW_CT", "LSW_QOD",
+  "LED_DIN_MCU", "LED_DIN_R", "LED_DIN",
+  "LED_D1", "LED_D2", "LED_D3", "LED_D4", "LED_D5", "LED_D6", "LED_D7", "LED_D8",
+  "LED_D9", "LED_D10", "LED_D11", "LED_D12", "LED_D13", "LED_D14", "LED_D15", "LED_D16",
+  "LED_D17", "LED_D18", "LED_D19", "LED_D20", "LED_D21", "LED_D22", "LED_D23", "LED_D24",
+  "LED_D25", "LED_D26", "LED_D27", "LED_D28", "LED_D29", "LED_D30", "LED_D31", "LED_D32",
+  "LED_D33", "LED_D34", "LED_D35", "LED_D36", "LED_D37", "LED_D38", "LED_D39", "LED_D40",
+  "LED_D41", "LED_D42", "LED_D43", "LED_D44", "LED_D45", "LED_D46", "LED_D47", "LED_D48",
+  "main:VBUS", "main:I2C_SCL", "main:I2C_SDA", "main:CHG_INT_N",
+  "base:GND", "base:VSYS", "base:VBAT", "base:VBUS", "base:/Base board/I2C_SCL",
+  "base:/Base board/I2C_SDA", "base:/Base board/CHG_INT_N", "CHG_TSMR",
+]
+
+[options]
+set = "phase0"

@@ -87,7 +87,7 @@ fn run(args: &[String]) -> Result<(), String> {
     for n in add {
         println!(
             "bb probe: {n} -> {}",
-            crate::elab::describe_probe(&board, &p.simulate, &n)?
+            crate::elab::describe_probe(&board, &p.simulated, &n)?
         );
         if !nets.contains(&n) {
             nets.push(n);

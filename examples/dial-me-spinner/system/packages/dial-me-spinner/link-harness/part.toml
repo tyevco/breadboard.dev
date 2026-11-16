@@ -3,8 +3,12 @@
 # section 2, `nets.py` LINK_PINOUT at dial-me-spinner 6854d25). It is not on
 # either schematic: examples/dial-me-spinner/system/bb.toml names it as the
 # harness view of its [[connection]] (ADR-007 D5, Amendment 5), and `bb open`
-# resolves and locks it. Phase 1 simulates one board only, so no deck holds it
-# yet; its vectors qualify it for the day both boards are in one deck.
+# resolves and locks it. A system run (Phase 2 R2, ADR-013 D2:
+# examples/dial-me-spinner/e1-system, simulate = ["main", "base"]) puts it in
+# the deck between the two boards. Its view is plain resistors, so it is valid
+# at `pi` as at `fast` (ADR-009 D1, D2: no element pi refuses, a resistor on
+# every node); its qualification at (10 us, phase0) does not depend on the
+# rung (ADR-006 D6).
 schema = "bb-part/1"
 
 [part]
@@ -19,9 +23,9 @@ file = "pins.toml"
 
 [[analog]]
 name = "wires"
-purpose = "the harness as one series resistance per wire (conductor plus two contacts), for DC and rail-drop work at fast"
-fidelity = ["fast"]
-default_for = ["fast"]
+purpose = "the harness as one series resistance per wire (conductor plus two contacts), for DC and rail-drop work at fast and pi"
+fidelity = ["fast", "pi"]
+default_for = ["fast", "pi"]
 file = "analog/wires.lib"
 subckt = "dms_link_harness_wires"
 ports = ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11", "A12",

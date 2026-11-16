@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-11-15; see "Approver decisions
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
   (see "Review notes"). D1 implemented in R1 (Amendment 1); the majors
-  landed in milestone S (Amendment 2).
+  landed in milestone S (Amendment 2); D2 implemented in R2 (Amendment 3).
 - **Part of:** the Phase 2 plan, milestones R1-R3. W1, W2 and the caliper
   analog-only example use it. `bb-project/1` and `bb-board/1` land in
   milestone S, the schema epoch.
@@ -370,3 +370,145 @@ record. S adds these `bb-project/1` keys (`spec/project.md` section 1):
 `bb pkg migrate --project` and `--board` rewrite the schema line or member.
 The board-file form of `bb run --elaborate-only` (it writes the analog
 engine's netlist) is S's deck gate, recorded in ADR-011 Amendment 1.
+
+## Amendment 3 (2026-11-16): R2 as implemented (D2)
+
+Milestone R2 implements D2 on track `r` (`p2/r`). `spec/project.md`
+sections 1, 2, 4 and 6 state the rules; this is the record. A one-board
+run is unchanged: every one-board deck and output is byte for byte what it
+was (`make test`'s committed hashes; `make dms-system`'s E1-on-the-system
+elaboration).
+
+1. **`simulate` as a list** (S's key, Amendment 2, now honoured). Each
+   entry a declared board, none twice. The **primary board** is the
+   target's: the board a `[targets]` key names by its qualifier when one
+   names a listed board, else the first listed. Its ground is node 0;
+   `bb run` refuses a target on another board. One target across the
+   listed boards (G3: a second is refused, "multi-MCU simulation is Phase
+   3"). A `[[device]]` stays on the primary board, because a device's
+   kernel nets are `<ref>.<pin>` without the board (a deviation from
+   nothing D2 says, recorded).
+2. **Names.** In a system run "the simulated board" of ADR-007 D7's leaf
+   rule is every listed board, so a leaf name on two of them is ambiguous
+   and must be qualified, in a bench, a binding or a probe (G3: `VSYS` is
+   refused, listing `base:VSYS` and `main:VSYS`; so is a bare `U1` in
+   `[corners]`).
+3. **The deck.** Every listed board's instances, in `board.bbm`'s order;
+   each board its own ground (`base:GND` is `base_GND`). Two rules D2 did
+   not spell out:
+   - **A bench element returns to its net's board's ground** (supplies,
+     batteries, loads, PWL and playback sources, a `short` fault), its
+     B-source terms read `V(net,ground)`; on node 0 the one-board form, so
+     no deck moves. A battery at J2 then drives its current through the
+     base board's ground and the harness's ground wires, as on the board.
+   - **The harness** is one line after the instances,
+     `X_conn<k>_<a>_<b>`. A mated pair with both nets in the analog scope
+     is wired; with both outside, a **dead wire** on node 0 at both ends
+     (listed in a warning); one in and one out is refused (list both or
+     neither: the wire would join them). Without the dead-wire rule the
+     dial-me-spinner harness could not enter a deck: USB_DM and USB_DP have
+     nothing else in it, so their wires would float. Its view must be valid
+     at the run's rung or below; `dial-me-spinner/link-harness:wires` (plain
+     resistors) now declares `fast` and `pi` (ADR-009 D1, D2; its
+     qualification is unchanged, its tree hash moved, `system/bb.lock`
+     relocked, `board.bbm` unchanged).
+   - A connection without a harness ties the mated nets into one node (`0`
+     with the primary ground, else the primary board's net's name).
+   - `run.json`: `simulated` (only in a system run) and the harness in
+     `analog` (`ref` `main:J1=base:J3`, `kind = "harness"`).
+4. **The project: `examples/dial-me-spinner/e1-system`.** E1's target,
+   bindings and probes on both boards (`simulate = ["main", "base"]`), and
+   two benches, `bench/cold.toml` and `bench/nominal.toml`, that are E1's
+   with the VSYS supply replaced by the base board's power path, as the
+   suite's `vsys_network` has it: a `[[battery]]` at `base:VBAT` (the
+   corner's 3.0 / 3.7 V behind RPACK 0.50 / 0.25 Ω), base U1
+   (`ti/bq25180:pp`, RON_BAT 55 mΩ as the suite's) at `suite_compat`, the
+   base board's C2, C3 and C4, and the harness. Choices, each measured:
+   - **`suite_compat` for base U1**: the suite's battery-only block has no
+     BUVLO gate. At `typ` a 3.0 V cell (below BUVLO's 3.15 V rising
+     threshold) would never close the gate, by the view's equations, so the
+     cold corner would have no VSYS; that corner is below the firmware's
+     3.465 V floor anyway (not run).
+   - **+3V3 stays the suite's ideal LDO** (E1's tracking supply, the 50 mA
+     budget on VSYS) and main U1 is excluded, because the reference deck has
+     exactly that. With the RT9080 (`richtek/rt9080:ldo`, `worst_dropout`)
+     in the deck instead, the cold corner ran (VLED within 6.72 mV of the
+     reference) but the **nominal corner's operating point failed**: gmin
+     stepping fails with the RT9080 regulating (VIN 3.68 V), then source
+     stepping scales away the B-source paths of the `saadc_se` hold node
+     ("singular matrix: check node __hold_u10_p0_02"). Standalone, without
+     the pin load, source stepping converges; P1's decks give the RT9080 a
+     `.nodeset`, which a bench cannot. **Open finding for P4**: W1 with the
+     firmware in the loop needs the RT9080 in a `bb run`, so it needs an
+     operating-point guide or a restated view; not R2's to decide.
+   - **No USB**: VBUS is a `[[supply]]` of 0 V behind 1 kΩ (a Norton B
+     conductance). A `[[pwl]]` with `rs` there puts a voltage source, a
+     branch-current unknown, on `base_GND`, which the harness's milliohm
+     GND wires tie to node 0: AGENTS.md's known bad idea. Measured: the
+     nominal run stalled (`NoProgress:ngspice` at 70.26 ms, the watchdog at
+     200 001 points in one cell, after 541 s); with the Norton it completes
+     in 6 s.
+5. **Gate G2, as measured** (`make dms-e1-system`, `scripts/dms_e1_system.sh`;
+   numbers from the committed run, item 7):
+
+   | Check | ok-cold | ok-nominal |
+   | --- | --- | --- |
+   | **Cross-check: VLED against the suite's `led_rail_sequence` battery-network deck** (the run's `pin_edge` records replayed into it, the fitted TPS22917 view in both; every 10 µs sample; limit 10 mV) | **3.164 mV** (4.07 ms) | **3.219 mV** (4.15 ms) |
+   | Negative control: the cell's R0 doubled (1.0 Ω), must fail | 49.202 mV: fails | — |
+   | Reported: the suite's deck with E1's bench supply vs its battery network (what E1's bench leaves out) | 2.472 mV (74.22 ms) | 1.515 mV (4.18 ms) |
+   | Reported: the system run vs E1's bench run (`bb run`, VLED) | 5.616 mV (74.21 ms) | 4.701 mV (4.17 ms) |
+   | E1's four checks (`check_dms_rail.py --board main`) | pass (VLED 2.969854 V at the P0.06 rises; LSW-2 24.420 ms) | pass (3.682364 V) |
+   | Equivalence: default (71 grants, 14 quiet) = one-cell reference (`--max-quantum 10us`, 12 000 grants) except grant records | identical | identical |
+   | Analog-first byte-identical, grant records included | yes | yes |
+   | Board-level convergence, 120 ms (limit 60 s), both engine orders | 2.9-10.8 s wall; one-cell reference 15.7 / 33.3 s (pooled / fresh) | 2.8-11.9 s; 14.1 / 33.1 s |
+   | Determinism, 10 runs | identical | — |
+   | Wrong-order firmware | fails exactly LSW-3 | — |
+
+   The system run is further from the suite than E1's bench (3.2 mV against
+   1.6-2.5 mV): the harness model carries its contacts (28.4 mΩ on VSYS and
+   18.9 mΩ on GND, against the suite's lumped 14.2 mΩ), so the inrush sags
+   more. **No vacuous pass:** `scripts/check_system_run.py` requires, on
+   every run, `simulated`, base U1 at `suite_compat` and the base
+   capacitors in the deck, no bench VSYS supply, the harness between main
+   and base nodes with its ground wires on 0 and `base_GND`, the base
+   elements on `base_GND`, and the load carried (base:VSYS above main:VSYS
+   by 1.42-3.95 mV, base:VBAT below the OCV, whenever VLED is above 2.5 V).
+   The cross-check needs `DMS_REPO` and the suite venv, so it is local, as
+   `make dms-crosscheck` is; CI runs `dms-e1-system-test`.
+6. **Gate G3** (`cli/tests/system_run.rs`, in `cargo-test`): the system
+   deck line for line (grounds, harness, bench returns, `run.json`), a
+   second target refused, ambiguous bench names refused (a net in `[[load]]`
+   and `[analog] nets`, an instance in `[corners]`), a harness wire half in
+   the scope refused, and a connection without a harness tying its nets.
+   `names::tests` has the leaf rule.
+7. **Runs and budget** (`make test` +30 s): `dms-e1-system-test` took
+   15.8 s alone on its own pool (with the pool's start; its three runs go
+   in parallel), 3.4 s in a pooled `make check` (1 234 s in all) and
+   38.7 s in a `POOL=0` one (1 485 s), both green, both beside another
+   track's `make check` (1-minute load 7-46, so to be re-measured idle).
+   The full gate took 93 s pooled and 169 s with `POOL=0` (load 9-20).
+8. **`make pool-equiv`** gains `dms-e1-system` and `dms-e1-system-ref`
+   (ok-cold, default and one-cell). It passed with them: 32
+   configurations, 2 rounds, every pooled run leased and byte-identical to
+   its fresh run and to the committed hashes (57 min, load 5-17).
+   `make lock-scope` passes with the project in `PKG_BOARDS`.
+   **Cost-table row** (`make cost-table-dms-e1-system`, also in `make
+   cost-table`; ok-cold, the one-cell reference against bb's defaults, the
+   ADR-003 protocol, N = 5, interleaved, medians, under the measurement
+   lock): fresh, 12 000 against 71 grants, simulation 20.71 / 4.89 s
+   (4.2x), total 23.86 / 9.25 s; on a 1-slot pool, 17.23 / 3.31 s (5.2x),
+   total 17.43 / 3.51 s, startup 0.17 / 0.16 s. Other tracks raised the
+   1-minute load from 4.9 to 37 during the fresh round (9-14 on the pool),
+   so the row is to be re-measured on an idle host.
+9. **Deviations, recorded.**
+   - +3V3 is not the RT9080 (item 4): the cross-check's reference has the
+     suite's ideal LDO, and the RT9080 view does not reach an operating
+     point in a `bb run` at the nominal corner (open finding for P4).
+   - The harness keeps its JST contacts (47.3 mΩ round trip against the
+     suite's 14.2 mΩ); the difference is inside the 10 mV and reported.
+   - The cross-check is local (`DMS_REPO`, the suite venv), as Phase 1's
+     `dms-crosscheck` is; CI and `make test` run `dms-e1-system-test`.
+   - Devices on the primary board only (item 1).
+   - `scripts/check_dms_rail.py --board main` and `dms_suite_deck.py
+     --battery` / `compare --run-col` read a system run's qualified columns;
+     their Phase 1 behaviour is unchanged.

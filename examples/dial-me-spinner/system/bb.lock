@@ -12,7 +12,7 @@ tree = "sha256:de0e664f0e1adffe7a2f9881ba91c21cd8298c01c412084f5910bd3b75d14f8c"
 id = "dial-me-spinner/link-harness"
 version = "0.1.0"
 source = "path+packages/dial-me-spinner/link-harness"
-tree = "sha256:37ac08bede96fb710dcca9de9594aca72adde3d0f01c8d0aaa315bbc603bfff9"
+tree = "sha256:268fb6a01d18e63deef16be764f8faf60941be85fb037c9dbd1a2ae31e86ec6b"
 
 [[package]]
 id = "generic/capacitor"

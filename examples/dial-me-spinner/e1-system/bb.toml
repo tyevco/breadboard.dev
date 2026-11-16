@@ -1,0 +1,76 @@
+# examples/dial-me-spinner/e1-system/bb.toml: E1 on the dial-me-spinner system, a single-MCU
+# system run (Phase 2 R2, ADR-013 D2).
+#
+# Both boards in one deck: the main board (U10 runs firmware/prebuilt/led_rail.elf, E1's
+# firmware) and the base board, mated by the link harness, imported from the netlists vendored at
+# dial-me-spinner 6854d25 like ../system (whose import this is, with a target). The E1 benches of
+# ../bench stand in for the base board's power path; here the base board's own views are the power
+# path: the battery (a bench [[battery]] at J2), the BQ25180 (base U1, `ti/bq25180:pp`), the base
+# board's VSYS capacitors and the harness (`dial-me-spinner/link-harness:wires`), then the main
+# board's RT9080 (main U1, `richtek/rt9080:ldo`). Those views are `pi`, so the benches run at
+# `fidelity = "pi"`. The targets, bindings and firmware are E1's (../bb.toml), qualified.
+#
+# Each board keeps its own ground: main:GND is node 0 (the target's board), base:GND is the node
+# base_GND, joined to it by the harness's three GND wires.
+schema = "bb-project/1"
+
+[project]
+name = "dial-me-spinner rev A: E1 on the system (main + base)"
+simulate = ["main", "base"]
+
+[[board]]
+id = "main"
+netlist = "../kicad/main/dial-me-spinner-main.net"
+ground = "GND"
+
+[[board]]
+id = "base"
+netlist = "../kicad/base/dial-me-spinner-base.net"
+ground = "GND"
+
+# The link harness (../system/packages): not on either schematic.
+[packages]
+paths = ["../system/packages"]
+
+# As in ../bb.toml: the NFC coil pads need a decision (ADR-007 D4).
+[instances."main:J11"]
+package = "none"
+reason = "NFC coil pads: no RF model in Phase 1"
+
+# Main J1 and base J3, straight through (as ../system/bb.toml).
+[[connection]]
+a = "main:J1"
+b = "base:J3"
+model = "dial-me-spinner/link-harness:wires"
+
+# E1's firmware (../bb.toml; the image hash of ADR-008 D5).
+[targets."main:U10"]
+images = [{ file = "../firmware/prebuilt/led_rail.elf", kind = "elf", hash = "sha256:5b02dd56447b14534702aea8be288577569f21a41c029d74b179fe6f450bbc10" }]
+
+# E1's bindings (../bb.toml), qualified: LED_PWR_EN (S0S1), LED_DIN_MCU (H0H1_max), and E2's two
+# adc_in bindings, so the main board's deck is E1's (the E1 firmware never starts the SAADC).
+[[bind]]
+pin = "main:U10.P1.04"
+model = "digital_out"
+set = "S0S1"
+net = "main:LED_PWR_EN"
+
+[[bind]]
+pin = "main:U10.P0.06"
+model = "digital_out"
+set = "H0H1_max"
+net = "main:LED_DIN_MCU"
+
+[[bind]]
+pin = "main:U10.P0.02"
+model = "adc_in"
+net = "main:VSYS_SENSE"
+trace_samples = true
+
+[[bind]]
+pin = "main:U10.VDD"
+model = "adc_in"
+vref = "3.6V"
+
+[probes]
+nets = ["VLED", "LED_DIN", "LED_DIN_MCU", "LED_DIN_R", "main:VSYS", "+3V3", "base:VSYS", "base:VBAT"]

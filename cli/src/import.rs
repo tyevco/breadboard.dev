@@ -1257,7 +1257,7 @@ pub fn import(
         .collect();
     let net_names = names::Nets {
         items: net_items,
-        simulated: &p.simulate,
+        simulated: &p.simulated,
     };
     let mut virtual_instances: Vec<Instance> = Vec::new();
     let mut device_nodes: Vec<(String, Node)> = Vec::new();
