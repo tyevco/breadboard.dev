@@ -179,16 +179,27 @@ statement of firmware.md.
   | Check | Limit | Reference |
   | --- | --- | --- |
   | Suite replica (local-only) | every W1 value of `results.json` within 1 mV and 10 µs | suite |
-  | P0 feasibility: static-load mode on the `pi` views at the +5 % corner | +3V3 below 2.94 V for at least 0.5 ms, recovered at least 2 ms before the 10 ms blanking ends | measured window |
-  | Static-load mode: +3V3 min, VSYS min, the 2.94 V window's start and end | within P0's measured model difference, fixed in P0's report before P4 (expected: mV and tens of µs) | suite |
-  | Static-load load sweep: 30, 50 and 60 mA | the same verdicts as the suite (no crossing; cross and recover; collapse) | table above |
-  | Rule firmware (10 ms), static-load, +5 % corner | the cue stays on; **`pofwarn` fired at least once** (so the pass is not vacuous); no `reset` record; +3V3 ≥ 2.7 V (flash VCC min) after 10 ms | firmware.md R8 |
-  | Negative control: blanking that ends inside the window (the whole ms nearest its midpoint: 4 ms for the suite's window) | fails exactly `cue-held`, the shed caused by the re-enable rule | measured window |
+  | P0 feasibility at the **stress corner** (D-W1): static-load mode on the `pi` views at the +5 % corner, 55 mA static +3V3 load, RT9080 worst | the stress load is the smallest whole mA with +3V3 below 2.94 V for at least 0.5 ms; +3V3 below 2.94 V for at least 0.5 ms, recovered at least 2 ms before the 10 ms blanking ends (P0: 0.83 ms, 3.255-4.089 ms) | measured window |
+  | **Margin check** at the suite's 50 mA (D-W1): static-load mode, RT9080 worst, +5 % corner | no POFWARN: +3V3 never below 2.94 V (P0: min 2.9640 V, margin +24.0 mV); +3V3 min and its margin reported at the nominal and the halved (DC-bias stand-in) +3V3 capacitance (P0: halved −21.2 mV, a 0.38 ms dip inside the blanking). With the firmware in the loop (P4), reported: the blanking-off build's `pofwarn` count (expected 0; the rule build masks the blanking) | ADR-009 Amendment 2 |
+  | Static-load mode at the stress corner: +3V3 min, VSYS min, the 2.94 V window's start and end | within the stress corner's own tolerances, fixed from P0's measured difference at 55 mA: 200 mV, 200 mV, 50 µs, 5 ms. The replica is near its cliff there, so the window's end is bounded, not discriminated | suite at 55 mA |
+  | Static-load load sweep: 30, 50, 55 and 60 mA | no crossing; no crossing (the margin check: the suite crosses and recovers here, the one verdict that differs, recorded); cross and recover; collapse | table above |
+  | Rule firmware (10 ms), static-load at the stress corner, +5 % corner | the cue stays on; **`pofwarn` fired at least once** (so the pass is not vacuous); no `reset` record; +3V3 ≥ 2.7 V (flash VCC min) after 10 ms | firmware.md R8 |
+  | Negative control: blanking that ends inside the window (the whole ms nearest its midpoint: 4 ms for the suite's window, and 4 ms for P0's stress-corner window, 89 µs before its end) | fails exactly `cue-held`, the shed caused by the re-enable rule | measured window |
   | Negative control: blanking off | fails exactly `cue-held`; POFWARN within one lattice cell of the window's start | — |
   | 5 ms blanking | reported (the suite predicts a pass) | — |
-  | Nominal and −5 % corners, rule firmware | reported; `pofwarn` count expected 0 | table above |
+  | Nominal and −5 % corners, rule firmware, stress corner | reported; `pofwarn` count expected 0 | table above |
   | Co-simulation: `supply_load` only, and `supply_load` plus a bench remainder load up to the 50 mA budget | reported; partition independence and determinism gated | — |
 
+- **The stress corner (approver decision D-W1, 2026-11-15, round 2b;
+  ADR-009 Amendment 2).** At the suite's 50 mA, P0's static-load deck
+  never crosses 2.94 V. Its +3V3 min is 2.9640 V at the RT9080 worst
+  corner, because of the board's 37.6 µF on +3V3, which the suite's ideal
+  LDO does not have. So W1's firmware-in-the-loop checks run at the
+  smallest whole mA that gives at least 0.5 ms below 2.94 V: 55 mA, at
+  the RT9080 worst corner. The stress corner has its own tolerances, and
+  the suite's 50 mA becomes a gated margin check. Every W1 report and
+  `run.json` labels the stress corner: the bench's name and its
+  `[[load]]` (`bench/w1-stress.toml`), and the report's suite names.
 - **Deviation, recorded:** the firmware cannot set ILIM and SYS_REG over
   I2C, because Phase 2 has no TWIM bus device (section 3 Out). The bench
   sets them, and the report says so.
@@ -370,12 +381,12 @@ element) and the P1 views. R3 needs B1 and is part of the adoption exit
 
 | # | Milestone | Gate | Budget | ADR |
 | --- | --- | --- | --- | --- |
-| P0 | **Numerics and feasibility spike** (1 week, timeboxed, like Phase 1's S1). The W1 and W2 suite replicas through `deck_run`; the first RT9080, BQ25180 and TPS61040 `pi` views in static-load mode at `phase0` and at the suite's fallback set | The suite replicas reproduce `results.json` (1 mV, 10 µs). The option set at which the static-load decks converge is named and qualified (expected: `phase0` with Gear, as measured on the suite deck). The model difference between the `pi` views and the suite is measured and **the static-load tolerances are fixed from it**. W1's feasibility row (section 2) passes; if it does not, the approver chooses from Q1's fallback before P4 starts | — (spike) | 009 D2 |
+| P0 | **Numerics and feasibility spike** (1 week, timeboxed, like Phase 1's S1). The W1 and W2 suite replicas through `deck_run`; the first RT9080, BQ25180 and TPS61040 `pi` views in static-load mode at `phase0` and at the suite's fallback set | The suite replicas reproduce `results.json` (1 mV, 10 µs). The option set at which the static-load decks converge is named and qualified (expected: `phase0` with Gear, as measured on the suite deck). The model difference between the `pi` views and the suite is measured and **the static-load tolerances are fixed from it**. W1's feasibility row (section 2) passes at the labelled stress corner the approver chose (D-W1, ADR-009 Amendment 2: 55 mA static +3V3 load at the RT9080 worst corner, the smallest whole mA with 0.5 ms below 2.94 V), with the stress corner's own tolerances fixed from the measured difference at 55 mA; the margin check at the suite's 50 mA passes (no POFWARN at the +5 % corner), with +3V3 min and its margin reported at the nominal and the halved +3V3 capacitance | — (spike) | 009 D2 |
 | P1 | `bb-part/1` keys in use (S): `power`, view `rails` and `supply_load`. The `pi` views (`richtek/rt9080` restated, `ti/bq25180` with its `suite_compat` corner, `ti/tps61040`), a battery element, view lint rules, the fidelity dial. **`pi` declarations on the existing views** that are adequate there (generic R/C/L, TPS22917, WS2812C), re-qualified per ADR-006 D6 | Every view qualified with its operating point solved at every qualification corner. **W1 and W2 static-load decks** against the suite with P0's tolerances, and W1's load sweep. The decks are assembled from the package views and run through `NgspiceEngine` with `deck_run`, because the project route needs R2. Every W1 assertion reports `rung: pi`. `fast` runs unchanged byte for byte | +30 s | 009 D1-D3 |
 | P2 | Rail-tracking and tristate `digital_out` at `pi`, with the high-Z leakage; `oe` from the `PIN_CNF` direction (or the fallback, ADR-009 D5) | At `fast` every committed hash unchanged. At `pi`: the operating point of every Phase 1 board solves with every `oe = 0`; E1 cold: LSW-3 re-reported with the documented pessimism removed; LED_PWR_EN's high level under a stated load against the PS VOH-versus-IOH figure. Partition independence | +15 s | 009 D5 |
 | P3 | `supply_load`, `[power] idd` for `nordic/nrf52840-qiaa`, CPU state outputs `#run`, `#hfxo`, `#nvmc`, `#saadc`, bench `[[activity]]` for radio TX | Renode-only test: `#run` edges at the WFI instants of a gate firmware, exact to fs. The total VDD current of a gate firmware with a known WFI duty equals a hand calculation of the duty-weighted average, within 1 %. Lookahead: the nRF feedback board with state outputs still takes at most 2× its grants. Equivalence against one-cell | +30 s | 009 D4 |
 | W-fw | **The W1 and W2 firmware.** Zephyr v4.5.0 apps in `examples/dial-me-spinner/firmware/`: the W1 app with POFCON at V28 and the blanking as a build option (10 ms rule, the window-midpoint control, 5 ms, off); the W2 old-rule and rule apps. Prebuilt images, `SHA256SUMS`, `PROVENANCE` | `make fw-rebuild` reproduces every image hash in a fresh west workspace. Each app's POWER and GPIO configuration checked by a Renode-only test on the P4 model | — | 008 D5 |
-| P4 | POFWARN: `BbNrf52Power` (POFCON, EVENTS_POFWARN, the IRQ), the comparator view, `#pofwarn` | Register and timing tests (ADR-005 test-plan shape): every threshold code, hysteresis, the "already below at enable" rule, non-existent codes refused. **W1 with the firmware in the loop and its negative controls** (section 2). `make pool-equiv` entry | +40 s | 009 D6 |
+| P4 | POFWARN: `BbNrf52Power` (POFCON, EVENTS_POFWARN, the IRQ), the comparator view, `#pofwarn` | Register and timing tests (ADR-005 test-plan shape): every threshold code, hysteresis, the "already below at enable" rule, non-existent codes refused. **W1 with the firmware in the loop and its negative controls** at the stress corner, and the margin check (section 2). `make pool-equiv` entry | +40 s | 009 D6 |
 | P5 | BOR and reset, the `reset` record, RESETREAS, GPIO high-Z during reset | Prototype first (one week): Renode 1.17.0 machine reset under External Control, fresh and pooled (risk R3), and a co-simulated crossing of VBOR with the P1 views. **W2**, or its fallback (section 5). Pool equivalence, and a pool process is never reused after a reset that failed | +40 s | 009 D7 |
 | P6 | (stretch) W3: averaged vs switched PWM load gate, PI-C; caliper analog-only | Section 2 W3 | — | 009 D9, 013 D3 |
 
@@ -427,9 +438,16 @@ re-runs `make check` on the merged tree.
 
 1. **W1 passes at `--fidelity pi` through `bb test`.** On the
    dial-me-spinner system project, at V28 and the VPOFTOL +5 % corner, in
-   static-load mode with the firmware in the loop:
-   - the static-load checks match the suite within P0's tolerances, and
-     the suite replica passes where the local-only package exists;
+   static-load mode at the labelled stress corner (55 mA static +3V3 load,
+   RT9080 worst; D-W1, ADR-009 Amendment 2), with the firmware in the
+   loop:
+   - the static-load checks match the suite within the stress corner's
+     tolerances, and the suite replica passes where the local-only
+     package exists;
+   - the margin check at the suite's 50 mA passes (no POFWARN at the +5 %
+     corner), and +3V3 min and its margin are reported at the nominal and
+     the halved +3V3 capacitance;
+   - every W1 report and `run.json` labels the stress corner;
    - the rule firmware keeps the cue, and `pofwarn` fired;
    - both negative controls fail exactly `cue-held`;
    - the co-simulation is reported;
@@ -724,6 +742,23 @@ decisions" section lists them).
 | 12 | **Accepted.** The POFWARN finding is reported to the user as a dial-me-spinner issue; Breadboard refuses threshold codes that do not exist | 009 |
 
 **E0 is signed off** by these answers, so E1 is not waiting on round 2.
+
+**Round 2b (2026-11-15), on P0's report: D-W1.** P0's feasibility row
+failed at 50 mA, and the approver invoked Q1's fallback with a margin
+check added:
+
+- W1 is gated at a labelled stress corner: 55 mA static +3V3 load at the
+  RT9080 worst corner, the smallest whole mA giving at least 0.5 ms below
+  2.94 V (0.83 ms, 3.255-4.089 ms);
+- its tolerances are its own, fixed from P0's measured model difference
+  at that load (the replica is near its cliff there);
+- a gated margin check at the suite's 50 mA: no POFWARN at the +5 %
+  corner, with +3V3 min and its margin reported at the nominal and the
+  halved (DC-bias stand-in) +3V3 capacitance;
+- every W1 report and `run.json` labels the stress corner.
+
+This is ADR-009 Amendment 2, and it is in section 2 (W1), section 4 (P0)
+and section 5 (item 1).
 
 **This build's scope.** Hardening and the technical exit:
 

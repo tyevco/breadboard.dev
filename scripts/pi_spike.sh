@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Phase 2 plan P0 (numerics and feasibility spike, ADR-009 D2, gate G3): the W1 and W2 suite replicas
 # and the first RT9080, BQ25180 and TPS61040 `pi` views in static-load mode, through NgspiceEngine
-# (deck_run), at Breadboard's option sets and the suite's.
+# (deck_run), at Breadboard's option sets and the suite's; W1 at its labelled stress corner and the
+# suite's 50 mA margin check (decision D-W1, ADR-009 Amendment 2).
 #
 #   scripts/pi_spike.sh [gate]          the P0 gate (make pi-spike); summary in $OUT/summary.json
 #   scripts/pi_spike.sh runs <id>...    run single configurations (for exploration), results on stdout
@@ -131,6 +132,9 @@ if [[ $MODE == gate ]]; then
   done
   for c in w1_l30 w1_l40 w1_l60; do ids+=("$c.pi.$Q.g1ms" "$c.$RV.$ROS.g1ms"); done
   for ma in 51 52 53 54 55 56 57 58 59 60; do ids+=("w1_l$ma.pi.$Q.g1ms" "w1_l$ma.pi_typ.$Q.g1ms" "w1_l$ma.$RV.$ROS.g1ms"); done
+  # W1's stress corner (decision D-W1, tolerances.toml [w1]): the option set qualified on it as well
+  S=$("$PY" -I -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["w1"]["stress_load_mA"])' "$TOL")
+  ids+=("w1_l$S.pi.$Q.g10us" "w1_l$S.pi.$Q.g10ms" "w1_l$S.pi.$Q.tmax1us")
   mapfile -t ids < <(printf '%s\n' "${ids[@]}" | sort -u)
   echo "pi-spike: $COMMIT ($NGV), ${#ids[@]} runs on $JOBS jobs in $RUN (load $(cut -d' ' -f1-3 /proc/loadavg))"
   start=$(date +%s)

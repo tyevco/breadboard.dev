@@ -67,9 +67,10 @@ CASES = {
     "w2old": dict(kind="old", ilim=0.100, vsysreg=4.5, i3v3=0.050, stop=5_000 * US, pad="OLED_VCC_EN",
                   suite_test=SUITE_W2O),
 }
-# The approver's Q1 stress-corner data (plan section 10, ADR-009 "Approver decisions"): W1 at every
-# whole mA from 51 to 59, to find the smallest static load at which the static-load deck crosses
-# 2.94 V for 0.5 ms. Measured and reported only; invoking the fallback is the approver's choice.
+# Q1's stress-corner sweep: W1 at every whole mA from 51 to 59, to find the smallest static load at
+# which the static-load deck crosses 2.94 V for 0.5 ms. The approver invoked the fallback (decision
+# D-W1, 2026-11-15, ADR-009 Amendment 2): W1 is gated at that load, labelled the stress corner
+# (tolerances.toml [w1]), and the suite's 50 mA ("w1") is its margin check.
 for _ma in range(51, 60):
     CASES[f"w1_l{_ma}"] = dict(CASES["w1"], i3v3=_ma / 1000, suite_test=None)
 PROBES = {"cue": ["n_vsys", "n_p3v3", "n_vled", "n_oled_vin", "n_iu2", "n_vsys_b"],
@@ -397,7 +398,22 @@ def cmd_gate(a):
     suite = json.load(open(a.suite_results))
     checks = {(c["test"].split("::")[-1], c["check"]): c["value"] for c in suite["checks"]}
     tol = tomllib.load(open(a.tolerances, "rb"))
-    out = {"schema": "bb-pi-spike-summary/1", "gates": [], "measured": {}, "runs": {}}
+    # W1's gated corner (decision D-W1, ADR-009 Amendment 2): the stress corner, and the suite's
+    # budget as its margin check. Every W1 line and the summary carry the label.
+    w1c = tol["w1"]
+    stress = f"w1_l{w1c['stress_load_mA']}"
+    margin = "w1" if w1c["margin_load_mA"] == 50 else f"w1_l{w1c['margin_load_mA']}"
+    blank_ms = w1c["blanking_ms"]
+    if VARIANTS["pi"][2] != w1c["rt9080_corner"]:
+        sys.exit(f"pi-spike: tolerances.toml [w1] rt9080_corner {w1c['rt9080_corner']!r}, but the gated variant "
+                 f"'pi' runs the RT9080 {VARIANTS['pi'][2]!r} corner")
+    label = (f"W1 {w1c['label']}: {w1c['stress_load_mA']} mA static +3V3 load (suite budget "
+             f"{w1c['margin_load_mA']} mA), RT9080 {w1c['rt9080_corner']}")
+    out = {"schema": "bb-pi-spike-summary/1", "gates": [], "measured": {}, "runs": {},
+           "w1_corner": {"label": w1c["label"], "text": label, "stress_load_mA": w1c["stress_load_mA"],
+                         "margin_load_mA": w1c["margin_load_mA"], "rt9080_corner": w1c["rt9080_corner"],
+                         "decision": w1c["decision"]}}
+    print(f"pi-spike: {label}")
     ok = True
 
     def gate(name, passed, detail):
@@ -485,7 +501,7 @@ def cmd_gate(a):
     # ---- 2. the option set: named, and qualified on the static-load decks ----------------------------
     q = tol["option_set"]["name"]
     out["option_set"] = {"name": q, "card": OPTION_SETS[q], "runs": {}}
-    for case in ("w1", "w2rule", "w2old"):
+    for case in ("w1", stress, "w2rule", "w2old"):
         for variant in ("pi",):
             base = rid(case, variant, q)
             r = runs.get(base)
@@ -583,23 +599,32 @@ def cmd_gate(a):
             out_[k] = next(m * e for m in (1, 2, 5, 10) if m * e >= x - 1e-12)
         return out_
 
-    for case in ("w1", "w2rule", "w2old"):
+    # gated: W1 at its stress corner (tolerances.toml [static_load.w1_stress]) and W2; W1 at the
+    # suite's 50 mA is its margin check (section 4), and its difference is reported only
+    for case, key in ((margin, None), (stress, "w1_stress"), ("w2rule", "w2rule"), ("w2old", "w2old")):
         mp, ms = meas(case, "pi", q), meas(case, rep_var, rep_opts)
+        tag = f"{case} ({label})" if case == stress else case
         if mp is None or ms is None:
-            gate(f"{case}: model difference measured", False, "a run failed")
+            gate(f"{tag}: model difference measured", False, "a run failed")
             continue
         diff = difference(case, mp, ms)
         out["model_difference"][case] = {"pi": mp, "suite": ms, "difference": diff, "attribution": {},
                                          "tolerance_by_rule": propose(diff)}
-        print(f"pi-spike: report: {case}: tolerances by the rule: {propose(diff)}")
-        lim = fixed.get(case, {})
-        if lim.get("status") == "pending":
-            gate(f"{case}: static-load tolerances fixed from the measured difference", False,
-                 f"pending the approver ({lim.get('reason', '')}); measured: {fmt(diff)}")
+        print(f"pi-spike: report: {tag}: difference {fmt(diff)}; tolerances by the rule: {propose(diff)}")
+        if key is None:
+            out["model_difference"][case]["gated"] = False
         else:
-            within = all(v is not None and abs(v) <= lim[k] for k, v in diff.items() if k in lim)
-            gate(f"{case}: the measured pi-vs-suite difference is within the tolerances fixed from it "
-                 f"(tolerances.toml [static_load.{case}])", within and bool(lim), fmt(diff))
+            lim = {k: v for k, v in fixed.get(key, {}).items() if not isinstance(v, str)}
+            # every tolerance must name a measured quantity, and every gated quantity must have been measured
+            known = all(k in diff and diff[k] is not None for k in lim)
+            within = known and all(abs(diff[k]) <= lim[k] for k in lim)
+            rule = propose(diff)
+            by_rule = all(lim[k] == rule.get(k) for k in lim)
+            gate(f"{tag}: the measured pi-vs-suite difference is within the tolerances fixed from it "
+                 f"(tolerances.toml [static_load.{key}])", within and bool(lim),
+                 ", ".join(f"{k} {diff[k]:+.3f} (limit {lim[k]:g})" for k in lim if k in diff and diff[k] is not None))
+            gate(f"{tag}: tolerances.toml [static_load.{key}] is the stated rule applied to the measured difference",
+                 by_rule and bool(lim), f"fixed {lim}, by the rule {rule}")
         # attribution (report): each variant against the replica
         for v in ("pi_no3v3c", "pi_c3half", "suite_lswfit", "pi_lswfix", "pi_typ"):
             mv = meas(case, v, q)
@@ -607,78 +632,134 @@ def cmd_gate(a):
                 out["model_difference"][case]["attribution"][v] = difference(case, mv, ms)
                 print(f"pi-spike: report: {case} {v} vs the replica: {fmt(out['model_difference'][case]['attribution'][v])}")
 
-    # ---- 4. W1's feasibility row (plan section 2) -------------------------------------------------------
-    mp = meas("w1", "pi", q)
-    if mp:
-        w = mp["win_v28p5"]
-        s, e = _first_last(w)
-        below = sum((iv[1] if iv[1] is not None else float("inf")) - iv[0] for iv in w)
-        rec = e is not None and e <= FW_POF_BLANK / 1e12 - 2.0
-        feas = below >= 0.5 and rec
-        out["feasibility"] = {"window_ms": w, "below_ms": below, "recovered_ms": e, "pass": feas}
-        gate("W1 feasibility: static-load mode on the pi views at V28 +5 % (2.94 V): +3V3 below 2.94 V for at least "
-             "0.5 ms, recovered at least 2 ms before the 10 ms blanking ends", feas,
-             f"windows {w} ms after LED_PWR_EN (total {below:.3f} ms, recovered at {e} ms, limit 8 ms)")
-    else:
-        gate("W1 feasibility", False, "the static-load run failed")
-    # the same row on the variants (report): which part of the deck decides it
-    out["feasibility_variants"] = {}
-    for v in ("pi_typ", "pi_no3v3c", "pi_c3half", "pi_lswfix"):
-        mv = meas("w1", v, q)
-        if mv:
-            w = mv["win_v28p5"]
-            below = sum((iv[1] if iv[1] is not None else float("inf")) - iv[0] for iv in w)
-            _, e = _first_last(w)
-            out["feasibility_variants"][v] = {"p3v3_min": mv["p3v3_min"], "window_ms": w, "below_ms": below,
-                                              "pass": below >= 0.5 and e is not None and e <= 8.0}
-            print(f"pi-spike: report: W1 feasibility on {v}: {out['feasibility_variants'][v]}")
+    # ---- 4. W1's stress corner and its margin check (decision D-W1, ADR-009 Amendment 2) -------------
+    thr = w1c["threshold_V"]
+    wkey = next(k for k, v in THR.items() if v == thr)          # "v28p5": V28 at VPOFTOL +5 %
+    min_below = w1c["min_below_ms"]
+    rec_by = blank_ms - w1c["recover_before_blanking_end_ms"]   # ms after LED_PWR_EN
 
-    # ---- 5. the load sweep (report; P1 gates it) ------------------------------------------------------
+    def below_ms(w):
+        return sum((iv[1] if iv[1] is not None else float("inf")) - iv[0] for iv in w)
+
+    def recovered(w):
+        _, e = _first_last(w)
+        return e
+
+    # 4a. the sweep at every whole mA (RT9080 worst, which W1 gates, and typ, reported): the stress load
+    # is the smallest whole mA with at least 0.5 ms below 2.94 V
+    out["stress_corner"] = {}
+    for variant in ("pi", "pi_typ"):
+        rows, smallest_below, smallest_feas, complete = {}, None, None, True
+        for ma in [50] + list(range(51, 60)) + [60]:
+            case = "w1" if ma == 50 else f"w1_l{ma}"
+            m = meas(case, variant, q)
+            if m is None:
+                rows[ma] = {"status": (runs.get(rid(case, variant, q)) or {}).get("status", "not run")}
+                if smallest_below is None:
+                    complete = False
+                continue
+            w = m[f"win_{wkey}"]
+            b, e = below_ms(w), recovered(w)
+            feas = b >= min_below and e is not None and e <= rec_by
+            rows[ma] = {"p3v3_min": m["p3v3_min"], "vsys_min": m["vsys_min"], f"win_{wkey}": w,
+                        "below_ms": b if b != float("inf") else None, "recovered_ms": e, "feasible": feas}
+            if b >= min_below and smallest_below is None:
+                smallest_below = ma
+            if feas and smallest_feas is None:
+                smallest_feas = ma
+        out["stress_corner"][variant] = {"rows": rows, "smallest_below_mA": smallest_below,
+                                         "smallest_feasible_mA": smallest_feas}
+        print(f"pi-spike: report: stress sweep, {variant} (RT9080 {VARIANTS[variant][2]}): smallest whole mA with "
+              f"+3V3 below {thr} V for >= {min_below} ms: {smallest_below}; also recovered by {rec_by:g} ms: "
+              f"{smallest_feas}")
+        if variant == "pi":
+            gate(f"{label}: the stress load is the smallest whole mA (50-60 mA, RT9080 worst) with +3V3 below "
+                 f"{thr} V for at least {min_below} ms", complete and smallest_below == w1c["stress_load_mA"],
+                 f"smallest {smallest_below} mA, tolerances.toml {w1c['stress_load_mA']} mA; "
+                 + ", ".join(f"{ma} mA {r['below_ms']:.3f} ms" if r.get("below_ms") is not None
+                             else f"{ma} mA {r.get('status', 'no recovery')}" for ma, r in rows.items()))
+
+    # 4b. the feasibility row at the stress corner (it replaces the 50 mA row)
+    mp = meas(stress, "pi", q)
+    if mp:
+        w = mp[f"win_{wkey}"]
+        b, e = below_ms(w), recovered(w)
+        feas = b >= min_below and e is not None and e <= rec_by
+        s0 = w[0][0] if w else None
+        mid = (s0 + e) / 2 if w and e is not None else None
+        ctl = round(mid) if mid is not None else None
+        out["feasibility"] = {"label": label, "case": stress, "window_ms": w, "below_ms": b, "recovered_ms": e,
+                              "pass": feas, "p3v3_min": mp["p3v3_min"], "vsys_min": mp["vsys_min"],
+                              "p3v3_min_after_blanking": mp["p3v3_min_after_blanking"],
+                              # P4's negative controls are derived from the measured window (plan section 2)
+                              "window_midpoint_ms": mid, "midpoint_control_ms": ctl,
+                              "midpoint_control_inside_by_us": None if ctl is None else
+                              min(ctl - s0, e - ctl) * 1e3,
+                              "blanking_5ms_ends_after_window": None if e is None else e < 5.0}
+        gate(f"{label}: feasibility at V28 +5 % ({thr} V): +3V3 below {thr} V for at least {min_below} ms, recovered at "
+             f"least {w1c['recover_before_blanking_end_ms']:g} ms before the {blank_ms:g} ms blanking ends", feas,
+             f"windows {w} ms after LED_PWR_EN (total {b:.3f} ms, recovered at {e} ms, limit {rec_by:g} ms)")
+        print(f"pi-spike: report: {label}: +3V3 min {mp['p3v3_min']:.4f} V, VSYS min {mp['vsys_min']:.4f} V, +3V3 min "
+              f"after the blanking {mp['p3v3_min_after_blanking']:.4f} V; window midpoint {mid} ms, so the "
+              f"window-midpoint control is {ctl} ms ({out['feasibility']['midpoint_control_inside_by_us']} us inside "
+              f"the window); 5 ms blanking ends after the window: {out['feasibility']['blanking_5ms_ends_after_window']}")
+    else:
+        gate(f"{label}: feasibility", False, "the static-load run failed")
+
+    # 4c. the margin check at the suite's budget: no POFWARN at the +5 % corner (gated, RT9080 worst,
+    # nominal +3V3 capacitance); +3V3 min and its margin reported at nominal and halved capacitance
+    out["margin"] = {"label": f"W1 margin check: {w1c['margin_load_mA']} mA (the suite's budget)", "case": margin}
+    for v, cap in (("pi", "nominal"), ("pi_c3half", "halved (DC-bias stand-in)"), ("pi_typ", "nominal, RT9080 typ"),
+                   ("pi_no3v3c", "none (as the suite's ideal LDO)"), ("pi_lswfix", "nominal, S1-fixed TPS22917")):
+        mv = meas(margin, v, q)
+        if mv is None:
+            out["margin"][v] = None
+            if v in ("pi", "pi_c3half"):
+                gate(f"W1 margin check ({w1c['margin_load_mA']} mA, +3V3 capacitance {cap}) measured", False,
+                     f"run {rid(margin, v, q)}: {(runs.get(rid(margin, v, q)) or {}).get('status', 'not run')}")
+            continue
+        w = mv[f"win_{wkey}"]
+        rep = {"capacitance": cap, "p3v3_min": mv["p3v3_min"], "margin_mV": (mv["p3v3_min"] - thr) * 1e3,
+               f"win_{wkey}": w, "below_ms": below_ms(w),
+               "inside_blanking": all(iv[1] is not None and iv[1] <= blank_ms for iv in w)}
+        out["margin"][v] = rep
+        if v == "pi":
+            gate(f"W1 margin check: {w1c['margin_load_mA']} mA (the suite's budget), RT9080 worst, nominal +3V3 "
+                 f"capacitance: no POFWARN at the +5 % corner (+3V3 never below {thr} V after LED_PWR_EN)", not w,
+                 f"+3V3 min {mv['p3v3_min']:.4f} V, margin {rep['margin_mV']:+.1f} mV")
+        print(f"pi-spike: report: W1 margin check at {w1c['margin_load_mA']} mA, +3V3 capacitance {cap}: +3V3 min "
+              f"{mv['p3v3_min']:.4f} V, margin {rep['margin_mV']:+.1f} mV to {thr} V, below for {rep['below_ms']:.3f} ms "
+              f"{w}{' (inside the blanking)' if w and rep['inside_blanking'] else ''}")
+
+    # 4d. the stress corner against the replica at the same load (the replica is near its cliff there)
+    for variant in ("pi", "pi_typ"):
+        mp2, ms2 = meas(stress, variant, q), meas(stress, rep_var, rep_opts)
+        if mp2 and ms2:
+            diff = difference(stress, mp2, ms2)
+            out["stress_corner"][variant].update(
+                {"difference_vs_replica": diff, "tolerance_by_rule": propose(diff),
+                 "replica": {"vsys_min": ms2["vsys_min"], "p3v3_min": ms2["p3v3_min"],
+                             f"win_{wkey}": ms2[f"win_{wkey}"]}})
+            print(f"pi-spike: report: {label}, {variant} vs the replica at the same load: {fmt(diff)}; replica "
+                  f"window {ms2[f'win_{wkey}']}")
+
+    # ---- 5. the load sweep (report; P1 gates it): no crossing, margin, stress, collapse ----------------
     out["sweep"] = {}
-    for case in ("w1_l30", "w1_l40", "w1", "w1_l60"):
+    for case in ("w1_l30", "w1_l40", margin, stress, "w1_l60"):
         row = {}
         for variant, opts in (("pi", q), (rep_var, rep_opts)):
             m = meas(case, variant, opts)
             if m is None:
                 row[variant] = None
                 continue
-            row[variant] = {"vsys_min": m["vsys_min"], "p3v3_min": m["p3v3_min"],
+            w = m[f"win_{wkey}"]
+            verdict = ("no crossing" if not w else "collapse" if recovered(w) is None else "cross and recover")
+            row[variant] = {"vsys_min": m["vsys_min"], "p3v3_min": m["p3v3_min"], "verdict": verdict,
                             "win_v28p5": m["win_v28p5"], "win_pof_suite": m["win_pof_suite"], "win_v28": m["win_v28"]}
         out["sweep"][case] = row
-        print(f"pi-spike: sweep {case}: {json.dumps(row)}")
-
-    # ---- 6. Q1's stress-corner data (report; the approver's choice, plan section 10) ------------------
-    out["stress_corner"] = {}
-    for variant in ("pi", "pi_typ"):
-        rows, smallest = {}, None
-        for ma in [50] + list(range(51, 60)) + [60]:
-            case = "w1" if ma == 50 else f"w1_l{ma}"
-            m = meas(case, variant, q)
-            if m is None:
-                rows[ma] = {"status": (runs.get(rid(case, variant, q)) or {}).get("status", "not run")}
-                continue
-            w = m["win_v28p5"]
-            below = sum((iv[1] if iv[1] is not None else float("inf")) - iv[0] for iv in w)
-            _, e = _first_last(w)
-            feas = below >= 0.5 and e is not None and e <= FW_POF_BLANK / 1e12 - 2.0
-            rows[ma] = {"p3v3_min": m["p3v3_min"], "vsys_min": m["vsys_min"], "win_v28p5": w,
-                        "below_ms": below if below != float("inf") else None, "feasible": feas}
-            if feas and smallest is None:
-                smallest = ma
-        out["stress_corner"][variant] = {"rows": rows, "smallest_feasible_mA": smallest}
-        print(f"pi-spike: report: Q1 stress corner, {variant} (RT9080 {VARIANTS[variant][2]}): smallest whole mA "
-              f"with +3V3 below 2.94 V for >= 0.5 ms and recovered by 8 ms: {smallest}")
-        if smallest is not None:
-            case = "w1" if smallest == 50 else f"w1_l{smallest}"
-            mp, ms = meas(case, variant, q), meas(case, rep_var, rep_opts)
-            if mp and ms:
-                diff = difference(case, mp, ms)
-                out["stress_corner"][variant]["difference_vs_replica"] = diff
-                out["stress_corner"][variant]["replica"] = {"vsys_min": ms["vsys_min"], "p3v3_min": ms["p3v3_min"],
-                                                            "win_v28p5": ms["win_v28p5"]}
-                out["stress_corner"][variant]["tolerance_by_rule"] = propose(diff)
-                print(f"pi-spike: report: Q1 stress corner, {variant} at {smallest} mA vs the replica at the same load: "
-                      f"{fmt(diff)}; replica window {ms['win_v28p5']}")
+        print(f"pi-spike: sweep {case}{' (' + label + ')' if case == stress else ''}: "
+              + "; ".join(f"{v}: {r['verdict']}, +3V3 min {r['p3v3_min']:.4f} V" if r else f"{v}: failed"
+                          for v, r in row.items()))
 
     out["pass"] = ok
     with open(a.summary, "w") as f:
