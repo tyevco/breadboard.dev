@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (2026-11-15; see "Approver decisions
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
-  (see "Review notes").
+  (see "Review notes"). Amendment 1: the `part.toml` keys landed in
+  milestone S.
 - **Part of:** the Phase 2 plan, milestones E2 and E3. Its `part.toml`
   keys (`[[document]]`, `claims`, `upstream_license`) land in milestone S,
   the schema epoch.
@@ -433,3 +434,21 @@ recommended answers (plan section 10). For this ADR:
   on floating URLs (D3).
 
 **Not adopted:** none.
+
+## Amendment 1 (2026-11-15): the keys landed (milestone S)
+
+Milestone S landed this ADR's `part.toml` keys, accepted and inert. ADR-011
+Amendment 1 is the record, and `spec/package.md` section 2 states them.
+
+- **`[[document]]`** (D3) takes `id` (lower case `[a-z0-9._-]`, unique),
+  `sha256` (64 lower-case hex digits; required: the document's identity),
+  and optional `title`, `revision`, `url` and `fetched_by`
+  (`agent:<who>` or `user:<who>`).
+- **`[claims] file`** (D4) names the package's `claims.toml`. It is a table
+  key, as `[pins] file` and `[tests] dir` are. This build checks only that
+  the file exists. `bb-claims/0` and its checker are E2's.
+- **`upstream_license`** (ADR-011 D7) goes in a provenance block (a view's
+  or the package's) and must be an SPDX expression.
+
+None of them changes a deck or an output. D7's rules on `reviewed_by` and
+on `refs` resolving to documents are E2's and are not applied here.

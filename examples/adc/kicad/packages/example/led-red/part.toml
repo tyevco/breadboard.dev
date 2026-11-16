@@ -3,7 +3,7 @@
 # of examples/adc (ADR-006 D1: a project's [packages] paths come before the
 # first-party directory). D1 names it with its bb:part field (ADR-007 D4
 # stage 2).
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "example/led-red"

@@ -1,5 +1,5 @@
 # st/stm32f103c8: the Phase 0 spike and feedback boards' MCU (ADR-006 D10).
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "st/stm32f103c8"

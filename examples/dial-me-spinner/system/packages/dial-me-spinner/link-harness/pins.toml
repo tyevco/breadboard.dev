@@ -1,4 +1,4 @@
-schema = "bb-pins/0"
+schema = "bb-pins/1"
 
 # The two ends of each of the 12 wires (ADR-007 Amendment 5): A<n> mates
 # [[connection]] a's pin n (main J1), B<n> mates b's pin n (base J3).

@@ -5,7 +5,9 @@
 #   - with a dial-me-spinner repository as $1 (or DMS_REPO), every file
 #     also equals `git show <commit>:<path>` byte for byte;
 #   - no file under kicad/ is missing from SOURCE;
-#   - every package file migrated from dial-me-spinner (a part.toml `origin`) has an entry.
+#   - every package file migrated from dial-me-spinner (a part.toml `origin`) has an entry;
+#     an entry may carry one recorded rename (rename=<old>:<new>, applied to the upstream
+#     bytes before the comparison; the schema epoch's view-name prefix, ADR-011 D11).
 # Usage: scripts/dms_source_check.sh [<dial-me-spinner repo>]
 set -euo pipefail
 
@@ -20,13 +22,24 @@ grep -q '^# reference   [0-9a-f]\{40\}$' "$SRC" || { echo "dms-source: no refere
 
 listed=$(mktemp)
 trap 'rm -f "$listed"' EXIT
-while read -r sha path origin; do
+while read -r sha path origin rename; do
   [[ -z ${sha:-} || $sha == \#* ]] && continue
   n=$((n + 1))
   echo "$path" >> "$listed"
   commit=${origin%%:*} src=${origin#*:}
   if [[ ! $sha =~ ^[0-9a-f]{64}$ || ! $commit =~ ^[0-9a-f]{40}$ || -z $src ]]; then
     echo "dms-source: malformed entry: $sha $path $origin" >&2; fail=1; continue
+  fi
+  # An optional recorded rename (rename=<old>:<new>, whole words): the
+  # package carries the file with that one change (the Phase 2 schema
+  # epoch's view-name prefix, ADR-011 D11), and the upstream bytes are
+  # compared after applying it.
+  sedexpr=
+  if [[ -n ${rename:-} ]]; then
+    if [[ ! $rename =~ ^rename=([A-Za-z0-9_]+):([A-Za-z0-9_]+)$ ]]; then
+      echo "dms-source: malformed rename: $path $rename" >&2; fail=1; continue
+    fi
+    sedexpr="s/\\b${BASH_REMATCH[1]}\\b/${BASH_REMATCH[2]}/g"
   fi
   if [[ ! -f $DIR/$path ]]; then
     echo "dms-source: $path missing" >&2; fail=1; continue
@@ -36,7 +49,7 @@ while read -r sha path origin; do
     echo "dms-source: $path sha256 $got, SOURCE says $sha" >&2; fail=1
   fi
   if [[ -n $REPO ]]; then
-    up=$(git -C "$REPO" show "$commit:$src" | sha256sum | cut -d' ' -f1)
+    up=$(git -C "$REPO" show "$commit:$src" | sed -E "${sedexpr:-}" | sha256sum | cut -d' ' -f1)
     if [[ $up != "$sha" ]]; then
       echo "dms-source: $path differs from $commit:$src ($up)" >&2; fail=1
     fi
@@ -52,7 +65,7 @@ done < <(find "$DIR/kicad" -type f | sort)
 # <path>"`) is vendored with a SOURCE entry of that commit and path (ADR-006 Amendment 5).
 while IFS= read -r o; do
   oc=${o%%:*} op=${o#*:}
-  if ! awk -v c="$oc" -v p="$op" '$1 !~ /^#/ && NF == 3 { split($3, a, ":"); if (index(a[1], c) == 1 && a[2] == p) f = 1 }
+  if ! awk -v c="$oc" -v p="$op" '$1 !~ /^#/ && (NF == 3 || (NF == 4 && $4 ~ /^rename=/)) { split($3, a, ":"); if (index(a[1], c) == 1 && a[2] == p) f = 1 }
        END { exit !f }' "$SRC"; then
     echo "dms-source: a package's origin dial-me-spinner@$o has no SOURCE entry" >&2; fail=1
   else

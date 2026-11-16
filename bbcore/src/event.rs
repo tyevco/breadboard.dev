@@ -72,14 +72,64 @@ pub enum Event {
         level: LogLevel,
         msg: String,
     },
-    /// Result of a check (emitted by tests / benches, not by the scheduler).
+    /// Result of a check (event stream version 2, ADR-010 D7): emitted by
+    /// the assertions of a bench or a test (milestone B2), never by the
+    /// scheduler itself. `value` and `limit` are integers in the base unit
+    /// `unit` (`uV`, `fs`, `nA`, `udegC` for µ°C, or `count`); `pass` is present
+    /// unless the outcome is `not_evaluable`, for version 1 consumers.
     Assert {
         t_fs: Time,
         name: String,
-        pass: bool,
+        outcome: AssertOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pass: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+        /// The lowest chosen rung over the instances on the nets the check
+        /// reads (ADR-009 D1).
+        rung: String,
         msg: String,
     },
+    /// A machine reset of a CPU engine (event stream version 2, ADR-009 D7;
+    /// milestone P5): `cause` is `bor`, `phase` is `enter`, `exit` or
+    /// `stop`; `ram` is `kept` on `exit`. It sorts like a `log` of its
+    /// engine.
+    Reset {
+        t_fs: Time,
+        source: String,
+        cause: String,
+        phase: ResetPhase,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ram: Option<String>,
+    },
 }
+
+/// An `assert` record's outcome (event stream version 2, ADR-010 D7).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssertOutcome {
+    Pass,
+    Fail,
+    NotEvaluable,
+}
+
+/// A `reset` record's phase (event stream version 2, ADR-009 D7).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetPhase {
+    Enter,
+    Exit,
+    Stop,
+}
+
+/// The event stream's schema version (`spec/event-stream.md`; version 2
+/// with the Phase 2 schema epoch). The stream carries no version field: a
+/// version 1 file is a version 2 file, since version 2 only adds records.
+pub const EVENT_STREAM_VERSION: u32 = 2;
 
 impl Event {
     /// The record's `t_fs`.
@@ -89,7 +139,8 @@ impl Event {
             | Event::PinEdge { t_fs, .. }
             | Event::NetSample { t_fs, .. }
             | Event::Log { t_fs, .. }
-            | Event::Assert { t_fs, .. } => *t_fs,
+            | Event::Assert { t_fs, .. }
+            | Event::Reset { t_fs, .. } => *t_fs,
         }
     }
 
@@ -179,5 +230,56 @@ mod tests {
             let ev = Event::from_line(line).unwrap();
             assert_eq!(serde_json::to_string(&ev).unwrap(), line);
         }
+    }
+
+    #[test]
+    fn version_2_records_have_the_documented_key_order() {
+        // ADR-010 D7 (the spec's example) and ADR-009 D7.
+        let a = Event::Assert {
+            t_fs: Time::from_fs(10_500_000_000_000_000),
+            name: "LED-DATA-V4".into(),
+            outcome: AssertOutcome::Pass,
+            pass: Some(true),
+            value: Some(2_971_511),
+            limit: Some(2_670_000),
+            unit: Some("uV".into()),
+            rung: "fast".into(),
+            msg: "VLED at P0.06 rise".into(),
+        };
+        let line = serde_json::to_string(&a).unwrap();
+        assert_eq!(
+            line,
+            r#"{"type":"assert","t_fs":10500000000000000,"name":"LED-DATA-V4","outcome":"pass","pass":true,"value":2971511,"limit":2670000,"unit":"uV","rung":"fast","msg":"VLED at P0.06 rise"}"#
+        );
+        assert_eq!(Event::from_line(&line).unwrap(), a);
+        let ne = Event::Assert {
+            t_fs: Time::ZERO,
+            name: "LSW-2".into(),
+            outcome: AssertOutcome::NotEvaluable,
+            pass: None,
+            value: None,
+            limit: None,
+            unit: None,
+            rung: "pi".into(),
+            msg: "deadline after the run's end".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&ne).unwrap(),
+            r#"{"type":"assert","t_fs":0,"name":"LSW-2","outcome":"not_evaluable","rung":"pi","msg":"deadline after the run's end"}"#
+        );
+        let r = Event::Reset {
+            t_fs: Time::from_us(10),
+            source: "renode".into(),
+            cause: "bor".into(),
+            phase: ResetPhase::Exit,
+            ram: Some("kept".into()),
+        };
+        let line = serde_json::to_string(&r).unwrap();
+        assert_eq!(
+            line,
+            r#"{"type":"reset","t_fs":10000000000,"source":"renode","cause":"bor","phase":"exit","ram":"kept"}"#
+        );
+        assert_eq!(Event::from_line(&line).unwrap(), r);
+        assert_eq!(EVENT_STREAM_VERSION, 2);
     }
 }

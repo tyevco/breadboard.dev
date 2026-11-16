@@ -5,7 +5,9 @@ decisions A-C; Amendment 1 for the KiCad value qualifiers; Amendment 3 for
 modules, the view conflict report and `bb pkg test --report`; Amendment 6
 for device parts in board files and device identities, approver decisions
 2026-11-14). ADR-015 D6 and D7 (Phase 2 H4, Amendment 3): platform hashes
-over the declared plugin sources, and the board-file package path.
+over the declared plugin sources, and the board-file package path. The
+Phase 2 schema epoch (milestone S; ADR-009 to ADR-013, ADR-011 Amendment 1):
+`bb-part/1`, `bb-pins/1` and `bb-lock/1`, the view-name rule and the relock.
 Implementation:
 the `bbpkg` crate (`bbpkg/src`), `bb pkg`, `bb open` and `bb run` (`cli/src`).
 JSON Schemas: `spec/schema/part.schema.json`, `pins.schema.json`,
@@ -18,7 +20,8 @@ pin models (`pins.toml`, `spec/pin-model.md`), its analog views (SPICE
 subcircuits with provenance), its behavioural layer (the CPU engine platform
 it runs on), and the test vectors that qualify its views. Packages are local
 directories; `bb.lock` pins their content. There is no registry, no signing
-and no `bb pkg publish` in Phase 1 (ADR-006 D8).
+and no `bb pkg publish` in Phase 1 (ADR-006 D8); `bb-lock/1` (section 9)
+holds the registry's keys, inert until milestone E1 (ADR-011).
 
 ## 1. Layout and search path
 
@@ -47,16 +50,23 @@ packages/                         first-party packages, in breadboard.dev
   directory through the path of the checkout it was built from, or
   `$BB_FIRST_PARTY_PACKAGES`.
 
-## 2. `part.toml` (`bb-part/0`)
+## 2. `part.toml` (`bb-part/1`)
 
 TOML is the authored form; `spec/schema/part.schema.json` is canonical.
-**Unknown keys are an error.** Keys reserved for `bb-part/1` are refused
-with "reserved for bb-part/1": top-level `layers`, `thermal`, `rtl`,
-`power`; `[pins] ibis`; `[behavioral] cpu`, `svd`; a view's `rails`.
+**Unknown keys are an error.** `bb-part/1` (the Phase 2 schema epoch) keeps
+every `bb-part/0` key and its meaning; a `bb-part/0` file is the previous
+major, read with the migration hint, and holds none of the `bb-part/1`
+keys (refused there with "new in bb-part/1"). Keys still reserved are
+refused with "reserved for a later milestone": top-level `layers`,
+`thermal`, `rtl`; `[pins] ibis`; `[behavioral] cpu`, `svd`. A reserved key
+becomes accepted within the major when an ADR gives it a meaning.
+
+**The epoch's keys are accepted, checked and inert** until their
+milestones use them: no `fast` deck, output or `run.json` depends on them.
 
 | Key | Required | Meaning |
 | --- | --- | --- |
-| `schema` | yes | `"bb-part/0"` |
+| `schema` | yes | `"bb-part/1"` |
 | `[part] id` | yes | the package id |
 | `[part] version` | yes | `MAJOR.MINOR.PATCH` (section 10 says when to bump) |
 | `[part] kind` | yes | `soc`, `module`, `power`, `analog_ic`, `logic`, `discrete`, `passive`, `connector`, `mechanical`, `testpoint` |
@@ -75,12 +85,17 @@ with "reserved for bb-part/1": top-level `layers`, `thermal`, `rtl`,
 | `[[analog]]` | no | analog views (section 3) |
 | `[provenance]` | no | the package-level default for views without their own block |
 | `[tests] dir` | no | the test vector directory (section 8) |
+| `[power]` | no | `bb-part/1` (ADR-009 D4, D5; used from milestones P2 and P3): `idd = { <state> = { typ, max, ref } }`, the supply current per CPU state (a state name is lower case `[a-z0-9_]`; `typ` and `max` currents, `max >= typ`; `ref` the source); `vdd_min` (a voltage, the operating minimum); `io_rail` (a `power_in`/`power_out` pin, the default `rail` of a `pi` `digital_out`) |
+| `[[document]]` | no | `bb-part/1` (ADR-012 D3; used from milestone E2): `id` (lower case `[a-z0-9._-]`, unique), `sha256` (64 lower-case hex digits: the document's identity), and optional `title`, `revision`, `url` (informative) and `fetched_by` (`agent:<who>` or `user:<who>`). The PDF is never committed |
+| `[claims] file` | no | `bb-part/1` (ADR-012 D4): the package's `claims.toml` (`bb-claims/0`, milestone E2; this build checks only that the file exists) |
 
 **Provenance** (`[analog.provenance]` or `[provenance]`): `source`
 (`datasheet`, `vendor_model`, `vendor_derived`, `measured`, `estimated`,
 `agent_generated`; required), `base`, `refs`, `deviations`,
 `not_modelled`, `origin` (`<repo>@<commit>:<path>` of a migrated file),
-`generated_by`, `reviewed_by`, and `confidence` (required), an enum, not a
+`generated_by`, `reviewed_by`, `upstream_license` (`bb-part/1`, ADR-011 D7:
+the SPDX licence of the upstream model a `vendor_derived` view comes from;
+publishing checks it, milestone E1), and `confidence` (required), an enum, not a
 number: `unchecked`; `self_checked` (passes its own vectors);
 `datasheet_checked` (the vectors are datasheet table values); `measured`
 (the vectors are bench measurements). A view whose source is `estimated`
@@ -110,16 +125,30 @@ Phase 1 implements three layers.
   | Key | Meaning |
   | --- | --- |
   | `name` | unique in the package |
-  | `kind` | `circuit` (default), `pin_load` or (`bb-part/1`) `switch` |
+  | `kind` | `circuit` (default), `pin_load`, or (`bb-part/1`) `switch` or `supply_load` |
   | `purpose` | text |
   | `fidelity` | the rungs it is valid for (`fast`, `pi`, `si`, `em`; at least one) |
   | `default_for` | the rungs it is the default for; a subset of `fidelity`; at most one view per package may name a rung |
   | `file` | the view file (SPICE), relative to the package (none for `switch`) |
   | `subckt` | the subcircuit the file defines (none for `switch`) |
-  | `ports` | `circuit`: the subckt's ports in order, as pin names; `pin_load`: typed ports (section 4); `switch`: its two contacts, `{ role = "pin", pin = "<name>" }` |
+  | `ports` | `circuit`: the subckt's ports in order, as pin names; `pin_load`: typed ports (section 4); `switch`: its two contacts, `{ role = "pin", pin = "<name>" }`; `supply_load`: `{ role = "pin", pin }` and `{ role = "state", state }` |
   | `params` | `{ name = "<value>" }` defaults, in the value grammar (section 6) |
+  | `rails` | `bb-part/1` (ADR-009): the view's supply ports, informative, for lint: each a port of the view on a `power_in`/`power_out` pin |
+  | `[[analog.corners]]` | `bb-part/1` (ADR-009 D8; a bench selects one from milestone P1): `name` (`typ`, `min`, `max`, `suite_compat` or `worst_<x>`, unique in the view), `params` (overrides of the view's own `params`, in the value grammar) and `ref` (required: where the corner's values come from) |
   | `[[analog.qualified]]` | `{ lattice, options }` pairs the view is qualified for, written by `bb pkg test --record` (section 8) |
   | `provenance` | section 2 |
+
+**The `supply_load` view kind** (`bb-part/1`, ADR-009 D4; it enters the
+deck from milestone P3). The current a part draws from its supply pins as
+a function of CPU state outputs: `I = Σ s_k · I_k`, each `s_k` the node of
+the state port `#<state>` (0..1), `I_k` from `[power] idd`. Its ports are
+the package's supply and ground pins (`{ role = "pin", pin }`, at least
+one) and its state ports (`{ role = "state", state = "<name>" }`, the
+node `#<name>`; each needs a `[power] idd.<name>` entry). It has a `file`
+and a `subckt` like a `circuit` view. It enters the deck at `pi` beside the
+instance's chosen view, so it is never valid at `fast` and never a rung's
+default (`default_for` is empty). In a test vector a state port is keyed
+by its state name.
 
 **The `switch` view kind** (`bb-part/1`, ADR-010 D2). A contact that a
 bench `[[action]] press` closes (`spec/project.md` section 3). `bb`
@@ -171,10 +200,25 @@ Definitions are emitted in sorted (kind, name) order, so the deck does not
 depend on the order of instances or views. Lint applies the same rule to a
 package's own views.
 
-## 4. `pins.toml` (`bb-pins/0`)
+**View names are unique by rule** (ADR-011 D11). Every top-level name a
+view defines (`.subckt`, `.model`, `.func`) starts with the package prefix,
+`<NS>_<NAME>_`: the package id upper-cased with `/`, `-` and `.` as `_`
+(`ti/tps22917` gives `TI_TPS22917_`; compared without case, as SPICE reads
+names). A view has no top-level `.param` (parameters go inside the
+subcircuit or on its line). There is no automatic renaming. `bb pkg lint`
+reports a violation as a warning, and with `--publish` (a package to be
+published, milestone E1) as an error. The first-party packages were
+renamed in the schema epoch (`bb_generic_resistor` became
+`GENERIC_RESISTOR_IDEAL`, `NRF_SAADC_SE` `NORDIC_NRF52840_QIAA_SAADC_SE`,
+`DRV8837_BRIDGE` and its `.model` `TI_DRV8837_BRIDGE` and
+`TI_DRV8837_BRIDGE_BODY`, `TPS22917_LSW_FIT` `TI_TPS22917_LSW_FIT`,
+`LSW_WS2812C` `WORLDSEMI_WS2812C_2020_LSW`), and `make packages` lints them
+with `--publish`.
+
+## 4. `pins.toml` (`bb-pins/1`)
 
 ```toml
-schema = "bb-pins/0"
+schema = "bb-pins/1"
 
 [[pin]]
 number = "15"                 # footprint or chip pin number, as KiCad reports it
@@ -191,7 +235,35 @@ vol = "0V"
 rise = "5ns"
 fall = "5ns"
 zout = "25"
+# rail = "VDD"                  # bb-pins/1: the rail a pi output drives from (milestone P2)
+# rhiz = "100Meg"               # bb-pins/1: its high-Z leakage (milestone P2)
+
+[[limits]]                      # bb-pins/1 (ADR-009 D3): absolute maximum ratings
+pin = "PA1"
+max = "VDD + 0.3V"              # <value>, <pin> + <value> or <pin> - <value>
+min = "-0.3V"
+source = "DS p. 34, Table 7"
 ```
+
+`bb-pins/1` (the Phase 2 schema epoch) keeps every `bb-pins/0` key and its
+meaning, and adds two things, accepted, checked and inert until their
+milestones use them (a `bb-pins/0` file, the previous major, has neither):
+
+- **`limits`** (ADR-009 D3; assertions from milestone P1): relational limits
+  for absolute maximum ratings, each a `pin` of the package, `min` and/or
+  `max`, and `source`. A bound is one supply-plus-offset term: a voltage
+  (`3.6V`), or a pin of the package plus or minus a voltage (`VDD + 0.7V`,
+  `VSS - 0.3V`; the spaces around the sign are part of the grammar). No
+  general expressions.
+- **the `digital_out` parameters `rail` and `rhiz`** (ADR-009 D5; the `pi`
+  glue of milestone P2), both optional: `rail`, a `power_in`/`power_out`
+  pin of the package (the default is `[power] io_rail`), and `rhiz`, the
+  high-Z leakage resistance (default 100 MΩ). At `fast` they are unused.
+  A binding may set them too.
+
+The pin model name `power` (`power{vmin, vmax, imax}`, ADR-009 D3) is
+reserved: refused as a pin's model or a `[defaults]` table until milestone
+P1 defines its parameters.
 
 - **Pins.** Every pin number of the footprint (or module pinmap) is listed
   exactly once. Pin names are unique, except that supply, ground and `nc`
@@ -206,7 +278,7 @@ zout = "25"
 
   | Model | Parameters (all required unless noted) |
   | --- | --- |
-  | `digital_out` | `voh`, `vol` (voltage or supply reference), `rise`, `fall` (time), `zout` (resistance) |
+  | `digital_out` | `voh`, `vol` (voltage or supply reference), `rise`, `fall` (time), `zout` (resistance); `bb-pins/1`: `rail` (a supply pin) and `rhiz` (resistance), both optional |
   | `digital_in` | `vih`, `vil` (voltage or supply reference), `cin` (capacitance) |
   | `adc_in` | `vref` (voltage or supply reference), `bits` (count); `model`, `load` (identifiers, ADR-008 D7; optional) |
 
@@ -468,12 +540,12 @@ other: an nRF model change re-locks no STM32 board.
 - **The legacy hash** (ADR-015 Amendment 3). Before Phase 2 H4 the hash
   covered every plugin source. A `bb-lock/0` entry that holds exactly that
   hash of the current files pins strictly more than the scoped hash does,
-  so `bb open` and `bb run` accept it as it stands, keep it (also with
-  `--update-lock`, which rewrites only entries that changed) and carry it
-  into `board.bbm` and `run.json`. An entry with any other content is a
-  mismatch, and `--update-lock` writes the scoped hash. The relock of every
-  committed lock to the scoped hash is the schema epoch's (Phase 2 plan,
-  milestone S).
+  so `bb run` accepts it as it stands from a `bb-lock/0` file and carries it
+  into `run.json`. `bb open` and `bb pkg migrate --lock` migrate a
+  `bb-lock/0` file: such an entry is written with the scoped hash (a
+  migration, not a change, so no `--update-lock` is needed). In a
+  `bb-lock/1` file only the scoped hash matches. The schema epoch
+  (milestone S) relocked every committed lock this way.
 
 Every `bbdev` device (ADR-006 D7) has an identity the same way: an id
 `<name>@<major>`, locked as `device:<id>`, and a content hash over the
@@ -485,23 +557,49 @@ files. `bb` embeds the table (`bbdev::DEVICES`):
 | --- | --- |
 | `dms/mechanism@1` | `bbdev/src/lib.rs`, `bbdev/src/engine.rs`, `bbdev/src/dms_mechanism.rs` (ADR-008 Amendment 9) |
 
-**`bb.lock`** (`bb-lock/0`), next to the project's `bb.toml`, or next to a
-hand-written `board.cir`:
+**`bb.lock`** (`bb-lock/1`, ADR-011 D5), next to the project's `bb.toml`,
+or next to a hand-written `board.cir`:
 
 ```toml
-schema = "bb-lock/0"
+schema = "bb-lock/1"
 
 [[package]]
 id = "st/stm32f103c8"
 version = "0.1.0"
-path = "../../packages/st/stm32f103c8"   # as found on the search path, relative to the project (informative; a mismatch warns)
-tree = "sha256:..."
+source = "path+../../packages/st/stm32f103c8"   # as found on the search path, relative to the lock (informative; a mismatch warns)
+tree = "sha256:..."                             # the integrity root
+
+# [[vendor_file]]                       # a file fetched at use, never redistributed (milestone E1)
+# url = "https://.../STM32F103.svd"
+# sha256 = "<64 hex digits>"
+# license = "LicenseRef-ST-EULA"
+# used_by = "st/stm32f103c8"
 
 [[platform]]
 id = "renode:stm32f103-offline@1"
 content = "sha256:..."
-renode = "1.17.0"
+engine = "renode"                       # engine-neutral: a Phase 3 backend is another value,
+engine_version = "1.17.0"               # not another lock major
 ```
+
+- `source` is `path+<path>` for a local package (every package this build
+  resolves) or `registry+<https:// or file:// url>` (milestone E1: read and
+  kept, never resolved by this build). Only a `path+` source is compared
+  with where the package resolved (the warning below); it is informative.
+- `[[vendor_file]]` entries (url, sha256, license, used_by; sorted by
+  `used_by`, then `url`) are read, checked and kept; nothing in this build
+  fetches one.
+- `engine` and `engine_version` come together. A device identity
+  (`device:<id>@<major>`) has neither.
+- **`bb-lock/0`**, the previous major, is read and migrated in memory:
+  `path = "<p>"` is `source = "path+<p>"`, `renode = "<v>"` is `engine =
+  "renode"`, `engine_version = "<v>"`. `bb run` reads it with the migration
+  hint; `bb open` rewrites it as `bb-lock/1` (also when nothing else
+  changed, so `bb open --check` fails on a `bb-lock/0` file), and so does
+  `bb pkg migrate --lock <bb.lock>...`. The migration writes a legacy
+  platform hash as the scoped one (above) and drops an entry for a Renode
+  platform this `bb` does not provide (an old platform major that no
+  package names any more, which has no scoped hash).
 
 Entries are sorted by id. Written by `bb open`:
 
@@ -517,9 +615,9 @@ platforms differ from its lock, or a board with packages and no lock, and
 never writes the lock.
 
 **A moved package warns** (ADR-015 D7). The tree hash decides acceptance,
-and the `path` stays informative. But `bb open` and `bb run` print a
+and the `path+` source stays informative. But `bb open` and `bb run` print a
 warning for every locked package that resolved somewhere other than its
-recorded `path` (relative to the lock's directory; the same directory
+recorded path (relative to the lock's directory; the same directory
 spelled differently does not count). The warning says what is at the
 recorded path:
 
@@ -545,14 +643,17 @@ Applies to `bb-part`, `bb-pins`, `bb-pkgtest`, `bb-lock`, `bb-project`,
 - `bb pkg migrate` rewrites a package (its `part.toml`, `pins.toml` and test
   vectors) in place to the current majors, mechanically. First-party
   packages are migrated in the same commit as the schema change. `bb pkg
-  migrate --bench <file>...` rewrites bench files (ADR-010 D1).
-- **Current majors** (the Phase 2 schema epoch, ADR-009..013, lands every
-  schema's next major in milestone S; milestone B1 carries its part of
-  it): `bb-part/1` (every `/0` key keeps its meaning; adds the `switch`
-  view kind, section 3; the other `bb-part/1` keys stay reserved until S)
-  and `bb-bench/1` (ADR-010 D1; `spec/project.md` section 3). Both
-  migrations from `/0` rewrite the `schema` line only. Every other schema
-  is at major 0.
+  migrate --bench`, `--project`, `--board` and `--lock <file>...` rewrite
+  bench files (ADR-010 D1), project files, `board.bbm` files (ADR-013; `bb
+  open` rewrites those whole too) and lockfiles (ADR-011 D5, section 9).
+- **Current majors** (the Phase 2 schema epoch, milestone S, ADR-009 to
+  ADR-013): `bb-part/1` and `bb-pins/1` (sections 2 to 4), `bb-lock/1`
+  (section 9), `bb-project/1`, `bb-bench/1` and `bb-board/1`
+  (`spec/project.md`, `spec/board-bbm.md`). Every `/0` key of `bb-part`,
+  `bb-pins`, `bb-bench`, `bb-project` and `bb-board` keeps its meaning,
+  so their migrations rewrite the `schema` line (member) only; `bb-lock`'s
+  renames two keys (section 9). `bb-pkgtest` stays at major 0. Every
+  committed file is at its current major.
 - **Package semver:** a change to a view's results (a vector's measured
   value) is at least a minor bump; a changed port list, pin list or
   parameter-set name is a major bump; a provenance-only edit is a patch.
@@ -597,9 +698,20 @@ Errors:
   three-argument `min()` segfaults libngspice 42; in numparam it is
   silently `min(a, c)`. `bb run` and `bb pkg test` run the same check on
   the whole deck before ngspice reads it;
-- test vectors parse and name existing views and their ports.
+- test vectors parse and name existing views and their ports;
+- the schema epoch's keys (`bb-part/1`, `bb-pins/1`): `[power] io_rail` and
+  a `digital_out` set's `rail` name `power_in`/`power_out` pins; an idd
+  `max` is not below its `typ`; a `supply_load` view is not valid at
+  `fast`, is no rung's default, has a supply pin port, its pin ports are
+  supply or ground pins and each state port has a `[power] idd` entry; only
+  a `supply_load` view has state ports; `rails` name the view's ports on
+  supply pins; a corner's `params` override the view's own and parse, its
+  name is unique and its `ref` is not empty; `[claims] file` exists; an
+  `upstream_license` is an SPDX expression; a limit's pin, and its bound's
+  pin, are pins of the package;
+- with `--publish`, the view-name rule (section 3; ADR-011 D11).
 
-Warnings: a previous-major file (the migration hint), a parameter set for a
+Warnings: the view-name rule without `--publish`, a previous-major file (the migration hint), a parameter set for a
 model no pin takes, a view without test vectors, a module whose chip
 package was not found, and a **conflict**: one parameter that several views
 of the package carry with different defaults (ADR-006 D9 rule 2; reported,

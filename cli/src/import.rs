@@ -1444,12 +1444,12 @@ pub fn import(
     for (id, pkg) in &used {
         let dir =
             std::fs::canonicalize(&pkg.dir).map_err(|e| format!("{}: {e}", pkg.dir.display()))?;
-        locked_packages.push(LockedPackage {
-            id: id.clone(),
-            version: pkg.part.version.clone(),
-            path: lock::relative_path(&proj_abs, &dir),
-            tree: pk.tree(id)?,
-        });
+        locked_packages.push(LockedPackage::at_path(
+            id,
+            &pkg.part.version,
+            &lock::relative_path(&proj_abs, &dir),
+            &pk.tree(id)?,
+        ));
     }
 
     board.sort();

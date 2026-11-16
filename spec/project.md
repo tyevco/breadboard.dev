@@ -8,7 +8,7 @@ Phase 2 R1, ADR-013 D1 and Amendment 1, with ADR-014 D4's project rule).
 Implementation:
 `cli/src/project.rs`, `names.rs`, `import.rs`, `elab.rs`, `open.rs`,
 `flash.rs`, `probe_cmd.rs`. JSON Schemas: `spec/schema/project.schema.json`
-(`bb-project/1`) and `spec/schema/bench.schema.json` (`bb-bench/0`); the TOML
+(`bb-project/1`) and `spec/schema/bench.schema.json` (`bb-bench/1` and `/0`); the TOML
 files are converted to JSON as they are and validated (`make packages`).
 **Changing this file requires an ADR.**
 
@@ -20,9 +20,27 @@ D5).
 
 ## 1. `bb.toml` (`bb-project/1`)
 
-`bb-project/1` adds `[[device]]` (ADR-013 D1). A `bb-project/0` file is the
+`bb-project/1` adds `[[device]]` (ADR-013 D1), and with the Phase 2 schema
+epoch (milestone S) `simulate` as a list (ADR-013 D2), `[run]` (ADR-013 D3)
+and `[registries.<name>]` (ADR-011 D4). A `bb-project/0` file is the
 previous major (ADR-006 D11): `bb` reads it with a migration hint, and its
-migration is the schema line only; `[[device]]` in it is an error.
+migration is the schema line only (`bb pkg migrate --project`);
+`[[device]]` and `[registries]` in it are errors.
+
+- **`simulate`** is a board id, or a list of them. A list of one board
+  means that board. A list of several (a single-MCU system run) is
+  milestone R2's and refused until then, naming the milestone.
+- **`[run]`** (`cpu = "none"`, a run without a CPU target, and `lattice`,
+  the engine-neutral name of the grant lattice) is milestone R3's, which is
+  not in this build: it is refused, naming the milestone, so a project that
+  names it never runs other than as written.
+- **`[registries.<name>]`** (`url`, `https://` or `file://`; `key`, the
+  registry's minisign public key; `namespaces`, at least one, each routed
+  to one registry only) is read and checked and is inert: nothing in this
+  build fetches from a registry (milestone E1).
+- A binding (`[[bind]]`, `[[device.bind]]`) may also set the `bb-pins/1`
+  `digital_out` parameters `rail` and `rhiz` (`spec/package.md` section 4),
+  unused at `fast`.
 
 ```toml
 schema = "bb-project/1"
@@ -432,7 +450,12 @@ its sha256 is in `run.json`.
   must match `[targets]`. The bench's option set must be one every
   in-scope view is lattice-qualified for at the run's lattice (ADR-006
   D6), unless `--allow-unqualified` names the view. Writes the Phase 0
-  outputs, `deck.cir` and `run.json`.
+  outputs, `deck.cir` and `run.json`. `--elaborate-only` stops before any
+  engine starts: a project writes `deck.cir` and `run.json`; a board file
+  (`--netlist`, milestone S) writes `deck.cir` as the analog engine's
+  netlist (the board's SPICE, its package views and the glue). `bb run`
+  reads a `bb-lock/0` lock with the migration hint (`spec/package.md`
+  section 9).
 - **`bb probe [--list] [net:<name>]… [--project <dir>]`.** Lists every net
   (display name, board, SPICE name, leaf name) and alias, or adds probes
   to `[probes] nets` after resolving them.

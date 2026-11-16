@@ -2,7 +2,7 @@
 # netlist at 6854d25 gives them for U40/U41 (KiCad symbol dial_spinner:DRV8837DSGR, footprint
 # Texas_DSG0008A: 1 VM, 2 OUT1, 3 OUT2, 4 GND, 5 IN2, 6 IN1, 7 nSLEEP, 8 VCC, 9 the exposed pad, GND).
 # No pin is bound to a co-simulation engine: the part is an analog view only.
-schema = "bb-pins/0"
+schema = "bb-pins/1"
 
 [[pin]]
 number = "1"

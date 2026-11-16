@@ -5,23 +5,27 @@
 //! previous major prints a migration hint; a newer major is refused with
 //! "upgrade bb". `bb pkg migrate` rewrites a package to the current major.
 //!
-//! The Phase 2 schema epoch (milestone S, ADR-009..013) moves every schema
-//! to its next major in one commit. Milestones B1 (ADR-010) and R1
-//! (ADR-013) develop against the epoch's draft and carry their pieces of it
-//! here:
+//! The Phase 2 schema epoch (milestone S, ADR-009..013) moves every
+//! authored schema to its next major (milestones B1 and R1 carried their
+//! drafts of it):
 //!
-//! - `bb-bench/1` (ADR-010 D1): every `/0` key keeps its meaning, so the
-//!   migration rewrites the `schema` line only, and a migrated bench builds
-//!   a byte-identical deck (gate G1);
-//! - `bb-part/1`, for the `switch` view kind (ADR-010 D2): every `/0` key
-//!   keeps its meaning, so the migration rewrites the `schema` line only.
-//!   The other `bb-part/1` keys (ADR-009, ADR-012) stay reserved until S;
-//! - `bb-project/1` and `bb-board/1` (ADR-013 D1, R1: `[[device]]` and
-//!   virtual instances): their `/0` files are read and migrated, the schema
-//!   line only.
+//! - `bb-part/1` (ADR-009 `power`, view `rails`, the `supply_load` view
+//!   kind, `[[analog.corners]]`; ADR-010 the `switch` view kind; ADR-012
+//!   `[[document]]`, `[claims]`, `upstream_license`) and `bb-pins/1`
+//!   (ADR-009 `limits`, the `digital_out` parameters `rail` and `rhiz`):
+//!   every `/0` key keeps its meaning, so the migration rewrites the
+//!   `schema` line only;
+//! - `bb-bench/1` (ADR-010 D1): the same, so a migrated bench builds a
+//!   byte-identical deck (gate G1);
+//! - `bb-project/1` and `bb-board/1` (ADR-013): the schema line (member)
+//!   only;
+//! - `bb-lock/1` (ADR-011 D5): `path` becomes `source = "path+<path>"` and
+//!   `renode` becomes `engine`/`engine_version` (`lock::migrate_text_0_to_1`);
+//!   `bb` also writes a legacy platform hash as the scoped one (ADR-015
+//!   Amendment 3).
 //!
-//! The machinery is also exercised by a synthetic bump in the tests (gate
-//! G9 of ADR-006).
+//! `bb-pkgtest` stays at major 0 (no Phase 2 key). The machinery is also
+//! exercised by a synthetic bump in the tests (gate G9 of ADR-006).
 
 use std::fmt;
 
@@ -88,9 +92,20 @@ pub enum Version {
 }
 
 /// `bb-part/0` -> `bb-part/1`: the `schema` line (every `/0` key keeps its
-/// meaning; `/1` adds the `switch` view kind, ADR-010 D2).
+/// meaning; `/1` adds keys only, `spec/package.md` section 2).
 fn part_0_to_1(t: &str) -> Result<String, String> {
     rewrite_schema_line(t, "bb-part/1")
+}
+
+/// `bb-pins/0` -> `bb-pins/1`: the `schema` line (`/1` adds `limits`, `rail`
+/// and `rhiz`, ADR-009 D3, D5).
+fn pins_0_to_1(t: &str) -> Result<String, String> {
+    rewrite_schema_line(t, "bb-pins/1")
+}
+
+/// `bb-lock/0` -> `bb-lock/1` (ADR-011 D5).
+fn lock_0_to_1(t: &str) -> Result<String, String> {
+    crate::lock::migrate_text_0_to_1(t)
 }
 
 /// `bb-bench/0` -> `bb-bench/1`: the `schema` line (ADR-010 D1: every `/0`
@@ -100,9 +115,9 @@ fn bench_0_to_1(t: &str) -> Result<String, String> {
 }
 
 impl Registry {
-    /// The registry of this build: `bb-part` and `bb-bench` at major 1
-    /// (ADR-010, the B1 draft of the schema epoch), `bb-project` and
-    /// `bb-board` at major 1 (ADR-013, R1), every other schema at major 0.
+    /// The registry of this build (the Phase 2 schema epoch): `bb-part`,
+    /// `bb-pins`, `bb-lock`, `bb-project`, `bb-bench` and `bb-board` at
+    /// major 1, `bb-pkgtest` at major 0.
     pub fn current() -> Registry {
         fn project_0_to_1(t: &str) -> Result<String, String> {
             rewrite_schema_line(t, "bb-project/1")
@@ -121,6 +136,8 @@ impl Registry {
                 .iter()
                 .map(|s| match *s {
                     "bb-part" => (*s, 1, vec![part_0_to_1 as Migration]),
+                    "bb-pins" => (*s, 1, vec![pins_0_to_1 as Migration]),
+                    "bb-lock" => (*s, 1, vec![lock_0_to_1 as Migration]),
                     "bb-bench" => (*s, 1, vec![bench_0_to_1 as Migration]),
                     "bb-project" => (*s, 1, vec![project_0_to_1 as Migration]),
                     "bb-board" => (*s, 1, vec![board_0_to_1 as Migration]),
@@ -227,17 +244,17 @@ pub fn rewrite_schema_line(text: &str, new_id: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// A synthetic bump: bb-pins/1 renames nothing but changes the id (the
+    /// A synthetic bump: bb-pkgtest/1 renames nothing but changes the id (the
     /// shape of a migration, ADR-006 D11, gate G9).
     fn bumped() -> Registry {
-        fn pins_0_to_1(t: &str) -> Result<String, String> {
-            rewrite_schema_line(t, "bb-pins/1")
+        fn pkgtest_0_to_1(t: &str) -> Result<String, String> {
+            rewrite_schema_line(t, "bb-pkgtest/1")
         }
         let mut r = Registry::current();
         for e in &mut r.entries {
-            if e.0 == "bb-pins" {
+            if e.0 == "bb-pkgtest" {
                 e.1 = 1;
-                e.2 = vec![pins_0_to_1 as Migration];
+                e.2 = vec![pkgtest_0_to_1 as Migration];
             }
         }
         r
@@ -246,17 +263,21 @@ mod tests {
     #[test]
     fn current_build_reads_its_majors() {
         let r = Registry::current();
-        assert_eq!(r.check("bb-pins", "bb-pins/0"), Ok(Version::Current));
-        let e = r.check("bb-pins", "bb-pins/1").unwrap_err();
+        assert_eq!(r.check("bb-pkgtest", "bb-pkgtest/0"), Ok(Version::Current));
+        let e = r.check("bb-pkgtest", "bb-pkgtest/1").unwrap_err();
         assert!(e.contains("upgrade bb"), "{e}");
-        assert!(r.check("bb-pins", "bb-part/0").is_err());
-        assert!(r.check("bb-pins", "bb-pins").is_err());
-        assert!(r.check("bb-pins", "bb-pins/01").is_err());
-        assert_eq!(r.migrate("bb-pins", "bb-pins/0", "x"), Ok(None));
-        // B1's draft of the schema epoch (ADR-010 D1, D2): bb-part/1 and
-        // bb-bench/1 are current, their /0 is the previous major and
-        // migrates by its schema line.
-        for (name, now) in [("bb-part", "bb-part/1"), ("bb-bench", "bb-bench/1")] {
+        assert!(r.check("bb-pkgtest", "bb-part/0").is_err());
+        assert!(r.check("bb-pkgtest", "bb-pkgtest").is_err());
+        assert!(r.check("bb-pkgtest", "bb-pkgtest/01").is_err());
+        assert_eq!(r.migrate("bb-pkgtest", "bb-pkgtest/0", "x"), Ok(None));
+        // The schema epoch (milestone S): every authored schema but
+        // bb-pkgtest at major 1; their /0 is the previous major and migrates
+        // by its schema line (bb-lock by its own rewrite, below).
+        for (name, now) in [
+            ("bb-part", "bb-part/1"),
+            ("bb-pins", "bb-pins/1"),
+            ("bb-bench", "bb-bench/1"),
+        ] {
             assert_eq!(r.current_id(name), now);
             assert_eq!(r.check(name, now), Ok(Version::Current));
             let old = now.replace("/1", "/0");
@@ -301,21 +322,41 @@ mod tests {
     }
 
     #[test]
+    fn lock_is_at_major_1() {
+        // ADR-011 D5: bb-lock/0 is read and migrated by its own rewrite.
+        let r = Registry::current();
+        assert_eq!(r.current_id("bb-lock"), "bb-lock/1");
+        let v0 = format!(
+            "schema = \"bb-lock/0\"\n\n[[package]]\nid = \"a/b\"\nversion = \"0.1.0\"\npath = \"p\"\ntree = \"sha256:{}\"\n",
+            "0".repeat(64)
+        );
+        let m = r.migrate("bb-lock", "bb-lock/0", &v0).unwrap().unwrap();
+        assert!(
+            m.contains("schema = \"bb-lock/1\"") && m.contains("source = \"path+p\""),
+            "{m}"
+        );
+        assert_eq!(r.migrate("bb-lock", "bb-lock/1", &m), Ok(None));
+    }
+
+    #[test]
     fn synthetic_bump_reads_previous_and_migrates() {
         let r = bumped();
-        assert_eq!(r.current_id("bb-pins"), "bb-pins/1");
+        assert_eq!(r.current_id("bb-pkgtest"), "bb-pkgtest/1");
         assert!(matches!(
-            r.check("bb-pins", "bb-pins/0"),
+            r.check("bb-pkgtest", "bb-pkgtest/0"),
             Ok(Version::Previous { .. })
         ));
-        assert_eq!(r.check("bb-pins", "bb-pins/1"), Ok(Version::Current));
+        assert_eq!(r.check("bb-pkgtest", "bb-pkgtest/1"), Ok(Version::Current));
         assert!(r
-            .check("bb-pins", "bb-pins/2")
+            .check("bb-pkgtest", "bb-pkgtest/2")
             .unwrap_err()
             .contains("upgrade bb"));
-        let text = "# c\nschema = \"bb-pins/0\"   # keep?\n[[pin]]\nnumber = \"1\"\n";
-        let m = r.migrate("bb-pins", "bb-pins/0", text).unwrap().unwrap();
-        assert_eq!(m, "# c\nschema = \"bb-pins/1\"\n[[pin]]\nnumber = \"1\"\n");
-        assert_eq!(r.migrate("bb-pins", "bb-pins/1", &m), Ok(None));
+        let text = "# c\nschema = \"bb-pkgtest/0\"   # keep?\nview = \"v\"\n";
+        let m = r
+            .migrate("bb-pkgtest", "bb-pkgtest/0", text)
+            .unwrap()
+            .unwrap();
+        assert_eq!(m, "# c\nschema = \"bb-pkgtest/1\"\nview = \"v\"\n");
+        assert_eq!(r.migrate("bb-pkgtest", "bb-pkgtest/1", &m), Ok(None));
     }
 }

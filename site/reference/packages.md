@@ -33,11 +33,11 @@ The first-party packages today: `generic/resistor`, `generic/capacitor`,
 `generic/inductor`, `st/stm32f103c8`, `st/stm32f072rb`, `nordic/nrf52840-qiaa`,
 `raytac/mdbt50q-u1mv2` (a module), `ti/tps22917` and `worldsemi/ws2812c-2020`.
 
-## `part.toml` (`bb-part/0`)
+## `part.toml` (`bb-part/1`)
 
 | Key | Required | Meaning |
 | --- | --- | --- |
-| `schema` | yes | `"bb-part/0"` |
+| `schema` | yes | `"bb-part/1"` (`bb-part/0`, the previous major, is still read) |
 | `[part] id`, `version` | yes | The package id and `MAJOR.MINOR.PATCH`. |
 | `[part] kind` | yes | `soc`, `module`, `power`, `analog_ic`, `logic`, `discrete`, `passive`, `connector`, `mechanical`, `testpoint` |
 | `[part] mpn`, `mpn_patterns`, `lcsc` | no | Keys for resolving a board's parts to this package. |
@@ -51,8 +51,14 @@ The first-party packages today: `generic/resistor`, `generic/capacitor`,
 | `[provenance]` | no | The default provenance for views without their own. |
 | `[tests] dir` | no | The test-vector directory. |
 
-Unknown keys are an error. Some keys are reserved for `bb-part/1` and refused
-with a message saying so.
+Unknown keys are an error. Some keys are reserved for later milestones and
+refused with a message saying so. `bb-part/1` (the Phase 2 schema epoch) also
+accepts `[power]`, a view's `rails` and `[[analog.corners]]`, the `switch`
+and `supply_load` view kinds, `[[document]]`, `[claims]` and
+`upstream_license`; most of them take effect in later milestones (see the
+spec). Every top-level name a view defines starts with the package prefix
+(`TI_TPS22917_LSW_FIT` in `ti/tps22917`): `bb pkg lint` warns otherwise, and
+`bb pkg lint --publish` refuses it.
 
 ### Layers
 
@@ -72,10 +78,10 @@ A view file defines and never instantiates: only comments, `.subckt` blocks,
 inlined into one deck; byte-identical definitions of a name are emitted once,
 and different definitions of one name are an error.
 
-## `pins.toml` (`bb-pins/0`)
+## `pins.toml` (`bb-pins/1`)
 
 ```toml
-schema = "bb-pins/0"
+schema = "bb-pins/1"
 
 [[pin]]
 number = "15"                 # footprint or chip pin number, as KiCad reports it

@@ -32,7 +32,7 @@
 # UARTE (ADR-008 D8): the UARTE PSEL.TXD/RXD pin selects are placeholders in Renode, so a UART gives no
 # pin edge on its TX or RX pin (nothing to bind); its output reaches events.jsonl only as the
 # `uart<n>: <line>` log records of D8.
-schema = "bb-pins/0"
+schema = "bb-pins/1"
 
 [[pin]]
 number = "A8"

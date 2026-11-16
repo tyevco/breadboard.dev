@@ -34,6 +34,11 @@ impl<'a> Obj<'a> {
         self.t.contains_key(key)
     }
 
+    /// The table's keys, in the table's (sorted) order.
+    pub fn keys(&self) -> Vec<String> {
+        self.t.keys().cloned().collect()
+    }
+
     pub fn get(&mut self, key: &str) -> Option<&'a Value> {
         let (k, v) = self.t.get_key_value(key)?;
         self.used.insert(k.as_str());

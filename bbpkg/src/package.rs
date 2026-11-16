@@ -62,8 +62,123 @@ pub const RUNGS: &[&str] = &["fast", "pi", "si", "em"];
 /// (ADR-006 D9, approver decision A).
 pub const LOCAL_ONLY: &str = "LicenseRef-local-only";
 
-/// Reserved keys of bb-part/1 (D11).
-pub const RESERVED_TOP: &[&str] = &["layers", "thermal", "rtl", "power"];
+/// Top-level keys still reserved in bb-part/1 (ADR-006 D11): refused until
+/// an ADR gives them a meaning, when they become accepted within the major.
+pub const RESERVED_TOP: &[&str] = &["layers", "thermal", "rtl"];
+
+/// What a reserved key is reserved for (the refusal's message).
+pub const RESERVED_FOR: &str = "a later milestone (a reserved key of bb-part/1, ADR-006 D11)";
+
+/// The view kinds: `circuit`, `pin_load`, and in bb-part/1 `switch`
+/// (ADR-010 D2) and `supply_load` (ADR-009 D4).
+pub const VIEW_KINDS: &[&str] = &["circuit", "pin_load", "switch", "supply_load"];
+
+/// A named corner's name (ADR-009 D8): `typ`, `min`, `max`, `suite_compat`
+/// or `worst_<x>`.
+pub fn corner_name_ok(n: &str) -> bool {
+    matches!(n, "typ" | "min" | "max" | "suite_compat")
+        || n.strip_prefix("worst_").is_some_and(|x| {
+            !x.is_empty()
+                && x.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        })
+}
+
+/// A `[[document]]` (bb-part/1, ADR-012 D3): a hashed document the
+/// package's claims cite. Inert until milestone E2 (the claim checker).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Document {
+    pub id: String,
+    pub title: Option<String>,
+    pub revision: Option<String>,
+    /// Where it was fetched (informative; the sha256 is the identity).
+    pub url: Option<String>,
+    /// 64 lower-case hex digits: the PDF the claims were checked against.
+    pub sha256: String,
+    /// `agent:<who>` or `user:<who>`.
+    pub fetched_by: Option<String>,
+}
+
+/// One `[power] idd` state (bb-part/1, ADR-009 D4): a supply current.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Idd {
+    pub state: String,
+    pub typ: String,
+    pub max: Option<String>,
+    pub reference: String,
+}
+
+/// `[power]` (bb-part/1, ADR-009 D4, D5): the supply currents per CPU
+/// state, the operating VDD minimum, and the rail `digital_out` drives from
+/// at `pi`. Inert until milestones P2 and P3 use it.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Power {
+    pub idd: Vec<Idd>,
+    pub vdd_min: Option<String>,
+    pub io_rail: Option<String>,
+}
+
+/// A named corner of a view (`[[analog.corners]]`, bb-part/1, ADR-009 D8):
+/// parameter overrides with a reference. Inert until a bench selects one
+/// (milestone P1).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Corner {
+    pub name: String,
+    pub params: Vec<(String, String)>,
+    pub reference: String,
+}
+
+/// A relational limit of `pins.toml` (`limits`, bb-pins/1, ADR-009 D3): an
+/// absolute maximum rating as `<value>` or `<pin> + <value>` / `<pin> -
+/// <value>`. Inert until milestone P1 makes limits assertions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Limit {
+    pub pin: String,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub source: String,
+}
+
+/// A limit's bound, parsed: an optional reference pin and a voltage offset
+/// (µV).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Bound {
+    pub pin: Option<String>,
+    pub offset_uv: i128,
+}
+
+/// Parse a limit bound: `<value>`, `<PIN> + <value>` or `<PIN> - <value>`
+/// (one supply-plus-offset term, no general expressions; ADR-009 D3).
+pub fn parse_bound(text: &str) -> Result<Bound, String> {
+    let t = text.trim();
+    let starts_num = t.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'));
+    if starts_num {
+        return parse_quantity(t, Dim::Voltage)
+            .map(|v| Bound {
+                pin: None,
+                offset_uv: v,
+            })
+            .map_err(|e| format!("{text:?}: {e}"));
+    }
+    let (pin, sign, rest) = match (t.find(" + "), t.find(" - ")) {
+        (Some(i), None) => (&t[..i], 1, &t[i + 3..]),
+        (None, Some(i)) => (&t[..i], -1, &t[i + 3..]),
+        (None, None) if is_pin_name(t) => (t, 1, "0V"),
+        _ => {
+            return Err(format!(
+                "{text:?}: expected <value>, <pin> + <value> or <pin> - <value> (ADR-009 D3)"
+            ))
+        }
+    };
+    if !is_pin_name(pin.trim()) {
+        return Err(format!("{text:?}: {:?} is not a pin name", pin.trim()));
+    }
+    let v = parse_quantity(rest.trim(), Dim::Voltage).map_err(|e| format!("{text:?}: {e}"))?;
+    Ok(Bound {
+        pin: Some(pin.trim().to_string()),
+        offset_uv: sign * v,
+    })
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Datasheet {
@@ -82,6 +197,9 @@ pub struct Provenance {
     pub generated_by: Option<String>,
     pub reviewed_by: Vec<String>,
     pub confidence: String,
+    /// bb-part/1 (ADR-011 D7, ADR-012): the upstream model's SPDX licence
+    /// of a `vendor_derived` view. Inert until publishing (milestone E1).
+    pub upstream_license: Option<String>,
 }
 
 /// A port of an analog view.
@@ -99,6 +217,11 @@ pub enum Port {
     },
     OtherPin {
         pin: String,
+    },
+    /// A `supply_load` view's state port (bb-part/1, ADR-009 D4): the CPU
+    /// state output `#<state>`, a node in 0..1.
+    State {
+        state: String,
     },
 }
 
@@ -122,6 +245,10 @@ pub struct View {
     pub params: Vec<(String, String)>,
     pub qualified: Vec<Qualified>,
     pub provenance: Option<Provenance>,
+    /// bb-part/1 (ADR-009): the view's supply ports, informative, for lint.
+    pub rails: Vec<String>,
+    /// bb-part/1 (ADR-009 D8): `[[analog.corners]]`.
+    pub corners: Vec<Corner>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -159,6 +286,13 @@ pub struct Part {
     pub analog: Vec<View>,
     pub provenance: Option<Provenance>,
     pub tests_dir: Option<String>,
+    /// bb-part/1 (ADR-009 D4): `[power]`.
+    pub power: Option<Power>,
+    /// bb-part/1 (ADR-012 D3): `[[document]]`.
+    pub documents: Vec<Document>,
+    /// bb-part/1 (ADR-012 D4): `[claims] file`, the package's `claims.toml`
+    /// (`bb-claims/0`, milestone E2; not read by this build).
+    pub claims_file: Option<String>,
 }
 
 /// A `pins.toml` parameter value (D4): a number with a unit, or a supply
@@ -185,6 +319,8 @@ pub enum ParamKind {
         supply_ok: bool,
     },
     Name,
+    /// A pin name of the part (`rail`, bb-pins/1, ADR-009 D5).
+    Pin,
 }
 
 /// The pin models and their parameters (`spec/pin-model.md`): `(model,
@@ -235,6 +371,18 @@ pub const PIN_MODELS: &[(&str, &[ParamSpec])] = &[
                     supply_ok: false,
                 },
                 true,
+            ),
+            // bb-pins/1 (ADR-009 D5): the rail a `pi` output drives from and
+            // its high-Z leakage. Optional, and unused at `fast` (milestone
+            // P2 implements the `pi` glue).
+            ("rail", ParamKind::Pin, false),
+            (
+                "rhiz",
+                ParamKind::Q {
+                    dim: Dim::Resistance,
+                    supply_ok: false,
+                },
+                false,
             ),
         ],
     ),
@@ -308,6 +456,12 @@ pub fn parse_param(text: &str, kind: ParamKind) -> Result<Param, String> {
             }
             Ok(Param::Name(text.to_string()))
         }
+        ParamKind::Pin => {
+            if !is_pin_name(text) {
+                return Err(format!("{text:?}: expected a pin name"));
+            }
+            Ok(Param::Name(text.to_string()))
+        }
         ParamKind::Q { dim, supply_ok } => {
             let t = text.trim();
             let starts_num =
@@ -365,6 +519,8 @@ pub struct Pins {
     pub pins: Vec<Pin>,
     /// `[defaults.<model>.<set>]`: model -> set -> [(param, text)].
     pub defaults: BTreeMap<String, BTreeMap<String, Vec<(String, String)>>>,
+    /// bb-pins/1 (ADR-009 D3): `limits`.
+    pub limits: Vec<Limit>,
 }
 
 impl Pins {
@@ -424,7 +580,7 @@ fn one_of(what: &str, v: &str, allowed: &[&str]) -> Result<(), String> {
     }
 }
 
-fn provenance(mut o: Obj) -> Result<Provenance, String> {
+fn provenance(mut o: Obj, major: u32) -> Result<Provenance, String> {
     let p = Provenance {
         source: o.str_req("source")?,
         base: o.str_opt("base")?,
@@ -435,12 +591,36 @@ fn provenance(mut o: Obj) -> Result<Provenance, String> {
         generated_by: o.str_opt("generated_by")?,
         reviewed_by: o.strs("reviewed_by")?,
         confidence: o.str_req("confidence")?,
+        upstream_license: o.str_opt("upstream_license")?,
     };
     let path = o.path.clone();
     o.done()?;
     one_of(&format!("{path}.source"), &p.source, SOURCES)?;
     one_of(&format!("{path}.confidence"), &p.confidence, CONFIDENCES)?;
+    if p.upstream_license.is_some() && major < 1 {
+        return Err(format!(
+            "{path}.upstream_license: new in bb-part/1 (ADR-012); run `bb pkg migrate`"
+        ));
+    }
     Ok(p)
+}
+
+/// A key new in bb-part/1, met in a bb-part/0 file.
+fn new_in_part_1(major: u32, at: &str, what: &str) -> Result<(), String> {
+    if major < 1 {
+        return Err(format!(
+            "{at}: new in bb-part/1 ({what}); run `bb pkg migrate`"
+        ));
+    }
+    Ok(())
+}
+
+/// A CPU state name (`#<state>`, ADR-009 D4) or an idd state.
+fn is_state_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.starts_with(|c: char| c.is_ascii_lowercase())
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn rungs(what: &str, v: &[String]) -> Result<(), String> {
@@ -507,20 +687,18 @@ pub fn switch_bounce_max(v: &View) -> Result<Option<i128>, String> {
 }
 
 fn view(mut o: Obj, major: u32) -> Result<View, String> {
-    o.reserved(&["rails"], "bb-part/1")?;
     let path = o.path.clone();
     let kind = o.str_opt("kind")?.unwrap_or_else(|| "circuit".into());
-    // The switch view kind is new in bb-part/1 (ADR-010 D2).
-    if kind == "switch" && major < 1 {
-        return Err(format!(
-            "{path}.kind \"switch\": new in bb-part/1 (ADR-010 D2); run `bb pkg migrate`"
-        ));
+    // The switch (ADR-010 D2) and supply_load (ADR-009 D4) view kinds are
+    // new in bb-part/1.
+    match kind.as_str() {
+        "switch" => new_in_part_1(major, &format!("{path}.kind \"switch\""), "ADR-010 D2")?,
+        "supply_load" => {
+            new_in_part_1(major, &format!("{path}.kind \"supply_load\""), "ADR-009 D4")?
+        }
+        _ => {}
     }
-    one_of(
-        &format!("{path}.kind"),
-        &kind,
-        &["circuit", "pin_load", "switch"],
-    )?;
+    one_of(&format!("{path}.kind"), &kind, VIEW_KINDS)?;
     let mut ports = Vec::new();
     match o.get("ports") {
         None => return Err(format!("{path}.ports: required")),
@@ -548,6 +726,40 @@ fn view(mut o: Obj, major: u32) -> Result<View, String> {
                     ("switch", _) => {
                         return Err(format!(
                             "{at}: a switch view's ports are typed tables {{ role = \"pin\", pin = \"<name>\" }} (ADR-010 D2)"
+                        ))
+                    }
+                    // ADR-009 D4: a supply_load view's ports are the
+                    // package's supply pins and its CPU state ports.
+                    ("supply_load", toml::Value::Table(t)) => {
+                        let mut po = Obj::new(at.clone(), t);
+                        let role = po.str_req("role")?;
+                        let port = match role.as_str() {
+                            "pin" => Port::OtherPin {
+                                pin: po.str_req("pin")?,
+                            },
+                            "state" => {
+                                let state = po.str_req("state")?;
+                                if !is_state_name(&state) {
+                                    return Err(format!(
+                                        "{at}.state {state:?}: a state name is lower case \
+                                         [a-z0-9_] (its node is #<state>, ADR-009 D4)"
+                                    ));
+                                }
+                                Port::State { state }
+                            }
+                            r => {
+                                return Err(format!(
+                                    "{at}.role {r:?}: a supply_load view's ports are role \"pin\" \
+                                     or \"state\" (ADR-009 D4)"
+                                ))
+                            }
+                        };
+                        po.done()?;
+                        ports.push(port);
+                    }
+                    ("supply_load", _) => {
+                        return Err(format!(
+                            "{at}: a supply_load view's ports are typed tables (ADR-009 D4)"
                         ))
                     }
                     ("pin_load", toml::Value::Table(t)) => {
@@ -605,6 +817,29 @@ fn view(mut o: Obj, major: u32) -> Result<View, String> {
             Ok(r)
         })
         .collect::<Result<Vec<_>, String>>()?;
+    // bb-part/1 (ADR-009 D8): named corners, parameter overrides with a ref.
+    let mut corners = Vec::new();
+    for mut c in o.tables("corners")? {
+        new_in_part_1(major, &c.path, "ADR-009 D8")?;
+        let at = c.path.clone();
+        let corner = Corner {
+            name: c.str_req("name")?,
+            params: c.str_map("params")?,
+            reference: c.str_req("ref")?,
+        };
+        c.done()?;
+        if !corner_name_ok(&corner.name) {
+            return Err(format!(
+                "{at}.name {:?}: a corner is typ, min, max, suite_compat or worst_<x> (ADR-009 D8)",
+                corner.name
+            ));
+        }
+        corners.push(corner);
+    }
+    let rails = o.strs("rails")?;
+    if !rails.is_empty() {
+        new_in_part_1(major, &format!("{path}.rails"), "ADR-009")?;
+    }
     // A switch view's element is generated (switch_definition): it has no
     // file and no subckt of its own.
     let (file, subckt) = if kind == "switch" {
@@ -629,7 +864,12 @@ fn view(mut o: Obj, major: u32) -> Result<View, String> {
         ports,
         params: o.str_map("params")?,
         qualified,
-        provenance: o.table_opt("provenance")?.map(provenance).transpose()?,
+        provenance: o
+            .table_opt("provenance")?
+            .map(|p| provenance(p, major))
+            .transpose()?,
+        rails,
+        corners,
     };
     o.done()?;
     if v.kind == "switch" {
@@ -664,7 +904,7 @@ fn view(mut o: Obj, major: u32) -> Result<View, String> {
 pub fn parse_part(text: &str, reg: &Registry) -> Result<(Part, Option<String>), String> {
     let t = toml::parse(text).map_err(|e| format!("part.toml: {e}"))?;
     let mut o = Obj::new("", &t);
-    o.reserved(RESERVED_TOP, "bb-part/1")?;
+    o.reserved(RESERVED_TOP, RESERVED_FOR)?;
     let schema = o.str_req("schema")?;
     let note = match reg.check("bb-part", &schema)? {
         Version::Current => None,
@@ -709,7 +949,7 @@ pub fn parse_part(text: &str, reg: &Registry) -> Result<(Part, Option<String>), 
     let mut pins = o
         .table_opt("pins")?
         .ok_or_else(|| "[pins]: required (file = \"pins.toml\")".to_string())?;
-    pins.reserved(&["ibis"], "bb-part/1")?;
+    pins.reserved(&["ibis"], RESERVED_FOR)?;
     let pins_file = pins.str_req("file")?;
     pins.done()?;
     let module = match o.table_opt("module")? {
@@ -729,7 +969,7 @@ pub fn parse_part(text: &str, reg: &Registry) -> Result<(Part, Option<String>), 
     }
     let behavioral = match o.table_opt("behavioral")? {
         Some(mut b) => {
-            b.reserved(&["cpu", "svd"], "bb-part/1")?;
+            b.reserved(&["cpu", "svd"], RESERVED_FOR)?;
             let r = Behavioral {
                 engine: b.str_req("engine")?,
                 platform: b.str_opt("platform")?,
@@ -759,12 +999,123 @@ pub fn parse_part(text: &str, reg: &Registry) -> Result<(Part, Option<String>), 
         .into_iter()
         .map(|v| view(v, major))
         .collect::<Result<Vec<_>, String>>()?;
-    let provenance = o.table_opt("provenance")?.map(provenance).transpose()?;
+    let provenance = o
+        .table_opt("provenance")?
+        .map(|p| provenance(p, major))
+        .transpose()?;
     let tests_dir = match o.table_opt("tests")? {
         Some(mut t) => {
             let d = t.str_req("dir")?;
             t.done()?;
             Some(d)
+        }
+        None => None,
+    };
+    // bb-part/1 (ADR-009 D4, D5): [power].
+    let power = match o.table_opt("power")? {
+        Some(mut pw) => {
+            new_in_part_1(major, "power", "ADR-009 D4")?;
+            let mut idd = Vec::new();
+            if let Some(mut it) = pw.table_opt("idd")? {
+                for s in it.keys() {
+                    let mut so = it
+                        .table_opt(&s)?
+                        .ok_or_else(|| format!("power.idd.{s}: expected a table"))?;
+                    if !is_state_name(&s) {
+                        return Err(format!(
+                            "power.idd.{s}: a state name is lower case [a-z0-9_] (ADR-009 D4)"
+                        ));
+                    }
+                    let e = Idd {
+                        state: s.clone(),
+                        typ: so.str_req("typ")?,
+                        max: so.str_opt("max")?,
+                        reference: so.str_req("ref")?,
+                    };
+                    so.done()?;
+                    for (k, v) in [("typ", Some(&e.typ)), ("max", e.max.as_ref())] {
+                        if let Some(v) = v {
+                            parse_quantity(v, Dim::Current)
+                                .map_err(|x| format!("power.idd.{s}.{k}: {x}"))?;
+                        }
+                    }
+                    idd.push(e);
+                }
+                it.done()?;
+            }
+            let r = Power {
+                idd,
+                vdd_min: pw.str_opt("vdd_min")?,
+                io_rail: pw.str_opt("io_rail")?,
+            };
+            pw.done()?;
+            if let Some(v) = &r.vdd_min {
+                parse_quantity(v, Dim::Voltage).map_err(|x| format!("power.vdd_min: {x}"))?;
+            }
+            if let Some(p) = &r.io_rail {
+                if !is_pin_name(p) {
+                    return Err(format!("power.io_rail {p:?}: expected a pin name"));
+                }
+            }
+            Some(r)
+        }
+        None => None,
+    };
+    // bb-part/1 (ADR-012 D3, D4): [[document]] and [claims] file.
+    let mut documents = Vec::new();
+    for mut d in o.tables("document")? {
+        new_in_part_1(major, &d.path, "ADR-012 D3")?;
+        let at = d.path.clone();
+        let doc = Document {
+            id: d.str_req("id")?,
+            title: d.str_opt("title")?,
+            revision: d.str_opt("revision")?,
+            url: d.str_opt("url")?,
+            sha256: d.str_req("sha256")?,
+            fetched_by: d.str_opt("fetched_by")?,
+        };
+        d.done()?;
+        if doc.id.is_empty()
+            || !doc.id.chars().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')
+            })
+        {
+            return Err(format!(
+                "{at}.id {:?}: lower case [a-z0-9._-] (ADR-012 D3)",
+                doc.id
+            ));
+        }
+        if doc.sha256.len() != 64
+            || !doc
+                .sha256
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(format!(
+                "{at}.sha256: 64 lower-case hex digits, the document's identity (ADR-012 D3)"
+            ));
+        }
+        if let Some(f) = &doc.fetched_by {
+            let ok = ["agent:", "user:"]
+                .iter()
+                .any(|p| f.strip_prefix(p).is_some_and(|w| !w.is_empty()));
+            if !ok {
+                return Err(format!(
+                    "{at}.fetched_by {f:?}: expected agent:<who> or user:<who> (ADR-012 D3)"
+                ));
+            }
+        }
+        if documents.iter().any(|x: &Document| x.id == doc.id) {
+            return Err(format!("{at}.id {:?}: used twice", doc.id));
+        }
+        documents.push(doc);
+    }
+    let claims_file = match o.table_opt("claims")? {
+        Some(mut c) => {
+            new_in_part_1(major, "claims", "ADR-012 D4")?;
+            let f = c.str_req("file")?;
+            c.done()?;
+            Some(f)
         }
         None => None,
     };
@@ -790,6 +1141,9 @@ pub fn parse_part(text: &str, reg: &Registry) -> Result<(Part, Option<String>), 
             analog,
             provenance,
             tests_dir,
+            power,
+            documents,
+            claims_file,
         },
         note,
     ))
@@ -823,6 +1177,33 @@ pub fn parse_pins(text: &str, reg: &Registry) -> Result<(Pins, Option<String>), 
         Version::Current => None,
         Version::Previous { hint } => Some(hint),
     };
+    let major = crate::schema::SchemaId::parse(&schema)?.major;
+    // bb-pins/1 (ADR-009 D3): relational limits for absolute maximum ratings.
+    let mut limits = Vec::new();
+    for mut l in o.tables("limits")? {
+        let at = l.path.clone();
+        if major < 1 {
+            return Err(format!(
+                "{at}: limits are new in bb-pins/1 (ADR-009 D3); run `bb pkg migrate`"
+            ));
+        }
+        let lim = Limit {
+            pin: l.str_req("pin")?,
+            min: l.str_opt("min")?,
+            max: l.str_opt("max")?,
+            source: l.str_req("source")?,
+        };
+        l.done()?;
+        if lim.min.is_none() && lim.max.is_none() {
+            return Err(format!("{at}: a limit needs min, max or both"));
+        }
+        for (k, v) in [("min", &lim.min), ("max", &lim.max)] {
+            if let Some(v) = v {
+                parse_bound(v).map_err(|e| format!("{at}.{k}: {e}"))?;
+            }
+        }
+        limits.push(lim);
+    }
     let mut pins = Vec::new();
     for mut p in o.tables("pin")? {
         let path = p.path.clone();
@@ -846,6 +1227,9 @@ pub fn parse_pins(text: &str, reg: &Registry) -> Result<(Pins, Option<String>), 
         p.done()?;
         one_of(&format!("{path}.role"), &pin.role, ROLES)?;
         for m in &pin.models {
+            if m == RESERVED_PIN_MODEL {
+                return Err(format!("{path}.models: {RESERVED_PIN_MODEL_MSG}"));
+            }
             if pin_model_params(m).is_none() {
                 return Err(format!(
                     "{path}.models: {m:?} is not a pin model (digital_out, digital_in, adc_in)"
@@ -860,6 +1244,9 @@ pub fn parse_pins(text: &str, reg: &Registry) -> Result<(Pins, Option<String>), 
             .as_table()
             .ok_or_else(|| "defaults: expected a table".to_string())?;
         for (model, sets) in d {
+            if model == RESERVED_PIN_MODEL {
+                return Err(format!("defaults.{model}: {RESERVED_PIN_MODEL_MSG}"));
+            }
             if pin_model_params(model).is_none() {
                 return Err(format!("defaults.{model}: not a pin model"));
             }
@@ -878,6 +1265,12 @@ pub fn parse_pins(text: &str, reg: &Registry) -> Result<(Pins, Option<String>), 
                     let all: Vec<String> = params.as_table().unwrap().keys().cloned().collect();
                     let mut kv = Vec::new();
                     for k in all {
+                        if major < 1 && PINS_1_PARAMS.contains(&k.as_str()) {
+                            return Err(format!(
+                                "defaults.{model}.{set}.{k}: new in bb-pins/1 (ADR-009 D5); run \
+                                 `bb pkg migrate`"
+                            ));
+                        }
                         kv.push((k.clone(), po.str_req(&k)?));
                     }
                     kv
@@ -894,10 +1287,20 @@ pub fn parse_pins(text: &str, reg: &Registry) -> Result<(Pins, Option<String>), 
             schema,
             pins,
             defaults,
+            limits,
         },
         note,
     ))
 }
+
+/// The pin model name `bb-pins/1` reserves (ADR-009 D3: `power{vmin, vmax,
+/// imax}`; its parameters and their source are milestone P1's).
+pub const RESERVED_PIN_MODEL: &str = "power";
+const RESERVED_PIN_MODEL_MSG: &str = "the power pin model is reserved (ADR-009 D3, milestone P1); \
+                                      bb-pins/1 does not define its parameters yet";
+
+/// The `digital_out` parameters new in `bb-pins/1` (ADR-009 D5).
+pub const PINS_1_PARAMS: &[&str] = &["rail", "rhiz"];
 
 /// Load the package in `dir` (its `part.toml` and the `pins.toml` it names).
 pub fn load(dir: &Path, reg: &Registry) -> Result<Package, String> {
@@ -1094,7 +1497,7 @@ confidence = "datasheet_checked"
         .unwrap_err();
         assert!(e.contains("part.colour: unknown key"), "{e}");
         let e = parse_part(&format!("{PART}[thermal]\nx = 1\n"), &reg).unwrap_err();
-        assert!(e.contains("reserved for bb-part/1"), "{e}");
+        assert!(e.contains("thermal: reserved for a later milestone"), "{e}");
         let e = parse_part(
             &with(
                 "file = \"pins.toml\"",
@@ -1104,9 +1507,23 @@ confidence = "datasheet_checked"
         )
         .unwrap_err();
         assert!(e.contains("pins.ibis: reserved"), "{e}");
-        let e =
-            parse_part(&with("name = \"lsw\"", "name = \"lsw\"\nrails = []"), &reg).unwrap_err();
-        assert!(e.contains("rails: reserved"), "{e}");
+        // A view's rails are a bb-part/1 key (milestone S): refused in a /0
+        // file, accepted in a /1 one.
+        let e = parse_part(
+            &with("name = \"lsw\"", "name = \"lsw\"\nrails = [\"VIN\"]"),
+            &reg,
+        )
+        .unwrap_err();
+        assert!(e.contains("rails: new in bb-part/1"), "{e}");
+        assert!(parse_part(
+            &with("name = \"lsw\"", "name = \"lsw\"\nrails = [\"VIN\"]").replacen(
+                "bb-part/0",
+                "bb-part/1",
+                1
+            ),
+            &reg
+        )
+        .is_ok());
         assert!(parse_part(&with("analog_ic", "chip"), &reg).is_err());
         assert!(parse_part(&with("datasheet_checked", "0.9"), &reg).is_err());
         assert!(parse_part(&with("ti/tps22917", "TI/TPS22917"), &reg).is_err());

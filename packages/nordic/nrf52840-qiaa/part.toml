@@ -8,7 +8,7 @@
 # parameter sets instead, and the package has no circuit view (ADR-006 Amendment 3). Its one analog
 # view is the SAADC's pin_load view saadc_se (plan M8, ADR-008 D7), the load a bound adc_in puts on
 # its pad; the behavioural platform nrf52840-bb@3 has the SAADC model it feeds.
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "nordic/nrf52840-qiaa"
@@ -43,7 +43,7 @@ purpose = "SAADC single-ended input (ADR-008 D7): pad capacitance, and the sampl
 fidelity = ["fast"]
 default_for = ["fast"]
 file = "analog/saadc_se.lib"
-subckt = "NRF_SAADC_SE"
+subckt = "NORDIC_NRF52840_QIAA_SAADC_SE"
 ports = [{ role = "pad" }, { role = "ctrl", signal = "smp" }, { role = "observe", signal = "hold" }, { role = "pin", pin = "VDD" }]
 params = { cs = "2.5p", cpad = "3p", rsw = "5k", tpre = "20n", rpre = "100", vpre_vdd = "1" }
 

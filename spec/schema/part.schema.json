@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/part.schema.json",
-  "title": "bb-part/0 and bb-part/1: a component package's part.toml (spec/package.md, ADR-006 D2-D4, ADR-010 D2)",
-  "description": "The JSON form of part.toml (TOML converted to JSON as is). Unknown keys are an error; the keys reserved for bb-part/1 (layers, thermal, rtl, power; pins.ibis; behavioral.cpu, behavioral.svd; a view's rails) are not accepted. bb-part/1 keeps every bb-part/0 key and its meaning and adds the switch view kind (ADR-010 D2; milestone B1's part of the Phase 2 schema epoch, whose other bb-part/1 keys stay reserved until milestone S).",
+  "title": "bb-part/0 and bb-part/1: a component package's part.toml (spec/package.md, ADR-006 D2-D4, ADR-009, ADR-010 D2, ADR-012)",
+  "description": "The JSON form of part.toml (TOML converted to JSON as is). Unknown keys are an error; the keys still reserved (layers, thermal, rtl; pins.ibis; behavioral.cpu, behavioral.svd) are not accepted. bb-part/1 (the Phase 2 schema epoch, milestone S) keeps every bb-part/0 key and its meaning and adds [power] (ADR-009 D4, D5), a view's rails and [[analog.corners]] (ADR-009, D8), the switch (ADR-010 D2) and supply_load (ADR-009 D4) view kinds, [[document]], [claims] and a provenance's upstream_license (ADR-012 D3, D4; ADR-011 D7). The new keys are accepted and inert until their milestones use them; a bb-part/0 file has none of them.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "part", "pins"],
@@ -80,6 +80,49 @@
       "additionalProperties": false,
       "required": ["dir"],
       "properties": { "dir": { "type": "string" } }
+    },
+    "power": {
+      "description": "bb-part/1 (ADR-009 D4, D5): supply currents per CPU state, the operating VDD minimum, and the rail digital_out drives from at pi.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "idd": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["typ", "ref"],
+            "properties": { "typ": { "$ref": "#/$defs/value" }, "max": { "$ref": "#/$defs/value" }, "ref": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "vdd_min": { "$ref": "#/$defs/value" },
+        "io_rail": { "type": "string", "minLength": 1 }
+      }
+    },
+    "document": {
+      "description": "bb-part/1 (ADR-012 D3): a hashed document the package's claims cite; the PDF itself is never committed.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sha256"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
+          "title": { "type": "string" },
+          "revision": { "type": "string" },
+          "url": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "fetched_by": { "type": "string", "pattern": "^(agent|user):.+$" }
+        }
+      }
+    },
+    "claims": {
+      "description": "bb-part/1 (ADR-012 D4): the package's claims file (bb-claims/0, milestone E2; not read before then).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file"],
+      "properties": { "file": { "type": "string" } }
     }
   },
   "allOf": [
@@ -89,8 +132,20 @@
       "else": { "not": { "required": ["module"] } }
     },
     {
+      "description": "A bb-part/0 file has none of the bb-part/1 keys.",
       "if": { "properties": { "schema": { "const": "bb-part/0" } } },
-      "then": { "properties": { "analog": { "items": { "properties": { "kind": { "enum": ["circuit", "pin_load"] } } } } } }
+      "then": {
+        "not": { "anyOf": [{ "required": ["power"] }, { "required": ["document"] }, { "required": ["claims"] }] },
+        "properties": {
+          "analog": {
+            "items": {
+              "properties": { "kind": { "enum": ["circuit", "pin_load"] }, "provenance": { "not": { "required": ["upstream_license"] } } },
+              "not": { "anyOf": [{ "required": ["rails"] }, { "required": ["corners"] }] }
+            }
+          },
+          "provenance": { "not": { "required": ["upstream_license"] } }
+        }
+      }
     }
   ],
   "$defs": {
@@ -114,8 +169,24 @@
         "origin": { "type": "string" },
         "generated_by": { "type": "string" },
         "reviewed_by": { "type": "array", "items": { "type": "string" } },
-        "confidence": { "enum": ["unchecked", "self_checked", "datasheet_checked", "measured"] }
+        "confidence": { "enum": ["unchecked", "self_checked", "datasheet_checked", "measured"] },
+        "upstream_license": { "type": "string", "minLength": 1, "description": "bb-part/1 (ADR-011 D7): the upstream model's SPDX licence of a vendor_derived view." }
       }
+    },
+    "state_port": {
+      "description": "bb-part/1 (ADR-009 D4): a supply_load view's port, a supply pin or a CPU state port #<state>.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role"],
+      "properties": {
+        "role": { "enum": ["pin", "state"] },
+        "pin": { "type": "string" },
+        "state": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+      },
+      "oneOf": [
+        { "properties": { "role": { "const": "pin" } }, "required": ["pin"], "not": { "required": ["state"] } },
+        { "properties": { "role": { "const": "state" } }, "required": ["state"], "not": { "required": ["pin"] } }
+      ]
     },
     "typed_port": {
       "type": "object",
@@ -138,7 +209,7 @@
       "required": ["name", "fidelity", "ports"],
       "properties": {
         "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
-        "kind": { "enum": ["circuit", "pin_load", "switch"] },
+        "kind": { "enum": ["circuit", "pin_load", "switch", "supply_load"] },
         "purpose": { "type": "string" },
         "fidelity": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rung" } },
         "default_for": { "type": "array", "items": { "$ref": "#/$defs/rung" } },
@@ -155,12 +226,32 @@
             "properties": { "lattice": { "$ref": "#/$defs/value" }, "options": { "type": "string" } }
           }
         },
-        "provenance": { "$ref": "#/$defs/provenance" }
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "rails": { "type": "array", "items": { "type": "string" }, "description": "bb-part/1 (ADR-009): the view's supply ports, informative, for lint." },
+        "corners": {
+          "description": "bb-part/1 (ADR-009 D8): named corners, parameter overrides with a reference.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "ref"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^(typ|min|max|suite_compat|worst_[a-z0-9_]+)$" },
+              "params": { "type": "object", "additionalProperties": { "$ref": "#/$defs/value" } },
+              "ref": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
       },
       "allOf": [
         {
           "if": { "properties": { "kind": { "const": "pin_load" } }, "required": ["kind"] },
           "then": { "required": ["file", "subckt"], "properties": { "ports": { "items": { "$ref": "#/$defs/typed_port" } } } }
+        },
+        {
+          "description": "ADR-009 D4: a supply_load view has a file and a subckt, and typed pin and state ports.",
+          "if": { "properties": { "kind": { "const": "supply_load" } }, "required": ["kind"] },
+          "then": { "required": ["file", "subckt"], "properties": { "ports": { "items": { "$ref": "#/$defs/state_port" } } } }
         },
         {
           "description": "ADR-010 D2: a switch view's element is generated (no file or subckt); two contacts as typed pin ports; params ron, roff, bounce_max.",
@@ -183,7 +274,7 @@
           }
         },
         {
-          "if": { "not": { "properties": { "kind": { "enum": ["pin_load", "switch"] } }, "required": ["kind"] } },
+          "if": { "not": { "properties": { "kind": { "enum": ["pin_load", "switch", "supply_load"] } }, "required": ["kind"] } },
           "then": { "required": ["file", "subckt"], "properties": { "ports": { "items": { "type": "string" } } } }
         }
       ]

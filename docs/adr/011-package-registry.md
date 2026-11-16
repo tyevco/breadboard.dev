@@ -3,6 +3,9 @@
 - **Status:** Accepted (2026-11-15; see "Approver decisions
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
   (see "Review notes").
+- **Amendments:** 1 (2026-11-15), milestone S as built: the schema epoch
+  (every Phase 2 schema major of ADR-009 to ADR-013), `bb-lock/1`, the
+  D11 renames and the one relock.
 - **Part of:** the Phase 2 plan, milestones E0-E1, then E3 and E5.
   `bb-lock/1` lands in milestone S, the schema epoch, before anything is
   published.
@@ -453,3 +456,132 @@ alternative). With local sources first, a registry is consulted only for
 an id no local source provides, which already keeps development builds
 and `make test` off the network; an opt-in flag would add a second way to
 say the same thing.
+
+## Amendment 1 (2026-11-15): milestone S, the schema epoch, as built
+
+Milestone S lands every Phase 2 schema major in one commit (plan section
+4, track S; approver decision Q3). The governing decisions are ADR-009 to
+ADR-013; this ADR holds the record because `bb-lock/1`, the view names
+and the relock are its own. `spec/package.md` (sections 2-4 and 9-11),
+`spec/project.md` (sections 1 and 5), `spec/event-stream.md` (version 2),
+`spec/pin-model.md` and `spec/schema/{part,pins,lock,project}.schema.json`
+state the result.
+
+**1. The majors.** `bb-part/1`, `bb-pins/1` and `bb-lock/1` are new;
+`bb-project/1`, `bb-board/1` and `bb-bench/1`, which R1 and B1 carried as
+drafts (ADR-013 Amendment 1, ADR-010 Amendment 1), are S's with the same
+keys plus the ones below. `bb-pkgtest` stays at major 0 (no Phase 2 key).
+Event stream version 2 fixes the `reset` record and `assert`'s version 2
+keys (ADR-009 D7, ADR-010 D7) in `bbcore::event`; nothing emits them yet,
+and no version 1 record changes. Every committed file is at its current
+major: 19 `part.toml`, 19 `pins.toml` (`bb pkg migrate`, the schema line),
+14 `bb.lock` and 6 `board.bbm` (`make locks`).
+
+**2. Accepted and inert.** The new package keys parse, are checked by
+lint and change no `fast` deck: `[power]` (`idd`, `vdd_min`, `io_rail`),
+a view's `rails` and `[[analog.corners]]`, the `supply_load` view kind
+(never valid at `fast`, never a rung's default), `[[document]]`, `[claims]
+file`, a provenance's `upstream_license`, `pins.toml` `limits`, and the
+`digital_out` parameters `rail` and `rhiz` (sets and bindings). Shapes the
+ADRs leave open are decided in the spec: state ports `{ role = "state",
+state }`, limit bounds `<value>` or `<pin> ± <value>`, `[claims] file` as
+`[pins] file` is, `udegC` for µ°C. Still reserved: `layers`, `thermal`,
+`rtl`, `[pins] ibis`, `[behavioral] cpu`/`svd`, and the pin model name
+`power` (ADR-009 D3 names it but defines no parameters, so P1 does).
+
+**Refused, naming the milestone, rather than ignored:** a project's
+`[run]` (R3, not in this build), a `simulate` list of several boards (R2;
+a list of one is that board), and B1's bench keys (`fidelity`, `corner`,
+`[[battery]]`, `[[activity]]`, `[[env]]`, `[probes]`, `replace`), which
+ADR-010 A1.7 prefers refused. A key that changes what a run does would
+otherwise run as other than written. `[registries.<name>]` (D4) is read,
+checked and inert.
+
+**3. `bb-lock/1`** (D5). `source = "path+<path>"` replaces `path`,
+`engine` and `engine_version` replace `renode`, and `[[vendor_file]]` and
+`registry+` sources are read, checked and written back. `bb-lock/0` is
+read and migrated in memory. `bb run` accepts its legacy all-sources
+platform hash (ADR-015 Amendment 3) and prints the migration hint. `bb
+open` and `bb pkg migrate --lock` write the scoped hash, without
+`--update-lock`, because the legacy hash pins strictly more. `bb open
+--check` fails on a `/0` file. In a `/1` file only the scoped hash
+matches. `run.json` (`bb-run/0`) keeps its `renode` key.
+
+- **Deviation, recorded.** The migration drops a `renode:` entry for a
+  platform this `bb` does not provide. That is
+  `examples/dial-me-spinner/bb.lock`'s stale `renode:nrf52840-bb@1`, left
+  by `--update-lock`, which never removes an entry. It has no scoped
+  hash. No package names it, so nothing checked it.
+- **Not done: `engine:bench@1`.** The bench engine's lock entry (ADR-010
+  D4; A1.7 deferred it to S) is not written. Its id fits `bb-lock/1`'s
+  grammar. But every project lock would move with every `bbbench` edit, and
+  B2 and B3 edit it throughout. That is the churn H4 removed for plugins.
+  Which projects lock it is ADR-010's decision, so track B makes it.
+  `run.json` still records the identity (`bench.engine`).
+
+**4. View names** (D11). The first-party views now define only prefixed
+names: `GENERIC_{RESISTOR,CAPACITOR,INDUCTOR}_IDEAL`,
+`NORDIC_NRF52840_QIAA_SAADC_SE`, `TI_DRV8837_BRIDGE` and
+`TI_DRV8837_BRIDGE_BODY`, `TI_TPS22917_LSW_FIT` and
+`WORLDSEMI_WS2812C_2020_LSW`. The `part.toml` `subckt` keys and the
+WS2812C vectors that instantiate the view follow, and so does
+`scripts/dms_packages.py`, so `make dms-vectors-check` regenerates them
+byte for byte, and `scripts/dms_home_boards.py`, which copies the DRV8837
+view verbatim into E3's `board-step.cir` and instantiates it there (its
+`--check` in `make dms-home-test` requires the regenerated file). D11's example is wrong in one point: DRV8837's `.param
+rdst`, `gleg` and `vth_k` were already inside its subcircuit, and no
+first-party view had a top-level `.param`. Lint reports either rule as a
+warning, and as an error with `bb pkg lint --publish`. `make packages`
+lints `packages/` with `--publish` (G10: 11 packages, 0 findings). The
+project-local example packages keep their names (5 warnings; they are not
+published).
+
+- No package version changes. A subcircuit rename changes no result, no
+  port and no parameter set (`spec/package.md` section 10), and nothing is
+  published yet. The trees change, and the relock records it.
+- The WS2812C view was migrated from the suite "unchanged". It now carries
+  one recorded change: its `deviations` list it, and
+  `examples/dial-me-spinner/SOURCE` gains a `rename=<old>:<new>` field,
+  which `scripts/dms_source_check.sh` applies to the upstream bytes before
+  it compares them. With `DMS_REPO` the check passes, still against
+  `6854d25`.
+
+**5. The gate, as measured.** The row asks for "decks byte-identical, so
+every output hash holds". A renamed view changes the deck's text, so the
+closest correct gate is `make schema-epoch` (new; about 4 min, most of it
+building the base `bb`). Every committed board file and every project
+with each bench is elaborated three ways (`bb run --elaborate-only`; for a
+board file this now writes the analog engine's netlist):
+
+- A, the base commit's `bb` (`61a3845`) on the base tree;
+- B, this `bb` on the base tree;
+- C, this `bb` on this tree.
+
+Results:
+
+- A = B byte for byte on all 17 project decks.
+- B = C on all 29 decks, byte for byte up to the rename list. The check
+  renames whole words only, and lets only the renamed definition blocks
+  move within the sorted definitions. 19 decks carry renamed views, and
+  every rename that is in a base deck was compared.
+- Two negative controls (a digit changed inside a renamed definition, and
+  one in an element line) are both told apart.
+- Not elaborated there: the system project, whose elaboration needs E1's
+  bindings; `make dms-system` (in `make test`) does that. `generic/inductor`
+  is in no committed deck; its own vectors build its renamed view.
+
+Every committed output hash holds: `make test` passes, pooled and with
+`POOL=0`, and so do `make packages`, `make dms-vectors-check`, `make
+pi-spike` (37/37, P0's numbers unchanged), `make dms-source` and `make
+lock-scope`. `lock-scope` now checks the committed locks themselves. A
+stock relock of each copy gives the committed `bb.lock` and `board.bbm`
+byte for byte. Under the edit to `bb_nrf52_saadc.cs`, 8 STM32 boards stay
+current, and 7 nRF52840 ones show exactly their platform's drift.
+
+**6. Order of merges, recorded.** The plan puts S on `main` "before any
+`/1` file" (approver decision Q3). B1 and R1 were merged first. They
+carried the `bb-bench/1`, `bb-project/1`, `bb-board/1` and `switch`
+pieces of the draft (16 benches, 7 projects, their `board.bbm` and two
+example packages were already `/1` on `main`). Those keys are the epoch's
+own, unchanged here, so no file needs a second migration. Nothing has
+been published (E1 has not landed), so no registry content is affected.

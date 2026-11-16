@@ -10,8 +10,9 @@
 //!   (every measured value and a sha256 of every sample's bits), so two
 //!   packages' results can be compared byte for byte (ADR-006 G8).
 //! - `bb pkg migrate [<dir>...]`: rewrite packages to the current schema
-//!   majors (D11); `bb pkg migrate --bench <file>...` rewrites bench files
-//!   (ADR-010 D1).
+//!   majors (D11); `--bench`, `--project`, `--board` and `--lock <file>...`
+//!   rewrite bench files (ADR-010 D1), project files, `board.bbm` files
+//!   (ADR-013) and lockfiles (ADR-011 D5).
 //! - `bb pkg tree <dir>`: a package's tree hash (D8).
 //! - `bb pkg value [--kicad R|C|L] <text>...`: parse values (D5) and print
 //!   them in integer sub-units, one JSON object per line.
@@ -29,11 +30,15 @@ use bbpkg::value::{self, Dim, PassiveKind};
 use crate::platforms;
 
 const USAGE: &str = "\
-usage: bb pkg lint [<dir>...]                 lint packages (default: first-party packages/)
+usage: bb pkg lint [--publish] [<dir>...]     lint packages (default: first-party packages/);
+                                              --publish: the view-name rule is an error (ADR-011 D11)
        bb pkg test [<dir>...] [--record] [--report <file>]
                                               run test vectors through NgspiceEngine (ADR-006 D6)
        bb pkg migrate [<dir>...]              rewrite packages to the current schema majors
        bb pkg migrate --bench <file>...       rewrite bench files to the current bb-bench major
+       bb pkg migrate --project <bb.toml>...  rewrite project files to the current bb-project major
+       bb pkg migrate --board <board.bbm>...  rewrite board.bbm files to the current bb-board major
+       bb pkg migrate --lock <bb.lock>...     rewrite lockfiles to the current bb-lock major
        bb pkg tree <package dir>              print a package's tree hash
        bb pkg value [--kicad R|C|L] [--dim voltage|time|resistance|capacitance|inductance|current|temperature|count|percent] <text>...";
 
@@ -101,6 +106,13 @@ fn is_first_party(dir: &Path) -> bool {
 }
 
 fn lint_cmd(args: &[String]) -> Result<bool, String> {
+    let publish = args.iter().any(|a| a == "--publish");
+    if let Some(bad) = args
+        .iter()
+        .find(|a| a.starts_with('-') && a.as_str() != "--publish")
+    {
+        return Err(format!("unknown option {bad}"));
+    }
     let reg = Registry::current();
     let pl = platforms::ids();
     let devs = bbdev::ids();
@@ -136,6 +148,7 @@ fn lint_cmd(args: &[String]) -> Result<bool, String> {
             devices: &devs,
             first_party: is_first_party(&dir),
             chip: chip.as_ref(),
+            publish,
         };
         let f = lint::lint(&pkg, &ctx, &reg);
         for x in &f {
@@ -534,27 +547,66 @@ fn canonical_time(p: &Pair) -> String {
     }
 }
 
+/// `bb pkg migrate --lock`: `bb-lock/0` -> `bb-lock/1` (ADR-011 D5), and
+/// every Renode platform entry that holds the legacy all-sources hash of
+/// this `bb`'s files written with the scoped one (ADR-015 Amendment 3: the
+/// legacy hash pins strictly more, so this is a migration, not a change).
+/// Any other platform content is kept as written (stale: `bb open` reports
+/// it).
+pub fn migrate_lock_text(text: &str) -> Result<Option<String>, String> {
+    let reg = Registry::current();
+    let mut lock = bbpkg::lock::Lock::parse(text, &reg)?;
+    if lock.major == bbpkg::lock::LOCK_MAJOR {
+        return Ok(None);
+    }
+    platforms::migrate_lock(&mut lock);
+    Ok(Some(lock.to_text()))
+}
+
 fn migrate_cmd(args: &[String]) -> Result<bool, String> {
     let reg = Registry::current();
     let mut changed = 0;
-    // ADR-010 D1: `bb-bench/0` -> `bb-bench/1`, the schema line only (every
-    // `/0` key keeps its meaning), so a migrated bench builds the same deck.
-    if args.first().map(String::as_str) == Some("--bench") {
+    // A file of one schema per flag: `--bench` (ADR-010 D1, the schema line),
+    // `--project` (ADR-013, the schema line), `--board` (board.bbm, its
+    // schema member; `bb open` rewrites it whole too) and `--lock` (ADR-011
+    // D5, with the scoped platform hashes of ADR-015 D6).
+    let flag = args.first().map(String::as_str);
+    let schema = match flag {
+        Some("--bench") => Some("bb-bench"),
+        Some("--project") => Some("bb-project"),
+        Some("--board") => Some("bb-board"),
+        Some("--lock") => Some("bb-lock"),
+        Some(f) if f.starts_with('-') => return Err(format!("unknown option {f}\n{USAGE}")),
+        _ => None,
+    };
+    if let Some(schema) = schema {
+        let flag = flag.expect("a flag");
         if args.len() < 2 {
-            return Err("usage: bb pkg migrate --bench <file>...".into());
+            return Err(format!("usage: bb pkg migrate {flag} <file>..."));
         }
         for f in &args[1..] {
             let text = std::fs::read_to_string(f).map_err(|e| format!("read {f}: {e}"))?;
-            let t = bbpkg::toml::parse(&text).map_err(|e| format!("{f}: {e}"))?;
-            let id = t
-                .get("schema")
-                .and_then(|s| s.as_str())
-                .ok_or_else(|| format!("{f}: no schema"))?;
-            if let Some(new) = reg
-                .migrate("bb-bench", id, &text)
-                .map_err(|e| format!("{f}: {e}"))?
-            {
-                println!("migrate {f}: {id} -> {}", reg.current_id("bb-bench"));
+            let id = if schema == "bb-board" {
+                serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| v.get("schema").and_then(|s| s.as_str()).map(str::to_string))
+                    .ok_or_else(|| format!("{f}: no schema member"))?
+            } else {
+                let t = bbpkg::toml::parse(&text).map_err(|e| format!("{f}: {e}"))?;
+                t.get("schema")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("{f}: no schema"))?
+            };
+            reg.check(schema, &id).map_err(|e| format!("{f}: {e}"))?;
+            let new = if schema == "bb-lock" {
+                migrate_lock_text(&text).map_err(|e| format!("{f}: {e}"))?
+            } else {
+                reg.migrate(schema, &id, &text)
+                    .map_err(|e| format!("{f}: {e}"))?
+            };
+            if let Some(new) = new {
+                println!("migrate {f}: {id} -> {}", reg.current_id(schema));
                 std::fs::write(f, new).map_err(|e| format!("write {f}: {e}"))?;
                 changed += 1;
             }

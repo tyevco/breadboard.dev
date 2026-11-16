@@ -6,7 +6,7 @@
 # dms-local-packages` builds it as a package with the same id, view name, ports and parameters in the
 # git-ignored local-packages/ (a project that lists that path shadows this package), and `make dms-m5b`
 # gates this view against it on the E1 checks (10 mV / 1 ms).
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "ti/tps22917"
@@ -31,7 +31,7 @@ purpose = "rail switching: ON comparator, CT-set turn-on ramp (Table 7.6), RON, 
 fidelity = ["fast"]
 default_for = ["fast"]
 file = "analog/lsw_fit.lib"
-subckt = "TPS22917_LSW_FIT"
+subckt = "TI_TPS22917_LSW_FIT"
 ports = ["CT", "GND", "ON", "QOD", "VIN", "VOUT"]
 params = { ron_add = "0", isd_out = "0" }
 

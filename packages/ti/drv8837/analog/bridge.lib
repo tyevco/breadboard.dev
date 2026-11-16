@@ -47,9 +47,9 @@
 * Ports: VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP (the package's pin names VM VCC IN1 IN2 nSLEEP OUT1 OUT2
 *   GND; GND is renamed GNDP, the gnd rule of spec/package.md section 5).
 * =====================================================================================================
-.model drv8837_bridge_body D(IS=1e-12 N=1.2 RS=0.05)
+.model TI_DRV8837_BRIDGE_BODY D(IS=1e-12 N=1.2 RS=0.05)
 
-.subckt DRV8837_BRIDGE VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP
+.subckt TI_DRV8837_BRIDGE VM VCC IN1 IN2 NSLEEP OUT1 OUT2 GNDP
 + params: rds=0.28 temp_c=25 tc_hot=0.0032 tc_cold=0.0005 vih_k=0.46 vil_k=0.38 rpd=100k
 + twake=30u ivm_on=0.8m ivcc_on=0.7m
 .param rdst = {rds*(1 + (temp_c > 25 ? tc_hot : tc_cold)*(temp_c - 25))}
@@ -80,13 +80,13 @@ B_LS1 OUT1 GNDP I = gleg*V(drv_en,GNDP)*V(drv_l2,GNDP)*V(OUT1,GNDP)
 B_HS2 VM OUT2 I = gleg*V(drv_en,GNDP)*V(drv_l2,GNDP)*(1 - V(drv_l1,GNDP))*V(VM,OUT2)
 B_LS2 OUT2 GNDP I = gleg*V(drv_en,GNDP)*V(drv_l1,GNDP)*V(OUT2,GNDP)
 * ---- body diodes (no capacitance, no transit time) and off-state leakage
-D_H1 OUT1 VM drv8837_bridge_body
-D_L1 GNDP OUT1 drv8837_bridge_body
-D_H2 OUT2 VM drv8837_bridge_body
-D_L2 GNDP OUT2 drv8837_bridge_body
+D_H1 OUT1 VM TI_DRV8837_BRIDGE_BODY
+D_L1 GNDP OUT1 TI_DRV8837_BRIDGE_BODY
+D_H2 OUT2 VM TI_DRV8837_BRIDGE_BODY
+D_L2 GNDP OUT2 TI_DRV8837_BRIDGE_BODY
 R_OF1 OUT1 GNDP 100Meg
 R_OF2 OUT2 GNDP 100Meg
 * ---- supply currents
 B_IVM VM GNDP I = ivm_on*V(drv_en,GNDP) + 30n*(1 - V(drv_en,GNDP))
 B_IVC VCC GNDP I = ivcc_on*V(drv_en,GNDP) + 5n*(1 - V(drv_en,GNDP))
-.ends DRV8837_BRIDGE
+.ends TI_DRV8837_BRIDGE

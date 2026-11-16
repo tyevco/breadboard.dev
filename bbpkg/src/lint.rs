@@ -40,6 +40,24 @@ pub struct Context<'a> {
     /// For a module: its chip package (`[module] chip`), when the caller
     /// found it, so the pinmap's chip pin names are checked too.
     pub chip: Option<&'a Package>,
+    /// The package is checked for publication (`bb pkg lint --publish`,
+    /// ADR-011 D11): the view-name rule is an error, not a warning.
+    pub publish: bool,
+}
+
+/// The prefix every top-level name of a package's views must start with
+/// before it is published (ADR-011 D11): the package id upper-cased, with
+/// `/`, `-` and `.` as `_`, then `_` (`ti/tps22917` -> `TI_TPS22917_`).
+pub fn name_prefix(id: &str) -> String {
+    let mut s: String = id
+        .chars()
+        .map(|c| match c {
+            '/' | '-' | '.' => '_',
+            c => c.to_ascii_uppercase(),
+        })
+        .collect();
+    s.push('_');
+    s
 }
 
 struct Out(Vec<Finding>);
@@ -132,10 +150,93 @@ pub fn lint(pkg: &Package, ctx: &Context, reg: &Registry) -> Vec<Finding> {
         }
     }
     lint_pins(pkg, &mut o);
-    lint_views(pkg, &mut o);
+    lint_views(pkg, ctx, &mut o);
+    lint_epoch(pkg, &mut o);
     lint_tests(pkg, reg, &mut o);
     o.0.sort_by(|a, b| a.level.cmp(&b.level));
     o.0
+}
+
+/// Is `name` a power pin (`power_in`/`power_out`) of the package?
+fn is_supply_pin(pkg: &Package, name: &str) -> bool {
+    pkg.pins
+        .by_name(name)
+        .is_some_and(|p| matches!(p.role.as_str(), "power_in" | "power_out"))
+}
+
+/// The keys of the Phase 2 schema epoch (bb-part/1, bb-pins/1): accepted,
+/// checked for consistency, and inert until their milestones use them.
+fn lint_epoch(pkg: &Package, o: &mut Out) {
+    let p = &pkg.part;
+    // [power] (ADR-009 D4, D5).
+    if let Some(pw) = &p.power {
+        if let Some(r) = &pw.io_rail {
+            if !is_supply_pin(pkg, r) {
+                o.e(format!(
+                    "power.io_rail {r}: not a power_in or power_out pin of this part"
+                ));
+            }
+        }
+        for i in &pw.idd {
+            if let (Some(max), Ok(typ)) = (&i.max, parse_quantity(&i.typ, Dim::Current)) {
+                if parse_quantity(max, Dim::Current).is_ok_and(|m| m < typ) {
+                    o.e(format!("power.idd.{}: max is below typ", i.state));
+                }
+            }
+        }
+    }
+    // [[document]] and [claims] (ADR-012 D3, D4).
+    if let Some(f) = &p.claims_file {
+        if !pkg.dir.join(f).is_file() {
+            o.e(format!("claims.file {f}: file not found"));
+        }
+    }
+    // upstream_license (ADR-011 D7): an SPDX expression.
+    let provs = p
+        .provenance
+        .iter()
+        .chain(p.analog.iter().filter_map(|v| v.provenance.as_ref()));
+    for pv in provs {
+        if let Some(u) = &pv.upstream_license {
+            if !spdx_ok(u) {
+                o.e(format!(
+                    "provenance.upstream_license {u:?}: expected an SPDX expression"
+                ));
+            }
+        }
+    }
+    // limits (bb-pins/1, ADR-009 D3): the pin and a reference pin exist.
+    for l in &pkg.pins.limits {
+        if pkg.pins.by_name(&l.pin).is_none() {
+            o.e(format!(
+                "pins.toml: limits: pin {} is not in pins.toml",
+                l.pin
+            ));
+        }
+        for b in [&l.min, &l.max].into_iter().flatten() {
+            if let Ok(crate::package::Bound { pin: Some(r), .. }) = crate::package::parse_bound(b) {
+                if pkg.pins.by_name(&r).is_none() {
+                    o.e(format!(
+                        "pins.toml: limits: {} {b:?}: {r} is not a pin of this part",
+                        l.pin
+                    ));
+                }
+            }
+        }
+    }
+    // rail (bb-pins/1, ADR-009 D5): a supply pin of the part.
+    if let Some(sets) = pkg.pins.defaults.get("digital_out") {
+        for (set, kv) in sets {
+            for (k, v) in kv {
+                if k == "rail" && !is_supply_pin(pkg, v) {
+                    o.e(format!(
+                        "pins.toml: defaults.digital_out.{set}.rail {v}: not a power_in or \
+                         power_out pin of this part"
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// A module (`spec/package.md` section 4, ADR-006 Amendment 3): every pad
@@ -384,15 +485,96 @@ fn lint_pins(pkg: &Package, o: &mut Out) {
     }
 }
 
-fn lint_views(pkg: &Package, o: &mut Out) {
+fn lint_views(pkg: &Package, ctx: &Context, o: &mut Out) {
     let p = &pkg.part;
     let mut names = BTreeSet::new();
     let mut rung_owner: BTreeMap<&str, &str> = BTreeMap::new();
     let mut texts: Vec<(String, String)> = Vec::new();
+    let prefix = name_prefix(&p.id);
     for v in &p.analog {
         let at = format!("[[analog]] {}", v.name);
         if !names.insert(v.name.as_str()) {
             o.e(format!("{at}: view name used twice"));
+        }
+        // bb-part/1 (ADR-009 D4): a supply_load view enters the deck at
+        // `pi` beside the instance's view, so it is never on the fast rung
+        // and never a rung's default (the ladder chooses the other views).
+        if v.kind == "supply_load" {
+            if v.fidelity.iter().any(|r| r == "fast") {
+                o.e(format!(
+                    "{at}: a supply_load view is not valid at fast (it enters the deck at pi, \
+                     ADR-009 D4)"
+                ));
+            }
+            if !v.default_for.is_empty() {
+                o.e(format!(
+                    "{at}: a supply_load view is no rung's default (it enters the deck beside \
+                     the instance's view, ADR-009 D4)"
+                ));
+            }
+            if !v.ports.iter().any(|x| matches!(x, Port::OtherPin { .. })) {
+                o.e(format!(
+                    "{at}: a supply_load view has at least one supply pin port"
+                ));
+            }
+            let states: Vec<&str> = p
+                .power
+                .iter()
+                .flat_map(|pw| pw.idd.iter().map(|i| i.state.as_str()))
+                .collect();
+            for port in &v.ports {
+                match port {
+                    Port::State { state } if !states.contains(&state.as_str()) => o.e(format!(
+                        "{at}: state port #{state} has no [power] idd.{state} entry"
+                    )),
+                    Port::OtherPin { pin }
+                        if !pkg.pins.by_name(pin).is_some_and(|x| {
+                            matches!(x.role.as_str(), "power_in" | "power_out" | "ground")
+                        }) =>
+                    {
+                        o.e(format!(
+                            "{at}: port {pin} is not a supply or ground pin (a supply_load \
+                             view's pin ports are the package's supply pins, ADR-009 D4)"
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+        } else if v.ports.iter().any(|x| matches!(x, Port::State { .. })) {
+            o.e(format!("{at}: only a supply_load view has state ports"));
+        }
+        // bb-part/1 (ADR-009): rails name the view's supply ports.
+        for r in &v.rails {
+            let is_port = v.ports.iter().any(|x| match x {
+                Port::Pin(n) | Port::OtherPin { pin: n } => n == r,
+                _ => false,
+            });
+            if !is_port || !is_supply_pin(pkg, r) {
+                o.e(format!(
+                    "{at}: rails: {r} is not one of the view's ports on a power_in or power_out pin"
+                ));
+            }
+        }
+        // bb-part/1 (ADR-009 D8): corners override the view's own params.
+        let mut corner_names = BTreeSet::new();
+        for c in &v.corners {
+            if !corner_names.insert(c.name.as_str()) {
+                o.e(format!("{at}: corner {} declared twice", c.name));
+            }
+            for (k, val) in &c.params {
+                if !v.params.iter().any(|(n, _)| n == k) {
+                    o.e(format!(
+                        "{at}: corner {}: {k} is not one of the view's params",
+                        c.name
+                    ));
+                }
+                if let Err(e) = parse_number(val) {
+                    o.e(format!("{at}: corner {}: params.{k}: {e}", c.name));
+                }
+            }
+            if c.reference.trim().is_empty() {
+                o.e(format!("{at}: corner {}: ref is empty", c.name));
+            }
         }
         for r in &v.default_for {
             if !v.fidelity.contains(r) {
@@ -493,6 +675,31 @@ fn lint_views(pkg: &Package, o: &mut Out) {
                 }
                 for g in spice::gnd_violations(&defs) {
                     o.e(format!("{at}: {}: {g}", v.file));
+                }
+                // ADR-011 D11: before publication every top-level name a
+                // view defines starts with the package prefix, and no
+                // top-level .param exists (an error with --publish, a
+                // warning otherwise).
+                for d in &defs {
+                    let msg = if d.kind == "param" {
+                        Some(format!(
+                            "{at}: {}: a top-level .param {} (parameters go inside the \
+                             subcircuit or on its line, ADR-011 D11)",
+                            v.file, d.name
+                        ))
+                    } else if !d.name.to_ascii_uppercase().starts_with(&prefix) {
+                        Some(format!(
+                            "{at}: {}: .{} {} does not start with {prefix} (ADR-011 D11)",
+                            v.file, d.kind, d.name
+                        ))
+                    } else {
+                        None
+                    };
+                    match msg {
+                        Some(m) if ctx.publish => o.e(m),
+                        Some(m) => o.w(format!("{m}; an error for publication")),
+                        None => {}
+                    }
                 }
                 // ADR-015 D3: every B/E/G expression and .func body against
                 // ngspice 42's function table and arity.

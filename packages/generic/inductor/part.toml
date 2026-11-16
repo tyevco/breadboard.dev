@@ -1,7 +1,7 @@
 # generic/inductor: any two-terminal inductor, selected by footprint plus value
 # (ADR-006 D5; ADR-007 D4 stage 5). A package for a specific MPN overrides
 # it whenever one exists.
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "generic/inductor"
@@ -22,7 +22,7 @@ purpose = "an ideal inductor of the instance's value (the parsed KiCad value fie
 fidelity = ["fast"]
 default_for = ["fast"]
 file = "analog/inductor.lib"
-subckt = "bb_generic_inductor"
+subckt = "GENERIC_INDUCTOR_IDEAL"
 ports = ["1", "2"]
 params = { value = "1e-3" }
 

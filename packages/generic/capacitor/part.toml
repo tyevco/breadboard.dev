@@ -1,7 +1,7 @@
 # generic/capacitor: any two-terminal capacitor, selected by footprint plus value
 # (ADR-006 D5; ADR-007 D4 stage 5). A package for a specific MPN overrides
 # it whenever one exists.
-schema = "bb-part/0"
+schema = "bb-part/1"
 
 [part]
 id = "generic/capacitor"
@@ -22,7 +22,7 @@ purpose = "an ideal capacitor of the instance's value (the parsed KiCad value fi
 fidelity = ["fast"]
 default_for = ["fast"]
 file = "analog/capacitor.lib"
-subckt = "bb_generic_capacitor"
+subckt = "GENERIC_CAPACITOR_IDEAL"
 ports = ["1", "2"]
 params = { value = "1e-6" }
 

@@ -262,7 +262,7 @@ fn a_modified_package_beside_a_board_copy_is_not_ignored_silently() {
     let board = spike.join("board.cir");
     let lock = spike.join("bb.lock");
     let committed_lock = std::fs::read_to_string(&lock).unwrap();
-    assert!(committed_lock.contains("path = \"../../packages/st/stm32f103c8\""));
+    assert!(committed_lock.contains("source = \"path+../../packages/st/stm32f103c8\""));
     let copy = root.join("packages/st/stm32f103c8");
     let recorded = "bb.lock records path ../../packages/st/stm32f103c8, but it resolved to";
 
@@ -340,8 +340,9 @@ fn a_modified_package_beside_a_board_copy_is_not_ignored_silently() {
         updated.contains(&format!("tree = \"{copy_tree}\"")),
         "{updated}"
     );
-    // Only the package's tree line changed; the platform entry (the legacy
-    // hash, ADR-015 Amendment 3) is kept as it stands.
+    // Only the package's tree line changed; the platform entry (the scoped
+    // hash of the schema epoch's relock, ADR-015 Amendment 3) is kept as it
+    // stands.
     let diff: Vec<(&str, &str)> = committed_lock
         .lines()
         .zip(updated.lines())
@@ -391,4 +392,78 @@ fn a_project_copy_warns_for_each_moved_package() {
         );
     }
     assert_eq!(t.matches("records path").count(), 3, "{t}");
+}
+
+/// The schema epoch (milestone S, ADR-011 D5): a `bb-lock/0` file (`path`,
+/// `renode`) is read by `bb run` with the migration hint, `bb open --check`
+/// fails on it (the lock would change), and both `bb pkg migrate --lock` and
+/// `bb open` rewrite it as exactly the committed `bb-lock/1` file. (The
+/// legacy all-sources platform hash becoming the scoped one is
+/// `platforms::tests`.)
+#[test]
+fn a_bb_lock_0_file_is_read_and_migrated() {
+    let root = std::env::temp_dir().join(format!("bb-lock-v0-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let _t = Tmp(root.clone());
+    let spike = root.join("examples/spike");
+    std::fs::create_dir_all(&spike).unwrap();
+    std::fs::copy(
+        repo().join("examples/spike/board.cir"),
+        spike.join("board.cir"),
+    )
+    .unwrap();
+    // An identical copy of the first-party package where the lock's
+    // recorded path points (the path warning names it as not used).
+    copy_dir(
+        &repo().join("packages/st/stm32f103c8"),
+        &root.join("packages/st/stm32f103c8"),
+    );
+    let v1 = std::fs::read_to_string(repo().join("examples/spike/bb.lock")).unwrap();
+    assert!(v1.contains("schema = \"bb-lock/1\""), "{v1}");
+    let v0 = v1
+        .replace("schema = \"bb-lock/1\"", "schema = \"bb-lock/0\"")
+        .replace("source = \"path+", "path = \"")
+        .replace("engine = \"renode\"\nengine_version = ", "renode = ");
+    assert_ne!(v0, v1);
+    let lock = spike.join("bb.lock");
+    let board = spike.join("board.cir");
+    std::fs::write(&lock, &v0).unwrap();
+
+    // bb run reads it (the lock check passes; the run stops at the firmware).
+    let o = run_board(&board);
+    let t = text(&o);
+    assert!(
+        t.contains("bb.lock is bb-lock/0, the previous major"),
+        "{t}"
+    );
+    assert!(t.contains("/nonexistent.elf not found"), "{t}");
+    // bb open --check: the lock would change.
+    let o = open_board(&["--check"], &board);
+    assert!(!o.status.success());
+    assert!(
+        text(&o).contains("it is bb-lock/0, the previous major"),
+        "{}",
+        text(&o)
+    );
+    assert_eq!(std::fs::read_to_string(&lock).unwrap(), v0);
+    // bb pkg migrate --lock, and bb open: the committed bb-lock/1 file.
+    let o = Command::new(bb())
+        .args(["pkg", "migrate", "--lock"])
+        .arg(&lock)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(std::fs::read_to_string(&lock).unwrap(), v1);
+    let o = Command::new(bb())
+        .args(["pkg", "migrate", "--lock"])
+        .arg(&lock)
+        .output()
+        .unwrap();
+    assert!(text(&o).contains("0 files rewritten"), "{}", text(&o));
+    std::fs::write(&lock, &v0).unwrap();
+    let o = open_board(&[], &board);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(text(&o).contains("migrated from bb-lock/0"), "{}", text(&o));
+    assert_eq!(std::fs::read_to_string(&lock).unwrap(), v1);
+    assert!(open_board(&["--check"], &board).status.success());
 }

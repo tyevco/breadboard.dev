@@ -101,6 +101,7 @@ fn errors(dir: &Path, first_party: bool) -> Vec<String> {
         devices: &[],
         first_party,
         chip: None,
+        publish: false,
     };
     lint(&pkg, &ctx, &reg)
         .into_iter()
@@ -378,6 +379,7 @@ fn findings(dir: &Path, chip: Option<&Path>) -> Vec<(Level, String)> {
         devices: &[],
         first_party: false,
         chip: chip.as_ref(),
+        publish: false,
     };
     lint(&pkg, &ctx, &reg)
         .into_iter()
@@ -401,7 +403,7 @@ source = "datasheet"
 confidence = "datasheet_checked"
 "#;
 
-const CHIP_PINS: &str = r#"schema = "bb-pins/0"
+const CHIP_PINS: &str = r#"schema = "bb-pins/1"
 [[pin]]
 number = "A1"
 name = "P0.01"
@@ -444,7 +446,7 @@ source = "datasheet"
 confidence = "self_checked"
 "#;
 
-const MOD_PINS: &str = r#"schema = "bb-pins/0"
+const MOD_PINS: &str = r#"schema = "bb-pins/1"
 [[pin]]
 number = "1"
 name = "GND"

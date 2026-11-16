@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (2026-11-15; see "Approver decisions
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
-  (see "Review notes").
+  (see "Review notes"). Amendments: 1, B1 as implemented; 2, the schema
+  epoch (milestone S).
 - **Part of:** the Phase 2 plan, milestones B1-B4. P1-P5 and E5 use it.
   Its schema keys (`bb-bench/1`, the `switch` view kind) land in milestone
   S, the schema epoch.
@@ -560,3 +561,23 @@ a press on a resistor is refused naming its views. Partition independence:
 every case at `--max-quantum` 10 µs, 1 ms and 10 ms equals its default run
 in `nets.csv`, `nets.vcd` and the non-grant records, and the committed
 hashes are those of the one-cell references.
+
+## Amendment 2 (2026-11-15): the schema epoch (milestone S)
+
+Milestone S landed `bb-bench/1`, the `switch` view kind and event stream
+version 2. ADR-011 Amendment 1 is the record.
+
+- **`bb-bench/1` and `switch` are B1's**, unchanged (A1.1). Every Phase 1
+  bench was already `/1`. The keys that later milestones implement stay
+  **refused, naming the milestone** (A1.7's preference): `fidelity`,
+  `corner`, `[[battery]]`, `[[activity]]`, `[[env]]`, `[probes]` and a
+  `[[load]] replace`. `spec/schema/bench.schema.json` accepts their shape.
+- **`assert` v2 (D7)** is `bbcore::event::Event::Assert`. Its keys are, in
+  order: `t_fs`, `name`, `outcome` (`pass`, `fail` or `not_evaluable`),
+  `pass` (absent when not evaluable), `value`, `limit`, `unit` (`uV`,
+  `fs`, `nA`, `udegC` or `count`), `rung` and `msg`. Optional keys are
+  omitted. B2 emits it.
+- **`engine:bench@1` is not locked yet** (A1.7 deferred it to S). Locking
+  it in every project lock would relock all of them on every `bbbench`
+  edit, which is the churn H4 removed for plugins. Which projects lock it,
+  and when, is decided in track B. `run.json` keeps recording the identity.
