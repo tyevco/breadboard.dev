@@ -7,8 +7,10 @@ the test vectors that qualify its views. This page summarises
 [`spec/package.md`](../records/spec/package), which is normative, with JSON
 Schemas in `spec/schema/`.
 
-Packages are local directories; `bb.lock` pins their content. There is no
-registry, no signing and no `bb pkg publish` in Phase 1.
+Packages are local directories, or (Phase 2 E1) archives that `bb open`
+fetches from a signed registry for an id no local directory provides
+(`spec/registry.md`); `bb.lock` pins their content by tree hash either way,
+and `bb run` never fetches. The public registry is not published yet.
 
 ## Layout and search path
 

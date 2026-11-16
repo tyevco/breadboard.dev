@@ -2199,9 +2199,14 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                     .locked_packages
                     .iter()
                     .map(|l| {
+                        // ADR-011 (Determinism impact): the source is an
+                        // input recorded: "path" for a local package (its
+                        // path would differ between copies of a project),
+                        // else the registry source.
                         Json::obj([
                             ("id", Json::str(&l.id)),
                             ("version", Json::str(&l.version)),
+                            ("source", Json::str(bbpkg::lock::source_kind(&l.source))),
                             ("tree", Json::str(&l.tree)),
                         ])
                     })

@@ -164,6 +164,7 @@ pooled-test:
 	+$(STEP) gdb-test
 	+$(STEP) vscode-templates
 	+$(STEP) dms-system
+	+$(STEP) registry-test
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -1024,6 +1025,31 @@ packages: bb
 	bash scripts/check_local_only.sh
 	bash scripts/check_local_only_test.sh
 	@echo "packages: PASS"
+
+# --- Phase 2 E1: the package registry (ADR-011; local fixtures only, nothing is published) -----
+# registry-test (in make test, a few seconds): G1-G5, G9, G10, vendor files, removal, the source
+# change and local-first rules against a file:// registry and a local HTTPS server, with
+# throwaway keys (scripts/registry_test.sh). registry-gate: the same, then G7 on the local public
+# registry repository with every first-party package (scripts/registry_g7.sh; needs the key in
+# ~/.config/bb-registry). registry-repo: make or update that repository (~/src/bb-registry,
+# BB_REGISTRY_REPO). test-offline: G8, make test and make packages in a network namespace with
+# loopback only (scripts/offline.sh).
+.PHONY: registry-test registry-gate registry-repo test-offline test-offline-inner
+registry-test: firmware bb
+	bash scripts/registry_test.sh $(BB) test
+registry-gate: firmware bb
+	bash scripts/registry_test.sh $(BB) gate
+registry-repo: bb
+	bash scripts/registry_repo.sh $(BB)
+test-offline: firmware bb
+	bash scripts/offline.sh $(MAKE) --no-print-directory test-offline-inner
+test-offline-inner:
+	@if curl -sS --max-time 5 -o /dev/null https://index.crates.io/config.json 2>/dev/null; then \
+	  echo "test-offline: the network is reachable: refusing"; exit 1; fi
+	@echo "test-offline: no route: $$(ip -o route show | wc -l) routes, interfaces: $$(ip -o -br link | awk '{print $$1}' | tr '\n' ' ')"
+	CARGO_NET_OFFLINE=true $(MAKE) --no-print-directory test
+	CARGO_NET_OFFLINE=true $(MAKE) --no-print-directory packages
+	@echo "test-offline: PASS (make test and make packages without a network)"
 
 # --- Phase 1 M5/M5b: the E1 packages (ADR-006 D9, Amendment 3) ------------
 # The committed vectors of packages/ti/tps22917 and packages/worldsemi/

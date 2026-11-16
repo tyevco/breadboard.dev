@@ -198,7 +198,8 @@ pub struct Provenance {
     pub reviewed_by: Vec<String>,
     pub confidence: String,
     /// bb-part/1 (ADR-011 D7, ADR-012): the upstream model's SPDX licence
-    /// of a `vendor_derived` view. Inert until publishing (milestone E1).
+    /// of a `vendor_derived` view; the publication licence gate checks it
+    /// (`lint::licence_gate`).
     pub upstream_license: Option<String>,
 }
 
@@ -256,6 +257,20 @@ pub struct Behavioral {
     pub engine: String,
     pub platform: Option<String>,
     pub device: Option<String>,
+    /// bb-part/1 (ADR-011 D5, D7; Amendment 2): the vendor SVD, fetched at
+    /// use by `bb open` and recorded as a `bb.lock` `[[vendor_file]]`; never
+    /// part of the package.
+    pub svd: Option<VendorRef>,
+}
+
+/// A vendor file a package names but never contains (ADR-011 D5, D7): an
+/// `https://` url, its sha256 (64 lower-case hex digits) and its licence
+/// (one SPDX id; a `LicenseRef-` one too, since it is never redistributed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VendorRef {
+    pub url: String,
+    pub sha256: String,
+    pub license: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -969,11 +984,44 @@ pub fn parse_part(text: &str, reg: &Registry) -> Result<(Part, Option<String>), 
     }
     let behavioral = match o.table_opt("behavioral")? {
         Some(mut b) => {
-            b.reserved(&["cpu", "svd"], RESERVED_FOR)?;
+            b.reserved(&["cpu"], RESERVED_FOR)?;
+            let svd = match b.table_opt("svd")? {
+                Some(mut v) => {
+                    new_in_part_1(major, "behavioral.svd", "ADR-011 D5")?;
+                    let r = VendorRef {
+                        url: v.str_req("url")?,
+                        sha256: v.str_req("sha256")?,
+                        license: v.str_req("license")?,
+                    };
+                    v.done()?;
+                    if !r.url.starts_with("https://") {
+                        return Err(format!(
+                            "behavioral.svd.url {:?}: a vendor file is fetched over https:// only \
+                             (ADR-011 D4)",
+                            r.url
+                        ));
+                    }
+                    if !(r.sha256.len() == 64
+                        && r.sha256
+                            .bytes()
+                            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)))
+                    {
+                        return Err(
+                            "behavioral.svd.sha256: expected 64 lower-case hex digits".into()
+                        );
+                    }
+                    if r.license.trim().is_empty() || r.license.contains(char::is_whitespace) {
+                        return Err("behavioral.svd.license: one SPDX licence id".into());
+                    }
+                    Some(r)
+                }
+                None => None,
+            };
             let r = Behavioral {
                 engine: b.str_req("engine")?,
                 platform: b.str_opt("platform")?,
                 device: b.str_opt("device")?,
+                svd,
             };
             b.done()?;
             if !ENGINES.contains(&r.engine.as_str()) {

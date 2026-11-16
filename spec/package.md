@@ -8,6 +8,8 @@ for device parts in board files and device identities, approver decisions
 over the declared plugin sources, and the board-file package path. The
 Phase 2 schema epoch (milestone S; ADR-009 to ADR-013, ADR-011 Amendment 1):
 `bb-part/1`, `bb-pins/1` and `bb-lock/1`, the view-name rule and the relock.
+Registries (milestone E1, ADR-011 Amendment 2): `registry+` sources, vendor
+files, the licence gate (section 14 and `spec/registry.md`).
 Implementation:
 the `bbpkg` crate (`bbpkg/src`), `bb pkg`, `bb open` and `bb run` (`cli/src`).
 JSON Schemas: `spec/schema/part.schema.json`, `pins.schema.json`,
@@ -19,9 +21,9 @@ A package describes one part: what it is (`part.toml`), its pins and their
 pin models (`pins.toml`, `spec/pin-model.md`), its analog views (SPICE
 subcircuits with provenance), its behavioural layer (the CPU engine platform
 it runs on), and the test vectors that qualify its views. Packages are local
-directories; `bb.lock` pins their content. There is no registry, no signing
-and no `bb pkg publish` in Phase 1 (ADR-006 D8); `bb-lock/1` (section 9)
-holds the registry's keys, inert until milestone E1 (ADR-011).
+directories, found on the search path, or archives fetched from a signed
+registry (section 14, `spec/registry.md`); `bb.lock` pins their content by
+tree hash, whatever the source.
 
 ## 1. Layout and search path
 
@@ -49,6 +51,13 @@ packages/                         first-party packages, in breadboard.dev
   (section 12; ADR-015 D7), then the first-party directory. `bb` finds that
   directory through the path of the checkout it was built from, or
   `$BB_FIRST_PARTY_PACKAGES`.
+- **Then the registries** (ADR-011 D4, `spec/registry.md` section 6): an id
+  that no local directory provides is resolved on a registry (`bb.toml`'s
+  routed `[registries.<name>]`, else the public one) by `bb open`, which
+  fetches it into the cache; `bb run` reads a locked registry package from
+  the cache only. Local sources always come first, so an edited
+  first-party package is used over its published copy, and `make test`
+  never needs the network.
 
 ## 2. `part.toml` (`bb-part/1`)
 
@@ -58,8 +67,9 @@ every `bb-part/0` key and its meaning; a `bb-part/0` file is the previous
 major, read with the migration hint, and holds none of the `bb-part/1`
 keys (refused there with "new in bb-part/1"). Keys still reserved are
 refused with "reserved for a later milestone": top-level `layers`,
-`thermal`, `rtl`; `[pins] ibis`; `[behavioral] cpu`, `svd`. A reserved key
-becomes accepted within the major when an ADR gives it a meaning.
+`thermal`, `rtl`; `[pins] ibis`; `[behavioral] cpu`. A reserved key
+becomes accepted within the major when an ADR gives it a meaning
+(`[behavioral] svd`: milestone E1, ADR-011 Amendment 2).
 
 **The epoch's keys are accepted, checked and inert** until their
 milestones use them: no `fast` deck, output or `run.json` depends on them.
@@ -82,6 +92,7 @@ milestones use them: no `fast` deck, output or `run.json` depends on them.
 | `[pins] file` | yes | the `pins.toml` file |
 | `[module] chip`, `pinmap` | for `kind = "module"` only | the chip package inside, and a module pad to chip pin map |
 | `[behavioral]` | no | at most one behavioural layer (section 3) |
+| `[behavioral] svd` | no | `bb-part/1` (ADR-011 D5, D7; Amendment 2): `{ url, sha256, license }`, the vendor SVD of the part, an `https://` url, its sha256 (64 lower-case hex digits) and its licence (one SPDX id, `LicenseRef-` included). It is a reference only, never part of the package: `bb open` fetches it at use and locks it as a `[[vendor_file]]` (section 9, `spec/registry.md` section 8) |
 | `[[analog]]` | no | analog views (section 3) |
 | `[provenance]` | no | the package-level default for views without their own block |
 | `[tests] dir` | no | the test vector directory (section 8) |
@@ -569,7 +580,7 @@ version = "0.1.0"
 source = "path+../../packages/st/stm32f103c8"   # as found on the search path, relative to the lock (informative; a mismatch warns)
 tree = "sha256:..."                             # the integrity root
 
-# [[vendor_file]]                       # a file fetched at use, never redistributed (milestone E1)
+# [[vendor_file]]                       # a file fetched at use, never redistributed ([behavioral] svd)
 # url = "https://.../STM32F103.svd"
 # sha256 = "<64 hex digits>"
 # license = "LicenseRef-ST-EULA"
@@ -582,13 +593,17 @@ engine = "renode"                       # engine-neutral: a Phase 3 backend is a
 engine_version = "1.17.0"               # not another lock major
 ```
 
-- `source` is `path+<path>` for a local package (every package this build
-  resolves) or `registry+<https:// or file:// url>` (milestone E1: read and
-  kept, never resolved by this build). Only a `path+` source is compared
-  with where the package resolved (the warning below); it is informative.
+- `source` is `path+<path>` for a local package, or `registry+<url>`
+  (`https://` or `file:///`, one trailing `/`) for one a registry supplied
+  (`spec/registry.md` section 6). A `path+` source's path is informative (the
+  warning below); a change of the kind of source, or of registry, for a
+  locked id is a mismatch (refused unless `--update-lock`, by `bb open` and
+  by `bb run`). `bb run` takes a `registry+` package from the registry cache
+  by its tree hash and never fetches.
 - `[[vendor_file]]` entries (url, sha256, license, used_by; sorted by
-  `used_by`, then `url`) are read, checked and kept; nothing in this build
-  fetches one.
+  `used_by`, then `url`): one per `[behavioral] svd` of a resolved package
+  (section 2). `bb open` fetches each into the cache and checks its sha256;
+  a new one is added, a changed one is a mismatch.
 - `engine` and `engine_version` come together. A device identity
   (`device:<id>@<major>`) has neither.
 - **`bb-lock/0`**, the previous major, is read and migrated in memory:
@@ -640,6 +655,10 @@ Applies to `bb-part`, `bb-pins`, `bb-pkgtest`, `bb-lock`, `bb-project`,
 - `bb` reads the current and the previous major of every schema and writes
   only the current one. Reading the previous major prints a migration hint;
   a newer major is refused with "upgrade bb"; an older one is refused.
+- **Registry content** is immutable, so `bb` reads every `bb-part` major ever
+  published to a registry, migrating in memory at read time (ADR-011 D12,
+  `spec/registry.md` section 5); the archive and its tree hash never change.
+  An unknown major there is refused with "update bb".
 - `bb pkg migrate` rewrites a package (its `part.toml`, `pins.toml` and test
   vectors) in place to the current majors, mechanically. First-party
   packages are migrated in the same commit as the schema change. `bb pkg
@@ -659,6 +678,14 @@ Applies to `bb-part`, `bb-pins`, `bb-pkgtest`, `bb-lock`, `bb-project`,
   parameter-set name is a major bump; a provenance-only edit is a patch.
 
 ## 11. Lint (`bb pkg lint`)
+
+`bb pkg lint --publish` (and `bb registry publish`, which runs it) checks a
+package for publication: the view-name rule below is an error, and **the
+licence gate** (ADR-011 D7) applies: every licence id of `part.license`
+OSI-approved, or CC0-1.0, CC-BY-4.0 or CC-BY-SA-4.0 for a package without
+view code; no `LicenseRef-*`; every view with a provenance `source`; a
+`vendor_derived` view with a redistributable `upstream_license`. A vendor
+file (`[behavioral] svd`) may carry any licence: it is not in the package.
 
 Errors:
 
@@ -812,3 +839,14 @@ others in `alt`).
   format and are schema-validated; they are **not** the Phase 1 packages
   (plan M5 and M5b write those from the datasheets and the suite), and
   their view files are not included.
+
+## 14. Registries
+
+Registries are specified in `spec/registry.md` (ADR-011): the static layout,
+the canonical index lines, the signed snapshot and its serial, the
+deterministic archive (`bb pkg pack`, `bb pkg unpack`), yanking and removal,
+routing by namespace, vendor files, the cache, and `bb registry`, the
+registry's CI tools. A registry package is the same package as a local one
+when its tree hash is the same: decks and outputs depend on tree hashes
+only, and `run.json` records each package's source (`path`, or its
+`registry+` source) as an input.

@@ -1,0 +1,7 @@
+# owners.toml: who may change each namespace (ADR-011 D8 item 8, D10). A pull request that adds
+# or changes a namespace's index lines passes only when its author or an approving reviewer is
+# listed. At first the project owns every namespace; a vendor claims its own later through a
+# GitHub organisation with a verified domain and a reviewed change to this file.
+default = ["tyevco"]
+
+[namespaces]

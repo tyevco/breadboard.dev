@@ -19,11 +19,20 @@
 //! ADR-015 D7: a board file's search path starts with its `*bb packages
 //! path=<dir>` lines, and `bb open` and `bb run` warn when a locked package
 //! resolved somewhere other than its recorded `path`.
+//!
+//! ADR-011 (Phase 2 E1): an id no local source provides is resolved on a
+//! registry (a project's routed `[registries]`, else the public one) and
+//! fetched into the cache, only by `bb open` (`--offline`: the cache only);
+//! `bb run` takes a locked registry package from the cache by its tree
+//! hash and never fetches. A change of source for a locked id needs
+//! `--update-lock`, and so does a changed vendor file.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use bbpkg::lock::{self, Drift, Lock, LockedPackage, LockedPlatform};
+use bbpkg::lock::{self, Drift, Lock, LockedPackage, LockedPlatform, VendorFile};
+use bbpkg::registry::{Access, Resolver};
 use bbpkg::schema::Registry;
 use bbpkg::SearchPath;
 
@@ -31,19 +40,24 @@ use crate::board::{self, Board};
 use crate::import;
 use crate::platforms;
 use crate::project::{Project, Source, PROJECT_FILE};
+use crate::registry;
 
 const USAGE: &str = "\
-usage: bb open <board.cir> [--check] [--update-lock]
+usage: bb open <board.cir> [--check] [--update-lock] [--offline]
 
   Resolves the board file's package= parts (ADR-006) on the package search
   path (the directories of its `*bb packages path=<dir>` lines, relative to
   the board file, then breadboard.dev's packages/, or
-  $BB_FIRST_PARTY_PACKAGES) and writes
-  bb.lock next to it: each package's version and tree hash, each engine
-  platform's content hash.
+  $BB_FIRST_PARTY_PACKAGES), then, for an id none of them provides, on the
+  public registry (ADR-011 D4; a project's [registries] route namespaces),
+  and writes bb.lock next to it: each package's version, source and tree
+  hash, each vendor file, each engine platform's content hash.
   --check        write nothing; fail if bb.lock is missing or would change
-  --update-lock  accept packages or platforms whose hash changed (rewrites
-                 only those entries; without it they are refused)
+  --update-lock  accept packages, sources, vendor files or platforms that
+                 changed (rewrites only those entries; without it they are
+                 refused)
+  --offline      fetch nothing: registry packages and vendor files from the
+                 cache only (bb run never fetches)
   KiCad projects (.kicad_pro, .net) and bb.toml are Phase 1 M4.";
 
 /// The package search path for a board file (ADR-006 D1, ADR-015 D7): the
@@ -69,20 +83,38 @@ pub fn search_path(board_file: &Path, text: &str) -> Result<SearchPath, String> 
     Ok(SearchPath { dirs })
 }
 
-/// Parse a board file, resolving packages on the search path. `fast`
-/// (`bb run`): take a package at its conventional path without loading the
-/// whole search path (the lock pins its content anyway); `bb open` loads
-/// everything, so an id provided twice is an error.
-pub fn parse_board(path: &Path, fast: bool) -> Result<Board, String> {
+/// Parse a board file, resolving packages on the search path, then (ADR-011
+/// D4) through `res` for an id no local directory provides: the public
+/// registry (`bb open`), or the lock's registry trees in the cache (`bb
+/// run`, [`Access::Locked`]). `fast` (`bb run`): take a package at its
+/// conventional path without loading the whole search path (the lock pins
+/// its content anyway); `bb open` loads everything, so an id provided twice
+/// is an error.
+pub fn parse_board(
+    path: &Path,
+    fast: bool,
+    res: &RefCell<Resolver>,
+    lock: Option<&Lock>,
+) -> Result<Board, String> {
     let text =
         std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let sp = search_path(path, &text)?;
     let reg = Registry::current();
-    let lookup = |spec: &str| {
-        if fast {
-            sp.find_fast(spec, &reg)
-        } else {
-            sp.find(spec, &reg)
+    let lookup = |spec: &str| match sp.try_find(spec, &reg, fast)? {
+        Some(p) => Ok(p),
+        None => {
+            let id = spec.split_once('@').map(|(i, _)| i).unwrap_or(spec);
+            let locked = lock.and_then(|l| l.packages.iter().find(|p| p.id == id));
+            res.borrow_mut().resolve(spec, locked, &reg).map_err(|e| {
+                format!(
+                    "{e} (searched {} first)",
+                    sp.dirs
+                        .iter()
+                        .map(|d| d.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
         }
     };
     board::parse_with(&text, Some(&lookup)).map_err(|e| format!("{}: {e}", path.display()))
@@ -103,25 +135,43 @@ pub fn lock_path(board_file: &Path) -> PathBuf {
         .join("bb.lock")
 }
 
-/// What the board resolves to now: its packages and platforms as lock
+/// What a board resolves to now, as lock entries.
+pub struct Resolved {
+    pub packages: Vec<LockedPackage>,
+    pub vendor_files: Vec<VendorFile>,
+    pub platforms: Vec<LockedPlatform>,
+}
+
+impl Resolved {
+    /// Every difference from `lock`.
+    pub fn drift(&self, lock: Option<&Lock>) -> Vec<Drift> {
+        let mut d = lock::drift(lock, &self.packages, &self.platforms);
+        d.extend(lock::vendor_drift(lock, &self.vendor_files));
+        d
+    }
+}
+
+/// What the board resolves to now: its packages (a registry package with
+/// its registry source, from `res`), vendor files and platforms as lock
 /// entries (a platform as `lock` pins it, `PlatformDef::locked_for`).
 pub fn resolved(
     board_file: &Path,
     b: &Board,
     lock: Option<&Lock>,
-) -> Result<(Vec<LockedPackage>, Vec<LockedPlatform>), String> {
+    res: &Resolver,
+) -> Result<Resolved, String> {
     let proj = std::fs::canonicalize(lock_path(board_file).parent().unwrap())
         .map_err(|e| format!("{}: {e}", board_file.display()))?;
     let mut pk = Vec::new();
     let mut pl: Vec<LockedPlatform> = Vec::new();
     for p in &b.packages {
         let dir = std::fs::canonicalize(&p.dir).map_err(|e| format!("{}: {e}", p.dir.display()))?;
-        pk.push(LockedPackage::at_path(
-            &p.part.id,
-            &p.part.version,
-            &lock::relative_path(&proj, &dir),
+        pk.push(registry::locked_entry(
+            res,
+            p,
+            &proj,
             &lock::tree_hash(&dir)?,
-        ));
+        )?);
         if let Some(pid) = p
             .part
             .behavioral
@@ -148,7 +198,11 @@ pub fn resolved(
             }
         }
     }
-    Ok((pk, pl))
+    Ok(Resolved {
+        packages: pk,
+        vendor_files: registry::vendor_files(&b.packages),
+        platforms: pl,
+    })
 }
 
 /// The lock path warnings of a board file (ADR-015 D7).
@@ -170,21 +224,38 @@ pub fn project_path_warnings(dir: &Path, lock: Option<&Lock>, pk: &[LockedPackag
     }
 }
 
+/// `bb run`'s board file: parsed with the lock's registry packages from
+/// the cache (never fetched), and checked against its current `bb.lock`.
+/// Returns the board and its warnings (path, yank; ADR-015 D7, ADR-011 D2).
+pub fn board_for_run(board_file: &Path) -> Result<(Board, Vec<String>), String> {
+    let lp = lock_path(board_file);
+    let lock = Lock::read(&lp, &Registry::current())?;
+    let res = RefCell::new(registry::resolver(None, Access::Locked)?);
+    let b = parse_board(board_file, true, &res, lock.as_ref())?;
+    let mut w = check_lock(board_file, &b, lock.as_ref(), &res.borrow())?;
+    w.extend(res.borrow().warnings.iter().cloned());
+    Ok((b, w))
+}
+
 /// `bb run`'s check: a board with packages needs a current `bb.lock`.
 /// Returns the lock's path warnings (ADR-015 D7).
-pub fn check_lock(board_file: &Path, b: &Board) -> Result<Vec<String>, String> {
+pub fn check_lock(
+    board_file: &Path,
+    b: &Board,
+    lock: Option<&Lock>,
+    res: &Resolver,
+) -> Result<Vec<String>, String> {
     if b.packages.is_empty() {
         return Ok(Vec::new());
     }
     let lp = lock_path(board_file);
-    let lock = Lock::read(&lp, &Registry::current())?;
-    let (pk, pl) = resolved(board_file, b, lock.as_ref())?;
-    let d = lock::drift(lock.as_ref(), &pk, &pl);
+    let r = resolved(board_file, b, lock, res)?;
+    let d = r.drift(lock);
     if d.is_empty() {
         // A bb-lock/0 file is read (its legacy platform hashes too) with the
         // migration hint (ADR-011 D5, ADR-015 Amendment 3).
-        let mut w: Vec<String> = lock.as_ref().and_then(Lock::hint).into_iter().collect();
-        w.extend(path_warnings(board_file, lock.as_ref(), &pk));
+        let mut w: Vec<String> = lock.and_then(Lock::hint).into_iter().collect();
+        w.extend(path_warnings(board_file, lock, &r.packages));
         return Ok(w);
     }
     let mut msg = format!(
@@ -201,7 +272,7 @@ pub fn check_lock(board_file: &Path, b: &Board) -> Result<Vec<String>, String> {
     for x in &d {
         msg.push_str(&format!("\n  {}", x.describe()));
     }
-    for w in path_warnings(board_file, lock.as_ref(), &pk) {
+    for w in path_warnings(board_file, lock, &r.packages) {
         msg.push_str(&format!("\n  {w}"));
     }
     msg.push_str(&format!(
@@ -226,14 +297,24 @@ pub fn main(args: &[String]) -> ExitCode {
     }
 }
 
+/// Fetch (or, offline, find in the cache) every vendor file (ADR-011 D5).
+fn fetch_vendor_files(v: &[VendorFile], offline: bool) -> Result<(), String> {
+    for f in v {
+        registry::fetch_vendor(f, offline)?;
+    }
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<ExitCode, String> {
     let mut check = false;
     let mut update = false;
+    let mut offline = false;
     let mut target: Option<PathBuf> = None;
     for a in args {
         match a.as_str() {
             "--check" => check = true,
             "--update-lock" => update = true,
+            "--offline" => offline = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(ExitCode::SUCCESS);
@@ -246,10 +327,15 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             }
         }
     }
+    let access = if offline {
+        Access::Offline
+    } else {
+        Access::Online
+    };
     let target = target.unwrap_or_else(|| PathBuf::from("."));
     if target.is_dir() || target.file_name().is_some_and(|n| n == PROJECT_FILE) {
         let dir = import::project_dir(Some(&target))?;
-        return open_project(&dir, check, update);
+        return open_project(&dir, check, update, access);
     }
     if target
         .extension()
@@ -301,11 +387,22 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         } else {
             return Err(format!("--check: {} is missing", toml_path.display()));
         }
-        return open_project(&dir, check, update);
+        return open_project(&dir, check, update, access);
     }
-    let b = parse_board(&target, false)?;
+    let lp = lock_path(&target);
+    let reg = Registry::current();
+    let mut lock = Lock::read(&lp, &reg)?;
+    // A bb-lock/0 file is migrated in memory (ADR-011 D5): its legacy
+    // platform hashes become the scoped ones (ADR-015 Amendment 3), and the
+    // lock is written as bb-lock/1 even when nothing else changed.
+    let migrated = lock.as_mut().is_some_and(platforms::migrate_lock);
+    let res = RefCell::new(registry::resolver(None, access)?);
+    let b = parse_board(&target, false, &res, lock.as_ref())?;
     for w in &b.warnings {
         eprintln!("bb open: warning: {}: {w}", target.display());
+    }
+    for w in &res.borrow().warnings {
+        eprintln!("bb open: warning: {w}");
     }
     let mut out = std::io::stdout().lock();
     use std::io::Write;
@@ -325,18 +422,17 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         let _ = writeln!(out, "bb open: no package= parts, so no bb.lock is needed");
         return Ok(ExitCode::SUCCESS);
     }
-    let lp = lock_path(&target);
-    let reg = Registry::current();
-    let mut lock = Lock::read(&lp, &reg)?;
-    // A bb-lock/0 file is migrated in memory (ADR-011 D5): its legacy
-    // platform hashes become the scoped ones (ADR-015 Amendment 3), and the
-    // lock is written as bb-lock/1 even when nothing else changed.
-    let migrated = lock.as_mut().is_some_and(platforms::migrate_lock);
-    let (pk, pl) = resolved(&target, &b, lock.as_ref())?;
-    for w in path_warnings(&target, lock.as_ref(), &pk) {
+    let r = resolved(&target, &b, lock.as_ref(), &res.borrow())?;
+    for p in &r.packages {
+        if !p.source.starts_with(lock::PATH_SOURCE) {
+            let _ = writeln!(out, "bb open: {} {} from {}", p.id, p.version, p.source);
+        }
+    }
+    fetch_vendor_files(&r.vendor_files, offline)?;
+    for w in path_warnings(&target, lock.as_ref(), &r.packages) {
         eprintln!("bb open: warning: {w}");
     }
-    let d = lock::drift(lock.as_ref(), &pk, &pl);
+    let d = r.drift(lock.as_ref());
     for x in &d {
         let _ = writeln!(out, "bb open: {}", x.describe());
     }
@@ -399,7 +495,7 @@ fn write_if_changed(path: &Path, text: &str) -> Result<bool, String> {
 /// `bb open` on a project (ADR-007 D7): import every board, resolve, and
 /// write `board.bbm`, `bb.lock` and `.bb/` (`--check`: write nothing, fail
 /// if `board.bbm` or `bb.lock` would change).
-fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, String> {
+fn open_project(dir: &Path, check: bool, update: bool, access: Access) -> Result<ExitCode, String> {
     use std::io::Write;
     let p = Project::read(dir)?;
     if let Some(h) = &p.schema_hint {
@@ -411,9 +507,13 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
     // A bb-lock/0 file is migrated in memory (ADR-011 D5, ADR-015
     // Amendment 3), so board.bbm gets the scoped platform hashes too.
     let migrated = lock.as_mut().is_some_and(platforms::migrate_lock);
-    let imp = import::import(&p, import::Mode::Open, lock.as_ref())?;
+    let mut res = registry::resolver(Some(&p), access)?;
+    let imp = import::import(&p, import::Mode::Open, lock.as_ref(), &mut res)?;
     let mut out = std::io::stdout().lock();
     for w in &imp.warnings {
+        eprintln!("bb open: warning: {w}");
+    }
+    for w in &res.warnings {
         eprintln!("bb open: warning: {w}");
     }
     let n_inst = imp.board.instances.len();
@@ -444,6 +544,11 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
             .collect::<Vec<_>>()
             .join(", ")
     );
+    for l in &imp.locked_packages {
+        if !l.source.starts_with(lock::PATH_SOURCE) {
+            let _ = writeln!(out, "bb open: {} {} from {}", l.id, l.version, l.source);
+        }
+    }
     if !imp.unresolved.is_empty() {
         let _ = writeln!(
             out,
@@ -490,12 +595,13 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
     for w in &dev_warnings {
         eprintln!("bb open: warning: {w}");
     }
+    fetch_vendor_files(&imp.vendor_files, access == Access::Offline)?;
     let bbm_text = imp.board.to_text();
     let bbm_path = dir.join(import::BOARD_FILE);
     for w in project_path_warnings(dir, lock.as_ref(), &imp.locked_packages) {
         eprintln!("bb open: warning: {w}");
     }
-    let d = lock::drift(lock.as_ref(), &imp.locked_packages, &imp.locked_platforms);
+    let d = imp.drift(lock.as_ref());
     for x in &d {
         let _ = writeln!(out, "bb open: {}", x.describe());
     }

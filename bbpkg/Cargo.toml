@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 bbcore.workspace = true
 bb-analog-ngspice = { path = "../engines/analog-ngspice" }
+minisign-verify = "0.3.0"
 
 [dev-dependencies]
 serde_json.workspace = true

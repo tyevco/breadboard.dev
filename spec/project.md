@@ -34,10 +34,13 @@ migration is the schema line only (`bb pkg migrate --project`);
   the engine-neutral name of the grant lattice) is milestone R3's, which is
   not in this build: it is refused, naming the milestone, so a project that
   names it never runs other than as written.
-- **`[registries.<name>]`** (`url`, `https://` or `file://`; `key`, the
+- **`[registries.<name>]`** (`url`, `https://` or `file:///`; `key`, the
   registry's minisign public key; `namespaces`, at least one, each routed
-  to one registry only) is read and checked and is inert: nothing in this
-  build fetches from a registry (milestone E1).
+  to one registry only): a private registry (ADR-011 D4, milestone E1). An
+  id of a routed namespace that no local source provides resolves on that
+  registry only, never on another one or the public one; every other
+  namespace resolves on the public registry (`spec/registry.md` section 6).
+  Only `bb open` fetches.
 - A binding (`[[bind]]`, `[[device.bind]]`) may also set the `bb-pins/1`
   `digital_out` parameters `rail` and `rhiz` (`spec/package.md` section 4),
   unused at `fast`.
@@ -582,7 +585,9 @@ reasons); `devices`, only when the project has a `[[device]]` (per device
 written; ADR-013 D1); `digital_only`, only when a net is (its display
 names, sorted; ADR-014 D4); `assert_files`, only when `bb run --assert`
 names any (each file's name and text, in order; ADR-010 Amendment 3);
-`packages` and `platforms` (the locked hashes); `deck_sha256`;
+`packages` (each one's id, version, `source`: `path` for a local package,
+else its `registry+<url>` source, ADR-011; and tree) and `platforms` (the
+locked hashes); `deck_sha256`;
 `options` (every run option that can change results, the probes, and
 `ngspice_watchdog`: `max_points_per_cell` and
 `max_points_without_progress`, the progress watchdog's limits, which decide

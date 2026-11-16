@@ -66,8 +66,8 @@ pub const PIN_PARAM_KEYS: &[&str] = &[
 ];
 
 /// `[registries.<name>]` (`bb-project/1`, ADR-011 D4): a private registry,
-/// routed by namespace. Read and checked; nothing in this build fetches
-/// from a registry (milestone E1), so it is inert.
+/// routed by namespace (`crate::registry::resolver`, `spec/registry.md`
+/// section 6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegistryEntry {
     pub name: String,
@@ -138,7 +138,7 @@ pub struct Project {
     pub connections: Vec<ConnectionEntry>,
     /// `[[device]]` (`bb-project/1`).
     pub devices: Vec<DeviceEntry>,
-    /// `[registries.<name>]` (`bb-project/1`, ADR-011 D4; inert until E1).
+    /// `[registries.<name>]` (`bb-project/1`, ADR-011 D4).
     pub registries: Vec<RegistryEntry>,
     /// The migration hint when the file is the previous major
     /// (`bb-project/0`, ADR-006 D11).
@@ -245,9 +245,10 @@ impl Project {
                         e.url
                     ));
                 }
-                if e.key.trim().is_empty() {
-                    return Err(format!("registries.{rname}.key: empty"));
-                }
+                bbpkg::registry::check_url(&e.url)
+                    .map_err(|err| format!("registries.{rname}.url: {err}"))?;
+                bbpkg::registry::check_key(&e.key)
+                    .map_err(|err| format!("registries.{rname}.key: {err}"))?;
                 if e.namespaces.is_empty() {
                     return Err(format!(
                         "registries.{rname}.namespaces: a registry is routed by at least one \
@@ -1353,7 +1354,7 @@ b = "base:J3"
         let e =
             Project::parse(&format!("{v1}\n[run]\ncpu = \"none\"\n"), Path::new(".")).unwrap_err();
         assert!(e.contains("[run] cpu") && e.contains("milestone R3"), "{e}");
-        let reg = "\n[registries.acme]\nurl = \"file:///srv/reg\"\nkey = \"RWQ\"\nnamespaces = [\"acme\"]\n";
+        let reg = "\n[registries.acme]\nurl = \"file:///srv/reg\"\nkey = \"RWR3ioZYEKjIEvJyXiAwNL6czjJWdX3+bxrhw4QWChjFKUCBHjYT6EGI\"\nnamespaces = [\"acme\"]\n";
         let p = Project::parse(&format!("{v1}{reg}"), Path::new(".")).unwrap();
         assert_eq!(p.registries[0].namespaces, vec!["acme"]);
         for (from, to, want) in [
@@ -1368,7 +1369,21 @@ b = "base:J3"
                 "namespaces = [\"Acme\"]",
                 "not a namespace",
             ),
-            ("key = \"RWQ\"\n", "", "key: required"),
+            (
+                "key = \"RWR3ioZYEKjIEvJyXiAwNL6czjJWdX3+bxrhw4QWChjFKUCBHjYT6EGI\"\n",
+                "",
+                "key: required",
+            ),
+            (
+                "RWR3ioZYEKjIEvJyXiAwNL6czjJWdX3+bxrhw4QWChjFKUCBHjYT6EGI",
+                "RWQ",
+                "minisign public key",
+            ),
+            (
+                "file:///srv/reg",
+                "file://relative",
+                "file:///<absolute path>",
+            ),
         ] {
             let e = Project::parse(
                 &format!("{v1}{}", reg.replacen(from, to, 1)),
@@ -1377,7 +1392,7 @@ b = "base:J3"
             .unwrap_err();
             assert!(e.contains(want), "{want}: {e}");
         }
-        let two = format!("{v1}{reg}[registries.other]\nurl = \"https://o\"\nkey = \"K\"\nnamespaces = [\"acme\"]\n");
+        let two = format!("{v1}{reg}[registries.other]\nurl = \"https://o\"\nkey = \"RWR3ioZYEKjIEvJyXiAwNL6czjJWdX3+bxrhw4QWChjFKUCBHjYT6EGI\"\nnamespaces = [\"acme\"]\n");
         assert!(Project::parse(&two, Path::new("."))
             .unwrap_err()
             .contains("routed to two registries"));

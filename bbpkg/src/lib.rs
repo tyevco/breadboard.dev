@@ -10,9 +10,14 @@
 //! - [`lock`]: tree hashes, platform content hashes and `bb.lock`;
 //! - [`schema`]: schema ids, the versioning policy, migrations;
 //! - [`optsets`]: named solver option sets;
+//! - [`archive`]: deterministic package archives (ADR-011 D6);
+//! - [`registry`]: registries, the signed snapshot, the cache and resolution
+//!   (ADR-011);
+//! - [`semver`]: versions and caret requirements (ADR-011 D4);
 //! - [`pattern`]: `mpn_patterns`, anchored regular expressions (ADR-007 D4);
 //! - [`sha256`].
 
+pub mod archive;
 pub mod bexpr;
 pub mod lint;
 pub mod lock;
@@ -21,7 +26,9 @@ pub mod optsets;
 pub mod package;
 pub mod pattern;
 pub mod pkgtest;
+pub mod registry;
 pub mod schema;
+pub mod semver;
 pub mod sha256;
 pub mod spice;
 pub mod toml;
@@ -56,6 +63,25 @@ impl SearchPath {
         reg: &schema::Registry,
     ) -> Result<package::Package, String> {
         self.find_impl(spec, reg, true)
+    }
+
+    /// As [`SearchPath::find`] (`fast`: [`SearchPath::find_fast`]), but an id
+    /// no directory provides is `Ok(None)`, so that a registry can be asked
+    /// next (ADR-011 D4: local sources first). An id provided locally with
+    /// another version than `id@version` asks for is still an error: a local
+    /// package shadows the registry.
+    pub fn try_find(
+        &self,
+        spec: &str,
+        reg: &schema::Registry,
+        fast: bool,
+    ) -> Result<Option<package::Package>, String> {
+        let id = spec.split_once('@').map(|(i, _)| i).unwrap_or(spec);
+        match self.find_impl(spec, reg, fast) {
+            Ok(p) => Ok(Some(p)),
+            Err(e) if e.starts_with(&format!("package {id} not found (searched ")) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     fn find_impl(

@@ -88,6 +88,154 @@ fn spdx_ok(s: &str) -> bool {
         })
 }
 
+/// OSI-approved licences (SPDX ids) the publication gate accepts (ADR-011
+/// D7). A licence missing here is refused until it is added with its OSI
+/// approval checked.
+pub const OSI_LICENSES: &[&str] = &[
+    "0BSD",
+    "AFL-3.0",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "Apache-2.0",
+    "Artistic-2.0",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-2-Clause-Patent",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDDL-1.0",
+    "CERN-OHL-P-2.0",
+    "CERN-OHL-S-2.0",
+    "CERN-OHL-W-2.0",
+    "ECL-2.0",
+    "EPL-1.0",
+    "EPL-2.0",
+    "EUPL-1.2",
+    "GPL-2.0-only",
+    "GPL-2.0-or-later",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "ISC",
+    "LGPL-2.1-only",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-only",
+    "LGPL-3.0-or-later",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "MS-PL",
+    "MS-RL",
+    "NCSA",
+    "OFL-1.1",
+    "PostgreSQL",
+    "UPL-1.0",
+    "Unlicense",
+    "Zlib",
+];
+
+/// Licences accepted for data-only packages (no view code; ADR-011 D7).
+pub const DATA_LICENSES: &[&str] = &["CC0-1.0", "CC-BY-4.0", "CC-BY-SA-4.0"];
+
+/// SPDX exceptions accepted after `WITH`.
+pub const LICENSE_EXCEPTIONS: &[&str] = &[
+    "Classpath-exception-2.0",
+    "GCC-exception-3.1",
+    "KiCad-libraries-exception",
+    "LLVM-exception",
+];
+
+/// The licence ids and exceptions of an SPDX expression, in order.
+fn spdx_ids(s: &str) -> (Vec<String>, Vec<String>) {
+    let mut ids = Vec::new();
+    let mut exc = Vec::new();
+    let mut after_with = false;
+    for w in s.replace('(', " ( ").replace(')', " ) ").split_whitespace() {
+        match w {
+            "AND" | "OR" | "(" | ")" => after_with = false,
+            "WITH" => after_with = true,
+            id if after_with => {
+                exc.push(id.to_string());
+                after_with = false;
+            }
+            id => ids.push(id.to_string()),
+        }
+    }
+    (ids, exc)
+}
+
+/// Is `id` a licence a published package may name (OSI, or a data licence)?
+pub fn redistributable(id: &str) -> bool {
+    OSI_LICENSES.contains(&id) || DATA_LICENSES.contains(&id)
+}
+
+/// The publication licence gate (ADR-011 D7): every licence of
+/// `part.license` OSI-approved, or CC0-1.0 / CC-BY-4.0 / CC-BY-SA-4.0 for a
+/// package without view code; no `LicenseRef-*`; every view with a
+/// provenance `source`; a `vendor_derived` view with a redistributable
+/// `upstream_license`. A vendor file (`[behavioral] svd`) is a reference
+/// and may carry any licence. One message per violation.
+pub fn licence_gate(pkg: &Package) -> Vec<String> {
+    let p = &pkg.part;
+    let mut out = Vec::new();
+    let (ids, exc) = spdx_ids(&p.license);
+    if ids.is_empty() {
+        out.push(format!(
+            "part.license {:?}: no licence id (ADR-011 D7)",
+            p.license
+        ));
+    }
+    for id in &ids {
+        if id.starts_with("LicenseRef-") {
+            out.push(format!(
+                "part.license {id}: a LicenseRef- licence cannot be published (ADR-011 D7)"
+            ));
+        } else if DATA_LICENSES.contains(&id.as_str()) {
+            if !p.analog.is_empty() {
+                out.push(format!(
+                    "part.license {id}: allowed only for data-only packages (pins, tables, \
+                     vectors), and this package has {} analog view(s) (ADR-011 D7)",
+                    p.analog.len()
+                ));
+            }
+        } else if !OSI_LICENSES.contains(&id.as_str()) {
+            out.push(format!(
+                "part.license {id}: not an OSI-approved licence this bb knows, nor CC0-1.0, \
+                 CC-BY-4.0 or CC-BY-SA-4.0 (ADR-011 D7)"
+            ));
+        }
+    }
+    for e in &exc {
+        if !LICENSE_EXCEPTIONS.contains(&e.as_str()) {
+            out.push(format!(
+                "part.license: exception {e} is not one this bb knows (ADR-011 D7)"
+            ));
+        }
+    }
+    for v in &p.analog {
+        match v.provenance.as_ref().or(p.provenance.as_ref()) {
+            None => out.push(format!(
+                "view {}: no provenance source (every published view needs one, ADR-011 D7)",
+                v.name
+            )),
+            Some(pr) if pr.source == "vendor_derived" => {
+                let ok = pr.upstream_license.as_deref().is_some_and(|u| {
+                    let (ids, _) = spdx_ids(u);
+                    !ids.is_empty() && ids.iter().all(|x| redistributable(x))
+                });
+                if !ok {
+                    out.push(format!(
+                        "view {}: vendor_derived with upstream_license {:?}: publishing needs a \
+                         known redistributable upstream licence (ADR-011 D7, the TPS22917 rule)",
+                        v.name, pr.upstream_license
+                    ));
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    out
+}
+
 /// Lint one loaded package.
 pub fn lint(pkg: &Package, ctx: &Context, reg: &Registry) -> Vec<Finding> {
     let mut o = Out(Vec::new());
@@ -106,6 +254,13 @@ pub fn lint(pkg: &Package, ctx: &Context, reg: &Registry) -> Vec<Finding> {
         o.e(format!(
             "part.license is {LOCAL_ONLY}: such a package must live in a local package path outside breadboard.dev, never in its packages/ (ADR-006 D9)"
         ));
+    }
+    // ---- the licence gate of publication (ADR-011 D7): errors with
+    // --publish only.
+    if ctx.publish {
+        for m in licence_gate(pkg) {
+            o.e(m);
+        }
     }
     // ---- behavioural layer (D3, D8).
     if let Some(b) = &p.behavioral {

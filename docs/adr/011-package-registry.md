@@ -5,7 +5,9 @@
   (see "Review notes").
 - **Amendments:** 1 (2026-11-15), milestone S as built: the schema epoch
   (every Phase 2 schema major of ADR-009 to ADR-013), `bb-lock/1`, the
-  D11 renames and the one relock.
+  D11 renames and the one relock. 2 (2026-11-15), milestone E1 as built:
+  the client, the archives, the registry's CI tools and repository, the
+  local fixtures and gates.
 - **Part of:** the Phase 2 plan, milestones E0-E1, then E3 and E5.
   `bb-lock/1` lands in milestone S, the schema epoch, before anything is
   published.
@@ -585,3 +587,148 @@ pieces of the draft (16 benches, 7 projects, their `board.bbm` and two
 example packages were already `/1` on `main`). Those keys are the epoch's
 own, unchanged here, so no file needs a second migration. Nothing has
 been published (E1 has not landed), so no registry content is affected.
+
+## Amendment 2 (2026-11-15): milestone E1 as built
+
+Milestone E1 (plan section 4, track E) built D1-D12 against local fixtures
+only (approver decision: nothing is published; plan section 10). The
+normative result is the new `spec/registry.md`, `spec/package.md` sections
+1, 2, 9-11 and 14, `spec/project.md` sections 1 and 6, and the new
+`spec/schema/index-line.schema.json`, `snapshot.schema.json` and
+`registry-config.schema.json` (`part.schema.json` gains `[behavioral] svd`).
+
+**1. What was built.**
+
+- `bbpkg::archive` (D6: the deterministic ustar and a strict reader),
+  `bbpkg::registry` (D1-D4: the formats, minisign verification with
+  `minisign-verify` 0.3.0, the one crate Q9 approved, with 0 dependencies;
+  the serial; `file://` and `curl` transport; the cache; the `Resolver`)
+  and `bbpkg::semver` (D4: caret requirements).
+- `bb open` resolves an id no local source provides on the registries,
+  `--offline` from the cache only; `bb run` and `bb flash` take a locked
+  registry package from the cache by its tree hash and never fetch.
+- `bb pkg pack` / `unpack` (D6), and `bb registry init`, `publish`, `yank`,
+  `remove`, `snapshot`, `check` and `verify`, the tools of the registry's
+  CI (D8). None of them signs: the key is only ever used by `minisign`.
+- The licence gate (D7) is part of `bb pkg lint --publish`, which `make
+  packages` already runs on `packages/` (11 packages, 0 findings).
+- The registry repository's own files (README, `owners.toml`, the `pr` and
+  `publish` workflows and their scripts) are `registry/template/` in
+  breadboard.dev. `make registry-repo` makes the local repository
+  `~/src/bb-registry` from them: every first-party package published,
+  signed with the registry key that was generated locally into
+  `~/.config/bb-registry` (never committed, never uploaded), committed on
+  its `main`, with no remote. `docs/registry-publish.md` is the human's
+  procedure to put it on GitHub Pages.
+
+**2. Decisions taken inside the ADR, recorded.**
+
+1. **`[behavioral] svd` declares a vendor file** (D5, D7). A `[[vendor_file]]`
+   needs a declaration in the package, and no `bb-part/1` key declared one.
+   The plan's rule for a key missing after S is to use a key S reserved
+   (section 4, track S); `[behavioral] svd` was reserved for exactly this
+   SVD. It is `{ url, sha256, license }`, `https://` only, any licence id
+   (it is never redistributed). `bb open` fetches it at use into the cache,
+   checks the sha256 and locks it; a changed declaration is a lock mismatch.
+   Nothing in this build reads it during a run (`bb pkg init --from-svd` is
+   not in E1's row). `[pins] ibis` stays reserved. No first-party package
+   uses the key, so no tree hash changed.
+2. **Which ids reach a registry.** A board file's `package=` parts; a
+   project's named ids (an `[instances]` override, a `bb:part` field, a
+   `[[device]]` package, a `[[connection]]` harness), its lock's
+   `registry+` entries, and the chips of fetched modules (an index line's
+   `deps`). A registry is not searched by MPN: index lines carry no MPNs,
+   and D4 asks a registry only for an id. MPN and LCSC matching then run
+   over the local and fetched packages together, which is how a project
+   whose lock has registry sources resolves with no checkout (G7). A
+   `path+` lock entry whose directory is gone is not looked up on a
+   registry, since that would be a change of source.
+3. **The source-change rule** (D5) compares the kind of source: `path`,
+   or the registry's URL with one trailing `/`. A `path+` source with
+   another path stays a warning (ADR-015 D7). `bb run` refuses a change of
+   source too, like any other lock mismatch.
+4. **The public registry** is compiled into `bb` (hosting default 1):
+   `https://tyevco.github.io/bb-registry/` and the locally generated key
+   `RWR3ioZYEKjIEvJyXiAwNL6czjJWdX3+bxrhw4QWChjFKUCBHjYT6EGI`.
+   `BB_PUBLIC_REGISTRY=<url>` uses a mirror, verified with the compiled key
+   (G7 runs that way), or a test fixture with `BB_PUBLIC_REGISTRY_KEY`;
+   `BB_PUBLIC_REGISTRY=off` disables it.
+5. **The snapshot also covers `config.json`**, and `dl` may be relative to
+   the registry's URL, so a mirror and the `file://` fixture need no edit.
+   A second, different snapshot with an already seen serial is refused too.
+6. **The index line's provenance** is the least confident view's
+   `source`, `confidence` and `generated_by` (the package-level block for
+   a package without views). `reviewed_by` is `[]` and `unverified_claims`
+   `null` until E2 writes them from approvals and the claim checker.
+7. **The size cap** is 2 000 000 bytes per archive. A module's `deps` entry
+   is `^<the chip's newest published version>`, and the chip must be
+   published first (`bb registry publish` orders chips before modules).
+8. **`run.json`** records each package's `source` as `path` for a local
+   package, not its path: the path differs between copies of a project
+   (every gate runs on copies), and `run.json` holds no paths. A registry
+   package records its `registry+` source.
+9. **The cache** is `$BB_REGISTRY_CACHE`, else `$BB_CACHE_DIR/registry`,
+   else `$XDG_CACHE_HOME/bb/registry`, else `~/.cache/bb/registry`; the
+   separate variable lets a test isolate the registry cache without
+   moving the Renode plugin and JIT caches.
+10. **Owners.** `owners.toml` is `default = [...]` plus `[namespaces]`. A
+    PR is judged by the base's `owners.toml`, and a change to `owners.toml`
+    or `config.json` needs a default owner, so a PR cannot make its author
+    an owner.
+11. **The plan's scope table** names `bb pkg publish` and `yank`. Here
+    publishing is a pull request to the registry repository (D8), and its
+    CI's tools are `bb registry publish` and `yank`.
+
+**3. The gates, as measured** (2026-11-15, this worktree, host shared with
+other tracks):
+
+| Gate | Result |
+| --- | --- |
+| G1 end to end | `make registry-test`: the spike from the `file://` registry with no first-party packages, its lock's trees and platform equal to the committed lock's; `bb run` with the registry moved away, a recording `curl` and in a network namespace gives `tests/golden/spike/outputs.sha256` (nets.csv, events.jsonl, nets.vcd); the same resolve over the local HTTPS server with a cold cache; `--offline` with the server down |
+| G2 tampering | refused: an archive content byte (the tree hash), a header byte (the checksum), an index line (its sha256 against the signed snapshot), a modified snapshot, an unsigned one, one signed by another key, and the registry served again at a lower serial |
+| G3 yanking | a new resolve takes 0.1.0 over the yanked 0.1.1; the existing lock keeps 0.1.1 with a warning from `bb open` (fresh index) and `bb run` (cached index); an explicit request for the yanked version is refused; legal removal: kept from a verified cached copy, refused with a cold cache |
+| G4 routing | a project routing `acme` resolves `acme/mcu` 0.1.0 from its registry although the public one has 9.0.0; an `acme` id only the public registry has is refused, naming the route; without the route it resolves publicly; a local `acme` package is used |
+| G5 archives | three first-party packages: two packs byte-identical, the extracted tree hash = the source's, the ustar form checked with Python's `tarfile` and read by GNU tar; `bb registry check` re-packs every archive |
+| G6 migration | milestone S (Amendment 1) |
+| G7 the public registry | locally: `make registry-gate` (`scripts/registry_g7.sh`) on `~/src/bb-registry`, served over local HTTPS and verified with the compiled key (11 packages, 11 archives); dial-me-spinner's E1 project with no first-party packages and a `registry+` lock: `bb open` with a cold cache fetches every package and finds `board.bbm` and `bb.lock` current; ok-cold passes `check_dms_rail.py` and gives `tests/golden/dms-rail/ok-cold`; with the server stopped, `bb open --offline` is current and the same run in a network namespace gives the same bytes. The live part is the human's (`docs/registry-publish.md`) |
+| G8 no network | `make test-offline`: `make test` (pooled) and `make packages` pass in a network namespace that has only `lo` (0 routes; the target refuses to start when `https://index.crates.io` answers), as the calling user (`scripts/offline.sh`). `registry-test` ran there too, its own `bb run` in a nested namespace. `make test` reads no network at all: a `curl` on PATH that records calls saw none in `cargo test -p bb-cli`, and every committed lock keeps `path+` sources |
+| G9 majors | `fixture/old` 0.1.0 (`bb-part/0`, `bb-pins/0`) and 0.2.0 (`bb-part/1`) both resolve and elaborate, each locked tree = its source tree; an index line at `bb-part/9` is refused with "update bb" |
+| G10 names | `make packages` (`bb pkg lint --publish packages`: 11 packages, 0 findings, now with the licence gate); a package with an unprefixed subcircuit is refused by `bb registry publish` |
+
+Also checked: the licence gate (a `LicenseRef-` and a non-OSI licence
+refused, a `vendor_derived` view without `upstream_license` refused, a
+`LicenseRef-` vendor file accepted and absent from the archive), the
+registry PR diff checks (a changed line, a deleted line, a replaced archive,
+a republished version with another tree, a yank by a non-owner and a PR
+that makes its author an owner: each refused), and the registry's own
+`ci/pr-check.sh` on a local pull request (an owner passes, a non-owner is
+refused, a non-owner approved by an owner passes). `make registry-test` has
+104 checks.
+
+**Times.** In `make test`, `make registry-test` takes 7.1 s pooled and
+9.6 s with `POOL=0` in the final `make check` runs (8.9 s in an earlier
+pooled run, 8.1 s inside `make test-offline`); the budget is +20 s. `make
+registry-gate` takes 34 s (`registry-test` 11.1 s, then G7, with the local
+registry repository already made), and `make test-offline` 978 s. `make
+check` is green pooled (1096 s) and with `POOL=0` (1161 s). Both ran beside
+other tracks' gates (1-minute load 4-36), against H0's idle baseline of
+470 s, so H6's idle measurement decides the budget.
+
+**4. Deviations, recorded.**
+
+- **D8 items 4 and 5 are not run by the registry's CI yet.** The provenance
+  gate needs ADR-012's claim checker (milestone E2), and the pins-against-
+  KiCad-symbol check needs the KiCad symbol libraries in that CI
+  (`scripts/check_pins_kicad.py` exists; milestone E3, which publishes
+  packages, adds it). `ci/pr-check.sh` names both.
+- **The registry's workflows have never run on GitHub** (approver decision:
+  nothing is published). Their steps run locally as scripts (`ci/publish.sh`
+  signs the local registry, `ci/pr-check.sh` checks a local pull request);
+  the attestation and Pages steps run only on GitHub.
+- **G8 runs locally, not as a CI job.** `make test-offline` uses an
+  unprivileged network namespace (`scripts/offline.sh`). GitHub's
+  ubuntu-24.04 runners restrict unprivileged user namespaces, and a second
+  full `make test` per PR would not fit H0's 15-minute CI job budget, so no
+  CI job was added. `registry-test` itself, in `make test`, runs its `bb
+  run` in a network namespace where one is available and otherwise with a
+  recording `curl` only.

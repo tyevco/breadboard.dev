@@ -103,7 +103,12 @@ fn run(args: &[String]) -> Result<(), String> {
             inst.status
         )
     })?;
-    let pkgs = import::Packages::load(&p.search_path())?;
+    let mut pkgs = import::Packages::load(&p.search_path())?;
+    // A registry package from the cache, by the lock (ADR-011 D4: only bb
+    // open fetches).
+    let lock = bbpkg::lock::Lock::read(&dir.join("bb.lock"), &bbpkg::schema::Registry::current())?;
+    let mut res = crate::registry::resolver(Some(&p), bbpkg::registry::Access::Locked)?;
+    pkgs.add_from_registries(std::slice::from_ref(&pr.id), lock.as_ref(), &mut res);
     let pkg = pkgs.get(&pr.id)?;
     // A module's behavioural layer is its chip's (spec/package.md section 4).
     let beh_pkg = match &pkg.part.module {
