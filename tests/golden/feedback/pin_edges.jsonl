@@ -2,7 +2,7 @@
 {"type":"pin_edge","t_fs":50954859304925,"net":"U1.PB0","driver":"ngspice.U1.PB0","level":1}
 {"type":"pin_edge","t_fs":50960000000001,"net":"U1.PA6","driver":"U1.PA6","level":1}
 {"type":"pin_edge","t_fs":100000000000001,"net":"U1.PA5","driver":"U1.PA5","level":0}
-{"type":"pin_edge","t_fs":101452500634705,"net":"U1.PB0","driver":"ngspice.U1.PB0","level":0}
+{"type":"pin_edge","t_fs":101452500349430,"net":"U1.PB0","driver":"ngspice.U1.PB0","level":0}
 {"type":"pin_edge","t_fs":101460000000001,"net":"U1.PA6","driver":"U1.PA6","level":0}
 {"type":"pin_edge","t_fs":150000000000001,"net":"U1.PA5","driver":"U1.PA5","level":1}
 {"type":"pin_edge","t_fs":150954859304925,"net":"U1.PB0","driver":"ngspice.U1.PB0","level":1}

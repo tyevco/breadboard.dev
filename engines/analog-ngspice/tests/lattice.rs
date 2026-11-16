@@ -115,6 +115,64 @@ fn solver_points_do_not_depend_on_the_partition() {
     }
 }
 
+/// ADR-015 Amendment 4 (H2, the SAADC stall): in a quiet stretch ngspice
+/// steps exactly TMAX = L, and `time + TMAX` is rounded while the lattice
+/// points are not TMAX apart in f64, so the points drift off the lattice
+/// until one lands just outside the grant tolerance and the clamp adds a
+/// sub-femtosecond step to `kL`. The lattice snap stretches the step before
+/// instead. 400 ms of a settled RC in 10 ms grants: with the snap no
+/// accepted step is shorter than 1 ps and every point the clamp put on a
+/// lattice point is within the grant tolerance of it; the negative control
+/// (`lattice_snap = false`, the clamp before H2) takes such micro-steps.
+#[test]
+fn quiet_tmax_steps_take_no_micro_step() {
+    let _g = NGSPICE.lock().unwrap_or_else(|e| e.into_inner());
+    let t_end = Time::from_ms(400);
+    // (steps shorter than 1 ps, the largest |t - kL| of a point within 1 ps
+    // of a lattice point, accepted points)
+    let run = |snap: bool| -> (usize, f64, usize) {
+        let mut cfg = config();
+        cfg.t_stop = t_end;
+        cfg.lattice_snap = snap;
+        let mut e = NgspiceEngine::new(cfg).expect("engine");
+        let (mut now, mut prev, mut micro, mut off, mut n) = (Time::ZERO, 0.0f64, 0, 0.0f64, 0);
+        while now < t_end {
+            let g = (now + Time::from_ms(10)).min(t_end);
+            e.advance_to(g).unwrap();
+            for &(t, _) in &e.solver_window_raw("out").unwrap() {
+                if t <= prev {
+                    continue;
+                }
+                n += 1;
+                if t - prev < 1e-12 {
+                    micro += 1;
+                }
+                let k = (t / L.as_secs_f64()).round() as u64;
+                let lp = Time::from_fs(k * L.as_fs()).as_secs_f64();
+                if (t - lp).abs() < 1e-12 {
+                    off = off.max((t - lp).abs());
+                }
+                prev = t;
+            }
+            now = g;
+        }
+        (micro, off, n)
+    };
+    let (micro, off, n) = run(true);
+    let (micro0, off0, n0) = run(false);
+    println!(
+        "lattice snap: {micro} micro-steps, max |t - kL| {off:e} s, {n} points; \
+         without: {micro0} micro-steps, max |t - kL| {off0:e} s, {n0} points"
+    );
+    assert!(
+        micro0 > 0,
+        "negative control: the clamp before H2 must micro-step here"
+    );
+    assert_eq!(micro, 0, "a sub-picosecond step with the lattice snap");
+    assert!(off <= 0.5e-15, "a lattice point missed by {off:e} s");
+    assert!(n < n0, "the snap must save the micro-steps' points");
+}
+
 /// TMAX must divide the lattice.
 #[test]
 fn tmax_must_divide_the_lattice() {

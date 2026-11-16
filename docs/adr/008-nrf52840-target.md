@@ -18,6 +18,9 @@
   M10's design (E3) and D9's PWM, TEMP and NVMC models on
   `nrf52840-bb@3` (2026-11-14, Amendment 9). Amendment 9's open points
   decided (Approver decisions (2026-11-14); the HOME_N gate, Amendment 10).
+  Amendment 11's Finding 2 (the SAADC stall) resolved by ADR-015
+  Amendment 4 (Phase 2 H2, 2026-11-16; a resolution note under the
+  finding).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -2546,6 +2549,29 @@ charge sharing E2 studies (a few hundred uV) does not reach the duty: the
 E3 boards bind P0.02 with `load=none`. Open finding for a later
 milestone: the cause inside `saadc_se` (a 2.5 pF node behind 5 kOhm and a
 20 ns delay node, both far stiffer than TMAX) is not yet isolated.
+
+**Resolution (Phase 2 H2, 2026-11-16; ADR-015 Amendment 4).** The cause
+was not inside `saadc_se` but in `NgspiceEngine`'s step clamp. In a quiet
+stretch ngspice steps exactly TMAX = L; `time + TMAX` is rounded and the
+lattice points are not TMAX apart in f64, so the points drift off the
+lattice until one lands just outside the grant tolerance, and the clamp
+then added a sub-femtosecond step to the lattice point. The integration,
+restarted from a step of about 1e-16 s, fell into a trapezoidal Newton
+limit cycle on this board (a crawl of about 0.3 fs per accepted point;
+ADR-015 Amendment 1). The loading view only made the board stiff enough
+to fall into it; the committed E3 board (`load=none`) fell into the same
+trap later, at 502.47 ms of a 1 s `homing_step.elf` run, which no gate ran
+that long. The approved fix (decision D-SNAP) is the **lattice snap**: a
+step that would land more than the grant tolerance but less than
+min(1 ps, 1 % of the step) short of the grant or the next lattice point
+lands on it. With it, `make ngspice-stall` runs the repro 300 ms at
+L = 5, 10 and 20 us and 1 s, and the committed board 1 s, to completion.
+E3's committed hashes are unchanged, and so are E2's but for `sag` and
+`rec`, which move by 1 uV at 4 and 1 VLED samples (re-recorded, ADR-015
+Amendment 4); every E2 and E3 check passes. The E3 boards keep
+`load=none` (the reason above, the duty, is unchanged); the stall no
+longer forces that choice, though only `homing_step.elf` has been run on
+the loading view (up to 1 s).
 
 #### Finding 3: no quiet grant on E3's boards
 
