@@ -339,6 +339,45 @@ pub const PLUGIN_SOURCES: &[(&str, &str)] = &[
     ("bb_nrf52_pwm.cs", BB_NRF52_PWM_CS),
 ];
 
+/// The plugin sources every Breadboard platform declares (ADR-015 D6): the
+/// lookahead block, which `bb run` maps on any platform with a feedback
+/// loop. There is no shared host-port base: each host port is defined in
+/// its model's own source.
+pub const SHARED_PLUGINS: &[&str] = &["bb_lookahead.cs"];
+
+/// The plugin sources whose types each platform's `.repl` instantiates, by
+/// `.repl` file name (ADR-015 D6). With [`SHARED_PLUGINS`] they are what the
+/// platform's content hash covers (`cli/src/platforms.rs`) and what the
+/// subset compile (`tests/plugin_scope.rs`) builds alone. At run time the
+/// cache still compiles every source of [`PLUGIN_SOURCES`] into one
+/// assembly (ADR-005 D6).
+pub const PLATFORM_PLUGINS: &[(&str, &[&str])] = &[
+    ("stm32f103-offline.repl", &[]),
+    (
+        "stm32f072-bb.repl",
+        &["bb_stm32_timer.cs", "bb_stm32f0_adc.cs"],
+    ),
+    (
+        "nrf52840-bb.repl",
+        &["bb_nrf52_saadc.cs", "bb_nrf52_pwm.cs"],
+    ),
+];
+
+/// The plugin sources platform `repl` declares: [`SHARED_PLUGINS`], then its
+/// own models from [`PLATFORM_PLUGINS`] (`None`: not a Breadboard platform).
+pub fn platform_plugins(repl: &str) -> Option<Vec<&'static str>> {
+    let own = PLATFORM_PLUGINS.iter().find(|(r, _)| *r == repl)?.1;
+    Some(SHARED_PLUGINS.iter().chain(own).copied().collect())
+}
+
+/// The text of plugin source `name` (a file name of [`PLUGIN_SOURCES`]).
+pub fn plugin_source(name: &str) -> Option<&'static str> {
+    PLUGIN_SOURCES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, s)| *s)
+}
+
 /// Default address of the lookahead block: unused on the STM32F103.
 pub const LOOKAHEAD_ADDRESS: u64 = 0x5FFF_0000;
 

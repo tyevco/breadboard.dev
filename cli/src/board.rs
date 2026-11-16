@@ -421,6 +421,38 @@ fn no_extra(lineno: usize, kv: &BTreeMap<&str, &str>) -> Result<(), String> {
     }
 }
 
+/// One `*bb packages path=<dir>` line (ADR-015 D7, `spec/package.md`
+/// section 12): the directory, relative to the board file.
+fn package_path<'a>(lineno: usize, toks: impl Iterator<Item = &'a str>) -> Result<&'a str, String> {
+    let mut kv = parse_kv(lineno, toks)?;
+    let path = take(lineno, &mut kv, "path")?;
+    no_extra(lineno, &kv)?;
+    if std::path::Path::new(path).is_absolute() || path.starts_with('/') {
+        return Err(format!(
+            "line {lineno}: *bb packages path={path}: the path must be relative to the board file"
+        ));
+    }
+    Ok(path)
+}
+
+/// The board file's package directories, in order: every `*bb packages
+/// path=<dir>` line (ADR-015 D7). They come before the first-party
+/// directory on its search path, as a `bb.toml`'s `[packages] paths` do.
+pub fn package_paths(text: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let Some(rest) = line.trim_start().strip_prefix("*bb") else {
+            continue;
+        };
+        let mut toks = rest.split_whitespace();
+        if !rest.starts_with(char::is_whitespace) || toks.next() != Some("packages") {
+            continue;
+        }
+        out.push(package_path(i + 1, toks)?.to_string());
+    }
+    Ok(out)
+}
+
 /// Parse a board file without packages (`package=` is an error).
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn parse(text: &str) -> Result<Board, String> {
@@ -470,6 +502,12 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         let keyword = toks
             .next()
             .ok_or_else(|| format!("line {lineno}: empty *bb directive"))?;
+        if keyword == "packages" {
+            // The package search path (ADR-015 D7): read before the parts by
+            // `package_paths`; checked here once more.
+            package_path(lineno, toks)?;
+            continue;
+        }
         let name = toks
             .next()
             .ok_or_else(|| format!("line {lineno}: *bb {keyword} needs a name"))?;
@@ -1005,6 +1043,31 @@ mod tests {
         let reg = Registry::current();
         let lookup = |spec: &str| sp.find(spec, &reg);
         parse_with(text, Some(&lookup))
+    }
+
+    #[test]
+    fn packages_directive() {
+        // ADR-015 D7: `*bb packages path=<dir>`, relative, in file order.
+        let t = "*bb packages path=../packages\n* x\n*bb packages path=vendor/pk\n\
+                 *bb part U1 engine=renode platform=stm32f103\n";
+        assert_eq!(package_paths(t).unwrap(), ["../packages", "vendor/pk"]);
+        assert!(parse(t).is_ok());
+        assert_eq!(
+            package_paths("*bbox packages path=x\n").unwrap(),
+            Vec::<String>::new()
+        );
+        for (bad, why) in [
+            ("*bb packages path=/abs/pk\n", "relative"),
+            ("*bb packages\n", "missing path="),
+            ("*bb packages path=a other=b\n", "unknown key"),
+            ("*bb packages dir=a\n", "missing path="),
+            ("*bb packages path=a path=b\n", "duplicate key"),
+        ] {
+            let e = package_paths(bad).unwrap_err();
+            assert!(e.contains(why), "{bad}: {e}");
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(why), "{bad}: {e}");
+        }
     }
 
     /// The Phase 0 directives of the examples, as committed before Phase 1

@@ -15,6 +15,10 @@
 //! `bb run --netlist <board.cir>` refuses a board whose packages or
 //! platforms differ from its `bb.lock` (or that has none), and never
 //! writes the lock.
+//!
+//! ADR-015 D7: a board file's search path starts with its `*bb packages
+//! path=<dir>` lines, and `bb open` and `bb run` warn when a locked package
+//! resolved somewhere other than its recorded `path`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -32,7 +36,9 @@ const USAGE: &str = "\
 usage: bb open <board.cir> [--check] [--update-lock]
 
   Resolves the board file's package= parts (ADR-006) on the package search
-  path (breadboard.dev's packages/, or $BB_FIRST_PARTY_PACKAGES) and writes
+  path (the directories of its `*bb packages path=<dir>` lines, relative to
+  the board file, then breadboard.dev's packages/, or
+  $BB_FIRST_PARTY_PACKAGES) and writes
   bb.lock next to it: each package's version and tree hash, each engine
   platform's content hash.
   --check        write nothing; fail if bb.lock is missing or would change
@@ -40,12 +46,27 @@ usage: bb open <board.cir> [--check] [--update-lock]
                  only those entries; without it they are refused)
   KiCad projects (.kicad_pro, .net) and bb.toml are Phase 1 M4.";
 
-/// The package search path for a board file (ADR-006 D1). A board file has
-/// no `bb.toml`, so it is the first-party directory alone.
-pub fn search_path() -> SearchPath {
-    SearchPath {
-        dirs: vec![bbpkg::first_party_dir()],
+/// The package search path for a board file (ADR-006 D1, ADR-015 D7): the
+/// directories its `*bb packages path=` lines name, relative to the board
+/// file and in order, then the first-party directory. A named directory
+/// that does not exist is an error (a silently skipped one would be the
+/// package-path trap again).
+pub fn search_path(board_file: &Path, text: &str) -> Result<SearchPath, String> {
+    let base = board_file.parent().unwrap_or(Path::new("."));
+    let mut dirs = Vec::new();
+    for p in board::package_paths(text).map_err(|e| format!("{}: {e}", board_file.display()))? {
+        let d = base.join(&p);
+        if !d.is_dir() {
+            return Err(format!(
+                "{}: *bb packages path={p}: {} is not a directory",
+                board_file.display(),
+                d.display()
+            ));
+        }
+        dirs.push(d);
     }
+    dirs.push(bbpkg::first_party_dir());
+    Ok(SearchPath { dirs })
 }
 
 /// Parse a board file, resolving packages on the search path. `fast`
@@ -55,7 +76,7 @@ pub fn search_path() -> SearchPath {
 pub fn parse_board(path: &Path, fast: bool) -> Result<Board, String> {
     let text =
         std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let sp = search_path();
+    let sp = search_path(path, &text)?;
     let reg = Registry::current();
     let lookup = |spec: &str| {
         if fast {
@@ -83,10 +104,11 @@ pub fn lock_path(board_file: &Path) -> PathBuf {
 }
 
 /// What the board resolves to now: its packages and platforms as lock
-/// entries.
+/// entries (a platform as `lock` pins it, `PlatformDef::locked_for`).
 pub fn resolved(
     board_file: &Path,
     b: &Board,
+    lock: Option<&Lock>,
 ) -> Result<(Vec<LockedPackage>, Vec<LockedPlatform>), String> {
     let proj = std::fs::canonicalize(lock_path(board_file).parent().unwrap())
         .map_err(|e| format!("{}: {e}", board_file.display()))?;
@@ -108,7 +130,7 @@ pub fn resolved(
         {
             let def = platforms::find(pid).ok_or_else(|| format!("platform {pid}: unknown"))?;
             if !pl.iter().any(|x| x.id == def.lock_id()) {
-                pl.push(def.locked());
+                pl.push(def.locked_for(lock));
             }
         }
         // A device package (ADR-006 D7, Amendment 6): its device identity.
@@ -129,17 +151,37 @@ pub fn resolved(
     Ok((pk, pl))
 }
 
-/// `bb run`'s check: a board with packages needs a current `bb.lock`.
-pub fn check_lock(board_file: &Path, b: &Board) -> Result<(), String> {
-    if b.packages.is_empty() {
-        return Ok(());
+/// The lock path warnings of a board file (ADR-015 D7).
+fn path_warnings(board_file: &Path, lock: Option<&Lock>, pk: &[LockedPackage]) -> Vec<String> {
+    let base = lock_path(board_file);
+    let base = base.parent().unwrap_or(Path::new("."));
+    match std::fs::canonicalize(base) {
+        Ok(b) => lock::path_warnings(lock, pk, &b),
+        Err(_) => Vec::new(),
     }
-    let (pk, pl) = resolved(board_file, b)?;
+}
+
+/// The lock path warnings of a project (ADR-015 D7): its packages' paths
+/// are relative to the project directory.
+pub fn project_path_warnings(dir: &Path, lock: Option<&Lock>, pk: &[LockedPackage]) -> Vec<String> {
+    match std::fs::canonicalize(dir) {
+        Ok(b) => lock::path_warnings(lock, pk, &b),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// `bb run`'s check: a board with packages needs a current `bb.lock`.
+/// Returns the lock's path warnings (ADR-015 D7).
+pub fn check_lock(board_file: &Path, b: &Board) -> Result<Vec<String>, String> {
+    if b.packages.is_empty() {
+        return Ok(Vec::new());
+    }
     let lp = lock_path(board_file);
     let lock = Lock::read(&lp, &Registry::current())?;
+    let (pk, pl) = resolved(board_file, b, lock.as_ref())?;
     let d = lock::drift(lock.as_ref(), &pk, &pl);
     if d.is_empty() {
-        return Ok(());
+        return Ok(path_warnings(board_file, lock.as_ref(), &pk));
     }
     let mut msg = format!(
         "{} does not match what {} resolves to (ADR-006 D8):",
@@ -154,6 +196,9 @@ pub fn check_lock(board_file: &Path, b: &Board) -> Result<(), String> {
     }
     for x in &d {
         msg.push_str(&format!("\n  {}", x.describe()));
+    }
+    for w in path_warnings(board_file, lock.as_ref(), &pk) {
+        msg.push_str(&format!("\n  {w}"));
     }
     msg.push_str(&format!(
         "\nrun `bb open {}`{}",
@@ -276,10 +321,13 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         let _ = writeln!(out, "bb open: no package= parts, so no bb.lock is needed");
         return Ok(ExitCode::SUCCESS);
     }
-    let (pk, pl) = resolved(&target, &b)?;
     let lp = lock_path(&target);
     let reg = Registry::current();
     let lock = Lock::read(&lp, &reg)?;
+    let (pk, pl) = resolved(&target, &b, lock.as_ref())?;
+    for w in path_warnings(&target, lock.as_ref(), &pk) {
+        eprintln!("bb open: warning: {w}");
+    }
     let d = lock::drift(lock.as_ref(), &pk, &pl);
     for x in &d {
         let _ = writeln!(out, "bb open: {}", x.describe());
@@ -339,7 +387,10 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
     if let Some(h) = &p.schema_hint {
         eprintln!("bb open: warning: {h}");
     }
-    let imp = import::import(&p, import::Mode::Open)?;
+    let lp = dir.join("bb.lock");
+    let reg = Registry::current();
+    let lock = Lock::read(&lp, &reg)?;
+    let imp = import::import(&p, import::Mode::Open, lock.as_ref())?;
     let mut out = std::io::stdout().lock();
     for w in &imp.warnings {
         eprintln!("bb open: warning: {w}");
@@ -420,9 +471,9 @@ fn open_project(dir: &Path, check: bool, update: bool) -> Result<ExitCode, Strin
     }
     let bbm_text = imp.board.to_text();
     let bbm_path = dir.join(import::BOARD_FILE);
-    let lp = dir.join("bb.lock");
-    let reg = Registry::current();
-    let lock = Lock::read(&lp, &reg)?;
+    for w in project_path_warnings(dir, lock.as_ref(), &imp.locked_packages) {
+        eprintln!("bb open: warning: {w}");
+    }
     let d = lock::drift(lock.as_ref(), &imp.locked_packages, &imp.locked_platforms);
     for x in &d {
         let _ = writeln!(out, "bb open: {}", x.describe());

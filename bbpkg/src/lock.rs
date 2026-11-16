@@ -14,7 +14,9 @@
 //! path, tree) and `[[platform]]` (id, content, renode) entries sorted by id.
 //! `bb open` writes it; `bb open` and `bb run` refuse a package or platform
 //! whose hash differs from it unless `bb open --update-lock`, which rewrites
-//! only the entries that changed.
+//! only the entries that changed. The `path` is informative: identity is the
+//! tree hash. `bb open` and `bb run` warn when a locked package resolved
+//! somewhere other than its recorded `path` ([`path_warnings`], ADR-015 D7).
 
 use std::path::{Path, PathBuf};
 
@@ -320,6 +322,59 @@ pub fn apply(lock: Option<&Lock>, drift: &[Drift]) -> Lock {
     l.packages.sort_by(|a, b| a.id.cmp(&b.id));
     l.platforms.sort_by(|a, b| a.id.cmp(&b.id));
     l
+}
+
+/// ADR-015 D7: the locked packages whose recorded `path` differs from where
+/// they resolved now, one warning each. `base` is the directory both paths
+/// are relative to (the lock's). The tree hash still decides acceptance;
+/// the warning says what was not used: a package with the same id at the
+/// recorded path (a copy beside a copied board, say) is named with its
+/// tree hash when it differs from the one used.
+pub fn path_warnings(lock: Option<&Lock>, packages: &[LockedPackage], base: &Path) -> Vec<String> {
+    let Some(lock) = lock else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in packages {
+        let Some(l) = lock.packages.iter().find(|l| l.id == p.id) else {
+            continue;
+        };
+        if l.path == p.path {
+            continue;
+        }
+        let recorded = base.join(&l.path);
+        let canon = |q: &Path| std::fs::canonicalize(q).ok();
+        let used = canon(&base.join(&p.path));
+        if used.is_some() && canon(&recorded) == used {
+            continue; // the same directory, spelled differently
+        }
+        let mut msg = format!(
+            "package {}: bb.lock records path {}, but it resolved to {} (the tree hash decides \
+             acceptance, ADR-015 D7)",
+            p.id, l.path, p.path
+        );
+        let there = recorded
+            .join("part.toml")
+            .is_file()
+            .then(|| crate::package::load(&recorded, &Registry::current()).ok())
+            .flatten()
+            .filter(|q| q.part.id == p.id);
+        match there {
+            Some(_) => match tree_hash(&recorded) {
+                Ok(t) if t != p.tree => msg.push_str(&format!(
+                    "; a different {} (tree {t}) is at the recorded path and is NOT used: name \
+                     its directory with `*bb packages path=` (a board file) or `[packages] \
+                     paths` (bb.toml)",
+                    p.id
+                )),
+                Ok(_) => msg.push_str("; an identical copy at the recorded path is not used"),
+                Err(e) => msg.push_str(&format!("; the recorded path is unreadable: {e}")),
+            },
+            None => msg.push_str(&format!("; no package {} is at the recorded path", p.id)),
+        }
+        out.push(msg);
+    }
+    out
 }
 
 /// `to` relative to `from` (both absolute and canonical), with `/`.

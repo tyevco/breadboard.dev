@@ -205,6 +205,11 @@ jobs:
       - name: Renode ADC platform test
         run: make adc-renode
 
+      # Phase 2 H4 (ADR-015 G5): each platform's declared plugin subset compiles alone
+      # and the plugin assembly has no module initialiser (about 6 s; not in make test).
+      - name: Plugin scope (subset compiles, no module initialiser)
+        run: make plugin-scope
+
   # Phase 1 M6 (plan section 2 E1): the dial-me-spinner LED rail sequencing gate. Both prebuilt
   # Zephyr firmwares at both benches, the one-cell references, both engine orders, the board-level
   # convergence gate, the PIN_CNF audit and its negative controls, 10-run determinism.
