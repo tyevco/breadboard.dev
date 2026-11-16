@@ -4,7 +4,9 @@ Status: normative. Decided by ADR-006 (accepted 2026-11-09, approver
 decisions A-C; Amendment 1 for the KiCad value qualifiers; Amendment 3 for
 modules, the view conflict report and `bb pkg test --report`; Amendment 6
 for device parts in board files and device identities, approver decisions
-2026-11-14). Implementation:
+2026-11-14). ADR-015 D6 and D7 (Phase 2 H4, Amendment 3): platform hashes
+over the declared plugin sources, and the board-file package path.
+Implementation:
 the `bbpkg` crate (`bbpkg/src`), `bb pkg`, `bb open` and `bb run` (`cli/src`).
 JSON Schemas: `spec/schema/part.schema.json`, `pins.schema.json`,
 `lock.schema.json`, `pkgtest.schema.json` (JSON Schema 2020-12; the TOML
@@ -39,9 +41,10 @@ packages/                         first-party packages, in breadboard.dev
   paths` (relative to the project, in order; ADR-007), then breadboard.dev's
   first-party `packages/`. The first directory that provides an id wins, so a
   private package shadows a first-party one. Two packages with one id in one
-  directory are an error. A hand-written `board.cir` has no `bb.toml`, so its
-  search path is the first-party directory alone. `bb` finds that directory
-  through the path of the checkout it was built from, or
+  directory are an error. A hand-written `board.cir` has no `bb.toml`: its
+  search path is the directories of its `*bb packages path=<dir>` lines
+  (section 12; ADR-015 D7), then the first-party directory. `bb` finds that
+  directory through the path of the checkout it was built from, or
   `$BB_FIRST_PARTY_PACKAGES`.
 
 ## 2. `part.toml` (`bb-part/0`)
@@ -429,18 +432,48 @@ symbolic link in a package is an error.
 **Platform identity.** Every engine platform `bb` provides has an id
 `<name>@<major>` and a content hash: the same list hash over the files that
 decide its behaviour, by file name. For Renode that is the `.repl` the
-platform loads and every source of Breadboard's Renode plugin assembly
-(`PLUGIN_SOURCES`, the inputs of ADR-005's plugin cache key). `bb` embeds
-the table (`cli/src/platforms.rs`):
+platform loads and the plugin sources it declares (ADR-015 D6): the sources
+of the models its `.repl` instantiates, and the shared ones every platform
+declares (`bb_lookahead.cs`, the lookahead block that `bb run` maps on any
+platform; there is no shared host-port base, each host port is defined in
+its model's source). `bb` embeds the table (`cli/src/platforms.rs`; the
+declarations are `bb_cpu_renode::PLATFORM_PLUGINS` and `SHARED_PLUGINS`, all
+under `engines/cpu-renode/platforms/`):
 
-| Platform | Loads | Board-file name |
-| --- | --- | --- |
-| `stm32f103-offline@1` | `engines/cpu-renode/platforms/stm32f103-offline.repl` | `stm32f103` |
-| `stm32f072-bb@1` | `engines/cpu-renode/platforms/stm32f072-bb.repl` | `stm32f072` |
-| `nrf52840-bb@1` | `engines/cpu-renode/platforms/nrf52840-bb.repl` (ADR-008 D1) | `nrf52840` |
+| Platform | Loads | Declared plugin sources | Board-file name |
+| --- | --- | --- | --- |
+| `stm32f103-offline@1` | `stm32f103-offline.repl` | `bb_lookahead.cs` | `stm32f103` |
+| `stm32f072-bb@1` | `stm32f072-bb.repl` | `bb_lookahead.cs`, `bb_stm32_timer.cs`, `bb_stm32f0_adc.cs` | `stm32f072` |
+| `nrf52840-bb@3` | `nrf52840-bb.repl` (ADR-008 D1, D7-D9) | `bb_lookahead.cs`, `bb_nrf52_saadc.cs`, `bb_nrf52_pwm.cs` | `nrf52840` |
 
 A behaviour change bumps the major and changes the hash. The lock records
-Renode's version (1.17.0) with each Renode platform.
+Renode's version (1.17.0) with each Renode platform. So a change to a
+model's source changes the hash of the platforms that declare it and of no
+other: an nRF model change re-locks no STM32 board.
+
+- **The declaration is complete.** Each platform's declared sources compile
+  alone, as a separate assembly, with Renode's own compiler (`make
+  plugin-scope`). A model that used a type of an undeclared source fails
+  there.
+- **The residual.** At run time the plugin cache still compiles every
+  plugin source into one assembly (ADR-005 D6), so a run on platform A
+  loads code from sources that A's lock does not cover. A compile failure
+  of that assembly fails every run, so it cannot pass silently. A model
+  that A never instantiates cannot act on A's run: .NET runs a type's
+  static initialiser only when the type is first used, and the assembly
+  has no module initialiser (`make plugin-scope` checks its metadata).
+  Process-wide static state is covered by the pool rule (`make
+  pool-equiv`). **A's lock does not pin the sources A does not
+  instantiate.**
+- **The legacy hash** (ADR-015 Amendment 3). Before Phase 2 H4 the hash
+  covered every plugin source. A `bb-lock/0` entry that holds exactly that
+  hash of the current files pins strictly more than the scoped hash does,
+  so `bb open` and `bb run` accept it as it stands, keep it (also with
+  `--update-lock`, which rewrites only entries that changed) and carry it
+  into `board.bbm` and `run.json`. An entry with any other content is a
+  mismatch, and `--update-lock` writes the scoped hash. The relock of every
+  committed lock to the scoped hash is the schema epoch's (Phase 2 plan,
+  milestone S).
 
 Every `bbdev` device (ADR-006 D7) has an identity the same way: an id
 `<name>@<major>`, locked as `device:<id>`, and a content hash over the
@@ -461,7 +494,7 @@ schema = "bb-lock/0"
 [[package]]
 id = "st/stm32f103c8"
 version = "0.1.0"
-path = "../../packages/st/stm32f103c8"   # as found on the search path, relative to the project (informative)
+path = "../../packages/st/stm32f103c8"   # as found on the search path, relative to the project (informative; a mismatch warns)
 tree = "sha256:..."
 
 [[platform]]
@@ -482,6 +515,20 @@ A module's chip package (section 4) is locked with the module, and the
 chip's platform with it. `bb run` refuses a board whose packages or
 platforms differ from its lock, or a board with packages and no lock, and
 never writes the lock.
+
+**A moved package warns** (ADR-015 D7). The tree hash decides acceptance,
+and the `path` stays informative. But `bb open` and `bb run` print a
+warning for every locked package that resolved somewhere other than its
+recorded `path` (relative to the lock's directory; the same directory
+spelled differently does not count). The warning says what is at the
+recorded path:
+
+- nothing with that id;
+- an identical copy, not used;
+- or a different package with that id, with its tree hash, that is **not
+  used**: the trap of a modified package beside a copied board. It names
+  the fix: `*bb packages path=` in a board file (section 12), or `bb.toml`'s
+  `[packages] paths`.
 `run.json` (ADR-007 D6) records both kinds of hash.
 
 ## 10. Schema versions and package versions
@@ -586,6 +633,23 @@ others in `alt`).
 - The board needs a current `bb.lock` next to it (`bb open <board.cir>`).
 - The Phase 0 form (`engine=renode platform=...` with every parameter
   written out) is unchanged and needs no lock.
+
+**The package path** (ADR-015 D7):
+
+```
+*bb packages path=../../packages      # searched before the first-party directory
+```
+
+- Each `*bb packages path=<dir>` line adds one directory to the board
+  file's search path, in file order, before the first-party directory, as
+  a `bb.toml`'s `[packages] paths` do (section 1). The line has no name and
+  exactly the key `path`.
+- `<dir>` is relative to the board file's directory. It has no whitespace
+  (the grammar has no quoting). An absolute path is an error, and so is a
+  directory that does not exist: a skipped entry would hide the package it
+  was meant to provide.
+- The lock records each package's `path` as resolved through it, so a board
+  and its packages copied together keep resolving to the copy.
 
 **Device parts** (ADR-006 D7, Amendment 6):
 

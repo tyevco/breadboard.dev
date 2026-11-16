@@ -4,7 +4,9 @@
   (2026-11-15)"). Proposed 2026-11-14, revised after design review round 1
   (see "Review notes"). Amendment 1: H1 as built (D1-D4). Amendment 2: H3
   as built (D5; it corrects D5's claim that a Renode client reconnects by
-  itself).
+  itself). Amendment 3: H4 as built (D6, D7; the declarations live in
+  Rust, not in `// bb-plugin-deps:` header lines, and a matching legacy
+  hash is kept until S's relock).
 - **Part of:** the Phase 2 plan, milestones H1-H4 and H6. H2 is the
   SAADC-stall spike that D1 makes bounded.
 - **Normative changes when implemented:**
@@ -791,3 +793,173 @@ The full gates are outside `make test`:
 - `make ec-long`: 130 s;
 - `make pool-equiv`: 1 602 s;
 - `make jit-profile-stress`: 194 s.
+
+## Amendment 3: H4 as built (D6, D7, 2026-11-15)
+
+Milestone H4 implements D6 and D7 and applies their `spec/package.md`
+changes (§1, §9, §12; described under "Exact `spec/` changes"). No output
+hash, no `bb.lock` and no `board.bbm` changes: the plan puts the relock
+into milestone S's commit, and this amendment records how H4 keeps it
+there.
+
+### D6: what a platform declares
+
+- **The declaration** is one table, `bb_cpu_renode::PLATFORM_PLUGINS`
+  (each `.repl`'s own models) plus `SHARED_PLUGINS`
+  (`bb_lookahead.cs`), read by `PlatformDef::plugins` in
+  `cli/src/platforms.rs`:
+  - `stm32f103-offline@1`: `bb_lookahead.cs`;
+  - `stm32f072-bb@1`: that, `bb_stm32_timer.cs`, `bb_stm32f0_adc.cs`;
+  - `nrf52840-bb@3`: that, `bb_nrf52_saadc.cs`, `bb_nrf52_pwm.cs`.
+- **There is no shared host-port base.** D6 names one, but each host port
+  (`BbAdcHostPort`, `BbSaadcHostPort`, `BbNrf52HostPort`) is defined in its
+  model's own source, and no source uses another's types (checked by the
+  subset compile below). The shared set is the lookahead block alone.
+- **The content hash** is the list hash of the `.repl` and the declared
+  sources (`PlatformDef::content`). The plugin cache key and the run-time
+  assembly are unchanged: one assembly of every source (ADR-005 D6).
+
+### Deviation 1: no `// bb-plugin-deps:` header lines
+
+D6 has each plugin source state its dependencies in a header line. H4
+declares them in the Rust table instead, for two reasons:
+
+- **A header line changes the source's bytes.** So it changes every
+  platform's hash, legacy and scoped alike, and every committed `bb.lock`
+  and `board.bbm` would need a relock in H4. The plan puts the relock in
+  S's commit.
+- **The table is what the hash follows anyway.** D6 already says the hash
+  covers "the plugin sources the platform declares in
+  `cli/src/platforms.rs`". A per-source header would be a second copy of
+  that list to keep in step. The subset compile proves the table complete,
+  which is the point of the headers: a hidden dependency fails it.
+
+S may add header lines with its relock if review wants them in the
+sources. The test would then check them against the table.
+
+### Deviation 2: a matching legacy hash is kept until S
+
+The committed locks and `board.bbm` files hold the pre-H4 hash, which
+covers every plugin source (the "legacy" hash). A scoped hash would make
+every one of them stale, so `make test` would fail without a relock. H4
+therefore accepts the legacy form:
+
+- **The rule** (`PlatformDef::locked_for`). A lock entry whose content is
+  exactly the legacy hash of the current files is kept as it stands, also
+  by `--update-lock`, which rewrites only entries that changed. The import
+  carries it into `board.bbm` and `run.json`, so those stay byte for byte.
+  Any other content gets the scoped entry, and `drift` reports it. A
+  missing entry is added with the scoped hash, and so is every new lock.
+- **It is not a weaker pin.** The legacy hash matches only if every plugin
+  source and the `.repl` are unchanged, which implies the scoped hash
+  matches. A legacy entry pins strictly more than a scoped one.
+- **The cost until S.** An nRF model edit still breaks the STM32 locks
+  that hold the legacy hash. `bb open --update-lock` then writes the
+  scoped hash, and from then on that entry no longer moves with nRF edits.
+  `make lock-scope` measures both sides of this.
+- **S's relock.** The `bb-lock/1` migration (ADR-011 D5) writes every
+  platform entry with `PlatformDef::locked()`, the scoped hash. With it
+  `board.bbm` and `run.json` record the scoped hash too. After that the
+  legacy acceptance is needed only to read a `bb-lock/0` file. S keeps it
+  for that case, or removes it with `/0`. The plan's S row says so.
+
+### D7: the package path
+
+- **`*bb packages path=<dir>`** (`spec/package.md` §12). The line has no
+  name and exactly the key `path`. The path is relative to the board file,
+  and every line adds one directory, in order, before the first-party
+  directory. An absolute path is an error.
+- **A named directory that does not exist is also an error.** D7 does not
+  say this. A skipped entry is how `bb.toml`'s `[packages] paths` behaves,
+  but in a board file it would hide the package the line was written for:
+  the same trap.
+- **The warning** (`bbpkg::lock::path_warnings`). For every locked package
+  whose recorded `path` differs from where it resolved now, `bb open` and
+  `bb run` print a warning, for board files and projects alike. A path that
+  names the same directory differently, such as through a symbolic link,
+  does not count. The warning says what is at the recorded path:
+  - nothing with that id;
+  - an identical copy, not used;
+  - a different package with that id, by tree hash, that "is NOT used".
+    This is the trap itself, and the warning names the fix.
+
+  When `bb run` refuses a lock, the warnings are part of the error.
+- **Copies warn.** A project copied out of the repository, which many gate
+  scripts make, now prints one warning per first-party package. That is
+  D7 as written: such a copy resolves its packages away from their
+  recorded paths. No script checked for silence on stderr.
+  `cli/tests/system.rs` did, so its copy now sits beside a link to the
+  first-party directory, and the paths agree.
+
+### Gates (G5, G6), measured
+
+- **G5, unit** (`platforms::tests`, in `cargo-test`):
+  - an edit to each plugin source changes exactly the hashes of the
+    platforms that declare it. An edit to `bb_nrf52_saadc.cs` changes no
+    STM32 hash.
+  - every source is declared by some platform, and every declared name
+    exists.
+  - the scoped hash differs from the legacy one.
+  - a legacy entry is kept only on an exact match: no lock, another
+    content, another Renode version or another platform's legacy hash all
+    give the scoped entry, and `drift` reports the last three as
+    mismatches.
+- **G5, end to end** (`make lock-scope`, 47 s, 20 s of it the second
+  build):
+  - a `bb` is built from a copy of the tree with one comment line added to
+    `bb_nrf52_saadc.cs`.
+  - scratch copies of all 15 `PKG_BOARDS` entries are relocked under D6 by
+    the stock `bb`.
+  - under the edited `bb`, all 8 STM32 boards and projects stay current
+    (`bb open --check`), and each of the 7 nRF52840 ones has exactly one
+    drift, `renode:nrf52840-bb@3`.
+  - the controls:
+    - the stock `bb` finds every relocked copy current;
+    - under the edited `bb`, all 15 copies of the committed (legacy) locks
+      drift on their platform, STM32 ones included. So the edit took
+      effect, and this is the churn S's relock removes.
+- **G5, subset compile** (`make plugin-scope`, 4.2 s of Renode, about 6 s
+  in all; CI job `adc`). With Renode 1.17.0's `AdHocCompiler`, the one the
+  plugin cache uses:
+  - each platform's declared subset compiles alone (4, 18 and 27 type
+    definitions);
+  - the whole assembly compiles (39), and none has a module initialiser.
+    The check is a `.cctor` on `<Module>`, read through
+    `System.Reflection.Metadata` without loading the assembly.
+  - the negative controls: a source that uses `BbStm32F0Adc` fails alone
+    with CS0246 and compiles beside `bb_stm32f0_adc.cs`; a source with
+    `[ModuleInitializer]` is detected.
+- **G5, "the relock in the schema-epoch commit":** no committed `bb.lock`
+  or `board.bbm` changes in H4 (Deviation 2).
+- **G6** (`cli/tests/lock.rs`, in `cargo-test`, under a second). A copy of
+  `examples/spike` sits under `<tmp>/examples/spike`, so its lock's
+  recorded path `../../packages/st/stm32f103c8` points at
+  `<tmp>/packages`:
+  - with nothing there, an identical copy there, then a modified copy
+    there, `bb open --check`, `bb open` and `bb run` (up to its firmware
+    check, after the lock check) accept the first-party tree. Each prints
+    the matching warning. For the modified copy that is "a different
+    st/stm32f103c8 (tree <its hash>) is at the recorded path and is NOT
+    used", with the fix.
+  - with `*bb packages path=../../packages`, the modified copy is used:
+    `bb open` and `bb run` refuse its tree against the lock, and `bb open
+    --update-lock` records exactly its tree hash. One line changes; the
+    legacy platform entry is kept. After that no warning is printed.
+  - a directive naming a missing directory is an error.
+  - a project copy (`examples/bench` elsewhere) warns once per moved
+    first-party package (3) and not for its own packages. The committed
+    example boards, in place, print no warning.
+
+### Budget
+
+H4's `make test` budget is none (plan section 4, "—"). Its additions are
+unit and CLI tests that take well under a second (`platforms::tests`,
+`board::tests::packages_directive`, three new tests in
+`cli/tests/lock.rs`). `plugin-scope` and `lock-scope` are outside
+`make test`. Two `make check` runs were made in this worktree, one after
+the other, at a 1-minute load of 1.7-2.5 before each. Both were green:
+
+- pooled: 447 s (the H0 baseline is 470 s);
+- `POOL=0`: 540 s.
+
+`cargo-test` took 146.0 s in the pooled run.

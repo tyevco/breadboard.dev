@@ -118,6 +118,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make check` | `fmt-check`, `clippy` and `test`, which is what CI runs |
 | `make worktree TRACK=<name>` | Phase 2 H0 (plan section 7 rule 1): the track's git worktree `~/src/bb-<name>` (`WORKTREE_ROOT`) on the branch `p2/<name>`, from `main` when the branch is new, locked against a `git worktree prune` from Windows, with its own git-ignored `local.mk` (included first by the Makefile): `CARGO_TARGET_DIR` `~/.cache/bb-target-wt-<name>`, `BB_SCRATCH` `~/.cache/bb-wt-<name>` (the gates' project copies and work directories) and `DMS_REPO`. Idempotent; `make worktree-remove TRACK=<name>` removes it and keeps the branch (`scripts/worktree.sh`) |
 | `make worktree-test` | H0 gate (not in `make test`; four release builds of `bb`): two throwaway worktrees build `bb` at the same time, and their crate hashes are compared (bbcore's rlib differs by a marker only A has; bbpkg's rlib and each `bb` carry their own package path, never the other's); negative control: built one after the other into one shared target directory, B's `make bb` compiles nothing and leaves B a binary with A's code and package path (cargo names sources by their workspace-relative path) (`scripts/worktree_test.sh`) |
+| `make plugin-scope` / `make lock-scope` | Phase 2 H4 gates (ADR-015 G5, D6; not in `make test`, H4's budget is none). `plugin-scope` (about 6 s; CI job `adc`): with Renode's own compiler, each platform's declared plugin subset (`bb_cpu_renode::PLATFORM_PLUGINS` plus `SHARED_PLUGINS`) compiles alone, the whole assembly has no module initialiser (its metadata read), and two negative controls (a source using another's type, a `[ModuleInitializer]`) are caught (`engines/cpu-renode/tests/plugin_scope.rs`). `lock-scope` (about 50 s): a second `bb` built from a copy of the tree with one edit to `bb_nrf52_saadc.cs`, on scratch copies of every `PKG_BOARDS` entry relocked under the D6 rule: every STM32 board and project stays current, every nRF52840 one has exactly its platform's drift; the committed (legacy-hash) locks all drift under it (`scripts/lock_scope.sh`). The unit form is `platforms::tests` in `cargo-test`; G6 (the package path) is `cli/tests/lock.rs` |
 | `make measure-lock-test` | H0 gate (in `make test`, a few seconds): on a private lock file, every target of `MEASURE_TARGETS` refuses while a probe holds the measurement lock (the hold checked from outside), before building anything; the probe runs before and after (`scripts/measure_lock_test.sh`) |
 | `make ngspice-stall` | Phase 2 H1 gate (ADR-015 G1, D1; nightly tier, not in `make test`; under the measurement lock, fresh Renode): the SAADC stall repro, `e3/board.cir` with `U10.P0.02` on the loading `saadc_se` view and `homing_step.elf`, 100 ms, ends in `NoProgress:ngspice at 77430000059213fs` (77.43 ms) in the cell (77.43 ms, 77.44 ms] within `STALL_MAX_S` (120 s) and with bb's peak RSS under `STALL_MAX_RSS_KB` (500 MB); the outputs written before the error equal a `--for 77430us` run (`nets.csv`, `nets.vcd` and the non-grant records byte for byte; the grant records add the failed grant's own); `--ngspice-watchdog 20000,10000` trips identically twice; negative control: the committed board (`load=none`) runs the same 100 ms clean (`scripts/ngspice_stall.sh`, about 3.5 min) |
 | `make dms-home-rss` | Phase 2 H1 gate (ADR-015 G2, D2): E3 `typ` (2.7 s) at bb's defaults with bb's peak RSS (`bb run: peak RSS`, `VmHWM`) at most `DMS_HOME_RSS_MAX_KB` = 403 627 kB, the full-length measurement with the engine's `.save` (336 356 kB, against 1.5 GB without) plus 20 %, and its committed hashes (`scripts/dms_home.sh rss`, about 4 min alone); `make dms-home` checks the same on its `typ` run |
@@ -224,7 +225,7 @@ milestone may add to `make test` (wall time, on the baseline host). The
 | H1 | +30 s | under 1 s (the new unit and lint tests); `packages`' operating-point checks not measurable (`bb pkg test` A/B: median 31.4 s against 34.0 s before H1, N = 5, at load 23-60) | `make ngspice-stall` 3.4 min (the repro 77.9-120.6 s under load: 2-minute bound on an idle host; ADR-015 Amendment 1); `make dms-home-rss` 8.6 min; `make dms-home` 62 min (both beside other gates) |
 | H2 | — | | |
 | H3 | +10 s | 8.9 s (`ec_exposure` in `cargo-test`: 8.93 s pooled, 8.44 s `POOL=0`, in idle `make check` runs of 481 s and 581 s; unit tests under 0.1 s) | `make ec-exposure` 8.2 s; `make ec-long` 130 s; `make pool-equiv` 26.7 min; `make jit-profile-stress` 194 s (ADR-015 Amendment 2) |
-| H4 | — | | |
+| H4 | — | under 1 s (`platforms::tests`, `packages_directive`, three tests in `cli/tests/lock.rs`: 0.17 s for the file); `plugin-scope` and `lock-scope` are outside `make test` | `make plugin-scope` about 6 s (4.2 s of Renode compiles); `make lock-scope` 47 s (20 s of it the second build) |
 | H5 | +30 s (`multi-producer`) | | |
 | H6 | — (removes: `fresh` to nightly, `adc-stock`, split `cargo-test`) | | |
 | S | — | | |
@@ -386,7 +387,7 @@ scripts/                setup.sh, doctor.sh, check_spike.py, golden.py, determin
                         dms_m5b.py), check_local_only.sh (+ check_local_only_test.sh),
                         check_dms_rail.py, dms_rail.sh,
                         dms_zephyr.sh, dms_crosscheck.sh (+ dms_suite_deck.py), demo.sh,
-                        stranger_test.sh, docs_plots.sh (+ docs_plots.py),
+                        stranger_test.sh, lock_scope.sh, docs_plots.sh (+ docs_plots.py),
                         jit_profile_stress.sh, gdb_gate.py, dms_system.sh, check_nrf_pwm.py,
                         dms_home.sh (+ dms_home_boards.py, check_dms_home.py; Phase 2 R1:
                         compare_project_run.py); Phase 2 H0:
@@ -483,10 +484,19 @@ feedback board).
 - **Packages and platforms are pinned** (ADR-006 D8). A board file whose
   parts come from packages (`*bb part U1 package=...`) needs a current
   `bb.lock` next to it; `bb run` refuses a mismatch and never writes the
-  lock. A change to a package's files, to a platform's `.repl` or to any
-  Renode plugin source in `PLUGIN_SOURCES` changes those hashes: run
+  lock. A change to a package's files, to a platform's `.repl` or to a
+  Renode plugin source that platform declares changes those hashes: run
   `make locks`, review, and commit the `bb.lock` files with the change. A
-  new platform adds a row to `cli/src/platforms.rs`. A package value is a
+  platform's hash covers its `.repl` and its declared plugin sources only
+  (`bb_cpu_renode::PLATFORM_PLUGINS` and `SHARED_PLUGINS`, ADR-015 D6), so
+  an nRF model edit re-locks no STM32 board; a model a `.repl` starts
+  using must be added to its row, and `make plugin-scope` checks that each
+  row compiles alone. Until milestone S relocks them, committed locks hold
+  the legacy all-sources hash, which `bb` keeps while it still matches
+  (ADR-015 Amendment 3). A board file names extra package directories with
+  `*bb packages path=<dir>`; `bb open` and `bb run` warn when a locked
+  package resolved away from its recorded `path` (D7). A new platform adds
+  a row to `cli/src/platforms.rs`. A package value is a
   string in the value grammar (`spec/package.md` section 6), never a SPICE
   suffix: write `Meg`, never a bare `M`.
 - **Devices** (ADR-006 D7, Amendment 6). A device is Rust in `bbdev`,

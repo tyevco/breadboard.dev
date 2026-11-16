@@ -19,7 +19,7 @@ CARGO ?= cargo
         adc-equiv adc-renode adc-model adc-startup adc-stock adc-order adc-determinism pooled-adc-determinism adc-stock-ref adc-open-stock-ref adc-speed \
         cost-table cost-table-runs startup-perf ec-reconnect ec-long ec-exposure \
         pool-equiv pool-perf dms-source dms-suite dms-suite-check dms-suite-update \
-        packages locks dms-values setup-container \
+        packages locks plugin-scope lock-scope dms-values setup-container \
         adc-kicad adc-kicad-prepare adc-kicad-ref kicad-import cost-table-adc-kicad \
         pooled-test pooled-partition pooled-lattice-check pooled-feedback-open pooled-lookahead-inert pooled-lookahead-equiv pooled-adc-equiv pooled-spike-verify-every pooled-determinism pooled-feedback-determinism
 
@@ -1229,9 +1229,27 @@ dms-home-rss: firmware bb
 	bash scripts/dms_home.sh rss $(BB) $(DMS_HOME_RSS_OUT)
 
 # After an intended change to a package, a platform's .repl or a Renode
-# plugin source: rewrite the changed bb.lock entries (review, then commit).
+# plugin source the platform declares: rewrite the changed bb.lock entries
+# (review, then commit). A platform's hash covers its .repl and its declared
+# plugin sources only (ADR-015 D6); a legacy entry that still matches is kept.
 locks: bb
 	set -e; for b in $(PKG_BOARDS); do $(BB) open --update-lock $$b; done
+
+# --- Phase 2 H4: lock scope and the package path (ADR-015 D6, D7) ----------
+# plugin-scope (G5, about 6 s; not in make test, H4's budget is none; CI job
+# adc): with Renode's own compiler, each platform's declared plugin subset
+# compiles alone, the whole assembly has no module initialiser, and two
+# negative controls (a hidden dependency, a [ModuleInitializer]) are caught
+# (engines/cpu-renode/tests/plugin_scope.rs).
+plugin-scope:
+	BB_REQUIRE_RENODE=1 $(CARGO) test -p bb-cpu-renode --test plugin_scope -- --ignored --nocapture
+# lock-scope (G5 end to end, about 1-2 min: a second bb is built): a bb with
+# one edit to bb_nrf52_saadc.cs on scratch copies of every board and
+# project, relocked under the D6 rule, changes no STM32 lock and exactly the
+# nRF52840 platform of every nRF lock; the committed (legacy) locks all
+# change under it, which is the churn S's relock removes (scripts/lock_scope.sh).
+lock-scope: bb
+	bash scripts/lock_scope.sh $(BB) $(PKG_BOARDS)
 
 # ADR-006 G3: bb's KiCad value parser against the suite's spicelib on the 29
 # distinct passive values of the dial-me-spinner main board (with DMS_REPO

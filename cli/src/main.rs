@@ -1754,7 +1754,9 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         for w in &board.warnings {
             eprintln!("bb run: warning: {}: {w}", netlist.display());
         }
-        open::check_lock(netlist, &board)?;
+        for w in open::check_lock(netlist, &board)? {
+            eprintln!("bb run: warning: {w}");
+        }
         let firmware = a.firmware.clone().expect("checked");
         if !firmware.is_file() {
             return Err(format!("firmware {} not found", firmware.display()));
@@ -1783,7 +1785,8 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
     if let Some(h) = &p.schema_hint {
         eprintln!("bb run: warning: {h}");
     }
-    let imp = import::import(&p, import::Mode::Run)?;
+    let lock = bbpkg::lock::Lock::read(&dir.join("bb.lock"), &bbpkg::schema::Registry::current())?;
+    let imp = import::import(&p, import::Mode::Run, lock.as_ref())?;
     for w in &imp.warnings {
         eprintln!("bb run: warning: {w}");
     }
@@ -1796,7 +1799,9 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
             bbm_path.display()
         ));
     }
-    let lock = bbpkg::lock::Lock::read(&dir.join("bb.lock"), &bbpkg::schema::Registry::current())?;
+    for w in open::project_path_warnings(&dir, lock.as_ref(), &imp.locked_packages) {
+        eprintln!("bb run: warning: {w}");
+    }
     let d = bbpkg::lock::drift(lock.as_ref(), &imp.locked_packages, &imp.locked_platforms);
     if !d.is_empty() {
         return Err(format!(

@@ -611,8 +611,13 @@ struct Tried {
     result: String,
 }
 
-/// Import a project.
-pub fn import(p: &Project, mode: Mode) -> Result<Imported, String> {
+/// Import a project. `lock` is its `bb.lock`, which decides how a platform
+/// is pinned (`PlatformDef::locked_for`, ADR-015 Amendment 3).
+pub fn import(
+    p: &Project,
+    mode: Mode,
+    lock: Option<&bbpkg::lock::Lock>,
+) -> Result<Imported, String> {
     let mut warnings = Vec::new();
     let mut pk = Packages::load(&p.search_path())?;
     let multi = p.multi();
@@ -1399,7 +1404,7 @@ pub fn import(p: &Project, mode: Mode) -> Result<Imported, String> {
                     platforms::ids().join(", ")
                 )
             })?;
-            let l = def.locked();
+            let l = def.locked_for(lock);
             if !board.platforms.iter().any(|x| x.id == l.id) {
                 board.platforms.push(Platform {
                     id: l.id.clone(),

@@ -47,10 +47,17 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 /// A copy of the system project (with the two vendored netlists at the
-/// relative paths its bb.toml names), `edit` applied to its bb.toml.
+/// relative paths its bb.toml names), `edit` applied to its bb.toml. It sits
+/// at `<tmp>/examples/dial-me-spinner/system` beside a `<tmp>/packages` that
+/// links to the first-party directory, so every bb.lock `path` still points
+/// where its package resolves (no ADR-015 D7 warning: the same directory,
+/// spelled through the link).
 fn project(name: &str, edit: impl Fn(&str) -> String) -> (Tmp, PathBuf) {
-    let d = std::env::temp_dir().join(format!("bb-system-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
+    let root = std::env::temp_dir().join(format!("bb-system-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(repo().join("packages"), root.join("packages")).unwrap();
+    let d = root.join("examples/dial-me-spinner");
     let sys = d.join("system");
     copy_dir(&dms().join("system"), &sys);
     for (b, f) in [
@@ -64,7 +71,7 @@ fn project(name: &str, edit: impl Fn(&str) -> String) -> (Tmp, PathBuf) {
     let t = sys.join("bb.toml");
     let s = std::fs::read_to_string(&t).unwrap();
     std::fs::write(&t, edit(&s)).unwrap();
-    (Tmp(d), sys)
+    (Tmp(root), sys)
 }
 
 fn append(extra: &'static str) -> impl Fn(&str) -> String {

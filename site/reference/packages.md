@@ -144,10 +144,17 @@ two grant partitions that must agree. `bb pkg test --record` records each
 
 `bb open` writes `bb.lock` next to a board file or in a project: each
 package's version and tree hash, and each engine platform's content hash
-(the platform's `.repl` and Breadboard's Renode plugin sources). `bb run`
+(the platform's `.repl` and the Renode plugin sources that platform
+declares, so an nRF model change re-locks no STM32 board). `bb run`
 refuses a mismatch and never writes the lock. After an intended change to a
 package or platform, run `bb open --update-lock` (`make locks` for every
 example) and review the diff.
+
+The lock also records where each package was found (`path`). The tree
+hash decides acceptance, but `bb open` and `bb run` warn when a package
+resolved somewhere else, and say whether a different package with that id
+sits, unused, at the recorded path: the usual sign of a board copied
+together with a modified package.
 
 ## Parts from packages in a board file
 
@@ -164,8 +171,16 @@ every pin parameter out:
 The engine and platform come from the package's `[behavioral]` layer, which
 is `renode` on a platform `bb` provides or `device` on a device `bb`
 provides. A board has exactly one `renode` part (its CPU) and any number of
-device parts. Its search path is the first-party directory alone, and it
-needs a current `bb.lock` next to it (`bb open <board.cir>`). The Phase 0
+device parts. Its search path is the directories its `*bb packages
+path=<dir>` lines name (relative to the board file, in order), then the
+first-party directory, and it needs a current `bb.lock` next to it (`bb
+open <board.cir>`):
+
+```text
+*bb packages path=../../packages      # my modified copies first
+```
+
+The Phase 0
 form, with `engine=renode platform=...` and every parameter written out,
 still works and needs no lock.
 
