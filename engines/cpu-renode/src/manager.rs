@@ -15,11 +15,14 @@
 //!   lease thus sees the same type registry, and the first one is warm.
 //! - **Lease** (connection thread): `Clear`, `logLevel 1` (Renode's
 //!   default) and `include @<the run's session.resc>`, with the console's
-//!   output copied into the run's `renode.log`. At the end: wait until
-//!   Renode has re-opened its External Control listener after the run's
+//!   output copied into the run's `renode.log`. The script ends by
+//!   connecting Renode's External Control client to the engine's listener
+//!   (ADR-015 D5); a `RECONNECT` runs [`crate::ec::RECONNECT_PY`]. At the
+//!   end: wait until Renode has disposed of the client after the run's
 //!   disconnect, `Clear`, and check that the process listens on no port
-//!   (ADR-004 Amendment 2: Renode 1.17.0 leaks the listener when `Clear`
-//!   races the re-listen).
+//!   and has no External Control thread left. (Renode never listens for
+//!   External Control any more, so Amendment 2's re-listen race is gone;
+//!   the check stays.)
 //! - **Discard** (kill, and the slot thread spawns a pre-warmed
 //!   replacement): a lease that ended with an error or without `END ok`,
 //!   a console that fails or stops answering, a process that exited, a
@@ -28,7 +31,6 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -38,12 +40,12 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::console::{Console, COMMAND_ERROR};
+use crate::ec::{self, EcListener, RECONNECT_OK, RECONNECT_PY};
 use crate::pool::{canonical_renode, PROTOCOL};
 use crate::protocol::Client;
 use crate::{
-    free_port, plugin_cache_path, write_plugin_loader, BB_ADC_NAME, BB_ADC_PORT_ADDRESS,
-    LOOKAHEAD_ADDRESS, LOOKAHEAD_NAME, PLUGIN_ERR, PLUGIN_LOADER, STM32F072_BB_REPL,
-    STM32F103_OFFLINE_REPL,
+    plugin_cache_path, write_plugin_loader, BB_ADC_NAME, BB_ADC_PORT_ADDRESS, LOOKAHEAD_ADDRESS,
+    LOOKAHEAD_NAME, PLUGIN_ERR, PLUGIN_LOADER, STM32F072_BB_REPL, STM32F103_OFFLINE_REPL,
 };
 
 /// Configuration of a [`Manager`].
@@ -500,8 +502,8 @@ fn warm_process(inner: &Inner) -> Result<Console, String> {
     if plugin {
         platforms.push((f072.to_string_lossy().into_owned(), Some(BB_ADC_NAME)));
     }
-    for (repl, adc) in &platforms {
-        let port = free_port().map_err(|e| e.to_string())?;
+    for (k, (repl, adc)) in platforms.iter().enumerate() {
+        let mut listener = EcListener::bind().map_err(|e| e.to_string())?;
         let mut lines = vec![
             "Clear".to_string(),
             "logLevel 1".to_string(),
@@ -531,15 +533,40 @@ fn warm_process(inner: &Inner) -> Result<Console, String> {
             lines.push(format!("sysbus.{LOOKAHEAD_NAME} Arm"));
         }
         lines.push("logLevel 2".into());
-        lines.push(format!(
-            "emulation CreateExternalControlServer \"bb\" {port}"
-        ));
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let out = con.run(&refs, t).map_err(|e| e.to_string())?;
         ok(&out, repl)?;
-        warm_external_control(port, *adc, plugin, t)
-            .map_err(|e| format!("pre-warm {repl}: {e}"))?;
-        end_session(&mut con, port, t)?;
+        // ADR-015 D5: Renode connects out to the pool's listener; the
+        // command blocks the console until CHECK_VERSION is answered.
+        con.send_line(&ec::create_client_line(listener.port()))
+            .map_err(|e| e.to_string())?;
+        let pid = con.pid();
+        let mut warm = |reconnect: bool| -> Result<(), String> {
+            let s =
+                listener
+                    .accept_from(pid, Instant::now() + t, Duration::from_millis(1), || Ok(()))?;
+            let c = if reconnect {
+                Client::reverse(s, t)
+            } else {
+                Client::accept_reverse(s, t)
+            }
+            .map_err(|e| e.to_string())?;
+            warm_external_control(c, *adc, plugin).map_err(|e| e.to_string())
+        };
+        warm(false).map_err(|e| format!("pre-warm {repl}: {e}"))?;
+        // Once per process: the reconnect a lease may ask for, so a broken
+        // one fails here, not in a run.
+        if k == 0 {
+            if !ec::wait_ec_closed(pid, Duration::from_secs(5)) {
+                return Err("pre-warm: the External Control client did not close".into());
+            }
+            let out = con.run(&[RECONNECT_PY], t).map_err(|e| e.to_string())?;
+            if !out.contains(RECONNECT_OK) {
+                return Err(format!("pre-warm reconnect: {out}"));
+            }
+            warm(true).map_err(|e| format!("pre-warm {repl} (reconnected): {e}"))?;
+        }
+        end_session(&mut con, t)?;
     }
     let out = con.run(&["logLevel 1"], t).map_err(|e| e.to_string())?;
     ok(&out, "logLevel")?;
@@ -642,13 +669,10 @@ pub fn warm_elf() -> Vec<u8> {
 
 /// The External Control calls an engine makes, once, so they are compiled.
 fn warm_external_control(
-    port: u16,
+    mut c: Client,
     adc: Option<&str>,
     plugin: bool,
-    t: Duration,
 ) -> Result<(), crate::protocol::ProtocolError> {
-    let s = TcpStream::connect(("127.0.0.1", port))?;
-    let mut c = Client::handshake(s, t)?;
     let md = c.get_machine("bbwarm")?;
     let gpio = c.get_gpio(md, "gpioPortA")?;
     let _ = c.gpio_get_state(gpio, 5)?;
@@ -679,17 +703,17 @@ fn warm_external_control(
     Ok(())
 }
 
-/// After the client of the External Control server on `port` disconnected:
-/// wait for Renode to listen again, `Clear`, and require that no listener
-/// is left (ADR-004 Amendment 2).
-fn end_session(con: &mut Console, port: u16, t: Duration) -> Result<(), String> {
-    // Renode 1.17.0 restarts the server after a disconnect
-    // (`ExternalControlSocket.Disconnect(Unconnected)`). A Clear that
-    // arrives while it does so leaves a listener no one closes; one that
-    // finds the server back in Accept closes it.
-    wait(Duration::from_secs(2), || {
-        con.listening_ports().contains(&port)
-    });
+/// After `bb` closed the External Control connection: wait until Renode has
+/// disposed of its client (its threads ended), `Clear`, and require that no
+/// listener and no External Control thread is left (ADR-004 Amendment 2,
+/// ADR-015 D5).
+fn end_session(con: &mut Console, t: Duration) -> Result<(), String> {
+    // A client whose peer closed disposes of itself on its receive thread
+    // (`Disconnect(State.Disposed)`); a Clear that disposed it concurrently
+    // would race that. Renode never re-listens in client mode.
+    if !ec::wait_ec_closed(con.pid(), Duration::from_secs(5)) {
+        return Err("the External Control client did not close after the run".into());
+    }
     let out = con
         .run(&["Clear"], t.min(Duration::from_secs(20)))
         .map_err(|e| e.to_string())?;
@@ -701,6 +725,10 @@ fn end_session(con: &mut Console, port: u16, t: Duration) -> Result<(), String> 
             "a listener is left after Clear: ports {:?}",
             con.listening_ports()
         ));
+    }
+    let tasks = PathBuf::from(format!("/proc/{}/task", con.pid()));
+    if ec::ec_threads(&tasks) != 0 {
+        return Err("an External Control thread is left after Clear".into());
     }
     Ok(())
 }
@@ -896,7 +924,8 @@ fn serve_lease(
         reply(w, &format!("ERR expected RUN, got {:?}", line.trim_end()))?;
         return Err(std::io::ErrorKind::InvalidData.into());
     };
-    let port: u16 = port
+    // The engine's listener, which the script connects to (ADR-015 D5).
+    let _port: u16 = port
         .parse()
         .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
     let log = File::create(Path::new(workdir).join("renode.log"))?;
@@ -920,22 +949,39 @@ fn serve_lease(
         return Err(std::io::ErrorKind::Other.into());
     }
     reply(w, "READY")?;
-    // The run: no timeout, it may be long.
-    r.get_ref().set_read_timeout(None)?;
-    line.clear();
-    if r.read_line(&mut line)? == 0 {
-        return Err(std::io::ErrorKind::UnexpectedEof.into());
+    // The run: no timeout, it may be long. The engine may ask for External
+    // Control reconnects (ADR-004 Amendment 8) before it ends the lease.
+    let mut clean = true;
+    loop {
+        r.get_ref().set_read_timeout(None)?;
+        line.clear();
+        if r.read_line(&mut line)? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        r.get_ref().set_read_timeout(Some(t))?;
+        match line.trim_end() {
+            "END ok" => break,
+            "END failed" => return Ok(false),
+            "RECONNECT" => {
+                let out = match con.run(&[RECONNECT_PY], t) {
+                    Ok(out) => out,
+                    Err(e) => e.to_string(),
+                };
+                if out.contains(RECONNECT_OK) && !out.contains(COMMAND_ERROR) {
+                    reply(w, "RECONNECTING")?;
+                } else {
+                    clean = false;
+                    let msg: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+                    reply(w, &format!("ERR reconnect failed: {}", msg.join("\\n")))?;
+                }
+            }
+            _ => return Err(std::io::ErrorKind::InvalidData.into()),
+        }
     }
-    r.get_ref().set_read_timeout(Some(t))?;
-    match line.trim_end() {
-        "END ok" => {}
-        "END failed" => return Ok(false),
-        _ => return Err(std::io::ErrorKind::InvalidData.into()),
-    }
-    if con.exited() {
+    if con.exited() || !clean {
         return Ok(false);
     }
-    match end_session(con, port, t) {
+    match end_session(con, t) {
         Ok(()) => Ok(!con.exited()),
         Err(e) => {
             if e.contains("listener") {

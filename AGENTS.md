@@ -78,6 +78,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make ec-reconnect` | ADR-004 Amendment 8: the one-cell references of `examples/adc` (`--lookahead off --adc-push every`) and `examples/feedback` (`--lookahead off`), with the Renode engine replacing its External Control connection every 2 000 messages (`EC_MESSAGES`, passed as `BB_RENODE_EC_MESSAGES`), must give their committed hashes (about 40 s; in `make test`) |
 | `make gdb` / `make gdb-test` | Phase 1 M9 (ADR-008 D10, Amendments 7 and 8): `bb run --gdb <port>` (`--gdb-wait on\|off`) driven by a real GDB in batch mode (`scripts/gdb_gate.py`; GDB: `gdb-multiarch` from `make setup`, else `arm-none-eabi-gdb` or the Zephyr SDK's, `GDB=` overrides) on the spike and E1 (a copy of the project in `~/.cache/bb-gdb-gate`). `gdb-test` (in `make test`, about 45 s): attach and detach without a stop give all four committed hashes of the run without GDB on both boards, a breakpoint hit and continued gives exactly one `warn` debug mark (and run.json `debug: true` on E1), a run without `--gdb` has no debug key, `monitor` is refused, and a client of Renode's internal stub port, first (`BB_GDB_STUB_DELAY_MS`, a test knob) or while the proxy holds it, gets no reply and changes nothing (Amendment 8). `gdb` (CI job `dms-rail`, about 5 min) adds attach mid-run, the scripted breakpoint session 21 times (5 on E1) byte-identical, steps and reads at a breakpoint, a 5 s hold past a 2 s External Control timeout (`BB_RENODE_IO_TIMEOUT`) with no grant boundary during it, Ctrl-C then detach or continue, 1 500 steps across grants and WFI, a second debugger, GDB or bb killed during a halt, the loopback listener, the pool and the internal-port race 5 times without the knob. A marked run is never compared against a reference |
 | `make ec-long` | ADR-004 Amendment 8 long one-cell gate (`scripts/ec_long.sh`, about 2.5 min): the ADC board's every-lattice-point reference over 1 500 ms (`EC_LONG_FOR`; Renode used to crash after 81 746 grants) must finish, reconnect at least once, pass `check_adc.py` and equal the lookahead run except grant records (CI job `adc`) |
+| `make ec-exposure` | Phase 2 H3 gate (ADR-015 D5, G4, Amendment 2; in `make test` through `cargo-test`, about 8 s): Renode connects out to `bb`'s `127.0.0.1` listener (`CreateExternalControlClient`), so it listens on nothing. 20 engine starts (4 fresh in parallel, 16 leased from a 2-process pool), each with a foreign client (a separate `bash` with `/dev/tcp`) connected to `bb`'s listener before Renode, and again before each of its reconnects (every 8 messages): every foreign client refused without reading a byte, the run's own Renode admitted (its socket inode among the Renode process's fds), Renode listening on no TCP port after start, after every grant and at the end, and the PA5 edges equal to a run without foreign clients (`engines/cpu-renode/tests/ec_exposure.rs`) |
 | `make nrf-gates` | Phase 1 M2 gate (ADR-008 D1-D4, D6; Amendment 2): the Renode engine tests `engines/cpu-renode/tests/nrf52840.rs` on Breadboard's nRF52840 (`Platform::Nrf52840Bb`, `nrf52840-bb@1`: no SVD download, 64 MIPS) with the bare-metal gate firmware in `engines/cpu-renode/tests/firmware/nrf52840/` (nrf-blinky edges identical at one-cell grants, 10 ms grants, plugin armed and lookahead on, self-test status exactly 0x3; nrf-ppi; nrf-busywait: a 10 ms nrfx busy-wait takes 6.66 ms of virtual time; the D6 TIMER-compare-then-long-sleep promise clamp; the PIN_CNF audit, mid-run and end-of-run) and the prebuilt Zephyr gate image (nrf-zephyr), then `make nrf-feedback` (about 2 min) |
 | `make nrf-saadc-model` | Phase 1 M8, first half (ADR-008 D7, D8, Amendment 4; in `make test`, about 25 s): Breadboard's nRF52840 SAADC (`BbNrf52Saadc` on `nrf52840-bb@2`). The Renode-only register and timing tests in ADR-005's test-plan shape (`examples/nrf-saadc/bb_saadc_test.py`, `nrf_saadc_idle.elf` / `nrf_saadc_burst.elf`: reset values, every TACQ x RESOLUTION x OVERSAMPLE x BURST instant, the 8x BURST, transfer and rounding, VDD, EasyDMA, LIMIT, timer mode, the IRQ, the TACQ < 2 L refusal, the UART tap; run twice, byte-identical), then `scripts/nrf_saadc_board.sh` on `examples/nrf-saadc` (the loading `adc_in`: 8 `#smp` toggles and exactly 8 charge transfers per 8x burst against the analytic charge sharing, codes, UART lines; lookahead at 1 ms and 10 ms, push-on-change and `--engine-order analog-first` equal to the every-lattice-point one-cell reference `tests/golden/nrf-saadc/outputs.sha256`; the refusal at `--renode-quantum 25us` and its message; the `load=none` escape). `make nrf-saadc-update` rewrites the hashes; `make cost-table-nrf-saadc` is the board's cost-table row (also in `make cost-table`; idle host) |
 | `make nrf-pwm-model` | Phase 1 M10, first step (ADR-008 D9, Amendment 9; in `make test`, about 25 s): Breadboard's nRF52840 PWM0-PWM3 (`BbNrf52Pwm`), the TEMP and NVMC stand-ins (`BbNrf52Temp`, `BbNrf52Nvmc`) and their host port (`BbNrf52HostPort` at 0x5FFC0000: the PWM pin ring, TEMP's value) on `nrf52840-bb@3`. `examples/nrf-pwm/bb_pwm_test.py`, Renode-only, each group twice and byte-identical: `registers` (`nrf_saadc_idle.elf`; reset values; every pin change exact to 0.5 ns for up and up-and-down x PRESCALER x COUNTERTOP x COMP x POLARITY; REFRESH, ENDDELAY, LOOP, the SHORTS, NextStep, the Grouped, Common and WaveForm decoders, PSEL and ENABLE while running, every event instant, the IRQs, the ring overflow; TEMP's DATARDY at 36 us and STOP; NVMC erase timing, CONFIG gating, partial erase, ERASEALL) and `firmware` (`nrf_pwm_step.elf`: TEMP, an NVMC erase polled on READY, 4 full steps at 446 PPS as `nrfx_pwm_complex_playback` runs them, every pin change against the firmware's duty table, the UART lines, and no lookahead promise past the next PWM edge). Then the engine path (M10, third step; ADR-008 Amendment 11): `examples/nrf-pwm/board.cir` (cyclic through a constant `digital_in`) runs the same firmware through `bb run`, fresh: `scripts/check_nrf_pwm.py` requires the four pins' `pin_edge` records to be the duty table's changes to the femtosecond, and the one-cell reference (`--lookahead off`), the default (lookahead on), `--max-quantum 1ms` and analog-first give identical `nets.csv`, `nets.vcd` and non-grant records |
@@ -222,7 +223,7 @@ milestone may add to `make test` (wall time, on the baseline host). The
 | H0 | — (`measure-lock-test`, a few seconds) | 0.7 s (`measure-lock-test`) | `make worktree-test` 76 s; `make baseline` 32 min |
 | H1 | +30 s | under 1 s (the new unit and lint tests); `packages`' operating-point checks not measurable (`bb pkg test` A/B: median 31.4 s against 34.0 s before H1, N = 5, at load 23-60) | `make ngspice-stall` 3.4 min (the repro 77.9-120.6 s under load: 2-minute bound on an idle host; ADR-015 Amendment 1); `make dms-home-rss` 8.6 min; `make dms-home` 62 min (both beside other gates) |
 | H2 | — | | |
-| H3 | +10 s | | |
+| H3 | +10 s | 8.9 s (`ec_exposure` in `cargo-test`: 8.93 s pooled, 8.44 s `POOL=0`, in idle `make check` runs of 481 s and 581 s; unit tests under 0.1 s) | `make ec-exposure` 8.2 s; `make ec-long` 130 s; `make pool-equiv` 26.7 min; `make jit-profile-stress` 194 s (ADR-015 Amendment 2) |
 | H4 | — | | |
 | H5 | +30 s (`multi-producer`) | | |
 | H6 | — (removes: `fresh` to nightly, `adc-stock`, split `cargo-test`) | | |
@@ -283,7 +284,9 @@ engines/cpu-renode/     Renode engine over the External Control API; platforms/:
                         ADC model and its host port, ADR-005) and stm32f072-bb.repl (the F072
                         overlay); tests/firmware (gate firmware); console.rs, pool.rs,
                         manager.rs (the warm Renode pool, ADR-004); gdb.rs (the GDB proxy of
-                        `bb run --gdb` in front of Renode's stub, ADR-008 D10, Amendment 7)
+                        `bb run --gdb` in front of Renode's stub, ADR-008 D10, Amendment 7);
+                        ec.rs (Phase 2 H3: the reverse External Control connection, bb's
+                        owner-checked listener and the reconnect, ADR-015 D5, Amendment 2)
 cli/                    `bb` binary (`bb run`, `bb pool`, `bb open`, `bb pkg`, `bb flash`, `bb probe`,
                         board-file parser, platforms.rs: the Renode platform identities of ADR-006 D8;
                         Phase 1 M4: project.rs (bb.toml, benches), names.rs, import.rs (resolution, D4),
@@ -587,14 +590,28 @@ feedback board).
   script) that sends many requests must reconnect too. A reconnect must not
   register the GPIO events again: the hooks of the first connection stay
   on the pins and would report every edge twice (ADR-004 Amendment 8).
-- **Sending `Clear` or `SIGTERM` to a Renode right after its External
-  Control client disconnected.** Renode 1.17.0 restarts the server then, and
-  a `Clear` that races the restart leaks the listener or crashes Renode
-  (ADR-004 Amendment 2); a `SIGTERM` that races it aborts Renode
-  (`SIGABRT`) before the runtime writes the JIT profile (Amendment 9).
-  The pool waits for the re-listen first, and a gathering engine waits until
-  the server's receive thread sleeps in `accept`
-  (`ec_server_accepting`); keep it that way.
+- **Letting Renode listen for External Control in a `bb` run, or
+  admitting a connection without the owner check.** Renode 1.17.0's server
+  binds `IPAddress.Any` with no accept hook, so any local process could
+  take the slot (ADR-015 D5). Renode is the client
+  (`CreateExternalControlClient`, `bb_cpu_renode::ec`): `bb` listens on
+  `127.0.0.1` and admits only a connection whose socket is among its own
+  Renode process's fds; anything else is closed unread. A Renode client
+  does not reconnect by itself when `bb` closes: the engine restarts the
+  *same* object (`ec::RECONNECT_PY`, reflection on the private
+  `RestartConnection`); a second `CreateExternalControlClient` would leave
+  the first object's GPIO hooks sending through disposed handlers
+  (ADR-015 Amendment 2). The Renode-only model tests
+  (`bb_adc_test.py`, `bb_saadc_test.py`, `renode_adc_test.py`,
+  `tests/console.rs`) still open a server for their own clients.
+- **Sending `Clear`, `SIGTERM` or the reconnect to a Renode before its
+  External Control client has closed.** After `bb` closes the connection
+  Renode disposes the client on its receive thread
+  (`Disconnect(State.Disposed)`); a `Clear`, an exit or a
+  `RestartConnection` racing that is the class of race of ADR-004
+  Amendments 2 and 9 (a leaked listener, `SIGABRT` before the JIT profile
+  is written). The engine, the pool and a gathering teardown wait until
+  the client's threads are gone (`ec::wait_ec_closed`); keep it that way.
 - **Parsing KiCad files with regex.** Use a real S-expression parser.
 - **Feeding recorded data through a `[[pwl]]`.** An inline PWL card is
   O(n²) in ngspice (100 000 points took 103 s); `bb run` warns above 1 000
@@ -682,8 +699,9 @@ feedback board).
   `~/.cache/bb/renode-jit` (same overrides), one per Renode install,
   platform and plugin setting (ADR-004 Amendment 6). The first run for a key
   gathers it and stops Renode with `SIGTERM` instead of `SIGKILL` so the
-  runtime writes it, once the External Control server is back in `accept`
-  (Amendment 9; `make jit-profile-stress` checks the gather under load).
+  runtime writes it, once Renode has disposed of its External Control
+  client (Amendment 9, ADR-015 Amendment 2; `make jit-profile-stress`
+  checks the gather under load).
   Deleting the directory only costs that one gather.
   `BB_RENODE_JIT_PROFILE=off` disables it. It changes JIT timing only; a
   new board must still give its committed hashes with and without it.

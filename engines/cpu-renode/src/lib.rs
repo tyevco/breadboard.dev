@@ -3,10 +3,13 @@
 //!
 //! # How time is controlled
 //!
-//! Renode is started paused (`--disable-xwt --port -1`, no monitor, no GUI)
-//! with a generated script that creates the machine, loads the platform and
-//! the ELF, and opens an External Control server
-//! (`emulation CreateExternalControlServer`). The engine then only ever sends
+//! Renode is started paused (`--disable-xwt --console --port -1`: no TCP
+//! monitor, no GUI; its console reads only the engine's stdin pipe) with a
+//! generated script that creates the machine, loads the platform and the
+//! ELF, and connects Renode's External Control client to the engine's
+//! listener on `127.0.0.1` (`emulation CreateExternalControlClient`; a
+//! reverse connection, so nothing listens on Renode's side, ADR-015 D5 and
+//! [`ec`]). The engine then only ever sends
 //! `RUN_FOR(n ns)` calls that end on the grant lattice: Renode's global
 //! quantum [`RenodeConfig::quantum`] (`L`, ADR-003 D2), which the engine
 //! declares through [`bbcore::Engine::grant_lattice`]. `RUN_FOR` returns once
@@ -156,6 +159,7 @@
 //! the rest of the engine does not depend on where its Renode came from.
 
 pub mod console;
+pub mod ec;
 pub mod gdb;
 pub mod manager;
 pub mod pool;
@@ -163,7 +167,7 @@ pub mod protocol;
 
 use std::collections::BTreeSet;
 use std::io::Read;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -871,6 +875,32 @@ pub struct RenodeConfig {
     /// without the JIT startup profile, and its External Control reads have
     /// no timeout (a halted CPU holds a `RUN_FOR` open).
     pub gdb: Option<gdb::GdbConfig>,
+    /// Called with the listener's port each time the engine is about to
+    /// have Renode connect to it ([`EcPhase`]): before Renode is spawned or
+    /// the leased process runs the script, and before each reconnect. The
+    /// exposure gate (ADR-015 G4) connects a foreign client there first.
+    /// Never set by `bb`; never changes results.
+    #[doc(hidden)]
+    pub ec_hook: Option<EcHook>,
+}
+
+/// When [`RenodeConfig::ec_hook`] is called.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EcPhase {
+    /// Before Renode is started (or the leased process runs the script).
+    Start,
+    /// Before the reconnect with this number (1, 2, ...).
+    Reconnect(u64),
+}
+
+/// A test hook of [`RenodeConfig::ec_hook`].
+#[derive(Clone)]
+pub struct EcHook(pub std::sync::Arc<dyn Fn(EcPhase, u16) + Send + Sync>);
+
+impl std::fmt::Debug for EcHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EcHook")
+    }
 }
 
 /// Environment override of [`RenodeConfig::io_timeout`] in seconds (a test
@@ -928,6 +958,7 @@ impl RenodeConfig {
             uart_log: false,
             pwm: false,
             gdb: None,
+            ec_hook: None,
         }
     }
 
@@ -1208,11 +1239,11 @@ struct JitProfile {
 
 const JIT_PROFILE_VERSION: &[u8] = b"bb-mcj-1";
 
-/// How long a gathering engine's teardown waits for Renode's External
-/// Control server to be back in `Accept` before it sends `SIGTERM`
-/// ([`ec_server_accepting`]); a bound, not a delay: the wait ends as soon as
-/// the server is there (about 1 ms on an idle host).
-const JIT_GATHER_ACCEPT_WAIT: Duration = Duration::from_secs(10);
+/// How long a gathering engine's teardown waits for Renode to have disposed
+/// of its External Control client before it sends `SIGTERM`
+/// ([`ec::wait_ec_closed`]); a bound, not a delay: the wait ends as soon as
+/// the client's threads are gone (a few ms).
+const JIT_GATHER_CLOSE_WAIT: Duration = Duration::from_secs(10);
 
 fn jit_profile_dir() -> Option<PathBuf> {
     let base = std::env::var_os("BB_CACHE_DIR")
@@ -1296,33 +1327,6 @@ impl JitProfile {
             }
         }
     }
-}
-
-/// The External Control server of process `pid` is back in `Accept`: one of
-/// its threads named `ExternalControl…` (Renode's receive thread; `comm` is
-/// cut to 15 bytes) sleeps in the kernel's `inet_csk_accept`
-/// (`/proc/<pid>/task/<tid>/wchan`).
-///
-/// After its client disconnects, Renode 1.17.0 restarts the server on the
-/// receive thread (`ExternalControlSocket.Disconnect(Unconnected)` →
-/// `RestartConnection`: a new socket, `Listen`, a new receive thread, then
-/// `Start`; the new thread calls `Accept`). A dispose in that window, by
-/// `Clear` or by the shutdown that `SIGTERM` starts (`Emulator.Exit` →
-/// `ExternalControlSocket.Dispose`), joins a thread that has not been
-/// started and leaves the new thread calling `Accept` on a disposed socket:
-/// an unhandled `ObjectDisposedException`, so Renode aborts (`SIGABRT`)
-/// before the runtime writes the JIT profile (ADR-004 Amendment 2 and
-/// Amendment 9). A listening port alone is not enough: `Listen` comes before
-/// the thread starts. Once the thread sleeps in `accept`, a dispose closes
-/// the socket under it and Renode exits cleanly.
-fn ec_server_accepting(task_dir: &Path) -> bool {
-    let Ok(rd) = std::fs::read_dir(task_dir) else {
-        return false;
-    };
-    rd.flatten().any(|t| {
-        let read = |f: &str| std::fs::read_to_string(t.path().join(f)).unwrap_or_default();
-        read("comm").starts_with("ExternalControl") && read("wchan").trim() == "inet_csk_accept"
-    })
 }
 
 /// Stop a gathering child gracefully (`SIGTERM`, the runtime writes its JIT
@@ -1644,7 +1648,10 @@ pub struct RenodeEngine {
 
 /// The External Control connection's parameters, for reconnecting.
 struct EcConnection {
-    port: u16,
+    /// `bb`'s listener, which Renode's client connects to (ADR-015 D5);
+    /// kept for the reconnects.
+    listener: ec::EcListener,
+    hook: Option<EcHook>,
     machine: String,
     io_timeout: Duration,
     /// [`RenodeConfig::ec_messages_per_connection`].
@@ -1706,7 +1713,9 @@ fn ns_to_seconds_str(ns: u64) -> String {
 /// Ports already handed to a Renode instance of this process. The OS may
 /// hand the same ephemeral port to two `bind(0)` calls once the first probe
 /// socket is closed; two engines started concurrently would then race for
-/// one server port and one would connect to the other's Renode.
+/// one server port and one would connect to the other's Renode. Since
+/// ADR-015 D5 only the GDB stub's internal port comes from here; External
+/// Control uses the engine's own bound listener ([`ec::EcListener`]).
 static PORTS: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
 
 pub(crate) fn free_port() -> Result<u16, EngineError> {
@@ -1718,7 +1727,7 @@ pub(crate) fn free_port() -> Result<u16, EngineError> {
         }
     }
     Err(EngineError::Other(
-        "no unused local port for the External Control server".into(),
+        "no unused local port for the GDB stub".into(),
     ))
 }
 
@@ -1794,7 +1803,9 @@ impl RenodeEngine {
             }
             Platform::Repl(p) => monitor_path(Path::new(p))?,
         };
-        let port = free_port()?;
+        // ADR-015 D5: bb listens, Renode connects out.
+        let mut listener = ec::EcListener::bind()?;
+        let port = listener.port();
         let la = &cfg.lookahead;
         if la.enabled && !la.plugin {
             return Err(EngineError::Other(
@@ -1967,11 +1978,12 @@ impl RenodeEngine {
              {extra}\
              {plugin_arm}\
              logLevel 2\n\
-             emulation CreateExternalControlServer \"bb\" {port}\n",
+             {create_client}\n",
             machine = cfg.machine,
             elf = monitor_path(&firmware)?,
             seed = cfg.seed,
             quantum = ns_to_seconds_str(quantum_ns),
+            create_client = ec::create_client_line(port),
         );
         let script_path = workdir.join("session.resc");
         std::fs::write(&script_path, script)?;
@@ -1988,6 +2000,9 @@ impl RenodeEngine {
             let _ = std::fs::remove_dir_all(&workdir);
             EngineError::Other(format!("{msg}{plugin}\n--- renode log (tail) ---\n{tail}"))
         };
+        if let Some(h) = &cfg.ec_hook {
+            (h.0)(EcPhase::Start, port);
+        }
         let mut jit = None;
         let mut host = Some(match lease {
             Some(l) => Host::Lease(l),
@@ -2000,11 +2015,14 @@ impl RenodeEngine {
                 if let Some(j) = &jit {
                     j.apply(&mut cmd);
                 }
+                // `--console` with stdin a pipe: the only monitor channel
+                // is this pipe, which a reconnect uses (ADR-015 Amendment
+                // 2). Renode exits when it closes.
                 let child = cmd
-                    .args(["--disable-xwt", "--plain", "--port", "-1"])
+                    .args(["--disable-xwt", "--plain", "--console", "--port", "-1"])
                     .arg(&script_path)
                     .current_dir(&workdir)
-                    .stdin(Stdio::null())
+                    .stdin(Stdio::piped())
                     .stdout(log.try_clone()?)
                     .stderr(log)
                     .spawn()
@@ -2017,7 +2035,7 @@ impl RenodeEngine {
         // A leased process runs the same script from its console; the
         // manager copies its output into this run's renode.log.
         if let Some(Host::Lease(l)) = host.as_mut() {
-            if let Err(e) = l.run(
+            if let Err(e) = l.start_run(
                 &monitor_path(&workdir)?,
                 &monitor_path(&script_path)?,
                 port,
@@ -2027,41 +2045,37 @@ impl RenodeEngine {
             }
         }
 
-        // Wait for the External Control server.
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        // Wait for Renode's External Control client (ADR-015 D5): only a
+        // connection from this Renode process is accepted.
+        let pid = host.as_ref().expect("host present").pid();
         let deadline = Instant::now() + cfg.startup_timeout;
-        let stream = loop {
-            if let Some(Host::Child(c)) = host.as_mut() {
-                if let Ok(Some(status)) = c.try_wait() {
-                    return Err(fail(
-                        &mut host,
-                        format!("renode exited during startup ({status})"),
-                    ));
-                }
-            }
-            match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
-                // TCP self-connect: while nothing listens on the port yet, the
-                // kernel can pick the port itself as this socket's ephemeral
-                // source port, and the connection then reaches itself. Seen
-                // with many engines starting at once (ADR-003 Amendment 3).
-                Ok(s) if s.local_addr().ok() == s.peer_addr().ok() && Instant::now() < deadline => {
-                    drop(s);
-                    std::thread::sleep(connect_poll());
-                }
-                Ok(s) => break s,
-                Err(_) if Instant::now() < deadline => std::thread::sleep(connect_poll()),
-                Err(e) => {
-                    return Err(fail(
-                        &mut host,
-                        format!("no External Control server on port {port}: {e}"),
-                    ))
-                }
-            }
+        let accepted = {
+            let h = host.as_mut().expect("host present");
+            listener.accept_from(pid, deadline, connect_poll(), || match &mut *h {
+                Host::Child(c) => match c.try_wait() {
+                    Ok(Some(status)) => Err(format!("renode exited during startup ({status})")),
+                    _ => Ok(()),
+                },
+                Host::Lease(l) => l.failed_early().map_err(|e| format!("pooled renode: {e}")),
+            })
         };
+        let stream = match accepted {
+            Ok(s) => s,
+            Err(e) => return Err(fail(&mut host, e)),
+        };
+        let client = match Client::accept_reverse(stream, cfg.io_timeout) {
+            Ok(c) => c,
+            Err(e) => return Err(fail(&mut host, format!("setup failed: {e}"))),
+        };
+        if let Some(Host::Lease(l)) = host.as_mut() {
+            if let Err(e) = l.wait_ready() {
+                return Err(fail(&mut host, format!("pooled renode: {e}")));
+            }
+        }
 
         type Setup = (Client, i32, Vec<PinState>, u64, Option<(i32, Vec<u32>)>);
         let setup = || -> Result<Setup, ProtocolError> {
-            let mut client = Client::handshake(stream, cfg.io_timeout)?;
+            let mut client = client;
             let md = client.get_machine(&cfg.machine)?;
             let mut pins = Vec::new();
             for (i, spec) in cfg.pins.iter().enumerate() {
@@ -2259,7 +2273,8 @@ impl RenodeEngine {
             failed: false,
             jit,
             ec: EcConnection {
-                port,
+                listener,
+                hook: cfg.ec_hook.clone(),
                 machine: cfg.machine.clone(),
                 io_timeout: cfg.io_timeout,
                 messages_per_connection: cfg.ec_messages_per_connection,
@@ -2832,6 +2847,17 @@ impl RenodeEngine {
         self.carried_edges
     }
 
+    /// External Control connections refused so far: their socket did not
+    /// belong to this engine's Renode (ADR-015 D5).
+    pub fn ec_refused(&self) -> u64 {
+        self.ec.listener.refused()
+    }
+
+    /// The port of `bb`'s External Control listener (`127.0.0.1`).
+    pub fn ec_port(&self) -> u16 {
+        self.ec.listener.port()
+    }
+
     /// Number of time/GPIO cross-checks run so far (see [`Verify`]).
     pub fn verifications(&self) -> u64 {
         self.verifications
@@ -3254,49 +3280,78 @@ impl RenodeEngine {
     /// leaks receive-thread stack per message ([`protocol::EC_MESSAGE_LIMIT`]);
     /// a new connection gets a new receive thread.
     ///
-    /// After the client disconnects, Renode disposes the connection's
-    /// command handlers and listens on the same port again
-    /// (`ExternalControlSocket.Disconnect(Unconnected)` →
-    /// `RestartConnection`), so the connect is retried until the server is
-    /// back. Descriptors (machine, GPIO, ADC, bus) belong to the handlers and
-    /// are fetched again. The GPIO event hooks registered on the first
-    /// connection stay on the pins and send through the socket object, so
-    /// they are not registered again (that would report every edge twice).
-    /// Nothing here touches emulation state: no time passes and no
-    /// peripheral is accessed, so results never depend on when (or whether)
-    /// the engine reconnects.
+    /// Renode's External Control is a client of `bb`'s listener (ADR-015
+    /// D5). When `bb` closes the connection, Renode disposes the client's
+    /// command handlers and threads and does not reconnect by itself
+    /// (`Disconnect(State.Disposed)`). Once those threads are gone the
+    /// engine has Renode restart the same client object
+    /// ([`ec::RECONNECT_PY`]: through the child's console pipe, or the
+    /// pool's `RECONNECT`), and accepts its new connection, from Renode's
+    /// process only. Descriptors (machine, GPIO, ADC, bus) belong to the
+    /// handlers and are fetched again. The GPIO event hooks registered on
+    /// the first connection stay on the pins and send through that same
+    /// object, so they are not registered again (that would report every
+    /// edge twice). Nothing here touches emulation state: no time passes
+    /// and no peripheral is accessed, so results never depend on when (or
+    /// whether) the engine reconnects.
     fn reconnect(&mut self) -> Result<(), EngineError> {
         let pending_events = self.client.take_events();
         self.client.close();
-        let addr = SocketAddr::from(([127, 0, 0, 1], self.ec.port));
-        let deadline = Instant::now() + self.ec.io_timeout.min(Duration::from_secs(30));
-        let stream = loop {
-            if let Host::Child(c) = &mut self.host {
-                if let Ok(Some(status)) = c.try_wait() {
+        let pid = self.host.pid();
+        let limit = self.ec.io_timeout.min(Duration::from_secs(30));
+        if !ec::wait_ec_closed(pid, limit) {
+            return Err(EngineError::Protocol(format!(
+                "{}External Control reconnect: Renode did not close the old connection",
+                self.host.status_note()
+            )));
+        }
+        let n = self.ec.reconnects + 1;
+        if let Some(h) = &self.ec.hook {
+            (h.0)(EcPhase::Reconnect(n), self.ec.listener.port());
+        }
+        match &mut self.host {
+            Host::Child(c) => {
+                use std::io::Write;
+                let sent = c.stdin.as_mut().map(|i| {
+                    i.write_all(format!("{}\n", ec::RECONNECT_PY).as_bytes())
+                        .and_then(|()| i.flush())
+                });
+                if !matches!(sent, Some(Ok(()))) {
                     return Err(EngineError::Protocol(format!(
-                        "renode exited while reconnecting External Control ({status})"
+                        "External Control reconnect: Renode's console pipe: {sent:?}"
                     )));
                 }
             }
-            match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
-                // TCP self-connect while nothing listens (see `start`).
-                Ok(s) if s.local_addr().ok() == s.peer_addr().ok() && Instant::now() < deadline => {
-                    drop(s);
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                Ok(s) => break s,
-                Err(_) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                Err(e) => {
-                    return Err(EngineError::Protocol(format!(
-                        "External Control reconnect: no server on port {} again: {e}",
-                        self.ec.port
-                    )))
-                }
-            }
-        };
-        let mut client = Client::handshake(stream, self.ec.io_timeout).map_err(proto)?;
+            Host::Lease(l) => l
+                .reconnect()
+                .map_err(|e| EngineError::Protocol(format!("External Control reconnect: {e}")))?,
+        }
+        let deadline = Instant::now() + limit;
+        let host = &mut self.host;
+        let stream = self
+            .ec
+            .listener
+            .accept_from(
+                pid,
+                deadline,
+                Duration::from_millis(1),
+                || match &mut *host {
+                    Host::Child(c) => match c.try_wait() {
+                        Ok(Some(status)) => Err(format!(
+                            "renode exited while reconnecting External Control ({status})"
+                        )),
+                        _ => Ok(()),
+                    },
+                    Host::Lease(_) => Ok(()),
+                },
+            )
+            .map_err(|e| {
+                EngineError::Protocol(format!(
+                    "External Control reconnect: {e}\n--- renode log (tail) ---\n{}",
+                    log_tail(&self.workdir.join("renode.log"))
+                ))
+            })?;
+        let mut client = Client::reverse(stream, self.ec.io_timeout).map_err(proto)?;
         if self.ec.no_read_timeout {
             client.set_read_timeout(None).map_err(proto)?;
         }
@@ -3750,27 +3805,18 @@ impl Drop for RenodeEngine {
                 // A clean run that gathers the startup JIT profile stops
                 // Renode gracefully so the runtime writes it (ADR-004
                 // Amendment 6); every other child is killed.
-                // Renode is signalled only once its External Control server
-                // is back in Accept after the disconnect: a SIGTERM during
-                // the server's restart aborts Renode before the profile is
-                // written (`ec_server_accepting`, ADR-004 Amendment 9). If
-                // that state does not come, Renode is killed and the next
-                // run gathers again.
+                // Renode is signalled only once it has disposed of its
+                // External Control client after the disconnect: a dispose
+                // racing the client's own (`Disconnect`) is the class of
+                // abort ADR-004 Amendment 9 found with the server's
+                // restart. If that state does not come, Renode is killed and
+                // the next run gathers again.
                 let gather = self.jit.as_ref().is_some_and(|j| j.gather.is_some());
                 if gather && !self.failed && !std::thread::panicking() {
                     self.client.close();
-                    let tasks = PathBuf::from(format!("/proc/{}/task", c.id()));
-                    let deadline = Instant::now() + JIT_GATHER_ACCEPT_WAIT;
-                    let accepting = loop {
-                        if ec_server_accepting(&tasks) {
-                            break true;
-                        }
-                        if Instant::now() >= deadline || matches!(c.try_wait(), Ok(Some(_))) {
-                            break false;
-                        }
-                        std::thread::sleep(Duration::from_millis(2));
-                    };
-                    if accepting {
+                    let closed = ec::wait_ec_closed(c.id(), JIT_GATHER_CLOSE_WAIT)
+                        && matches!(c.try_wait(), Ok(None));
+                    if closed {
                         terminate_gracefully(c, Duration::from_secs(5));
                     } else {
                         let _ = c.kill();
@@ -3811,32 +3857,6 @@ impl Drop for RenodeEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `ec_server_accepting` on a fake `/proc/<pid>/task`: only an
-    /// `ExternalControl…` thread asleep in `inet_csk_accept` counts (ADR-004
-    /// Amendment 9); another server's accepting thread, a receive thread in
-    /// `recv`, a running thread (`wchan` 0) and a missing directory do not.
-    #[test]
-    fn ec_server_accepting_reads_wchan() {
-        let root = std::env::temp_dir().join(format!("bb-ec-accept-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let task = |tid: u32, comm: &str, wchan: &str| {
-            let d = root.join(tid.to_string());
-            std::fs::create_dir_all(&d).unwrap();
-            std::fs::write(d.join("comm"), format!("{comm}\n")).unwrap();
-            std::fs::write(d.join("wchan"), wchan).unwrap();
-        };
-        assert!(!ec_server_accepting(&root), "missing directory");
-        task(1, "renode", "futex_do_wait");
-        task(2, "SocketServerPro", "inet_csk_accept");
-        task(3, "ExternalControl", "sk_wait_data");
-        assert!(!ec_server_accepting(&root), "receive thread in recv");
-        task(3, "ExternalControl", "0");
-        assert!(!ec_server_accepting(&root), "receive thread running");
-        task(4, "ExternalControl", "inet_csk_accept");
-        assert!(ec_server_accepting(&root), "new receive thread in accept");
-        let _ = std::fs::remove_dir_all(&root);
-    }
 
     #[test]
     fn stm32_pin_names() {

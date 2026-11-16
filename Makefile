@@ -17,7 +17,7 @@ CARGO ?= cargo
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
         adc-equiv adc-renode adc-model adc-startup adc-stock adc-order adc-determinism pooled-adc-determinism adc-stock-ref adc-open-stock-ref adc-speed \
-        cost-table cost-table-runs startup-perf ec-reconnect ec-long \
+        cost-table cost-table-runs startup-perf ec-reconnect ec-long ec-exposure \
         pool-equiv pool-perf dms-source dms-suite dms-suite-check dms-suite-update \
         packages locks dms-values setup-container \
         adc-kicad adc-kicad-prepare adc-kicad-ref kicad-import cost-table-adc-kicad \
@@ -718,6 +718,19 @@ ec-reconnect: firmware bb
 	@echo "ec-reconnect: PASS (one-cell references identical with a reconnect every $(EC_MESSAGES) messages)"
 ec-long: firmware bb
 	bash scripts/ec_long.sh $(BB) $(EC_LONG_OUT) -- $(subst --for $(ADC_FOR),--for $(EC_LONG_FOR),$(ADC_ARGS))
+# ADR-015 D5/G4 (Phase 2 H3): the External Control exposure gate. Renode
+# connects out to bb's listener (CreateExternalControlClient); 20 engine
+# starts (4 fresh, 16 leased) each with a foreign client (a separate bash)
+# connected to bb's listener first, again before every reconnect: every one
+# refused without a byte, the run's own Renode admitted, Renode listening
+# on no port at any check, PA5 edges as the reference
+# (engines/cpu-renode/tests/ec_exposure.rs; it is also in make test through
+# cargo-test, about 8 s).
+ec-exposure: firmware
+	@mkdir -p out
+	BB_REQUIRE_RENODE=1 $(CARGO) test -p bb-cpu-renode --test ec_exposure -- --nocapture 2>&1 \
+	    | tee out/ec-exposure.log | grep -E '^ec-exposure|^test result'; \
+	    test $${PIPESTATUS[0]} -eq 0
 
 # --- Phase 1 M8 (first half): Breadboard's nRF52840 SAADC (ADR-008 D7/D8) --
 # nrf52840-bb@2: BbNrf52Saadc (BURST/oversampling, TACQ, EasyDMA, the TACQ

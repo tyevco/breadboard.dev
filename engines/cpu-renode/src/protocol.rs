@@ -40,6 +40,15 @@
 //! `renode_create_time(v, TU_NANOSECONDS)` multiplies by 1, and running for
 //! 1 ns then reading the time returns 1 (verified against Renode 1.17.0).
 //!
+//! Since ADR-015 D5 (Phase 2 H3) Renode is the *socket* client
+//! (`CreateExternalControlClient`, see [`crate::ec`]) and `bb` listens, but
+//! `bb` still sends every request ([`Client::accept_reverse`],
+//! [`Client::reverse`]). Renode routes an incoming message by id bit 15
+//! and, in client mode, serves requests from the handler whose ids have bit
+//! 15 clear, so `bb`'s request ids then have bit 15 clear; Renode's own
+//! `CHECK_VERSION` and its GPIO events carry bit 15. Messages are still
+//! classified by type, never by that bit.
+//!
 //! The client is single-threaded and synchronous: it never sends a new request
 //! before the previous one has been answered, and it acknowledges GPIO events
 //! inline while waiting for that answer. GPIO events therefore arrive in
@@ -134,6 +143,10 @@ pub const EC_MESSAGE_LIMIT: u64 = 400_000;
 /// Synchronous External Control API connection.
 pub struct Client {
     stream: TcpStream,
+    /// Bit 15 of this side's request ids: set when Renode is the server
+    /// ([`Client::handshake`]), clear when Renode is the client
+    /// ([`Client::reverse`]).
+    id_bit: u16,
     next_id: u16,
     events: Vec<GpioEvent>,
     /// Messages sent on this connection (requests and event answers): what
@@ -142,17 +155,70 @@ pub struct Client {
 }
 
 impl Client {
-    /// Wrap a connected stream and perform the version handshake.
-    pub fn handshake(stream: TcpStream, io_timeout: Duration) -> Result<Client> {
+    fn wrap(stream: TcpStream, io_timeout: Duration, id_bit: u16) -> Result<Client> {
         stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(io_timeout))?;
         stream.set_write_timeout(Some(io_timeout))?;
-        let mut c = Client {
+        Ok(Client {
             stream,
+            id_bit,
             next_id: 0,
             events: Vec::new(),
             sent: 0,
-        };
+        })
+    }
+
+    /// Wrap a stream connected to Renode's External Control **server**
+    /// (`CreateExternalControlServer`) and perform the version handshake.
+    /// `bb` itself no longer uses it (ADR-015 D5); Renode-only tests do.
+    pub fn handshake(stream: TcpStream, io_timeout: Duration) -> Result<Client> {
+        let mut c = Client::wrap(stream, io_timeout, CLIENT_INITIATED)?;
+        c.request(CMD_CHECK_VERSION, &PROTOCOL_VERSION.to_le_bytes())?;
+        Ok(c)
+    }
+
+    /// Wrap a stream that Renode's External Control **client**
+    /// (`CreateExternalControlClient`, ADR-015 D5) opened to `bb`'s
+    /// listener, and answer the `CHECK_VERSION` request its constructor
+    /// sends first (Renode's monitor waits for that answer). Renode is the
+    /// client here, but `bb` still drives it: `bb` sends every request
+    /// (with id bit 15 clear, which Renode 1.17.0 routes to the handler its
+    /// default thread serves in client mode) and Renode answers them.
+    pub fn accept_reverse(stream: TcpStream, io_timeout: Duration) -> Result<Client> {
+        let mut c = Client::wrap(stream, io_timeout, 0)?;
+        let (mid, body) = c.recv()?;
+        if body.len() < 3 {
+            return Err(ProtocolError::Server(format!(
+                "short first message ({} bytes)",
+                body.len()
+            )));
+        }
+        let cmd = u16::from_le_bytes([body[0], body[1]]);
+        let (rtype, data) = (body[2], &body[3..]);
+        if cmd != CMD_CHECK_VERSION || rtype != TYPE_REQUEST {
+            c.send(mid, &response_header(cmd, TYPE_INVALID_COMMAND))?;
+            return Err(ProtocolError::Server(format!(
+                "Renode's first message is command {cmd}, type {rtype}, not CHECK_VERSION"
+            )));
+        }
+        if data != PROTOCOL_VERSION.to_le_bytes() {
+            let msg = format!("Version missmatch, client version: {data:?}, server version: 0");
+            let mut p = response_header(cmd, TYPE_ERROR).to_vec();
+            p.extend_from_slice(msg.as_bytes());
+            c.send(mid, &p)?;
+            return Err(ProtocolError::Server(format!(
+                "Renode's External Control protocol version {data:?} is not 0"
+            )));
+        }
+        c.send(mid, &response_header(cmd, TYPE_SUCCESS))?;
+        Ok(c)
+    }
+
+    /// Wrap a stream that Renode's client re-opened after a reconnect
+    /// (`RestartConnection`, which sends nothing first) and check the
+    /// protocol version with a request of `bb`'s own.
+    pub fn reverse(stream: TcpStream, io_timeout: Duration) -> Result<Client> {
+        let mut c = Client::wrap(stream, io_timeout, 0)?;
         c.request(CMD_CHECK_VERSION, &PROTOCOL_VERSION.to_le_bytes())?;
         Ok(c)
     }
@@ -366,7 +432,7 @@ impl Client {
                 self.sent
             )));
         }
-        let id = CLIENT_INITIATED | self.next_id;
+        let id = self.id_bit | self.next_id;
         self.next_id = (self.next_id + 1) & !CLIENT_INITIATED;
         let mut payload = Vec::with_capacity(3 + data.len());
         payload.extend_from_slice(&cmd.to_le_bytes());
@@ -621,6 +687,107 @@ mod tests {
         // Every message Renode's receive thread received is counted:
         // CHECK_VERSION, RUN_FOR, the event's answer, the read, the write.
         assert_eq!(c.messages_sent(), 5);
+    }
+
+    /// ADR-015 D5: the reverse connection's wire format, as Renode 1.17.0's
+    /// client produces it (checked against a running Renode, ADR-015
+    /// Amendment 2): Renode connects and sends `CHECK_VERSION` with id
+    /// 0x8001, `bb` answers under that id; `bb`'s requests carry ids with
+    /// bit 15 clear from 0; a GPIO event carries bit 15 (0x8002) and is
+    /// answered under its id. A reconnected client sends nothing first, so
+    /// [`Client::reverse`] checks the version itself. A wrong version is
+    /// refused.
+    #[test]
+    fn reverse_connection_wire_format() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let renode = std::thread::spawn(move || {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(&frame(
+                0x8001,
+                CMD_CHECK_VERSION,
+                TYPE_REQUEST,
+                &[0, 0, 0, 0],
+            ))
+            .unwrap();
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x8001, CMD_CHECK_VERSION, TYPE_SUCCESS, &[])
+            );
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x0000, CMD_RUN_FOR, TYPE_REQUEST, &10_000u64.to_le_bytes())
+            );
+            let mut ev = Vec::new();
+            ev.extend_from_slice(&3i32.to_le_bytes());
+            ev.extend_from_slice(&5000u64.to_le_bytes());
+            ev.push(0);
+            ev.extend_from_slice(&[0u8; 7]);
+            s.write_all(&frame(0x8002, CMD_GPIO, TYPE_EVENT_REQUEST, &ev))
+                .unwrap();
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x8002, CMD_GPIO, TYPE_SUCCESS, &[])
+            );
+            s.write_all(&frame(0x0000, CMD_RUN_FOR, TYPE_SUCCESS, &[]))
+                .unwrap();
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x0001, CMD_GET_TIME, TYPE_REQUEST, &0u64.to_le_bytes())
+            );
+            s.write_all(&frame(
+                0x0001,
+                CMD_GET_TIME,
+                TYPE_SUCCESS,
+                &10_000u64.to_le_bytes(),
+            ))
+            .unwrap();
+            drop(s);
+            // The reconnect: nothing first, bb checks the version.
+            let mut s = TcpStream::connect(addr).unwrap();
+            assert_eq!(
+                read_frame(&mut s),
+                frame(0x0000, CMD_CHECK_VERSION, TYPE_REQUEST, &[0, 0, 0, 0])
+            );
+            s.write_all(&frame(0x0000, CMD_CHECK_VERSION, TYPE_SUCCESS, &[]))
+                .unwrap();
+            drop(s);
+            // A Renode of another protocol version.
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(&frame(
+                0x8001,
+                CMD_CHECK_VERSION,
+                TYPE_REQUEST,
+                &[1, 0, 0, 0],
+            ))
+            .unwrap();
+            let r = read_frame(&mut s);
+            assert_eq!(&r[..2], &0x8001u16.to_le_bytes());
+            assert_eq!(&r[6..9], &[0, 0, TYPE_ERROR]);
+        });
+        let (s, _) = listener.accept().unwrap();
+        let mut c = Client::accept_reverse(s, Duration::from_secs(10)).unwrap();
+        c.run_for(10_000).unwrap();
+        assert_eq!(
+            c.take_events(),
+            vec![GpioEvent {
+                descriptor: 3,
+                time_ns: 5000,
+                state: false
+            }]
+        );
+        assert_eq!(c.get_time().unwrap(), 10_000);
+        // The answer to CHECK_VERSION, RUN_FOR, the event's answer, GET_TIME.
+        assert_eq!(c.messages_sent(), 4);
+        let (s, _) = listener.accept().unwrap();
+        Client::reverse(s, Duration::from_secs(10)).unwrap();
+        let (s, _) = listener.accept().unwrap();
+        let e = Client::accept_reverse(s, Duration::from_secs(10))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(e.contains("version"), "{e}");
+        renode.join().unwrap();
     }
 
     /// ADR-004 Amendment 8: at [`EC_MESSAGE_LIMIT`] a request fails with a

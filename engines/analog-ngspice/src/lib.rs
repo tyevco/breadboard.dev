@@ -1443,11 +1443,14 @@ fn logged_errors() -> Vec<String> {
 /// What a failed advance reports from the log: the error lines, or when
 /// ngspice printed none (it stops a transient on a singular matrix or a
 /// collapsed step with warnings only), the last three distinct warnings,
-/// oldest first. "singular matrix: check node qf" names the cause.
+/// oldest first. "singular matrix: check node qf" names the cause. ngspice
+/// spells its texts in more than one case ("Timestep too small" from
+/// `doAnalyses`, "timestep too small" elsewhere), so every match ignores
+/// ASCII case.
 fn failure_lines(log: &[String]) -> Vec<String> {
     let errs: Vec<String> = log
         .iter()
-        .filter(|l| l.starts_with("stderr Error") || l.starts_with("stderr error"))
+        .filter(|l| l.to_ascii_lowercase().starts_with("stderr error"))
         .cloned()
         .collect();
     if !errs.is_empty() {
@@ -1455,10 +1458,10 @@ fn failure_lines(log: &[String]) -> Vec<String> {
     }
     let mut w: Vec<String> = Vec::new();
     for l in log.iter().rev() {
-        let warn = l.starts_with("stderr Warning")
-            || l.starts_with("stderr warning")
-            || l.contains("singular matrix")
-            || l.contains("timestep too small");
+        let lc = l.to_ascii_lowercase();
+        let warn = lc.starts_with("stderr warning")
+            || lc.contains("singular matrix")
+            || lc.contains("timestep too small");
         if warn && !w.contains(l) {
             w.push(l.clone());
             if w.len() == 3 {
@@ -3054,6 +3057,28 @@ mod tests {
             ]
         );
         assert!(failure_lines(&[s("stdout x")]).is_empty());
+    }
+
+    /// The H1 follow-up: ngspice's `doAnalyses` prints "Timestep too
+    /// small" with a capital T (and other paths print it in lower case);
+    /// a collapsed step is reported either way, as are other spellings of
+    /// the warning and error texts.
+    #[test]
+    fn failure_text_matches_ignore_case() {
+        let s = |x: &str| x.to_string();
+        let cap = s("stderr doAnalyses: TRAN:  Timestep too small; time = 7.743e-02, timestep = 1.25e-20: trouble with node \"vpre\"");
+        let log = vec![s("stdout Reference value : 7.74300e-02"), cap.clone()];
+        assert_eq!(failure_lines(&log), vec![cap.clone()]);
+        for line in [
+            "stdout tran: timestep too small",
+            "stdout TIMESTEP TOO SMALL",
+            "stdout Singular Matrix: check node qf",
+            "stderr WARNING: something",
+        ] {
+            assert_eq!(failure_lines(&[s(line)]), vec![s(line)], "{line}");
+        }
+        let e = s("stderr ERROR: no such vector x");
+        assert_eq!(failure_lines(&[cap, e.clone()]), vec![e]);
     }
 
     #[test]

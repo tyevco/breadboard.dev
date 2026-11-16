@@ -10,22 +10,37 @@
 //! The pool is not an engine. A lease is one run: the manager clears the
 //! process, has it include the run's own `session.resc` (the script a fresh
 //! run uses, minus the lookahead loader, which the pool ran at pre-warm),
-//! and the engine then talks to that Renode's External Control server
-//! exactly as it would to a fresh one. At the end of the lease the manager
-//! clears the process again, so no machine and no simulated time exist in
-//! a pool process between leases (ADR-004 "Lease" 4).
+//! and that Renode then connects out to the engine's External Control
+//! listener exactly as a fresh one does (ADR-015 D5). At the end of the
+//! lease the manager clears the process again, so no machine and no
+//! simulated time exist in a pool process between leases (ADR-004 "Lease"
+//! 4).
 //!
 //! # Wire protocol (one Unix stream per lease, text lines)
 //!
 //! ```text
-//! engine  -> manager   LEASE 1 <renode> <plugin>        renode: canonical launcher path;
+//! engine  -> manager   LEASE 2 <renode> <plugin>        renode: canonical launcher path;
 //!                                                     plugin: cached assembly path or -
 //! manager -> engine    OK <pid> | BUSY | NOMATCH <why>
-//! engine  -> manager   RUN <workdir> <script> <port>  after OK; paths are monitor-safe
-//! manager -> engine    READY | ERR <message>          ERR: the process is discarded
+//! engine  -> manager   RUN <workdir> <script> <port>  after OK; paths are monitor-safe;
+//!                                                     port: the engine's listener
+//! manager -> engine    READY | ERR <message>          READY once the script finished,
+//!                                                     i.e. after the engine answered
+//!                                                     Renode's CHECK_VERSION;
+//!                                                     ERR: the process is discarded
+//! engine  -> manager   RECONNECT                      (any number of times) after
+//!                                                     closing External Control
+//! manager -> engine    RECONNECTING | ERR <message>   Renode is connecting again
 //! engine  -> manager   END ok|failed                  after closing External Control
 //! manager -> engine    DONE kept|discarded
 //! ```
+//!
+//! Protocol 2 (ADR-015 Amendment 2) is the reverse connection: Renode's
+//! script ends with `CreateExternalControlClient`, which blocks the include
+//! until the engine has accepted the connection and answered, so the
+//! engine sends `RUN`, accepts (watching for an early `ERR`) and then reads
+//! `READY`; and `RECONNECT` has the manager run [`crate::ec::RECONNECT_PY`]
+//! on the console.
 //!
 //! A lease whose stream closes without `END ok` (the engine failed, or `bb`
 //! died) discards the process.
@@ -40,7 +55,7 @@ use std::time::Duration;
 pub const POOL_ENV: &str = "BB_RENODE_POOL";
 
 /// Protocol version of the lease messages.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 /// The pool socket from [`POOL_ENV`], if set and not empty.
 pub fn from_env() -> Option<PathBuf> {
@@ -128,9 +143,10 @@ impl Lease {
     }
 
     /// Have the process run `script` (copying its output to
-    /// `workdir/renode.log`); returns once the script has finished. The
-    /// External Control server on `port` is then listening.
-    pub fn run(
+    /// `workdir/renode.log`). Returns at once: the script ends by connecting
+    /// to the engine's listener on `port`, which the engine accepts
+    /// ([`Lease::failed_early`] meanwhile), and then [`Lease::wait_ready`].
+    pub fn start_run(
         &mut self,
         workdir: &str,
         script: &str,
@@ -141,10 +157,62 @@ impl Lease {
             .get_ref()
             .set_read_timeout(Some(timeout))
             .map_err(|e| format!("pool: {e}"))?;
-        self.send(&format!("RUN {} {} {port}", word(workdir)?, word(script)?))?;
+        self.send(&format!("RUN {} {} {port}", word(workdir)?, word(script)?))
+    }
+
+    /// While the engine waits for the leased Renode to connect: `Err` if
+    /// the manager has already answered (the script failed: `ERR`, or the
+    /// manager went away). Never blocks.
+    pub fn failed_early(&mut self) -> Result<(), String> {
+        let s = self.rd.get_ref();
+        s.set_nonblocking(true).map_err(|e| format!("pool: {e}"))?;
+        let pending = match self.rd.fill_buf() {
+            Ok(b) => Some(b.is_empty()),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => None,
+            Err(e) => return Err(format!("pool: receive: {e}")),
+        };
+        self.rd
+            .get_ref()
+            .set_nonblocking(false)
+            .map_err(|e| format!("pool: {e}"))?;
+        match pending {
+            None => Ok(()),
+            Some(true) => Err("pool: the manager closed the lease".into()),
+            Some(false) => {
+                let r = self.recv()?;
+                self.answer(&r)?;
+                Err(format!("pool: {r:?} before Renode connected"))
+            }
+        }
+    }
+
+    /// After the engine answered the leased Renode's `CHECK_VERSION`: wait
+    /// until the manager reports the script finished.
+    pub fn wait_ready(&mut self) -> Result<(), String> {
+        let r = self.recv()?;
+        self.answer(&r)
+    }
+
+    fn answer(&mut self, r: &str) -> Result<(), String> {
+        match r.split_once(' ').map_or((r, ""), |(a, b)| (a, b)) {
+            ("READY", _) => Ok(()),
+            ("ERR", m) => {
+                self.ended = true;
+                Err(m.replace("\\n", "\n"))
+            }
+            _ => Err(format!("pool: unexpected answer {r:?}")),
+        }
+    }
+
+    /// Have the manager reconnect the leased Renode's External Control
+    /// client ([`crate::ec::RECONNECT_PY`]), after the engine closed the
+    /// connection and the old one's threads have ended. Returns once
+    /// Renode is connecting to the engine's listener again.
+    pub fn reconnect(&mut self) -> Result<(), String> {
+        self.send("RECONNECT")?;
         let r = self.recv()?;
         match r.split_once(' ').map_or((r.as_str(), ""), |(a, b)| (a, b)) {
-            ("READY", _) => Ok(()),
+            ("RECONNECTING", _) => Ok(()),
             ("ERR", m) => {
                 self.ended = true;
                 Err(m.replace("\\n", "\n"))

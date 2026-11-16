@@ -182,6 +182,16 @@ impl Console {
         }
     }
 
+    /// Send one command line without waiting for it (a command that blocks
+    /// until a peer acts, like `CreateExternalControlClient`, ADR-015 D5).
+    /// The next [`Console::run`] finishes after it.
+    pub fn send_line(&mut self, line: &str) -> Result<(), ConsoleError> {
+        debug_assert!(!line.contains('\n'));
+        self.stdin.write_all(format!("{line}\n").as_bytes())?;
+        self.stdin.flush()?;
+        Ok(())
+    }
+
     /// The process has exited.
     pub fn exited(&mut self) -> bool {
         !matches!(self.child.try_wait(), Ok(None))
