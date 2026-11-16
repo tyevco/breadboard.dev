@@ -20,6 +20,7 @@ pub mod obj;
 pub mod optsets;
 pub mod package;
 pub mod pattern;
+pub mod pirules;
 pub mod pkgtest;
 pub mod schema;
 pub mod sha256;

@@ -1,0 +1,4 @@
+* iq_noload: richtek/rt9080 view ldo with no load, VIN fed through a 1 kOhm sense resistor.
+VSUP sup 0 4.3
+RS sup vin 1k
+CO vout 0 1u

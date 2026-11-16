@@ -1,0 +1,6 @@
+* boost_ccm: ti/tps61040 view boost at VIN 3.6 V with 10 uH fed through a 0.1 Ohm sense resistor, its
+* own output 1 mF (10 mF for the current limit) (so it stays near its precharge, VIN - 0.4 V, for the window): the converter runs at
+* its switch current limit in continuous conduction.
+VIN vin 0 3.6
+RSENSE vin vl 0.1
+L1 vl sw 10u

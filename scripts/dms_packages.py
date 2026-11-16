@@ -450,8 +450,10 @@ file = "pins.toml"
 [[analog]]
 name = "lsw"
 purpose = "rail switching, turn-on ramp, quick output discharge (the suite's load_switches view)"
-fidelity = ["fast", "pi"]
-default_for = ["fast", "pi"]
+# fast only: the vendor-derived view has V-type B sources, a CCCS and a 0 V source, which ADR-009 D2
+# rule 1 refuses at pi (Phase 2 P1; the committed view is the one restated for pi, decision D-TPS)
+fidelity = ["fast"]
+default_for = ["fast"]
 file = "analog/load_switches__tps22917.lib"
 subckt = "LSW_TPS22917"
 ports = ["CT", "GND", "ON", "QOD", "VIN", "VOUT"]

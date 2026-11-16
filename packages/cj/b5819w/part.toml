@@ -1,0 +1,49 @@
+# cj/b5819w: CJ B5819W 40 V 1 A Schottky barrier diode, SOD-123 (Phase 2 P1: the rectifier of the
+# dial-me-spinner OLED boost, D21). A plain SPICE diode fitted to the datasheet's typical curves.
+schema = "bb-part/1"
+
+[part]
+id = "cj/b5819w"
+version = "0.1.0"
+kind = "discrete"
+manufacturer = "Jiangsu Changjiang Electronics Technology (CJ)"
+mpn = ["B5819W SL", "B5819W"]
+lcsc = ["C8598"]
+datasheet = { url = "https://atta.szlcsc.com/upload/public/pdf/source/20170217/1487301580783.pdf", rev = "D, Mar 2015" }
+license = "Apache-2.0"
+description = "40 V, 1 A Schottky barrier diode, SOD-123"
+
+[footprints]
+kicad = ["Diode_SMD:D_SOD-123"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "diode"
+purpose = "the rectifier: forward conduction, junction capacitance, reverse breakdown"
+fidelity = ["fast", "pi"]
+default_for = ["fast", "pi"]
+file = "analog/b5819w_diode.lib"
+subckt = "CJ_B5819W_DIODE"
+ports = ["A", "K"]
+
+[analog.provenance]
+source = "datasheet"
+base = "breadboard.dev's own SPICE diode, fitted to the CJ datasheet's typical curves (page 2, read by eye) and checked against its limits (page 1); none of the dial-me-spinner suite's B5819W model is used"
+refs = [
+  "CJ B5817W-5819W, rev D (March 2015), page 1: VF <= 0.6 V at 1 A, <= 0.9 V at 3 A; V(BR) >= 40 V at 1 mA; IR <= 1 mA at 40 V; CD <= 120 pF at 4 V, 1 MHz",
+  "page 2, Forward Characteristics (25 C, read): 0.1 A at about 0.32 V, 1 A at about 0.43 V",
+  "page 2, Capacitance Characteristics (25 C, read): 180 pF at 0 V, about 60 pF at 4 V, 40 pF at 10 V",
+]
+deviations = ["n 1.1 and rs 0.05 Ohm fit the curve up to 1 A only"]
+not_modelled = ["the forward curve above 1 A", "the reverse leakage's slope in VR", "self-heating"]
+generated_by = "Claude (Phase 2 P1)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

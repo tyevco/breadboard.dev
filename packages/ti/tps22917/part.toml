@@ -6,11 +6,16 @@
 # dms-local-packages` builds it as a package with the same id, view name, ports and parameters in the
 # git-ignored local-packages/ (a project that lists that path shadows this package), and `make dms-m5b`
 # gates this view against it on the E1 checks (10 mV / 1 ms).
+#
+# Phase 2 P1 (approver decision D-TPS, ADR-009 Amendment 4): the view is restated to ADR-009 D2's rules
+# (no V-type B source, no internal node held only by a microsiemens path) from SLVSDW8B itself, and is
+# valid, and the default, at both fast and pi. E1's fast results moved within their recorded tolerances;
+# the re-recorded hashes and the reason are in the amendment.
 schema = "bb-part/1"
 
 [part]
 id = "ti/tps22917"
-version = "0.2.0"
+version = "0.3.0"
 kind = "power"
 manufacturer = "Texas Instruments"
 mpn = ["TPS22917DBVR", "TPS22917DBVT"]
@@ -28,33 +33,33 @@ file = "pins.toml"
 [[analog]]
 name = "lsw"
 purpose = "rail switching: ON comparator, CT-set turn-on ramp (Table 7.6), RON, quick output discharge"
-fidelity = ["fast"]
-default_for = ["fast"]
+fidelity = ["fast", "pi"]
+default_for = ["fast", "pi"]
 file = "analog/lsw_fit.lib"
 subckt = "TI_TPS22917_LSW_FIT"
 ports = ["CT", "GND", "ON", "QOD", "VIN", "VOUT"]
+rails = ["VIN", "VOUT"]
 params = { ron_add = "0", isd_out = "0" }
 
 [analog.provenance]
 source = "agent_generated"
-base = "breadboard.dev's own behavioural model (no vendor netlist), written by an agent from SLVSDW8B Tables 7.3, 7.5 and 7.6 as the dial-me-spinner repository quotes them; SLVSDW8B itself was not opened (ADR-006 Amendment 5)"
+base = "breadboard.dev's own behavioural model (no vendor netlist), written by an agent from SLVSDW8B Tables 7.3, 7.5 and 7.6 (Phase 1 M5b, from the dial-me-spinner repository's quotes of them), restated in Phase 2 P1 to ADR-009 D2's rules from SLVSDW8B itself (opened: September 2017, revised December 2021)"
 refs = [
-  "SLVSDW8B Table 7.3 (VIH, VIL): dial-me-spinner@6854d25:hardware/sim/tests/test_load_switches.py SW_VIH_MIN, SW_VIL_MAX",
-  "SLVSDW8B Table 7.5 (RON typ): dial-me-spinner@6854d25:hardware/sim/tests/test_power_integrity.py LSW_RON, docs/bringup.md",
-  "SLVSDW8B Table 7.5 (QOD typ): dial-me-spinner@6854d25:hardware/sim/tests/test_load_switches.py SW_QOD",
-  "SLVSDW8B Table 7.5 (RPD): dial-me-spinner@6854d25:hardware/sim/models/sleep_current__tps22917.lib, oled_boost__tps22917.lib (headers)",
-  "SLVSDW8B Table 7.6 (tON, tR at 3.6 / 5 V): dial-me-spinner@6854d25:hardware/sim/tests/test_load_switches.py SW_TON_K, SW_TR_K",
-  "SLVSDW8B Table 7.6 (tON and SRON at 1 / 1.2 / 1.8 V, CT open tON): dial-me-spinner@6854d25:hardware/sim/models/load_switches__tps22917.lib (the suite's header comments)",
+  "SLVSDW8B Table 7.3: VIH >= 1.0 V, VIL <= 0.35 V",
+  "SLVSDW8B Table 7.5: RON typ 220 / 170 / 120 / 90 / 80 mOhm at VIN 1.0 / 1.2 / 1.8 / 3.6 / 5 V (IOUT 200 mA, 25 C); QOD 150 Ohm; RPD 750 kOhm; IQ,VIN 0.5 uA typ",
+  "SLVSDW8B Table 7.6: tON 3 / 3.4 / 3.6 / 3.8 / 4 us/pF and tR 0.6 / 0.95 / 1.2 / 1.6 / 1.8 us/pF at VIN 1.0 / 1.2 / 1.8 / 3.6 / 5 V; SRON 1100 / 1000 / 1100 / 1900 / 2300 (mV/us) pF; tON 120 us at 3.6 V with CT open",
+  "SLVSDW8B section 9.3.2, Equation 2: turn-on time = CT x tON, from enable to VOUT at 90 % of VIN",
 ]
 deviations = [
   "QOD has 1 GOhm to VOUT, so a floating QOD pin (quick output discharge disabled) stays defined",
-  "a linear turn-on ramp through Table 7.6's tON and tR, so its slope is about 5 % below Table 7.6's SRON",
+  "a linear turn-on ramp through Table 7.6's tON and tR, so its slope is not Table 7.6's SRON (a linear ramp cannot match all three); below 3.6 V the rise time per pF is 0.8 VIN / SRON (0.727 / 0.96 / 1.309 us/pF at 1 / 1.2 / 1.8 V), as in Phase 1, not the tR row (0.6 / 0.95 / 1.2): the tR row moved E1's cold VLED ramp by about 40 us, beyond its recorded snapshot tolerance (decision D-TPS)",
   "ON trip points 0.68 V rising / 0.63 V falling: the datasheet guarantees only VIL <= 0.35 V and VIH >= 1.0 V",
-  "IQ 0.5 uA on, ISD 5 nA off: assumed values inside Figures 7-1/7-2's ranges",
+  "ISD 5 nA off: an assumed value below Table 7.5's 10 nA typ",
+  "C_int 32 pF gives 118 us CT-open tON at 3.6 V against Table 7.6's 120 us",
 ]
-not_modelled = ["temperature (ron_add and isd_out apply Table 7.5 corners)", "RON below 3.6 V except by linear extrapolation (clamped at 0.25 Ohm)", "QOD's dependence on VIN", "reverse current blocking thresholds and timing (reverse current is never conducted)", "thermal shutdown", "ESD structures", "tolerance and part-to-part spread"]
-generated_by = "Claude (Phase 1 M5b)"
-confidence = "self_checked"   # datasheet_checked once someone checks the figures against SLVSDW8B itself
+not_modelled = ["temperature (ron_add and isd_out apply Table 7.5 corners)", "RON's dependence on IOUT", "QOD's dependence on VIN", "reverse current blocking thresholds and timing (reverse current is never conducted)", "thermal shutdown", "ESD structures", "tolerance and part-to-part spread"]
+generated_by = "Claude (Phase 1 M5b; restated in Phase 2 P1)"
+confidence = "self_checked"   # datasheet_checked once ADR-012's claim checker passes its claims
 
 [[analog.qualified]]   # bb pkg test --record
 lattice = "10us"

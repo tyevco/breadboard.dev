@@ -343,6 +343,18 @@ fn port_key(p: &Port) -> &str {
 /// The deck body for a vector: the view's definitions, `X1`, the test
 /// circuit and the option set's card.
 pub fn deck(pkg: &Package, view: &View, v: &Vector, options: &str) -> Result<String, String> {
+    deck_at(pkg, view, v, options, None)
+}
+
+/// [`deck`] at one of the view's corners (`[[analog.corners]]`, ADR-009
+/// D8): the corner's parameters override the view's and the vector's.
+pub fn deck_at(
+    pkg: &Package,
+    view: &View,
+    v: &Vector,
+    options: &str,
+    corner: Option<&crate::package::Corner>,
+) -> Result<String, String> {
     let switch = view.kind == "switch";
     let text = if switch {
         crate::package::switch_definition()
@@ -354,6 +366,11 @@ pub fn deck(pkg: &Package, view: &View, v: &Vector, options: &str) -> Result<Str
     let mut params: BTreeMap<String, String> = view.params.iter().cloned().collect();
     for (k, val) in &v.params {
         params.insert(k.clone(), val.clone());
+    }
+    if let Some(c) = corner {
+        for (k, val) in &c.params {
+            params.insert(k.clone(), val.clone());
+        }
     }
     let mut x1 = String::from("X1");
     let mut keys: Vec<&str> = view.ports.iter().map(port_key).collect();
@@ -539,6 +556,42 @@ fn crossing(samples: &[(Time, f64)], level: f64, rise: bool, n: u32, after: Time
         }
     }
     None
+}
+
+/// ADR-009 D2 rule 2 (milestone P1): solve the DC operating point of the
+/// vector's circuit with the view at `corner` (`None`: its own parameters),
+/// under `options`, with ADR-015 D4's fail-fast (no transient-op fallback).
+/// The edges sit at their initial levels.
+pub fn operating_point_at(
+    pkg: &Package,
+    view: &View,
+    v: &Vector,
+    options: &str,
+    corner: Option<&crate::package::Corner>,
+) -> Result<(), String> {
+    let body = deck_at(pkg, view, v, options, corner)?;
+    let mut cfg = NgspiceConfig::new(body, v.stop, v.lattice);
+    cfg.lattice = Some(v.lattice);
+    for e in &v.edges {
+        cfg.inputs.push(InputBinding {
+            pin: format!("edge_{}", e.net),
+            source: format!("V_bbt_{}", e.net),
+            drive: Drive::Digital {
+                model: e.model,
+                initial: e.initial,
+            },
+            glue_node: Some(e.net.clone()),
+        });
+    }
+    let lint = crate::bexpr::check(&cfg.netlist);
+    if !lint.is_empty() {
+        return Err(format!(
+            "the deck's expressions (ADR-015 D3): {}",
+            lint.join("; ")
+        ));
+    }
+    bb_analog_ngspice::operating_point(&cfg)
+        .map_err(|e| format!("operating point under {options}: {e}"))
 }
 
 /// Run a vector at grant partition `max_quantum` under `options` and

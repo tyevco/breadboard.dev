@@ -1,0 +1,4 @@
+* ilim_90pct: richtek/rt9080 view ldo into 2.7 Ohm, which draws 1.1 A at 90 % of VOUT.
+VIN vin 0 4.3
+RL vout 0 2.7
+CO vout 0 1u

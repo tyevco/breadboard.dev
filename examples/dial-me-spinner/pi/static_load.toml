@@ -1,0 +1,166 @@
+# Phase 2 P1 (plan section 4, ADR-009 D1-D3; decision D-W1, ADR-009 Amendment 2): the W1 and W2
+# static-load decks, assembled by scripts/pi_static.py from the package views and the dial-me-spinner
+# system import (../system/board.bbm: the main and the base board), and run through NgspiceEngine with
+# deck_run (the project route needs R2). make pi-static is the gate; tolerances come from P0
+# (../pi-spike/tolerances.toml), and the references below are P0's measurements of the suite replica.
+#
+# STATIC-LOAD MODE (ADR-009 D4): the suite's +3V3 budget is a bench load on +3V3 in place of the CPU's
+# supply_load; the suite's averaged LED-cue load is the pixels' duty. The firmware's enable edge is
+# digital_out glue at 200 us (deck_run --edge), as P0 did. The bench stands in for what the suite's
+# deck has and the boards do not: a 5 V VBUS, the dead cell (below BUVLO, modelled as 0 V behind
+# RPACK 0.25 Ohm, the suite's convention), the link harness as the suite's lumped 14.2 mOhm, and one
+# ground for both boards. ILIM and SYS_REG are instance parameters of base:U1 (ADR-009 default 4:
+# Phase 2 has no TWIM bus device; recorded as a deviation).
+schema = "bb-pi-static/0"
+
+[w1]
+# W1 at its LABELLED STRESS CORNER (decision D-W1): every W1 line and summary names it.
+label = "W1 stress corner: 55 mA static +3V3 load (suite budget 50 mA), RT9080 worst_dropout"
+stress_case = "w1_l55"
+margin_case = "w1_l50"
+margin_halved_case = "w1_l50_c3half"
+t_on_us = 200
+threshold_V = 2.94            # POFWARN V28 at VPOFTOL +5 %
+min_below_ms = 0.5
+blanking_ms = 10.0
+recover_before_blanking_end_ms = 2.0
+# the load sweep (plan section 2 W1 table, as D-W1 restates it): the verdict at 2.94 V of each load
+sweep = { w1_l30 = "no crossing", w1_l50 = "no crossing", w1_l55 = "cross and recover", w1_l60 = "collapse" }
+# the nets W1's checks read (+3V3, and VSYS for its minimum): the rung of every W1 check is the
+# lowest chosen rung over the in-scope instances with a port on one of them (ADR-009 D1)
+reads = ["main:+3V3", "main:VSYS"]
+
+# Instance parameters the decks set (ADR-009 default 4, and the board facts an averaged view needs):
+# base:U1's ILIM and SYS_REG come from each case; main:U20's output (the TPS61040 view's own output
+# state, packages/ti/tps61040) is the board's: its capacitance is every capacitor between output_net
+# and ground, its load and target the feedback divider (output_net -> fb_net -> ground, VREF 1.233 V,
+# SLVS413L 5.5).
+[boost]
+instance = "main:U20"
+output_net = "main:+13V_OLED"
+fb_net = "main:/OLED display & 13 V boost/OLED_BST_FB"
+vref = "1.233"
+
+# The analog scope of every deck: an instance enters when every port of its pi view is on one of these
+# nets (signal pins its view has no port for, such as the BQ25180's I2C, are not modelled). Each
+# board's ground is node 0 (the suite's one ground; the harness's ground wires are in its 14.2 mOhm).
+[scope]
+cue = [
+  "base:GND", "base:VBUS", "base:VBAT", "base:VSYS",
+  "main:GND", "main:VSYS", "main:VSYS_SENSE", "main:+3V3",
+  "main:VLED", "main:/Power & link/LSW_CT", "main:/Power & link/LSW_QOD", "main:LED_PWR_EN",
+  "main:/LED ring/LED_DIN",
+  "main:OLED_VIN", "main:/OLED display & 13 V boost/OLED_BST_SW", "main:+13V_OLED",
+  "main:/OLED display & 13 V boost/OLED_BST_FB", "main:/OLED display & 13 V boost/OLED_LSW_CT",
+  "main:OLED_VCC_EN",
+]
+# kind cue also takes the LED ring's data chain (LED_D1..LED_D47: the pixels' DIN inputs)
+cue_led_chain = 47
+old = [
+  "base:GND", "base:VBUS", "base:VBAT", "base:VSYS",
+  "main:GND", "main:VSYS", "main:VSYS_SENSE", "main:+3V3",
+  "main:OLED_VIN", "main:/OLED display & 13 V boost/OLED_BST_SW", "main:+13V_OLED",
+  "main:/OLED display & 13 V boost/OLED_BST_FB", "main:/OLED display & 13 V boost/OLED_LSW_CT",
+  "main:OLED_VCC_EN",
+]
+
+# The cases. kind cue: the LED charging cue (usb_100ma_charging_cue of the suite), U2 and the LED ring,
+# U21 and the OLED boost held off; kind old: the OLED enabled (u21_turn_on), no LED ring.
+[case.w1_l30]
+kind = "cue"
+i3v3_mA = 30
+ilim = "0.08"
+vsysreg = "4.312"
+
+[case.w1_l50]
+kind = "cue"
+i3v3_mA = 50
+ilim = "0.08"
+vsysreg = "4.312"
+
+[case.w1_l50_c3half]
+kind = "cue"
+i3v3_mA = 50
+ilim = "0.08"
+vsysreg = "4.312"
+cap_scale = { net = "main:+3V3", factor = "0.5" }   # the halved +3V3 capacitance (DC-bias stand-in), report
+
+[case.w1_l55]
+kind = "cue"
+i3v3_mA = 55
+ilim = "0.08"
+vsysreg = "4.312"
+
+[case.w1_l60]
+kind = "cue"
+i3v3_mA = 60
+ilim = "0.08"
+vsysreg = "4.312"
+
+[case.w2rule]
+kind = "cue"
+i3v3_mA = 50
+ilim = "0.1"
+vsysreg = "4.5"
+
+[case.w2old]
+kind = "old"
+i3v3_mA = 50
+ilim = "0.1"
+vsysreg = "4.5"
+
+# The suite replica at each load, as P0 measured it (make pi-spike at c6897f2: the suite's own deck with
+# the S1-fixed TPS22917 through NgspiceEngine at phase0, ADR-009 Amendment 1 and 2; out/pi-spike/
+# summary.json). Times in ms after the enable edge; a window end of "none" never recovers. The replica is
+# local-only, so P1's gate compares against these recorded values.
+[reference.w1_l30]
+vsys_min = 3.1412723
+p3v3_min = 3.1147723
+v28p5 = []
+
+[reference.w1_l50]
+vsys_min = 2.9108828
+p3v3_min = 2.8667161
+v28p5 = [[3.2951028, 4.4465790]]
+
+[reference.w1_l55]
+vsys_min = 2.8564077
+p3v3_min = 2.8078244
+v28p5 = [[3.2341054, 6.9471638]]
+
+[reference.w1_l60]
+vsys_min = 2.8001591
+p3v3_min = 2.7471591
+v28p5 = [[3.1790838, "none"]]
+
+[reference.w2rule]
+vsys_min = 3.2666277
+p3v3_min = 3.2224610
+
+[reference.w2old]
+vsys_min = 1.4611206
+p3v3_min = 1.4169539
+# +3V3 falling through VBOR,ON 1.57 / 1.60 / 1.63 V (min / typ / max), ms after OLED_VCC_EN rises
+vbor_min_cross = 3.8511000
+vbor_typ_cross = 3.8392080
+vbor_max_cross = 3.8274075
+
+# P0's own static-load decks (the spike's views and the suite's netlist extraction, local-only) at the
+# same cases, for the report: P1's decks are assembled from the packages instead, so this is the change
+# that assembly makes (not a gate).
+[p0_static.w1_l55]
+vsys_min = 2.9589330
+p3v3_min = 2.9188752
+v28p5 = [[3.2551932, 4.0892748]]
+
+[p0_static.w1_l50]
+vsys_min = 2.9987087
+p3v3_min = 2.9640341
+
+[p0_static.w2rule]
+vsys_min = 3.2621091
+p3v3_min = 3.2294017
+
+[p0_static.w2old]
+vsys_min = 1.4694762
+p3v3_min = 1.4346446

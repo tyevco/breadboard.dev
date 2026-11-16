@@ -291,7 +291,8 @@ fn shared_refs_resolve_by_qualified_name() {
         ("base", "J1", "excluded", "USB-C receptacle: no model"),
         ("main", "TP1", "excluded", "a test point"),
         // The other board's namesakes are untouched.
-        ("main", "U1", "unmodelled", ""),
+        // (main:U1 is the RT9080, resolved by its package since Phase 2 P1.)
+        ("main", "U1", "ok", ""),
         ("main", "U2", "ok", ""),
         ("main", "J1", "unmodelled", ""),
         ("base", "TP1", "no_model", ""),
@@ -325,15 +326,16 @@ fn shared_refs_resolve_by_qualified_name() {
     // bb flash resolves a qualified target (and then refuses an instance
     // with no behavioural layer, which is a different error).
     std::fs::write(d.join("x.elf"), b"\x7fELF").unwrap();
-    for t in ["main:U1", "base:U1"] {
+    // main:U1 has a package since Phase 2 P1 (richtek/rt9080, an analog
+    // view only); base:U1 is excluded here, so it has none.
+    for (t, want) in [
+        ("main:U1", "package richtek/rt9080 has no behavioural layer"),
+        ("base:U1", "base:U1 has no package ("),
+    ] {
         let o = run(&["flash", "--target", t, "x.elf"], &d);
         let msg = text(&o);
         assert!(!o.status.success(), "{t}: {msg}");
-        assert!(
-            msg.contains(&format!("{t} has no package ("))
-                && msg.contains("it cannot run firmware"),
-            "{t}: {msg}"
-        );
+        assert!(msg.contains(want), "{t}: {msg}");
     }
 }
 

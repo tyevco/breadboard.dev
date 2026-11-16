@@ -1,0 +1,31 @@
+# RT9080 EN and the output active discharge: EN low at 1 ms discharges 1 uF through RDISCHG 80 Ohm, so
+# VOUT falls to 3.3 V / e = 1.214 V one time constant (80 us) after EN crosses its threshold (80 ns into
+# the 100 ns fall).
+schema = "bb-pkgtest/0"
+view = "ldo"
+circuit = "en_discharge.cir"
+stop = "2ms"
+sample = "1us"
+
+[ports]
+VIN = "vin"
+VOUT = "vout"
+EN = "en"
+GND = "0"
+
+[[edge]]
+net = "en"
+model = { voh = "3.3V", vol = "0V", rise = "100ns", fall = "100ns", zout = "0" }
+at = [["100us", "high"], ["1ms", "low"]]
+
+[[expect]]
+meas = { node = "vout", at = "0.9ms" }
+value = "3.3V"
+tol = "1mV"
+source = "DS9080-09 Electrical Characteristics: VOUT 3.3 V (EN high, VEN_R 0.9 V min)"
+
+[[expect]]
+meas = { node = "vout", when = "1.214V", fall = "1", after = "1ms" }
+value = "1.08008ms"
+tol = "5us"
+source = "DS9080-09 Electrical Characteristics: RDISCHG 80 Ohm (EN = 0 V); 1 ms + 80 ns + 80 Ohm x 1 uF"

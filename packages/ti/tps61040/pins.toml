@@ -1,0 +1,28 @@
+# ti/tps61040 pins (SOT-23-5, DBV): numbers and names as SLVS413L section 4 (Pin Configuration and
+# Functions) gives them. No pin is bound to a co-simulation engine, so no pin offers a pin model.
+schema = "bb-pins/1"
+
+[[pin]]
+number = "1"
+name = "SW"
+role = "analog"
+
+[[pin]]
+number = "2"
+name = "GND"
+role = "ground"
+
+[[pin]]
+number = "3"
+name = "FB"
+role = "analog"
+
+[[pin]]
+number = "4"
+name = "EN"
+role = "input"
+
+[[pin]]
+number = "5"
+name = "VIN"
+role = "power_in"

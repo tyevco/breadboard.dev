@@ -1,0 +1,64 @@
+# ti/tps61040: TI TPS61040 boost converter, the averaged input side (Phase 2 P1, ADR-009 D2 rule 3).
+#
+# One view, `boost`, valid at `pi` only: the averaged inductor current the converter draws at SW (its
+# input current) with the soft start, UVLO and the PFM regulation, from SLVS413L. A switching view is
+# `si` (Phase 3). The converter's output is the view's own state (its capacitance, load and target
+# are instance parameters the board sets), because a view's ports are the package's pins and none of
+# them is the output: the view does not drive the board's output net (the view file's header). The
+# dial-me-spinner suite's port of TI SLVMDA8 stays local-only (ADR-009 D2's table).
+schema = "bb-part/1"
+
+[part]
+id = "ti/tps61040"
+version = "0.1.0"
+kind = "power"
+manufacturer = "Texas Instruments"
+mpn = ["TPS61040DBVR", "TPS61040DBVT"]
+lcsc = ["C7722"]
+datasheet = { url = "https://www.ti.com/lit/ds/symlink/tps61040.pdf", rev = "SLVS413L" }
+license = "Apache-2.0"
+description = "Low-power DC-DC boost converter, 28 V switch, 400 mA switch current limit (averaged input side)"
+
+[footprints]
+kicad = ["Package_TO_SOT_SMD:SOT-23-5"]
+
+[pins]
+file = "pins.toml"
+
+[[analog]]
+name = "boost"
+purpose = "the averaged input current of the PFM boost and its start-up surge (soft start, UVLO, regulation against the view's own output state)"
+fidelity = ["pi"]
+default_for = ["pi"]
+file = "analog/tps61040_boost_avg.lib"
+subckt = "TI_TPS61040_BOOST_AVG"
+ports = ["VIN", "SW", "FB", "EN", "GND"]
+rails = ["VIN"]
+params = { lind = "10u", ilim = "0.4", toffmin = "400n", tonmax = "6u", uvlo = "1.5", uvlo_hys = "0.05", iq = "28u", isd = "0.1u", eta = "0.85", vdf = "0.4", tfilt = "2u", vout = "13", cout = "1u", rload = "1Meg" }
+
+[analog.provenance]
+source = "datasheet"
+base = "breadboard.dev's own averaged PFM boost, fitted to SLVS413L (Phase 2 P0 spike view, packaged in P1 with its output made the view's own state); none of the dial-me-spinner suite's models is used"
+refs = [
+  "SLVS413L section 5.5: VUVLO 1.5 V typ; EN VIH 1.3 V min, VIL 0.4 V max; IQ 28 uA typ; ISD 0.1 uA typ; switch current limit 350 / 400 / 450 mA; minimum off time 250 / 400 / 550 ns; maximum on time 4 / 6 / 7.5 us; VREF 1.233 V typ",
+  "SLVS413L section 6.3.1, Equation 1: Ipeak = ILIM + VIN / L x 100 ns",
+  "SLVS413L section 6.3.2: soft start, ILIM / 4 for the first 256 cycles, ILIM / 2 for the next 256",
+  "SLVS413L section 6.4.1: PFM operation",
+]
+deviations = [
+  "averaged: one cycle's mean current, CCM or DCM by the minimum off time, filtered with 2 us",
+  "efficiency 0.85, inside Figures 5-1 to 5-4 (not fitted)",
+  "the regulation fades the average over the output's equivalent of a 30 mV FB band below VREF",
+  "the output is the view's own state (cout, rload, vout: instance parameters), precharged to VIN - vdf as the board's inductor and rectifier would; the board's output net is not driven",
+  "the UVLO hysteresis 50 mV (the datasheet gives none); the EN switch at 0.85 V",
+]
+not_modelled = ["switching ripple", "the regulation loop's dynamics and accuracy", "IFB", "thermal shutdown", "RDS(on) loss (in eta)", "SW leakage", "the board's output net"]
+generated_by = "Claude (Phase 2 P0, packaged in P1)"
+confidence = "self_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[tests]
+dir = "tests"

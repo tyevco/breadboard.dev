@@ -1,0 +1,6 @@
+* dropout_600ma: richtek/rt9080 view ldo at the dropout test condition of DS9080-09 (600 mA, VOUT at 98 %).
+* The load is a resistor that draws 600 mA at 3.234 V (an ideal 600 mA sink would equal the fold-back
+* limit at VOUT = 0, a second operating point).
+VIN vin 0 3.544
+RL vout 0 5.39
+CO vout 0 1u

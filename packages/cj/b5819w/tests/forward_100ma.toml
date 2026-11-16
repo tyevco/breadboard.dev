@@ -1,0 +1,15 @@
+# B5819W forward voltage at 0.1 A (25 C): the datasheet's typical curve, read by eye.
+schema = "bb-pkgtest/0"
+view = "diode"
+circuit = "forward_100ma.cir"
+stop = "100us"
+
+[ports]
+A = "a1"
+K = "0"
+
+[[expect]]
+meas = { node = "a1", at = "100us" }
+value = "0.32V"
+tol = "15mV"
+source = "CJ B5817W-5819W rev D, page 2 Forward Characteristics (25 C): about 0.32 V at 0.1 A (read)"

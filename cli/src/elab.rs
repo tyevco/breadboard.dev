@@ -632,6 +632,27 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             return Err(format!("bench: two [[supply]] on net {d}"));
         }
     }
+    // [[battery]] (ADR-010 D2, milestone P1): its OCV at the bench's state
+    // of charge drives its net, as a supply would.
+    let mut battery_ocv: Vec<(String, i128)> = Vec::new();
+    for bt in &a.bench.batteries {
+        let d = net_by(&bt.net, "[[battery]]")?;
+        let what = format!("bench {}.ocv {}", bt.path, bt.ocv);
+        let text = a
+            .bench
+            .data
+            .get(&bt.ocv)
+            .ok_or_else(|| format!("{what}: not read"))?;
+        let rows = crate::project::ocv_table(text, &what)?;
+        let v = crate::project::ocv_at(&rows, bt.soc_ppm);
+        if supply_on.insert(d.clone(), v).is_some() {
+            return Err(format!(
+                "bench {}: net {d} has another [[supply]] or [[battery]]",
+                bt.path
+            ));
+        }
+        battery_ocv.push((d, v));
+    }
     let mut nominal: BTreeMap<String, i128> = BTreeMap::new();
     for (k, v) in &a.bench.nominal {
         nominal.insert(net_by(k, "[nominal]")?, *v);
@@ -937,6 +958,17 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         .iter()
         .filter_map(|(k, ov)| insts.resolve(k).ok().map(|key| (key, ov.analog.clone())))
         .collect();
+    // ADR-009 D8 (milestone P1): the bench's corners, per instance over the
+    // bench's `corner`.
+    let mut inst_corner: BTreeMap<(String, String), String> = BTreeMap::new();
+    for (k, c) in &a.bench.corners {
+        let key = insts
+            .resolve(k)
+            .map_err(|x| format!("bench [corners] {k:?}: {x}"))?;
+        inst_corner.insert(key, c.clone());
+    }
+    let mut corners_used: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut global_corner_used = false;
 
     let mut deck_views: Vec<(String, String)> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
@@ -1117,6 +1149,48 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 None => params.push(("value".into(), s)),
             }
         }
+        // ADR-009 D8: the instance's corner overrides the view's params. A
+        // per-instance corner must exist in the view; the bench's global
+        // corner applies where the view declares it.
+        let corner = match inst_corner.get(&key) {
+            Some(c) => {
+                corners_used.insert(key.clone());
+                Some(view.corners.iter().find(|x| x.name == *c).ok_or_else(|| {
+                    format!(
+                        "bench [corners] {q}: view {} of {} has no corner {c:?} (it has: \
+                                 {})",
+                        view.name,
+                        pkg.part.id,
+                        if view.corners.is_empty() {
+                            "none".to_string()
+                        } else {
+                            view.corners
+                                .iter()
+                                .map(|x| x.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        }
+                    )
+                })?)
+            }
+            None => a
+                .bench
+                .corner
+                .as_ref()
+                .and_then(|c| view.corners.iter().find(|x| x.name == *c)),
+        };
+        if let Some(c) = corner {
+            if !inst_corner.contains_key(&key) {
+                global_corner_used = true;
+            }
+            for (k, v) in &c.params {
+                let d = parse_number(v).map_err(|e| format!("{q}: corner {}: {k}: {e}", c.name))?;
+                match params.iter_mut().find(|(n, _)| n == k) {
+                    Some(e) => e.1 = spice_number(d),
+                    None => params.push((k.clone(), spice_number(d))),
+                }
+            }
+        }
         let label = format!("{}:{}", pkg.part.id, view.name);
         if switch {
             // One generated definition for every switch (ADR-010 D2).
@@ -1183,7 +1257,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         {
             unqualified.push(label.clone());
         }
-        inst_json.push(Json::obj([
+        let mut ij = Json::obj([
             ("ref", Json::str(&q)),
             ("package", Json::str(&pr.id)),
             ("version", Json::str(&pr.version)),
@@ -1206,7 +1280,31 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 ),
             ),
             ("qualified_for_run", Json::Bool(qualified)),
-        ]));
+        ]);
+        // ADR-009 D8: the corner the instance runs at (none: the view's own
+        // parameters, so a run without corners keeps its run.json).
+        if let (Some(c), Json::Obj(o)) = (corner, &mut ij) {
+            o.push(("corner".into(), Json::str(&c.name)));
+        }
+        inst_json.push(ij);
+    }
+    // ADR-009 D8: a per-instance corner for an instance that is not in the
+    // deck, or a global corner no view in the deck declares, does nothing:
+    // said, not silent.
+    for (k, c) in &inst_corner {
+        if !corners_used.contains(k) {
+            warnings.push(format!(
+                "bench [corners] {}:{} = {c:?}: the instance has no view in the deck, so the \
+                 corner applies to nothing",
+                k.0, k.1
+            ));
+        }
+    }
+    if let Some(c) = a.bench.corner.as_ref().filter(|_| !global_corner_used) {
+        warnings.push(format!(
+            "bench corner = {c:?}: no view in the deck declares it (every instance runs at its \
+             view's own parameters)"
+        ));
     }
     // The pin_load view of every loading adc_in (ADR-008 D7, glue rule 9) is
     // in the deck too: the same qualification rule (ADR-006 D6), recorded in
@@ -1815,6 +1913,63 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         }
         nodes_used.insert(n);
     }
+    // [[battery]] (ADR-010 D2, milestone P1): the Norton form of the OCV
+    // behind R0 (a constant current OCV/R0 in parallel with R0), then each
+    // RC pair in series (R and C in parallel): no branch-current unknown
+    // (ADR-009 D2), and a plain resistor on every node, so ngspice's source
+    // stepping never sees a node held only by a B source (ADR-009
+    // Amendment 4).
+    for (k, (bt, (d, ocv))) in a.bench.batteries.iter().zip(&battery_ocv).enumerate() {
+        if !scoped(d) {
+            return Err(format!(
+                "bench {} on {d}: the net is outside the analog scope",
+                bt.path
+            ));
+        }
+        if let Some(drv) = power_out_nets.get(d) {
+            return Err(format!(
+                "bench {} on {d}: {drv} also drives it (a power_out pin): two drivers; exclude \
+                 {drv} in the bench ([analog] exclude, ADR-007 D5)",
+                bt.path
+            ));
+        }
+        let n = node_of(d);
+        if n == "0" {
+            return Err(format!("bench {} on the ground net {d}", bt.path));
+        }
+        note_file(&bt.ocv, &mut csv_json);
+        let inner = |j: usize| format!("bb_bat{k}_{j}");
+        let n0 = if bt.rc.is_empty() {
+            n.clone()
+        } else {
+            inner(0)
+        };
+        let r0 = spice_number(to_decimal(bt.r0_uohm, Dim::Resistance));
+        bench_lines.push(format!(
+            "I_bench_bat{k} 0 {n0} DC {{{} / {r0}}}",
+            spice_number(to_decimal(*ocv, Dim::Voltage)),
+        ));
+        bench_lines.push(format!("R_bench_bat{k}_0 {n0} 0 {r0}"));
+        for (j, (r, c)) in bt.rc.iter().enumerate() {
+            let from = inner(j);
+            let to = if j + 1 == bt.rc.len() {
+                n.clone()
+            } else {
+                inner(j + 1)
+            };
+            bench_lines.push(format!(
+                "R_bench_bat{k}_{} {from} {to} {}",
+                j + 1,
+                spice_number(to_decimal(*r, Dim::Resistance))
+            ));
+            bench_lines.push(format!(
+                "C_bench_bat{k}_{} {from} {to} {}",
+                j + 1,
+                spice_number(to_decimal(*c, Dim::Capacitance))
+            ));
+        }
+        nodes_used.insert(n);
+    }
     for (k, l) in a.bench.loads.iter().enumerate() {
         let d = net_by(&l.net, "[[load]]")?;
         let n = node_of(&d);
@@ -2318,8 +2473,15 @@ mod tests {
             "{e}"
         );
         // The ladder: at a higher rung with no default there, the first
-        // lower rung that has one is chosen.
+        // lower rung that has one is chosen (the view is the default at
+        // fast and pi since milestone P1, ADR-009 D1).
+        let (v, rung) = select_view(&pkg, "pi", None).unwrap().unwrap();
+        assert_eq!((v.name.as_str(), rung.as_str()), ("lsw", "pi"));
         let (v, rung) = select_view(&pkg, "si", None).unwrap().unwrap();
+        assert_eq!((v.name.as_str(), rung.as_str()), ("lsw", "pi"));
+        let mut fast_only = pkg.clone();
+        fast_only.part.analog[0].default_for = vec!["fast".into()];
+        let (v, rung) = select_view(&fast_only, "pi", None).unwrap().unwrap();
         assert_eq!((v.name.as_str(), rung.as_str()), ("lsw", "fast"));
         assert!(select_view(&pkg, "spice", None).is_err());
         // A pin_load view is never selected as the part's circuit.

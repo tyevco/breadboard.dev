@@ -1,0 +1,17 @@
+# RT9080 load regulation, 1 mA to 600 mA at VIN = VOUT + 1 V: 0.5 % typ, so VOUT = 3.3 V x 0.995.
+schema = "bb-pkgtest/0"
+view = "ldo"
+circuit = "loadreg_600ma.cir"
+stop = "1ms"
+
+[ports]
+VIN = "vin"
+VOUT = "vout"
+EN = "vin"
+GND = "0"
+
+[[expect]]
+meas = { node = "vout", at = "1ms" }
+value = "3.2835V"
+tol = "1mV"
+source = "DS9080-09 Electrical Characteristics: load regulation 0.5 % typ (1 mA < ILOAD < 600 mA), VOUT 3.3 V"

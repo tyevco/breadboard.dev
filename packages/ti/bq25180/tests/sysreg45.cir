@@ -1,0 +1,5 @@
+* sysreg45: ti/bq25180 view pp, VIN 5 V, SYS_REG 4.5 V, a 3.7 V cell, SYS into 100 Ohm.
+VIN in 0 5
+VBAT bat 0 3.7
+RL sys 0 100
+CS sys 0 10u

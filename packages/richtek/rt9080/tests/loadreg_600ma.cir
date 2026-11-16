@@ -1,0 +1,4 @@
+* loadreg_600ma: richtek/rt9080 view ldo, 600 mA at VIN = VOUT + 1 V (5.4725 Ohm draws 600 mA at 3.2835 V).
+VIN vin 0 4.3
+RL vout 0 5.4725
+CO vout 0 1u

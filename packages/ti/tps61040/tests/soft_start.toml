@@ -1,0 +1,29 @@
+# TPS61040 soft start (SLVS413L 6.3.2): the current limit is ILIM/4 for the first 256 cycles. At VIN 3.6 V
+# with 10 uH, Ipeak = 0.1 A + 3.6 V / 10 uH x 100 ns = 0.136 A (Eq. 1), and with the output near VIN the
+# inductor barely discharges in the off time, so the average input current is about Ipeak: 13.6 mV across
+# the 0.1 Ohm sense resistor, 20 us after EN rises at 10 us (about 50 cycles).
+schema = "bb-pkgtest/0"
+view = "boost"
+circuit = "boost_ccm.cir"
+stop = "100us"
+
+[params]
+cout = "1m"
+
+[ports]
+VIN = "vin"
+SW = "sw"
+FB = "0"
+EN = "en"
+GND = "0"
+
+[[edge]]
+net = "en"
+model = { voh = "3.6V", vol = "0V", rise = "100ns", fall = "100ns", zout = "0" }
+at = [["10us", "high"]]
+
+[[expect]]
+meas = { node = "vl", at = "30us" }
+value = "3.58644V"
+tol = "1mV"
+source = "SLVS413L 6.3.2 (ILIM/4 for 256 cycles) and Eq. 1 (Ipeak = ILIM + VIN/L x 100 ns), ILIM 400 mA typ (5.5)"

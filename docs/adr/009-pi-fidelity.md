@@ -10,7 +10,10 @@
   approver's decision D-W1: W1 at a labelled stress corner (55 mA, RT9080
   worst) with its own tolerances, plus a gated 50 mA margin check; P0
   closed. 3 (2026-11-15), milestone S: this ADR's schema keys landed,
-  accepted and inert (ADR-011 Amendment 1).
+  accepted and inert (ADR-011 Amendment 1). 4 (2026-11-15), P1 as
+  implemented: the `pi` packages, the TPS22917 restated (decision D-TPS),
+  the `pi` lint, the dial, corners, the battery, and W1/W2 in static-load
+  mode on the package views (`make pi-static`).
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
@@ -872,3 +875,141 @@ lint and inert. No `fast` deck, output or `run.json` depends on them, and
 - **The ADR-006 D3 sentence** about the TPS22917 `pi` view is not
   corrected here. That sentence is corrected when P1 restates the view
   (decision D-TPS).
+
+## Amendment 4 (2026-11-15): P1 as implemented (the `pi` views, the dial, corners, the battery, static-load W1/W2)
+
+Milestone P1 (plan section 4). `make pi-static` is its gate (28 gates,
+all pass); `make pi-static-test` (in `make test`) runs the same seven
+cases without the partition runs.
+
+**The packages** (all `pi`-only unless stated; each view qualified at (10
+µs, `phase0`) and lint clean, `--publish` names):
+
+| Package | View | Source | Corners |
+| --- | --- | --- | --- |
+| `richtek/rt9080` (U1) | `ldo`: P0's view; IQ split half ground current, half divider leak, so the no-load input current is IQ | DS9080-09 | `typ`, `worst_dropout` (0.53 V at 600 mA, 1 % load regulation: D-W1's "RT9080 worst") |
+| `ti/bq25180` (base U1) | `pp`: P0's view | SLUSE99C | `typ`, `suite_compat` (`sup_gate = 0`) |
+| `ti/tps61040` (U20) | `boost`: P0's averaged PFM view, its output made the view's own state | SLVS413L | — |
+| `cj/b5819w` (D21, `fast` and `pi`) | `diode`: a SPICE diode fitted to the CJ datasheet's typical curves | CJ rev D 2015 | — |
+
+- Each has vectors from its datasheet's tables (5, 6, 3 and 2). The
+  packages list their MPNs, so `bb open` now resolves main U1, U20, D21
+  and base U1. At `fast` the ladder finds no view for the `pi`-only ones,
+  so no `fast` deck changes (their `run.json` lists them out of scope).
+  `make locks` relocked every example. Two tests assumed those parts
+  unresolved: `cli/tests/system.rs` now expects main U1 resolved, and
+  `cli/tests/kicad_import.rs` runs its synthetic two-board fixture (whose
+  RT9080-33GJ5 and BQ25180YBGR have made-up pins) without first-party
+  packages.
+- **The TPS61040's output.** An averaged boost cannot deliver its energy
+  through the board's rectifier (at DC the inductor holds SW at VIN), and a
+  view's ports are the package's pins, none of which is the output. P0
+  used a modelling port on D21's cathode. The package keeps the output as
+  the view's own state: `cout`, `rload` and `vout` are instance parameters
+  that the deck takes from the board (14.8 µF, 551.3 kΩ, 12.9972 V); the
+  board's +13V_OLED net is not driven by it. Recorded as a deviation.
+- **`pi` declarations** (D1): `generic/{resistor,capacitor,inductor}` and
+  `worldsemi/ws2812c-2020` are now valid and the default at `fast` and
+  `pi`. `pi` runs at `phase0` (Amendment 1), so their qualification
+  records stand; `bb pkg test` re-ran their vectors.
+
+**The TPS22917 restated (decision D-TPS).** The `lsw` view now has no
+V-type B source: every internal signal is an I-type source into 1 Ω.
+SLVSDW8B was opened for it, and the view is valid and the default at
+`fast` and `pi` (so ADR-006 D3's sentence is true again). Three findings:
+
+- **Source stepping.** With the old 1 µS VINF node fixed (1 S into 1 mF),
+  the W1 decks still failed their operating point at 50 and 55 mA (gmin
+  stepping, then "singular matrix: check node xmain_u2.lsf_vinf" and
+  `lsf_en`, `base_vbat` in source stepping). The singular nodes are the
+  ones whose only DC path is a B source. A plain resistor on each fixed
+  it: 1 GΩ keepers from `lsf_en` to `lsf_ont` and from `lsf_vinf` to VIN
+  (beside the sources that drive them, so they change no DC value), and
+  the bench cell as a current OCV/R0 with a real R0. D2 rule 2 is
+  therefore read as "a plain resistor on every node", not only "a
+  conductance". Every division by an internal node is also guarded by a
+  clamp that is inactive at any solution.
+- **The rise time below 3.6 V.** Table 7.6's tR row (0.6 / 0.95 / 1.2
+  µs/pF at 1 / 1.2 / 1.8 V) moved E1's cold VLED ramp (VSYS 3.0 V) by
+  about 40 µs, 64 mV at one sample, beyond its recorded 1 mV / 1 sample
+  snapshot. The view keeps Phase 1's 0.8 VIN / SRON there (0.727 / 0.96 /
+  1.309 µs/pF; a linear ramp cannot meet tR and SRON together). RON now
+  follows Table 7.5's five typ columns.
+- **E1 within its recorded tolerances.** VLED is within 0.096 mV (cold)
+  and 0.001 mV (nominal) of the committed snapshots at every 100 µs. The
+  four checks give the same verdicts and the same printed values (VLED
+  2.971510 / 3.684020 V at the P0.06 rises, LSW-2 24.420 ms; the wrong
+  order fails exactly LSW-3). The bytes changed (different equations), so
+  `tests/golden/dms-rail/*/outputs.sha256` are re-recorded from the
+  one-cell references, and `vled.csv` is kept as Phase 1 recorded it. The
+  docs site's `e1-rail` plots are regenerated. E2's s1, s50 and c5 cases
+  and their `load = "none"` twins keep their hashes (U2 does not switch in
+  them). `sag` and `rec`, where U2 sheds and restores the LEDs, changed
+  bytes and nothing else `make dms-vsense` checks: the same codes (1296,
+  1293, 1289, 1286, 1282; 1296, 1269, 1314), the shed at 4000.480 ms
+  (154.4 ms after the crossing) and the restore at 2000.480 ms as ADR-008
+  recorded, the defaults equal to their references, determinism. Their
+  `tests/golden/dms-vsense/{sag,rec}/outputs.sha256` are re-recorded; the
+  E2 plots are unchanged.
+  `make dms-m5b` (local) passes 20/20 against the vendor-derived view
+  with Phase 1's margins (LSW-2 0.555 / 0.356 ms, the rest 0.001 mV). That
+  local-only package (`make dms-local-packages`) now declares `fast` only:
+  its V-type B sources, CCCS and 0 V source are what rule 1 refuses at
+  `pi`, and the new lint said so.
+
+**Lint (D2).** `bb pkg lint` applies rules 1 and 5 to every view valid at
+`pi` (`bbpkg::pirules`; `spec/package.md` section 11): V, E, F, H, V-type
+B, W, T/O/U and A elements are errors, L and K warnings (the generic
+inductor warns). Rule 4 is ADR-015 D3's lint. Rule 2: `bb pkg test`
+solves every vector's operating point at every corner, under every option
+set the view runs under (22 corner operating points on the four new
+packages).
+
+**The dial, corners and the battery** (`spec/project.md` section 3.2).
+`bb run --fidelity fast|pi` and the bench's `fidelity` (the command line
+wins); `si`/`em` are refused, and so is `pi` on a board file. `corner`
+applies where a view declares it; `[corners]` sets one per instance (the
+syntax D8 left open), must exist in the view, and `run.json` records
+`corner` on the instance. `[[battery]]` is ADR-010 D2's shape (no
+capacity: the state of charge holds for the run), written as `I` and `R`
+elements. `cli/tests/fidelity.rs` elaborates the main board at `pi` and
+`fast` with them.
+
+**W1 and W2 in static-load mode** (`scripts/pi_static.py`,
+`examples/dial-me-spinner/pi/static_load.toml`). The decks are assembled
+from the package views (the ladder at `pi`, the corners) and the system
+import's `board.bbm`, as `bb run` would, plus the bench of static-load
+mode (5 V VBUS, the dead cell as the suite models it, the suite's lumped
+harness, the +3V3 budget as a load in place of the CPU's `supply_load`).
+They run through `deck_run` at `phase0`. The replica's values are P0's
+recorded measurements, so the gate needs no dial-me-spinner checkout.
+
+| Row (W1 rows labelled "W1 stress corner: 55 mA static +3V3 load (suite budget 50 mA), RT9080 worst_dropout") | Result |
+| --- | --- |
+| Stress corner against the replica at 55 mA (200 mV, 200 mV, 50 µs, 5 ms) | VSYS min +102.4 mV, +3V3 min +111.1 mV, window start +21.9 µs, end −2860 µs: pass |
+| Feasibility at 2.94 V | below for 0.831 ms (3.256-4.087 ms), recovered by 8 ms; +3V3 3.114 V after the blanking: pass |
+| Margin check, 50 mA, nominal +3V3 capacitance | +3V3 min 2.9642 V, margin +24.2 mV, no POFWARN: pass; halved capacitance (report): 2.9190 V, −21.0 mV, 3.254-3.633 ms |
+| Load sweep 30 / 50 / 55 / 60 mA | no crossing / no crossing / cross and recover / collapse: pass (50 mA differs from the suite's verdict, as recorded in Amendment 2) |
+| W2 rule (10, 20 mV) | VSYS min −4.3 mV, +3V3 min +7.2 mV: pass |
+| W2 old rule (20, 50 mV, 500 µs) | +12.3 mV, +21.7 mV; VBOR crossings +92.5 / +85.9 / +79.4 µs: pass |
+| Every W1 check's rung (D1) | `pi` (29 instances on +3V3 and VSYS, every one at `pi`) |
+| Partitions (`make pi-static`) | 10 µs, 1 ms and 10 ms grants and a second 1 ms run byte-identical (a consistency check: deck_run's partitions) |
+
+The package decks reproduce P0's static-load decks closely (stress corner
+VSYS min 2.9588 against 2.9589 V, window 0.831 against 0.834 ms). W2
+old takes 24 s (75 284 solver points, against P0's 51 602): the
+TPS61040's own output state regulates through a band.
+
+**Deviations, recorded.**
+
+- The `power` pin model stays reserved: its only consumer is D3's limit
+  assertion, which needs B2's assertion engine. `[power]` and
+  `supply_load` stay as S left them (their consumers are P2 and P3).
+  P1 uses `rails` (every new view declares them; lint checks them).
+- `bench/w1-stress.toml` is not written: P1 has no project route (R2).
+  P1's labels are the case spec's and the summary's (Amendment 2 allows
+  "P1's summaries").
+- ILIM and SYS_REG are base U1's instance parameters (default 4).
+- `scripts/kicad_import.sh`'s M4f counts were stale since Phase 1 M10
+  (`ti/drv8837`); with P1's packages they are 56 by MPN and 14
+  unresolved (`make kicad-import` passes with `KICAD_WINDOWS=0`).

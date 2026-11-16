@@ -1,0 +1,18 @@
+# BQ25180 SYS regulation at SYS_REG_CTRL 010 (4.5 V): 45 mA through RON_IN 270 mOhm typ gives
+# 4.5 V / (1 + 0.27 / 100).
+schema = "bb-pkgtest/0"
+view = "pp"
+circuit = "sysreg45.cir"
+stop = "1ms"
+
+[ports]
+IN = "in"
+SYS = "sys"
+BAT = "bat"
+GND = "0"
+
+[[expect]]
+meas = { node = "sys", at = "1ms" }
+value = "4.48788V"
+tol = "1mV"
+source = "SLUSE99C Table 8-3: SYS_REG_CTRL 010 = 4.5 V; section 7.5: RON_IN 270 mOhm typ"

@@ -1,0 +1,28 @@
+# TPS61040 switch current limit after the soft start (SLVS413L 6.3.1): Ipeak = 0.4 A + 3.6 V / 10 uH x
+# 100 ns = 0.436 A (Eq. 1). With the output near VIN the average input current is about Ipeak, less
+# VD x toffmin / (2 L) (the off-time decay, a few mA): about 43 mV across the 0.1 Ohm sense resistor.
+schema = "bb-pkgtest/0"
+view = "boost"
+circuit = "boost_ccm.cir"
+stop = "2ms"
+
+[params]
+cout = "10m"
+
+[ports]
+VIN = "vin"
+SW = "sw"
+FB = "0"
+EN = "en"
+GND = "0"
+
+[[edge]]
+net = "en"
+model = { voh = "3.6V", vol = "0V", rise = "100ns", fall = "100ns", zout = "0" }
+at = [["10us", "high"]]
+
+[[expect]]
+meas = { node = "vl", at = "2ms" }
+value = "3.5566V"
+tol = "1mV"
+source = "SLVS413L 6.3.1 Eq. 1 (Ipeak = ILIM + VIN/L x 100 ns), ILIM 400 mA typ (5.5), minimum off time 400 ns typ"

@@ -362,10 +362,33 @@ at = "260ms"
   node `bb_fault<k>`, connected to the net while closed (before `at`);
   `short` connects the net to the ground from `at`. With `for`, the fault
   ends after it.
+- **The rung and the corners** (ADR-009 D1, D8; milestone P1):
+  - `fidelity = "fast" | "pi"`: the run's rung; `bb run --fidelity` wins,
+    and without either the run is at `fast`. `si` and `em` are refused
+    (Phase 3).
+  - `corner = "<name>"`: every in-scope instance whose view declares a
+    corner of that name (`spec/package.md` section 3) runs at it; the
+    others run at their view's own parameters. A name no view in the deck
+    declares is a warning.
+  - `[corners]`, `"<board>:<ref>" = "<name>"` (or `<ref>` when one board
+    has it): a per-instance corner, over `corner`. The instance's view must
+    declare it (an error otherwise); one for an instance not in the deck is
+    a warning.
+  - A corner's `params` override the view's own, after the generic value;
+    `run.json` records `corner` on each instance that runs at one.
+- **`[[battery]]`** (ADR-010 D2; milestone P1): `net`, `ocv` (a CSV
+  `soc,volts`, relative to the bench: a header `soc,volts`, then rows with
+  `soc` strictly increasing in 0..1, a value in the value grammar or a plain
+  number of volts; at least two rows), `soc` (0..1), `r0` (> 0), `rc`
+  (optional `[["<R>", "<C>"], ...]`, each pair in series after R0) and
+  `temp_c` (informative). The OCV is the table's at `soc`, linear between
+  rows (µV, rounded half away from zero), and the state of charge holds for
+  the whole run: ADR-010 D2 gives the cell no capacity. The battery drives
+  its net as a `[[supply]]` does (two sources on one net, or a `power_out`
+  pin on it, are refused).
 - **Refused, not ignored:** the `bb-bench/1` keys of ADR-010 D2 that later
-  milestones implement (`fidelity`, `corner`, `[[battery]]`,
-  `[[activity]]`, `[[env]]`, `[probes]`, a `[[load]]` `replace`), and an
-  `after` on a `log` record.
+  milestones implement (`[[activity]]`, `[[env]]`, `[probes]`, a
+  `[[load]]` `replace`), and an `after` on a `log` record.
 
 ### 3.3 The bench CSV (ADR-010 D3)
 
@@ -408,7 +431,13 @@ packages; it contains no file paths:
    dc 0 external`, or behind `rs` on `bb_play_<net>` with `R_play_<net>`),
    the switch control sources (`V_bb_ctl_<ref>`) and the faults
    (`X_bb_fault<k> <net> <node> bb_fault<k>_ctl bb_switch ...` with
-   `V_bb_fault<k>_ctl`);
+   `V_bb_fault<k>_ctl`). A `[[battery]]` (milestone P1) is its Norton
+   form, `I_bench_bat<k> 0 <n0> DC {<ocv> / <r0>}` and `R_bench_bat<k>_0
+   <n0> 0 <r0>`, then for each RC pair `j` (from 1) `R_bench_bat<k>_<j>`
+   and `C_bench_bat<k>_<j>` in parallel from `bb_bat<k>_<j-1>` to the next
+   node; `<n0>` is `bb_bat<k>_0`, or the net itself without RC pairs. No
+   branch-current unknown, and a plain resistor on every node (ADR-009
+   Amendment 4);
 5. the option set's `.options` card.
 
 The pin-model glue (`spec/pin-model.md`) is added by the analog engine, as
@@ -440,8 +469,10 @@ its sha256 is in `run.json`.
   `[targets."<board>:<ref>"]` with a format-preserving edit (every other
   line and comment kept). No device is touched. `bb flash --hash-only
   <file>` prints the image hash (hex) and touches nothing.
-- **`bb run [--project <dir>] --for <t> [--bench <file>] [--fidelity fast]
-  [--probe net:<name>]… --out <dir> [--allow-unqualified <pkg:view>]…`**
+- **`bb run [--project <dir>] --for <t> [--bench <file>] [--fidelity
+  fast|pi] [--probe net:<name>]… --out <dir> [--allow-unqualified
+  <pkg:view>]…`** (`--fidelity` over the bench's `fidelity`, default
+  `fast`; a board file runs at `fast` only)
   (with every Phase 0 option except `--netlist`, `--firmware` and
   `--target`). **Read-only on the project:** `board.bbm` must equal what
   the import gives now (for a `kicad =` board, from `.bb/<board>.net`
@@ -470,8 +501,8 @@ its sha256; `seed` and `bounce`: each press's generated toggle offsets;
 `engine`: the bench engine's `id` and `content` hash, ADR-010 D4);
 `targets` (instance and image kinds and hashes); `analog` (per in-scope
 instance: package, version, view, requested fidelity, the rung it was
-chosen at, provenance `source` and `confidence`, its qualifications and
-whether one covers the run; and per loading `adc_in`, its `pin_load` view
+chosen at, `corner` when it runs at one (ADR-009 D8), provenance `source`
+and `confidence`, its qualifications and whether one covers the run; and per loading `adc_in`, its `pin_load` view
 under the bound pin, `kind = "pin_load"`; an explicit `load = "none"` on
 an `adc_in` binding is recorded the same way, with `view = "none"` and only
 `ref`, `package`, `version` and `kind`); `out_of_scope` and `not_simulated` (with

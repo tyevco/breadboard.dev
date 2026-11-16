@@ -3,6 +3,12 @@
 schema = "bb-lock/1"
 
 [[package]]
+id = "cj/b5819w"
+version = "0.1.0"
+source = "path+../../../../packages/cj/b5819w"
+tree = "sha256:de0e664f0e1adffe7a2f9881ba91c21cd8298c01c412084f5910bd3b75d14f8c"
+
+[[package]]
 id = "dial-me-spinner/detent-stepper"
 version = "0.1.0"
 source = "path+../packages/dial-me-spinner/detent-stepper"
@@ -16,21 +22,21 @@ tree = "sha256:ca8013893567552bf0f795bff5a147d3f7c23f3687ad8d93a72866af307ac565"
 
 [[package]]
 id = "generic/capacitor"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../../../packages/generic/capacitor"
-tree = "sha256:21a89d756d6bfad930bc936b240f42581cb1525705e76d7b90e0e79ca34bddc4"
+tree = "sha256:065d83ff66a82da321eafac531dc7ea94d378faf0d4bcae062b7b08c2bd1e9ef"
 
 [[package]]
 id = "generic/inductor"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../../../packages/generic/inductor"
-tree = "sha256:ec869e7843e4ef132feac5f4bfeb5fc604d3f1b1b3cb3c8087ce50987f519371"
+tree = "sha256:501ac2631c3940f159452083b11d333eb984397cd41000c19799f3b1785090e1"
 
 [[package]]
 id = "generic/resistor"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../../../packages/generic/resistor"
-tree = "sha256:a654dc5331934af18317bcea38a8a44ca6599366e9872bac82d17c04e5ed832a"
+tree = "sha256:46eb1f932bcde305315ac95e50fd700df0493731cece37260822d18cf715ef36"
 
 [[package]]
 id = "nordic/nrf52840-qiaa"
@@ -45,6 +51,12 @@ source = "path+../../../../packages/raytac/mdbt50q-u1mv2"
 tree = "sha256:a3539339c5e519797bb3df1b0975cc4052d5b286dc4e954f441848a7c4793208"
 
 [[package]]
+id = "richtek/rt9080"
+version = "0.1.0"
+source = "path+../../../../packages/richtek/rt9080"
+tree = "sha256:d951485dc0b5f77e65e3e0626d1f41a30333047ef0fd2468cba2d31b31974ac4"
+
+[[package]]
 id = "ti/drv8837"
 version = "0.1.0"
 source = "path+../../../../packages/ti/drv8837"
@@ -52,15 +64,21 @@ tree = "sha256:81ab65abf78387ec62f0f1370a46bdc6893bcb2a941c815c05f5150bb6e987c2"
 
 [[package]]
 id = "ti/tps22917"
-version = "0.2.0"
+version = "0.3.0"
 source = "path+../../../../packages/ti/tps22917"
-tree = "sha256:e983c07604a768d7c84b3d499b87981bb50a845d83e18eeec7c2b7b2c9c86149"
+tree = "sha256:2921cca3816200c4f1c919396b137cb5c1ef1af401aba8fca304c8e2161cfe71"
+
+[[package]]
+id = "ti/tps61040"
+version = "0.1.0"
+source = "path+../../../../packages/ti/tps61040"
+tree = "sha256:6e768e72f7646e8e014f781e50541103db5dc456a4dce1e0efc22c5885b25242"
 
 [[package]]
 id = "worldsemi/ws2812c-2020"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../../../packages/worldsemi/ws2812c-2020"
-tree = "sha256:c832760201a3e2f8da5ce8428e2d3a469134470397ffe10432064a7b26250173"
+tree = "sha256:d4eeb2e18d60c3ef5c8fdbb407ba6c5b8e1b5d661d92a0af5ef5dfbf1599ec62"
 
 [[platform]]
 id = "device:dms/mechanism@1"

@@ -1,0 +1,17 @@
+# BQ25180 battery-only mode below BUVLO (3.0 V, b000): the battery FET is off, so SYS is not supplied.
+schema = "bb-pkgtest/0"
+view = "pp"
+circuit = "buvlo_low.cir"
+stop = "1ms"
+
+[ports]
+IN = "0"
+SYS = "sys"
+BAT = "bat"
+GND = "0"
+
+[[expect]]
+meas = { node = "sys", at = "1ms" }
+value = "0V"
+tol = "1mV"
+source = "SLUSE99C section 8.3.3 and 8.3.8: below VBUVLO the BAT to SYS path is disengaged"

@@ -1,0 +1,22 @@
+* =====================================================================================================
+* cj/b5819w view "diode" (breadboard.dev, Apache-2.0): Jiangsu Changjiang Electronics (CJ) B5819W,
+* 40 V 1 A Schottky barrier diode, SOD-123 (marking SL). A plain SPICE diode, valid at fast and pi (a
+* junction has no rung of its own; ADR-009 D2 allows D elements).
+*
+* Datasheet: CJ "B5817W-5819W SOD-123 Plastic-Encapsulate Diodes", rev D, March 2015, page 1 (limits)
+* and page 2 (typical characteristics, read by eye from the figures; Ta = 25 C):
+*   Forward Characteristics (25 C): IF 0.1 A at VF about 0.32 V, 1 A at about 0.43 V   -> is, n, rs
+*   Limits: VF <= 0.6 V at IF 1 A, <= 0.9 V at 3 A; V(BR) >= 40 V at IR 1 mA; IR <= 1 mA at VR 40 V
+*   Capacitance Characteristics (25 C, 1 MHz): 180 pF at 0 V, about 60 pF at 4 V, 40 pF at 10 V
+*                                                                       -> cjo, vj, m (CD <= 120 pF at 4 V)
+* Fit: n = 1.1, rs = 0.05 Ohm, is = 1.45 uA gives 0.32 V at 0.1 A and 0.43 V at 1 A; cjo 180 pF,
+*   vj 0.5 V, m 0.5 give 60 pF at 4 V and 39 pF at 10 V; bv 45 V at 1 mA (V(BR) >= 40 V).
+* NOT modelled: the forward curve above 1 A (the pulsed curve bends away from rs = 0.05 Ohm: about
+*   0.53 V at 2.5 A against about 0.8 V read), the reverse leakage's slope in VR (the model's 1.45 uA
+*   against about 4 uA at 1 V read), temperature beyond SPICE's own, self-heating.
+* Ports: A K.
+* =====================================================================================================
+.subckt CJ_B5819W_DIODE A K
+D1      A K CJ_B5819W_D
+.model CJ_B5819W_D d (is=1.45u n=1.1 rs=0.05 cjo=180p vj=0.5 m=0.5 bv=45 ibv=1m)
+.ends CJ_B5819W_DIODE
