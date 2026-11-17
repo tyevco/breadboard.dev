@@ -1,0 +1,52 @@
+# examples/dial-me-spinner/asserts/w2-old.toml: W2's old-rule checks (Phase 2 plan section 2 W2; P5,
+# ADR-009 D7, Amendment 9) as assertions, for the runs of the old-rule firmware (w2_old_rule.elf) in
+# static-load mode (bench/w2-old*.toml): `bb run --project ... --bench bench/w2-old.toml --assert
+# ../asserts/w2-old.toml`. Each requires pi: below it, not_evaluable.
+#
+# What they cannot say, scripts/check_dms_w2.py does: that the reset records pair up (a hold, then
+# its release) at ceil_L of #bor's crossings, that every boot after a release read RESETREAS as 0,
+# the VBOR crossing against the suite, and how many brown-outs the run had. The plan's "at least 2
+# reset records" counts records: one brown-out gives two, its hold (`enter`) and its release
+# (`exit`); check_dms_w2.py reports the number of brown-outs separately (ADR-009 Amendment 9).
+schema = "bb-bench/1"
+
+# The plan's check: at least two `reset` records (ADR-009 D7).
+[[assert]]
+name = "brownout"
+kind = "event"
+event = "reset"
+min = 2
+requires = "pi"
+msg = "W2 old rule: the brown-out holds the CPU in reset and releases it (at least 2 reset records)"
+
+# Every boot reads RESETREAS (the firmware prints it with the rule): the power-on boot and the reboot
+# after the brown-out read 0 (a brown-out leaves no reset reason).
+[[assert]]
+name = "boots"
+kind = "log"
+match = "w2: boot resetreas="
+min = 2
+requires = "pi"
+msg = "W2 old rule: the firmware boots again after the brown-out"
+
+[[assert]]
+name = "resetreas-zero"
+kind = "log"
+match = "w2: boot resetreas=0x00000000 rule=old"
+min = 2
+requires = "pi"
+msg = "W2 old rule: RESETREAS reads 0 at the boot after the brown-out"
+
+# The enables fall through their pull-downs during reset: every bound digital_out is high-Z while the
+# CPU is held (ADR-009 D5, D7), and R25 pulls OLED_VCC_EN below the TPS22917's VIL (0.4 V, U21's ON)
+# within 20 us of the hold and keeps it there until the release.
+[[assert]]
+name = "oled-en-in-reset"
+kind = "settle"
+net = "main:OLED_VCC_EN"
+event = { edge = "U10.#bor", level = 1 }
+within = "20us"
+min = "0V"
+max = "0.4V"
+requires = "pi"
+msg = "W2 old rule: OLED_VCC_EN falls through R25 below 0.4 V while the CPU is held in reset"

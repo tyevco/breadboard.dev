@@ -160,13 +160,9 @@ namespace Antmicro.Renode.Peripherals.Analog
             active = false;
             timerMode = false;
             scan = null;
-            for(var i = 0; i < InputCount; i++)
-            {
-                inputs[i].Clear();
-                sampledAt[i] = 0;
-                hasSampled[i] = false;
-            }
-            Stats = new BbSaadcStats();
+            // The timed inputs, what was sampled of them and the statistics
+            // are the host's (the analog world, ADR-005 D5): a machine reset
+            // (ADR-009 D7's brown-out) keeps them. They start empty.
             IRQ.Unset();
         }
 
@@ -1060,13 +1056,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         public void Reset()
         {
-            error = 0;
-            firstErrorNs = 0;
-            firstErrorInput = 0;
-            refusedTacq = 0;
-            remaining = 0;
-            entryWord = 0;
-            accepted = 0;
+            // Host-port state is the engine's (its error words, the batch in
+            // progress, the counts it has read): a machine reset (ADR-009 D7's
+            // brown-out) keeps it. Every field starts at 0.
         }
 
         public uint ReadDoubleWord(long offset)
@@ -1267,7 +1259,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         public void Reset()
         {
-            count = 0;
+            // The ring and its count are the engine's: a machine reset (ADR-009
+            // D7's brown-out) keeps them.
         }
 
         public uint ReadDoubleWord(long offset)

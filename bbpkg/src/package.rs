@@ -88,6 +88,11 @@ pub const POF_THRESHOLD_STATES: &[&str] = &["pofthr0", "pofthr1", "pofthr2", "po
 /// CPU engine's watched `digital_in` `#pofwarn`.
 pub const POF_OUTPUT_SIGNAL: &str = "pofwarn";
 
+/// A `pof_comparator` view's optional second observe port (ADR-009 D7,
+/// Phase 2 P5): the brownout reset detector's output, the CPU engine's
+/// watched `digital_in` `#bor`.
+pub const POF_BOR_SIGNAL: &str = "bor";
+
 /// A named corner's name (ADR-009 D8): `typ`, `min`, `max`, `suite_compat`
 /// or `worst_<x>`.
 pub fn corner_name_ok(n: &str) -> bool {

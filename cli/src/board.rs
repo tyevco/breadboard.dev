@@ -267,6 +267,11 @@ pub struct PofGlue {
     pub node: String,
     pub kernel_net: String,
     pub pofen_net: String,
+    /// The brownout reset detector's output node and its kernel net
+    /// `<ref>.#bor` (ADR-009 D7, milestone P5), thresholded like `#pofwarn`
+    /// into the CPU engine's watched `digital_in` `#bor`; `None` when the
+    /// view has no `bor` port.
+    pub bor: Option<(String, String)>,
 }
 
 /// The `digital_in` thresholds of `#pofwarn` (glue rule 13): the

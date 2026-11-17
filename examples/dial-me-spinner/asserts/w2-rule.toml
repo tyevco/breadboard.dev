@@ -1,0 +1,33 @@
+# examples/dial-me-spinner/asserts/w2-rule.toml: W2's rule checks (Phase 2 plan section 2 W2; P5,
+# ADR-009 D7, Amendment 9) as assertions, for the runs of the rule firmware (w2_rule.elf: NEW-1, the
+# OLED stays off) in static-load mode (bench/w2-rule.toml): `bb run --project ... --bench
+# bench/w2-rule.toml --image main:U10=... --assert ../asserts/w2-rule.toml`. Each requires pi.
+schema = "bb-bench/1"
+
+# No brown-out (ADR-009 D7's `reset` record).
+[[assert]]
+name = "no-reset"
+kind = "event"
+event = "reset"
+max = 0
+requires = "pi"
+msg = "W2 rule: no reset record"
+
+# +3V3 at least the flash's VCC minimum (2.7 V) for the whole run.
+[[assert]]
+name = "vcc"
+kind = "range"
+net = "main:+3V3"
+min = "2.7V"
+requires = "pi"
+msg = "W2 rule: +3V3 >= 2.7 V"
+
+# The rule (NEW-1): OLED_VCC_EN never rises.
+[[assert]]
+name = "oled-off"
+kind = "count"
+net = "U10.P1.02"
+level = 1
+max = 0
+requires = "pi"
+msg = "W2 rule: OLED_VCC_EN (U10.P1.02) stays low"

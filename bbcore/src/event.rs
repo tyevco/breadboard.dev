@@ -30,6 +30,16 @@ pub struct LogRecord {
     pub msg: String,
 }
 
+/// A machine reset of a CPU engine during an advance (ADR-009 D7, milestone
+/// P5): the `reset` record of its engine, `cause` `bor`. `ram` is `kept` on
+/// `exit`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResetRecord {
+    /// Sim time of the reset (must be <= the grant it happened in).
+    pub t: Time,
+    pub phase: ResetPhase,
+}
+
 /// One line of the event stream.
 ///
 /// Field order here **is** the on-disk key order; changing it is a schema

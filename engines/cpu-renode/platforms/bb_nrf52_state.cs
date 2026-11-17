@@ -123,6 +123,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             running = true;
             if((this.mask & (1u << StateRun)) != 0)
             {
+                levels[StateRun] = true;
                 cpu.AddHookAtWfiStateChange(OnWfi);
             }
             if((this.mask & (1u << StateHfxo)) != 0)
@@ -165,6 +166,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                     saadc.ActiveChange = (t, level) => Record(t * 1000000ul, StateSaadc, level);
                 }
             }
+            // ADR-009 D7 (Phase 2 P5): a brown-out's hold and release.
+            var bo = machine.GetPeripheralsOfType<BbNrf52Power>().FirstOrDefault();
+            if(bo != null)
+            {
+                bo.BrownOutChange = BrownOut;
+            }
             if((this.mask & PofMask) != 0)
             {
                 var power = machine.GetPeripheralsOfType<BbNrf52Power>().FirstOrDefault();
@@ -179,6 +186,46 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 }
             }
             this.Log(LogLevel.Info, "bb_nrf52_state: armed, mask 0x{0:X}", this.mask);
+        }
+
+        // ADR-009 D7 (Phase 2 P5): a brown-out's hold (enter) or release at
+        // tFs, a lattice point where Renode is paused, called by BbNrf52Power:
+        // the hold before it resets the machine, the release after. The hold
+        // records every state whose last recorded level is 1 as 0 at tFs (no
+        // instruction runs, and the reset clears the clock, the NVMC, the
+        // SAADC and POFCON) and ignores the WFI hook until the release (a
+        // reset leaves WFI through it); the release records #run 1 at tFs and
+        // makes it (with the executed instruction count after the reset) the
+        // new reference.
+        public void BrownOut(bool enter, ulong tFs)
+        {
+            lock(sync)
+            {
+                held = enter;
+                if(!armed || cpu == null)
+                {
+                    return;
+                }
+                if(enter)
+                {
+                    running = false;
+                    for(var s = 0; s < StateCount; s++)
+                    {
+                        if(levels[s])
+                        {
+                            Record(tFs, s, false);
+                        }
+                    }
+                    return;
+                }
+                refFs = tFs;
+                refInstructions = cpu.ExecutedInstructions;
+                running = true;
+                if((mask & (1u << StateRun)) != 0)
+                {
+                    Record(tFs, StateRun, true);
+                }
+            }
         }
 
         public uint ReadDoubleWord(long offset)
@@ -265,7 +312,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         // reference is asleep since the instant they reach.
         private void SyncEntry()
         {
-            if(!running || cpu == null || (mask & (1u << StateRun)) == 0)
+            if(held || !running || cpu == null || (mask & (1u << StateRun)) == 0)
             {
                 return;
             }
@@ -282,6 +329,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             lock(sync)
             {
+                if(held)
+                {
+                    return;
+                }
                 // The entry (late; or not hooked at all before the wake).
                 Entry(cpu.ExecutedInstructions);
                 if(entered)
@@ -315,6 +366,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 ringT[count % RingSize] = tFs;
                 ringS[count % RingSize] = (uint)state | (level ? 1u << 8 : 0u);
                 ringV[count % RingSize] = value;
+                if(state < StateCount)
+                {
+                    levels[state] = level;
+                }
                 count++;
                 if(count - acked > RingSize && (error & ErrOverflow) == 0)
                 {
@@ -370,6 +425,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public const int RingSize = 2048;
         public const int StateRun = 0, StateHfxo = 1, StateNvmc = 2, StateSaadc = 3, StatePofen = 4;
         public const int StateEvent = 0x10;
+        // The level states (run, hfxo, nvmc, saadc, pofen, pofthr0..3).
+        public const int StateCount = 9;
         public const uint PofMask = 0x1F0;
         public const uint ErrOverflow = 1u << 0, ErrSetup = 1u << 1, ErrFirmware = 1u << 3;
 
@@ -379,12 +436,15 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly ulong[] ringT = new ulong[RingSize];
         private readonly uint[] ringS = new uint[RingSize];
         private readonly uint[] ringV = new uint[RingSize];
+        // The last recorded level of each state (ADR-009 D7's hold).
+        private readonly bool[] levels = new bool[StateCount];
         private BaseClockSource clock;
         private TranslationCPU cpu;
         private ulong fsPerInstruction;
         private ulong refFs;
         private ulong refInstructions;
         private bool running;
+        private bool held;
         private bool armed;
         private uint mask;
         private uint error;

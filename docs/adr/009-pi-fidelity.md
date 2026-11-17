@@ -33,7 +33,13 @@
   its controls and the margin check (`make dms-w1`); the rule's
   anti-vacuity check is `pof-dip` (the firmware disables POFCON to blank);
   static-load mode's load collapses at `pi` (ADR-013 Amendment 3's open
-  finding).
+  finding). 9 (2026-11-17), P5 as implemented: the prototype passes (a
+  machine reset under External Control, fresh and pooled; the co-simulated
+  VBOR crossing), so W2 is not the fallback; the brownout detector (the
+  `pof` view's `bor` output), the hold and release, the `reset` record,
+  RESETREAS 0, every output high-Z in reset; W2 on the system (`make
+  dms-w2`); the TPS61040 view damped; finding: the loop does not repeat
+  (one brown-out in 200 ms), which needs the approver.
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
@@ -1801,3 +1807,155 @@ vectors in `packages` about 0.5 s. `make dms-w1` 61 s pooled (with
 - The halved-capacitance margin figure stays P1's static-deck report
   (Amendment 4: 2.9190 V, −21.0 mV); the firmware-in-the-loop margin check
   runs at the nominal capacitance.
+
+## Amendment 9 (2026-11-17): P5 as implemented (BOR and reset, the `reset` record, RESETREAS, high-Z in reset; W2)
+
+Milestone P5 (plan section 4). `make dms-w2` is its gate (all pass);
+`make dms-w2-test` (in `make test`) and the engine test
+`nrf_bor_hold_and_release` (`engines/cpu-renode/tests/nrf52840.rs`, in
+`cargo-test`) are its fast part. D7's `spec/` changes are made here:
+`spec/pin-model.md` (glue rule 13's `bor` output and the hold, `oe` 0 in
+reset), `spec/event-stream.md` (the `reset` record is emitted),
+`spec/package.md` and `spec/schema/part.schema.json` (a `pof_comparator`
+view's second output `bor`).
+
+**1. The prototype (risk R3), first.** Both of D7's unknowns resolved, so
+W2 counts in full (decision Q2) and the run-ending fallback (`phase =
+"stop"`) is not implemented:
+
+- **A machine reset under External Control works, fresh and pooled.** The
+  engine writes a host register of `BbNrf52Power` (0x40000F24) while Renode
+  is paused on the lattice point; the model calls `Machine.Reset()` (every
+  peripheral and the CPU) there. Measured on the gate firmware `nrf_bor.c`:
+  the External Control GPIO event hooks stay on their `GPIO` objects and
+  report the reset's own edges; the lookahead block stays armed with its
+  self-test passed (status 0x3); the message count grows only by the
+  engine's one write and one read-back; RAM and flash are memories, which
+  `Machine.Reset()` leaves alone (the firmware's boot count in RAM
+  survives); RESETREAS and GPREGRET read 0 after it. A halted CPU
+  (`IsHalted`) defers its time handle's re-enable to the next unlatch, one
+  quantum late: the release therefore enables the time handle itself
+  (unlatched while Renode is paused), and the firmware's first boot store
+  after a release lands at the release's lattice point + 1 fs, as at
+  power-on (P0.13's first toggle 1.00725 ms after it in both). Identical in
+  one-cell grants, 10 ms grants, with the armed plugin, with lookahead on and
+  on a leased pool process.
+- **The P1 views give a co-simulated crossing of VBOR.** W2's old rule on
+  the system: +3V3 falls through VBOR,ON 1.60 V 3.923 ms after OLED_VCC_EN
+  rises (the suite: 3.839 ms; P1's static deck: 3.924 ms).
+
+**2. The model** (`bb_nrf52_power.cs`, `bb_nrf52_state.cs`; platform
+`nrf52840-bb@4`, its content hash changed, no firmware-visible change
+without a brown-out). Host registers 0xF24 (write 1: hold, 2: release; read
+1 while held) and 0xF28 (the holds). The hold: the state block records
+every state output it last reported high as low at the instant (#run,
+#hfxo, #nvmc, #saadc, #pofen, #pofthr*), then `Machine.Reset()`, the CPU
+halted, RESETREAS 0. The release: the CPU un-halted with its time handle,
+`Machine.Reset()`, RESETREAS 0, the state block's #run high at the instant
+and its WFI reference rebased. The host ports keep what is the engine's
+across a machine reset: `BbUartLog`'s ring, `BbSaadcHostPort`'s and
+`BbNrf52HostPort`'s words and counts, and the SAADC's timed inputs and
+statistics (their `Reset()` only ran at construction before, where they
+are empty, so no result changes). The power model reaches the state block
+through a delegate it arms (no compile dependency: W-fw's and the SAADC's
+Renode-only tests compile the model without it).
+
+**3. The engine** (`RenodeEngine`). `#bor` (`PinSpec::nrf_bor`) is a watched
+input that is no GPIO: applied at `ceil_L` of its crossing like any
+`digital_in`, a rise holds, a fall releases. With the reset: every `#oe`
+low at the instant (`PIN_CNF` = 0x2), the `PIN_CNF` audit's state at its
+reset value without a finding (the `reset` record says why), the inputs it
+had driven high driven again, the reset's GPIO events taken at the same
+instant (lattice rule 3 when it is the grant's end), a `reset` record
+(`enter`; `exit` with `ram = "kept"`) through the new `Engine::drain_resets`
+(the scheduler merges it with the engine's logs: at one instant the logs
+first). A held machine promises quiet until an input changes (lookahead);
+the audit treats the brown-out as an input (the promise held up to its
+lattice point; the reset's own WFI exit there is not a broken promise). A
+hold while a PWM channel drives a bound pin is refused (not modelled). With
+`--pi-oe fixed` the pins keep driving in reset (`bb run` warns).
+
+**4. The detector** (`nordic/nrf52840-qiaa` 0.5.0, view `pof`): a second
+output `bor = clamp((VBOR + bhyst - V(VDD,VSS)) / bhyst, -1, 2)`, the form of
+`pofwarn`; VBOR,ON 1.60 V at `typ`, 1.57 V at `min`, 1.63 V at `max` (PS
+v1.1 5.3.8.4; the corner that trips earliest is `max`, as for POF); `bhyst`
+10 mV, a numerics floor (the PS gives none). Three vectors by hand (each
+within 10 ns). Glue rule 13 thresholds it (1 V / 0 V) into `<ref>.#bor`;
+`run.json`'s `pof` names it. The internal pins of the CPU target at `pi`
+(the state outputs, `#pofen`, `#pofwarn`, `#bor`) are digital nets of an
+assertion. Every other `pi` deck with the view gains the output node and
+keeps its hashes (`dms-w1-test`, `dms-e1-system-test`, `pi-glue-test`,
+`pi-idd-test`: unchanged).
+
+**5. W2** (`examples/dial-me-spinner/w2`, `simulate = ["main", "base"]`;
+`scripts/dms_w2.sh`, `scripts/check_dms_w2.py`, `asserts/w2-old.toml`,
+`asserts/w2-rule.toml`). Static-load mode of the suite's W2 cases: USB 5.0 V
+(Norton, 10 mΩ), the dead cell, the suite's 50 mA +3V3 budget in place of
+U10's `supply_load`, base U1 at `worst_ilim100` (ILIM at the suite's
+100 mA, SYS_REG 4.5 V, ungated supplement: `ti/bq25180` 0.3.0; ILIM and
+SYS_REG are the bench's, default 4's recorded deviation), main U1 at
+`worst_dropout` (as P1's static decks), U20 at `suite_compat` (its own
+output state set to the board's 14.8 µF, 551.3 kΩ divider and 12.9972 V, as
+P1's `[boost]`: a project has no instance parameters; `ti/tps61040` 0.2.0),
+U10's detector at `typ` (benches `-min`, `-max` for the other corners).
+
+| Case | Result |
+| --- | --- |
+| old, 20 ms (GATED) | brownout, boots, resetreas-zero, oled-en-in-reset pass (rung `pi`); #bor rises 5.156182 ms, hold at 5.16 ms, falls 5.327308 ms, release at 5.33 ms; while held every U10 output and `#oe` low, nothing else; OLED_VCC_EN below 0.4 V 3.98 µs after #bor rises (R25); the reboot reads RESETREAS 0x00000000 (5.538 ms) and enables the OLED again (6.563 ms) |
+| static-load against the suite (Amendment 1's 500 µs) | VBOR crossing after OLED_VCC_EN: 3.923057 ms at 1.60 V (suite 3.839208, +83.8 µs), 3.941526 ms (suite 3.8511000, +90.4 µs) at 1.57 V, 3.904752 ms (suite 3.8274075, +77.3 µs) at 1.63 V: pass. VSYS and +3V3 minima are not comparable (the reset ends the collapse the suite's deck runs on): reported, +3V3 min 1.566 V, VSYS min 1.584 V; P1's static deck gates them (`make pi-static`: +12.4 mV, +21.8 mV) |
+| old, 200 ms (the plan's window) | as old; **one brown-out** (two `reset` records): the OLED attempt after the release dips +3V3 to 1.890 V (11.91 ms) and completes |
+| rule, 20 ms and 200 ms (GATED) | no-reset, vcc, oled-off pass; +3V3 min 3.227528 V (suite 3.2224610, +5.1 mV, tolerance 20 mV), VSYS min 3.260327 V (suite 3.2666277, -6.3 mV, tolerance 10 mV); LED_PWR_EN 1.233 ms, P0.06 15.047 ms after it |
+
+- **Finding: the loop does not repeat (needs the approver).** The plan
+  expects the old rule's boot to brown out again and again. On these views
+  it does once: the first attempt charges the boost's output to 9.4 V
+  before the reset cuts its input (`+13V_OLED` holds it: 14.8 µF into the
+  551.3 kΩ divider, τ about 8 s), so the second attempt, enabled 1.23 ms
+  after the release with VSYS at 2.2 V, has 3.6 V left to boost and
+  reaches regulation with +3V3 at 1.890 V, 290 mV above VBOR (the boost's
+  internal output measured on the elaborated deck). Not modelled, and
+  each would only delay the second attempt (so leave more margin): tPOR
+  after the release (PS 5.3.8.3: 1 ms typ), the Zephyr boot steps that
+  W-fw folds into its 1 ms. The plan's check reads "at least 2 `reset`
+  records in 200 ms, RESETREAS read as 0 after each one": one brown-out
+  writes two records (its hold and its release), so the assertion
+  `brownout` (min 2) passes literally while the brown-outs number one.
+  `check_dms_w2.py` reports the count and the loop's verdict; whether W2
+  counts with one brown-out and a completed second attempt is the
+  approver's call, not taken here.
+- **The boost view's damping (`ti/tps61040` 0.2.0, a numerics change).**
+  When the converter stops (the reset cuts OLED_VIN), the board's L20 and
+  the rectifier's capacitance at SW rang undamped at about 5 MHz in the
+  averaged view, which held ngspice at 4 ns steps (72 s for 2 ms). A 1 kΩ
+  from SW to VIN (`rdamp`, a recorded assumption: the switching losses of
+  the real part damp it) carries L di/dt / 1 kΩ of the averaged current. W2
+  old's 200 ms now take 4.3 s; P1's static W2 old deck runs in 2 367 solver
+  points instead of 75 284 and moves by at most 0.13 mV and 0.7 µs (`make
+  pi-static`: VSYS +12.357 mV, +3V3 +21.829 mV, VBOR crossings +91.8,
+  +85.2, +78.7 µs against Amendment 4's +12.3, +21.7, +92.5, +85.9,
+  +79.4); its three vectors are unchanged.
+
+**6. Partition independence and determinism (G5, `make dms-w2`):** old and
+rule at 20 ms and 200 ms: bb's defaults and 1 ms grants equal the one-cell
+references (`--max-quantum 10us --lookahead off`) in `nets.csv`, `nets.vcd`
+and every non-grant record; the references equal `tests/golden/dms-w2`
+(new); analog-first byte-identical (old, rule); 10 runs byte-identical
+(old, rule); no promise broken. `make pool-equiv`: PASS in 11 min 13 s (41 configurations, among them G7's reset case: `dms-w2-old` at bb's defaults and as its one-cell reference, each with its brown-out's hold and release, and `dms-w2-rule`; every pooled run leased and byte-identical to its fresh run and to the committed hashes, 82 leases by one Renode process). A reset that fails (the model's read-back disagrees, or the External Control write fails) fails the engine, and a failed lease's process is discarded by the pool's existing rule (ADR-004 Part B); no failing reset was injected to show it.
+
+**7. Budget** (+40 s): `dms-w2-test` 2.0 s in the pooled `make check` (502 s in all) and 5.8 s with `POOL=0` (604 s), load 1.2-7; `nrf_bor_hold_and_release` 8.8 s alone, +3.1 to +4.3 s on the `nrf52840` binary (52.0 / 51.6 s without it, 55.1 / 55.9 s with it, run in parallel with its other tests); the three `bor` vectors in `packages` about 0.3 s. In all about +5.5 s pooled and +10 s `POOL=0`. Before the damping (item 5) W2 old cost 34 s for 6 ms and 150 s for 30 ms. `make dms-w2` 39 s pooled; `make dms-wfw-test` 23.6 s and `make nrf-power-model` 12.4 s on the changed plugins (both pass, unchanged expectations); `make plugin-scope` and `make lock-scope` pass (8 STM32 boards and projects unchanged, 15 nRF52840 ones changed).
+
+**Deviations, recorded.**
+
+- W2's loop is one brown-out on these views (item 5): the plan's "at least
+  2 `reset` records" passes literally; the count and the verdict are
+  reported, the decision is the approver's.
+- The detector's hysteresis is 10 mV, a numerics floor (item 4); tPOR and
+  VDD,POR are not modelled: the release is at `ceil_L` of the fall (D7).
+- The supply_load's reset current is its `ibase` (every state output low
+  while held; the PS gives no reset current); W2 runs in static-load mode.
+- U20's output parameters come through a `suite_compat` corner (item 5);
+  the TPS61040 view gains a damping resistance (item 5).
+- A hold while a PWM channel drives a bound pin is refused; with `--pi-oe
+  fixed` the pins keep driving in reset (a warning).
+- VSYS and +3V3 minima of the old rule are reported, not gated, against the
+  suite (the reset ends the collapse); P1's static decks gate them.

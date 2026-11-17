@@ -358,6 +358,10 @@ const STATE_EVENT: u32 = 0x10;
 /// The name of the POWER model's `#pofwarn` input (ADR-009 D6): its GPIO
 /// input 0 on the platform's `clock` peripheral (`BbNrf52Power`).
 pub const NRF_POFWARN: &str = "#pofwarn";
+/// The name of the brown-out input (ADR-009 D7, Phase 2 P5): the BOR
+/// comparator's output; while it is high the engine holds the machine in
+/// reset (`BbNrf52Power`'s brown-out control, host register +0x24).
+pub const NRF_BOR: &str = "#bor";
 /// The POWER model's host registers (`bb_nrf52_power.cs`): the error word
 /// at +0x0C, the first refused POFCON word at +0x18 and its time in ns at
 /// +0x1C/+0x20.
@@ -743,6 +747,20 @@ impl PinSpec {
             name: NRF_POFWARN.into(),
             gpio: "clock".into(),
             index: 0,
+            direction: PinDirection::Input,
+        }
+    }
+
+    /// The `#bor` input of the nRF52840's POWER model (ADR-009 D7, Phase 2
+    /// P5): the brown-out comparator's output, a watched digital input. It is
+    /// no GPIO: a rise holds the machine in reset at its lattice point (a
+    /// machine reset, the CPU halted), a fall resets it again and releases
+    /// it, through `BbNrf52Power`'s brown-out control on `clock`.
+    pub fn nrf_bor() -> PinSpec {
+        PinSpec {
+            name: NRF_BOR.into(),
+            gpio: "clock".into(),
+            index: -1,
             direction: PinDirection::Input,
         }
     }
@@ -1558,6 +1576,9 @@ struct PinState {
     pwm_owned: bool,
     /// Input pin: the last level driven or queued to be driven.
     scheduled: Option<Level>,
+    /// Input pin: the last level driven (`SET_STATE`), which a brown-out
+    /// reset drives again (ADR-009 D7).
+    applied: Option<Level>,
     /// ADC input: the last value (µV) set or queued to be set.
     scheduled_uv: Option<u32>,
     /// ADC input: the last value (µV) set (for the cross-check).
@@ -1831,6 +1852,13 @@ pub struct RenodeEngine {
     gdb: Option<gdb::GdbProxy>,
     /// The debug mark (a `warn` log record) has been emitted.
     gdb_marked: bool,
+    /// ADR-009 D7 (Phase 2 P5): the machine is held in reset (`#bor` high).
+    bor_held: bool,
+    /// The `reset` records not yet drained.
+    resets: Vec<bbcore::ResetRecord>,
+    /// The lattice point (ns) of a brown-out hold or release in the current
+    /// advance, for the lookahead audit.
+    bor_at: Option<u64>,
 }
 
 /// The External Control connection's parameters, for reconnecting.
@@ -2308,8 +2336,10 @@ impl RenodeEngine {
                 if matches!(
                     spec.direction,
                     PinDirection::AdcSample | PinDirection::OutputEnable | PinDirection::State
-                ) {
-                    // Not a GPIO event: its edges come from the SAADC's
+                ) || spec.name == NRF_BOR
+                {
+                    // Not a GPIO event (`#bor` is not a GPIO either, ADR-009
+                    // D7; it starts low): its edges come from the SAADC's
                     // acquisition ring (ADR-008 D7), from the PIN_CNF
                     // write hook (`#oe`, ADR-009 D5: DIR is 0 after reset),
                     // or from the state block (ADR-009 D4: `#run` is high
@@ -2327,6 +2357,7 @@ impl RenodeEngine {
                         gpio_level: level,
                         pwm_owned: false,
                         scheduled: None,
+                        applied: None,
                         scheduled_uv: None,
                         applied_uv: None,
                         timed: false,
@@ -2350,6 +2381,7 @@ impl RenodeEngine {
                         gpio_level: Level::Low,
                         pwm_owned: false,
                         scheduled: None,
+                        applied: None,
                         scheduled_uv: None,
                         applied_uv: None,
                         // Every ADC input is a timed input (checked in start).
@@ -2370,6 +2402,7 @@ impl RenodeEngine {
                     gpio_level: level,
                     pwm_owned: false,
                     scheduled: None,
+                    applied: None,
                     scheduled_uv: None,
                     applied_uv: None,
                     timed: false,
@@ -2581,6 +2614,9 @@ impl RenodeEngine {
             }),
             gdb,
             gdb_marked: false,
+            bor_held: false,
+            resets: Vec::new(),
+            bor_at: None,
         })
     }
 
@@ -3246,7 +3282,17 @@ impl RenodeEngine {
             _ => self.lookahead_query()?,
         };
         self.la.stats.queries += 1;
-        let Some(mut p_ns) = st.promise_ns() else {
+        // ADR-009 D7: held in reset, the machine runs nothing and every
+        // peripheral is in its reset state, so no output changes before an
+        // input does (the release is `#bor`'s fall). The block reports the
+        // halted CPU, which vetoes its own promise.
+        let held = self.bor_held && st.status & LookaheadStatus::HALTED != 0;
+        let p_ns = if held {
+            Some(u64::MAX)
+        } else {
+            st.promise_ns()
+        };
+        let Some(mut p_ns) = p_ns else {
             return Ok(now);
         };
         if let Some(Fault::StretchPromise { ns }) = self.fault {
@@ -3275,6 +3321,14 @@ impl RenodeEngine {
         let broken = |at: Time| EngineError::PromiseBroken {
             promised: until,
             at,
+        };
+        // ADR-009 D7: a brown-out is an input. The promise held while the
+        // inputs were constant: up to the lattice point where `#bor` changed
+        // (a producer that runs first stops there, ADR-003 D5), whose reset
+        // changes the outputs at once (1 fs after it) and leaves WFI there.
+        let until = match self.bor_at {
+            Some(ns) => until.min(Time::from_ns(ns)),
+            None => until,
         };
         if let Some(tr) = self.trace.iter().find(|tr| tr.t > from && tr.t < until) {
             return Err(broken(tr.t));
@@ -3483,6 +3537,16 @@ impl Engine for RenodeEngine {
         ready
     }
 
+    /// ADR-009 D7: the brown-out's `reset` records (hold and release).
+    fn drain_resets(&mut self) -> Vec<bbcore::ResetRecord> {
+        let now = self.now;
+        let (ready, later) = std::mem::take(&mut self.resets)
+            .into_iter()
+            .partition(|r| r.t <= now);
+        self.resets = later;
+        ready
+    }
+
     /// ADR-005 D3: an ADC input on Breadboard's model is sampled. The model
     /// reads it only at its sample instants, each a clock limit at or after
     /// the lookahead promise, and a push changes nothing else in Renode.
@@ -3537,6 +3601,8 @@ impl Engine for RenodeEngine {
                 });
             }
         }
+        // A brown-out applied before this advance (at its start) or in it.
+        self.bor_at = None;
         Ok(())
     }
 
@@ -3872,6 +3938,7 @@ impl RenodeEngine {
             p.gpio = match p.spec.direction {
                 PinDirection::Adc => client.get_adc(md, &p.spec.gpio).map_err(proto)?,
                 PinDirection::AdcSample | PinDirection::OutputEnable | PinDirection::State => -1,
+                _ if p.spec.name == NRF_BOR => -1,
                 _ => client.get_gpio(md, &p.spec.gpio).map_err(proto)?,
             };
         }
@@ -3885,14 +3952,92 @@ impl RenodeEngine {
         Ok(())
     }
 
-    fn set_input(&mut self, i: usize, value: InputValue) -> Result<(), EngineError> {
-        let p = &self.pins[i];
-        match value {
-            InputValue::Level(level) => self
-                .client
-                .gpio_set_state(p.gpio, p.spec.index, level == Level::High)
-                .map_err(proto)?,
+    /// ADR-009 D7 (Phase 2 P5): `#bor` rose (`enter`: hold the machine in
+    /// reset) or fell (release it), applied while Renode is paused on its
+    /// lattice point `ceil_L(t)` (the input rule of ADR-003 D2). The POWER
+    /// model resets the machine (every peripheral and the CPU; RAM and flash
+    /// are kept), sets RESETREAS to 0, halts the CPU on a hold and releases
+    /// it on a release; the state block records the state outputs low on a
+    /// hold and `#run` high on a release, the GPIO port reports its outputs'
+    /// reset levels as GPIO events, both at this lattice point (reported
+    /// 1 fs after it, like any change stamped there). Here: every `#oe` falls
+    /// with the reset (`PIN_CNF` is 0x2, an input: D5), the `PIN_CNF`
+    /// audit's state returns to the reset value without a finding (the
+    /// `reset` record says why), the inputs driven high are driven again (a
+    /// reset clears a GPIO port's input levels), and a `reset` record.
+    fn brown_out(&mut self, enter: bool) -> Result<(), EngineError> {
+        if enter == self.bor_held {
+            return Ok(());
         }
+        let at_ns = self.renode_ns;
+        if enter && self.pins.iter().any(|p| p.pwm_owned) {
+            return Err(EngineError::Protocol(format!(
+                "{}: a brown-out at {at_ns} ns while a PWM channel drives a bound pin is not                  modelled (ADR-009 D7)",
+                self.name
+            )));
+        }
+        // The PIN_CNF writes before the reset first (the audit's findings
+        // and the `#oe` lines up to this instant).
+        self.poll_pin_cnf_writes()?;
+        self.read_hook_lines()?;
+        self.sysbus_write_u32(NRF_POWER_HOST + 0x24, if enter { 1 } else { 2 })?;
+        let held = self.sysbus_read_u32s(NRF_POWER_HOST + 0x24, 1)?[0] == 1;
+        if held != enter {
+            return Err(EngineError::Protocol(format!(
+                "{}: the POWER model did not {} the machine at {at_ns} ns (brown-out control                  reads {}; ADR-009 D7)",
+                self.name,
+                if enter { "hold" } else { "release" },
+                u32::from(held)
+            )));
+        }
+        if self
+            .pins
+            .iter()
+            .any(|p| p.spec.direction == PinDirection::OutputEnable)
+        {
+            for port in 0..2u64 {
+                self.hook_oe.push([at_ns, port, NRF_GPIO_DIR, 0]);
+            }
+        }
+        self.pin_cnf_state.fill((NRF_PIN_CNF_RESET, None));
+        for i in 0..self.pins.len() {
+            let p = &self.pins[i];
+            if p.spec.direction == PinDirection::Input
+                && p.spec.name != NRF_BOR
+                && p.spec.name != NRF_POFWARN
+                && p.applied == Some(Level::High)
+            {
+                self.client
+                    .gpio_set_state(p.gpio, p.spec.index, true)
+                    .map_err(proto)?;
+            }
+        }
+        self.bor_held = enter;
+        self.bor_at = Some(at_ns);
+        self.input_applied = true;
+        self.la.cached = None;
+        self.resets.push(bbcore::ResetRecord {
+            t: Time::from_ns(at_ns),
+            phase: if enter {
+                bbcore::ResetPhase::Enter
+            } else {
+                bbcore::ResetPhase::Exit
+            },
+        });
+        Ok(())
+    }
+
+    fn set_input(&mut self, i: usize, value: InputValue) -> Result<(), EngineError> {
+        let InputValue::Level(level) = value;
+        if self.pins[i].spec.name == NRF_BOR {
+            self.pins[i].applied = Some(level);
+            return self.brown_out(level == Level::High);
+        }
+        let p = &self.pins[i];
+        self.client
+            .gpio_set_state(p.gpio, p.spec.index, level == Level::High)
+            .map_err(proto)?;
+        self.pins[i].applied = Some(level);
         self.input_applied = true;
         // The input may wake the CPU (EXTI -> NVIC): a cached lookahead
         // snapshot no longer describes Renode.
@@ -3922,6 +4067,11 @@ impl RenodeEngine {
             }
         }
         self.run_to(target_ns, &mut events)?;
+        // ADR-009 D7: a brown-out applied at the grant end itself (after the
+        // last RUN_FOR) reported its reset's GPIO events while Renode was
+        // paused there; they are stamped `target_ns`, so they are carried
+        // (lattice rule 3). Empty otherwise.
+        events.extend(self.client.take_events());
         // ADR-008 D8: the UART tap's line toggled (a line ended).
         let uart_due = events.iter().any(|e| e.descriptor == UART_EVENT_DESC);
         // ADR-008 D7: the SAADC recorded an acquisition or a sample, or

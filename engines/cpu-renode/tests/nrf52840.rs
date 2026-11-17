@@ -21,6 +21,9 @@
 //!   sleep gives a promise past `Time`'s range, clamped, with grants capped
 //!   at the maximum quantum and the reference's edges.
 //! - `nrf-pincnf` (D4): the end-of-run `PIN_CNF` audit's findings.
+//! - `nrf-bor` (Phase 2 P5, ADR-009 D7): a brown-out's hold and release
+//!   under External Control (`#bor`), the `reset` records, RESETREAS and
+//!   GPREGRET 0, RAM kept, every output and `#oe` low while held.
 //! - `nrf-zephyr`: an unmodified Zephyr image, with and without lookahead,
 //!   and Zephyr's `k_busy_wait(10000)` and `k_msleep(10)`.
 //!
@@ -974,4 +977,216 @@ fn nrf_state_outputs_exact() {
         nvmc[0].0,
         nvmc[1].0
     );
+}
+
+/// Drive `cfg` in `mode` to `t_end`, delivering the `#bor` transitions
+/// `bor` (time, level) as the kernel does: each in the input trace of the
+/// grant that contains it (the engine applies it at `ceil_L`). Grants end at
+/// most at each transition's `ceil_L`, as a producer that runs first stops
+/// there (ADR-003 D5). Returns the drive and the `reset` records.
+fn drive_bor(
+    cfg: &RenodeConfig,
+    mode: Mode,
+    t_end: Time,
+    bor: &[(Time, bool)],
+) -> (Drive, Vec<(Time, bbcore::ResetPhase)>) {
+    let cfg = with_mode(cfg, mode);
+    let mut e = RenodeEngine::start(&cfg).expect("start renode");
+    let mut d = Drive {
+        startup: e.lookahead_startup(),
+        ..Drive::default()
+    };
+    let mut resets = Vec::new();
+    let mut now = Time::ZERO;
+    let mut next = 0;
+    let base: bbcore::PinSignals = [(
+        bb_cpu_renode::NRF_BOR.to_string(),
+        PinSignal::digital(bbcore::Level::Low, Time::ZERO),
+    )]
+    .into_iter()
+    .collect();
+    e.apply_inputs(&base).unwrap();
+    while now < t_end {
+        assert_eq!(e.next_safe_time(now), Time::MAX);
+        let q = e.quiet_until(now);
+        if q > now {
+            d.promises.push((now, q));
+        }
+        let mut g = match mode {
+            Mode::Long => floor_l((now + MAX_GRANT).min(t_end)),
+            _ => floor_l(q.min(now + MAX_GRANT).min(t_end)).max(now + L),
+        };
+        if let Some((t, _)) = bor.get(next) {
+            g = g.min(ceil_l(*t).max(now + L));
+        }
+        let mut trace = Vec::new();
+        while let Some((t, high)) = bor.get(next) {
+            if *t > g {
+                break;
+            }
+            trace.push(bbcore::Transition {
+                t: *t,
+                pin: bb_cpu_renode::NRF_BOR.to_string(),
+                signal: PinSignal::digital(bbcore::Level::from_bool(*high), *t),
+            });
+            next += 1;
+        }
+        e.apply_input_trace(&Default::default(), &trace).unwrap();
+        if let Err(err) = e.advance_to(g) {
+            d.err = Some((now, err));
+            break;
+        }
+        for tr in e.read_output_trace().unwrap().expect("a trace") {
+            let PinSignal::Digital { level, .. } = tr.signal else {
+                panic!("analog output from renode")
+            };
+            assert!(
+                tr.t > now && tr.t <= g,
+                "{} at {} outside ({now}, {g}]",
+                tr.pin,
+                tr.t
+            );
+            d.edges.push((tr.t, tr.pin, level == bbcore::Level::High));
+        }
+        for r in e.drain_logs() {
+            d.logs.push((r.t, r.level, r.msg));
+        }
+        for r in e.drain_resets() {
+            assert!(
+                r.t >= now && r.t <= g,
+                "reset at {} outside [{now}, {g}]",
+                r.t
+            );
+            resets.push((r.t, r.phase));
+        }
+        d.grants.push((now, g));
+        now = g;
+    }
+    if d.err.is_none() {
+        e.end_of_run().expect("end-of-run verify");
+    }
+    d.stats = e.lookahead_stats();
+    (d, resets)
+}
+
+/// `nrf-bor` (ADR-009 D7, Phase 2 P5; the prototype of risk R3 made a gate):
+/// a brown-out under External Control. `#bor` rises at 10.0034 ms and falls
+/// at 12.0071 ms (off the lattice), then rises at 20.0005 ms and falls at
+/// 20.5 ms (a hold of 50 cells). The engine holds the machine in reset from
+/// `ceil_L` of each rise to `ceil_L` of each fall and resets it again there:
+/// every output and `#oe` low and no change while held, `#run` low; at the
+/// release `#run` rises and the firmware boots as from power-on (P0.13's
+/// first toggle the same 1.00725 ms after it), RAM kept (P0.15: the boot
+/// count survived), RESETREAS 0 (P0.14 low) and GPREGRET cleared (P0.16
+/// low). One-cell grants, 10 ms grants, the armed plugin, lookahead on (a
+/// held machine promises quiet until the release) and a pooled Renode (when
+/// `BB_RENODE_POOL` is set) give identical edges and `reset` records.
+#[test]
+fn nrf_bor_hold_and_release() {
+    let Some(mut cfg) = config("nrf_bor", &["P0.13", "P0.14", "P0.15", "P0.16"]) else {
+        return;
+    };
+    cfg.pins.push(PinSpec::nrf_oe("P0.13#oe").unwrap());
+    cfg.pins.push(PinSpec::nrf_oe("P0.15#oe").unwrap());
+    cfg.pins.push(PinSpec::nrf_state("#run").unwrap());
+    cfg.pins.push(PinSpec::nrf_bor());
+    let bor = [
+        (Time::from_ns(10_003_400), true),
+        (Time::from_ns(12_007_100), false),
+        (Time::from_ns(20_000_500), true),
+        (Time::from_ns(20_500_000), false),
+    ];
+    let t_end = Time::from_ms(30);
+    let (reference, r_ref) = drive_bor(&cfg, Mode::Reference, t_end, &bor);
+    assert!(reference.err.is_none(), "reference: {:?}", reference.err);
+    use bbcore::ResetPhase::{Enter, Exit};
+    assert_eq!(
+        r_ref,
+        vec![
+            (Time::from_us(10_010), Enter),
+            (Time::from_us(12_010), Exit),
+            (Time::from_us(20_010), Enter),
+            (Time::from_us(20_500), Exit),
+        ],
+        "the reset records at ceil_L of each crossing"
+    );
+    let at = |t: Time| t + Time::from_fs(1);
+    for (start, end) in [
+        (Time::from_us(10_010), Time::from_us(12_010)),
+        (Time::from_us(20_010), Time::from_us(20_500)),
+    ] {
+        // While held: every output and #oe low at the reset, nothing else.
+        let held: Vec<_> = reference
+            .edges
+            .iter()
+            .filter(|e| e.0 > start && e.0 <= end)
+            .collect();
+        assert!(!held.is_empty(), "the hold at {start} lowered nothing");
+        for e in &held {
+            assert!(e.0 == at(start) && !e.2, "a change while held: {e:?}");
+        }
+        for pin in ["P0.13#oe", "P0.15#oe"] {
+            assert!(
+                held.iter().any(|e| e.1 == pin),
+                "{pin} did not fall at the hold {start}: {held:?}"
+            );
+        }
+        // The release: #run rises, the boot configures the pins at once,
+        // P0.15 high (RAM kept), P0.14 and P0.16 stay low.
+        let boot: Vec<_> = reference.edges.iter().filter(|e| e.0 == at(end)).collect();
+        for (pin, level) in [
+            ("#run", true),
+            ("P0.13#oe", true),
+            ("P0.15#oe", true),
+            ("P0.15", true),
+        ] {
+            assert!(
+                boot.iter().any(|e| e.1 == pin && e.2 == level),
+                "{pin} at the release {end}: {boot:?}"
+            );
+        }
+        let first = reference
+            .edges
+            .iter()
+            .find(|e| e.1 == "P0.13" && e.0 > end)
+            .expect("P0.13 toggles after the release");
+        assert_eq!(
+            first.0,
+            end + Time::from_ns(1_007_250),
+            "the RTC restarts with the boot"
+        );
+    }
+    for pin in ["P0.14", "P0.16"] {
+        assert!(
+            edges_of(&reference, pin).is_empty(),
+            "{pin}: RESETREAS and GPREGRET are 0 after a brown-out"
+        );
+    }
+    // At power-on the boot count is 1: P0.15 rises only after the first release.
+    let p15 = edges_of(&reference, "P0.15");
+    assert_eq!(p15[0].0, at(Time::from_us(12_010)), "{p15:?}");
+    // The same in every mode.
+    for mode in [Mode::Long, Mode::ArmedOff, Mode::On] {
+        let (d, r) = drive_bor(&cfg, mode, t_end, &bor);
+        assert!(d.err.is_none(), "{mode:?}: {:?}", d.err);
+        assert_eq!(d.edges, reference.edges, "{mode:?}: the edges");
+        assert_eq!(r, r_ref, "{mode:?}: the reset records");
+        if mode == Mode::On {
+            // A held machine promises quiet until the release.
+            assert!(
+                d.promises.iter().any(|(f, u)| *f <= Time::from_us(10_020)
+                    && *f >= Time::from_us(10_010)
+                    && *u >= Time::from_us(12_010)),
+                "no hold promise: {:?}",
+                d.promises
+            );
+            eprintln!(
+                "nrf-bor: {} edges, {} reference grants, {} lookahead grants ({} promises)",
+                reference.edges.len(),
+                reference.grants.len(),
+                d.grants.len(),
+                d.stats.promises
+            );
+        }
+    }
 }

@@ -113,7 +113,12 @@ high-Z. `s` is the level ramp above normalised to 0..1 (0 V / 1 V over
   edges (the hook and a GPIO event read the same clock), low after reset
   (`PIN_CNF = 0x2`), so a pin is high-Z until firmware makes it an output.
   On every other platform, or with `bb run --pi-oe fixed`, `oe = 1` (a
-  `dc 1` source). While a CPU is held in reset `oe` is 0 (milestone P5).
+  `dc 1` source). While a CPU is held in reset (a brown-out, rule 13 and
+  ADR-009 D7; milestone P5) every `#oe` is 0: the engine reports each one
+  low at the hold's lattice point (1 fs after it, the lattice rule of GPIO
+  edges), the reset's `PIN_CNF = 0x2`, and it stays low until firmware
+  makes the pin an output again after the release. With `--pi-oe fixed`
+  the pins keep driving in reset (`bb run` warns).
 - A board file names no rail: only `bb run --operating-point --fidelity
   pi` builds its glue, with a stand-in rail `V_bb_<id>_rail
   __pi_rail_<id> 0 dc <voh>` (gate G9). `--operating-point` solves the DC
@@ -349,5 +354,14 @@ boundary; the analog engine handles it entirely.
     `#pofwarn` (kernel net `<ref>.#pofwarn`): an interrupt source like a GPIO
     input, never a sampled input. The CPU engine's `#pofen` (POFCON.POF;
     kernel net `<ref>.#pofen`) drives no circuit node: the comparator is not
-    gated by POF, the POWER model applies it. At `fast` there is no
-    comparator and none of these pins is bound.
+    gated by POF, the POWER model applies it. A view with the second output
+    port `bor` (milestone P5, ADR-009 D7, Amendment 9: the brownout reset
+    detector) puts it on the node `bb_bor_<ref>`, thresholded the same way
+    (`vih` 1 V, `vil` 0 V, no `cin`) into the CPU engine's watched input
+    `#bor` (kernel net `<ref>.#bor`). While `#bor` is high the CPU engine
+    holds the machine in reset: at `ceil_L` of its rise the machine is reset
+    and its CPU halted, every output and `#oe` is reported low and a `reset`
+    record (`phase = "enter"`) is written; at `ceil_L` of its fall the
+    machine is reset again and released, with a `reset` record (`phase =
+    "exit"`, `ram = "kept"`); RESETREAS reads 0 after it. At `fast` there is
+    no comparator and none of these pins is bound.
