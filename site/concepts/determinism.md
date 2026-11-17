@@ -45,8 +45,8 @@ Calling two runs equivalent from `events.jsonl` alone, or from `nets.csv`
 alone, is one of the "known bad ideas" in `AGENTS.md`.
 
 What **does** change results, and so is run configuration: the Renode
-quantum (`--renode-quantum`), the seed (`--seed`), the sample rate, the
-ADC model (`--adc-model`) and, for a project, the bench and its option set.
+quantum (`--renode-quantum`), the seed (`--seed`), the sample rate and,
+for a project, the bench and its option set.
 
 ## The gates
 

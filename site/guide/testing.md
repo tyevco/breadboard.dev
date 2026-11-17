@@ -33,9 +33,9 @@ make test        # the exit gate alone
    engines registered in the other order, byte-identical.
 6. **`nrf-feedback`**: the feedback circuit on the nRF52840, lookahead on,
    against its one-cell reference.
-7. **`adc`**, **`adc-order`**, **`adc-stock`**, **`adc-model`**: the STM32F072
-   ADC board on Breadboard's ADC model and on Renode's stock one, and the
-   Renode-only tests of the ADC model.
+7. **`adc`**, **`adc-order`**, **`adc-model`**: the STM32F072 ADC board on
+   Breadboard's ADC model, and the Renode-only tests of the ADC model
+   (Renode's stock ADC, `adc-stock`, was removed in Phase 2 H6).
 8. **`nrf-saadc-model`**, **`nrf-pwm-model`**: the Renode-only tests of
    Breadboard's nRF52840 SAADC and PWM (with the TEMP and NVMC stand-ins),
    then their boards through `bb run` (`examples/nrf-saadc`,
@@ -75,7 +75,7 @@ outputs are the same either way (`make pool-equiv` checks this).
 
 ```sh
 make test              # on a warm pool (POOL_SLOTS, default 5)
-make test POOL=0       # every Renode fresh (CI job `fresh`)
+make test POOL=0       # every Renode fresh (the nightly job `fresh`)
 ```
 
 ## Golden, partition and determinism gates
@@ -114,17 +114,25 @@ reason (and, for the protocol, an ADR).
 
 ## Speed gates (run on an idle host)
 
-`make perf`, `make lookahead-perf`, `make adc-speed`, `make startup-perf` and
+`make perf`, `make lookahead-perf`, `make startup-perf` and
 `make pool-perf` measure wall-clock time with the ADR-003 measurement protocol
 (interleaved A/B, N runs each, medians, startup separate). They are not in CI.
 `make cost-table` only reports; see [Performance](../concepts/performance).
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push and pull request. Its jobs:
-`test` (setup, doctor, fmt, clippy, packages, `make test`), `fresh`
-(`make test POOL=0`), `verify-every`, `partition`, `feedback`, `adc`,
-`dms-rail` and `fw-rebuild`.
+`.github/workflows/ci.yml` runs on every push and pull request: the PR tier
+(ADR-015 D11; its slowest job at most 15 minutes, `make check` at most the
+runtime baseline plus 4 minutes). Its jobs: `test` (setup, doctor, fmt,
+clippy, packages, `make test` without `cargo-test`), `cargo-test`
+(`cargo test --workspace` on a warm pool), `verify-every`, `partition`,
+`feedback`, `adc`, `dms-rail` and `fw-rebuild`.
+
+`.github/workflows/nightly.yml` is the nightly tier: once a day on `main`
+(and by hand), one job each for `make test POOL=0` (the `fresh` job),
+`make ec-long`, `make ngspice-stall`, `make dms-home` and `make dms-vsense`.
+`make nightly` runs the same locally. A nightly failure blocks the next
+milestone merge.
 
 `.github/workflows/docs.yml` builds this site and deploys it to GitHub Pages
 on a push to `main` that touches `site/`, `docs/`, `spec/` or `README.md`.

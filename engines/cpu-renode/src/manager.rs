@@ -493,12 +493,10 @@ fn warm_process(inner: &Inner) -> Result<Console, String> {
     let warm_elf = inner.work.join("bbwarm.elf");
     let f103 = inner.work.join("platform.repl");
     let f072 = inner.work.join("platform-f072-bb.repl");
-    // (platform, ADC instance): the F103, the stock F072 (`--adc-model
-    // stock`) and, with the plugin assembly, Breadboard's F072 (ADR-005).
-    let mut platforms = vec![
-        (f103.to_string_lossy().into_owned(), None),
-        ("platforms/cpus/stm32f072.repl".to_string(), Some("adc")),
-    ];
+    // (platform, ADC instance): the F103 and, with the plugin assembly,
+    // Breadboard's F072 (ADR-005). The stock F072 went with `--adc-model
+    // stock` (Phase 2 H6, ADR-015 D9).
+    let mut platforms = vec![(f103.to_string_lossy().into_owned(), None)];
     if plugin {
         platforms.push((f072.to_string_lossy().into_owned(), Some(BB_ADC_NAME)));
     }

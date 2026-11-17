@@ -22,7 +22,8 @@ grant may end with `stop:ngspice`: the ADC pin is a sampled input and is not
 watched (ADR-005 D3).
 
 --model stock (ADR-003 plan step 9, `bb run --adc-model stock`,
-adc_board_isr.elf): the firmware converts ADC channel 1 once per TIM3
+adc_board_isr.elf; that path was removed in Phase 2 H6, ADR-015 D9, so this
+mode only reads runs recorded before it): the firmware converts ADC channel 1 once per TIM3
 update. On Renode 1.17.0 TIM3 updates every
 999 us (ARR ticks, ADR-003 Amendment 5 fact 5), so conversion k happens at
 the TIM3 limit T_k = k * 999 us. Its ISRs then write, in the same slice:

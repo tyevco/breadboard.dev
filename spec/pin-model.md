@@ -160,8 +160,7 @@ boundary as `Analog` transitions of its trace, only at lattice points:
   model does not).
 - It emits a transition at `kL` only where the **push key** changes: the
   finest value the consumer's converter can see (ADR-005 D5).
-  - Breadboard's STM32F072 ADC model (the default, `bb run --adc-model bb`):
-    the key is
+  - Breadboard's STM32F072 ADC model (`BbStm32F0Adc`, ADR-005): the key is
     `code12 = min(4095, round_half_up(uV * 4095 / Vref_uV))` with
     `Vref_uV = round(vref * 1e6)` (RM0091 13.9: `FULL_SCALE = 4095`;
     saturating, as silicon does; ADR-005 approver decision 2), and the
@@ -170,12 +169,6 @@ boundary as `Analog` transitions of its trace, only at lattice points:
     and the analog watchdog from `code12` with low bits cleared, so the rule
     is exact whatever resolution or alignment the firmware selects. `bits`
     must be 12 and `vref` the model's reference (3.3 V; `bb` checks).
-  - Renode 1.17.0's stock `STM32_ADC_Common` (`bb run --adc-model stock`,
-    ADR-003 Amendments 5 and 10): the key is whole millivolts,
-    `floor(uV / 1000)`, delivered as exactly that many millivolts, because
-    the stock model converts
-    `code = round_half_even(floor(uV / 1000) / (vref * 1000) * (2^bits - 1))`
-    and nothing finer; `bits` documents the code mapping only.
   - Breadboard's nRF52840 SAADC (`model = "nrf_saadc"`, ADR-008 D7): the
     key is the **raw clamped `uV`** itself, delivered as is, on every
     change, because gain, reference and resolution are run-time choices of
@@ -184,20 +177,23 @@ boundary as `Analog` transitions of its trace, only at lattice points:
     supply), and `bits` documents only. Because the pin is a sampled input,
     pushes cost batch size, not grants.
 
+  Renode 1.17.0's stock ADC (`bb run --adc-model stock`, a whole-millivolt
+  key applied with External Control `ADC SetValue`) is no longer a consumer:
+  it was removed in Phase 2 H6 (ADR-015 D9), and an `adc_in` pin needs one
+  of Breadboard's models.
+
   A reference mode pushes `uV` at every lattice point; the converter sees
   the same values (`bb run --adc-push every`).
 - The value at t = 0 is the value delivered at the initial solver point.
 - The pin's boundary value is the last delivered value; a pin without a
   transition in the grant did not change.
 - The consumer applies a push at its lattice point `t`, never earlier.
-  Breadboard's model: the push is a **timed input** (written to the model's
+  Breadboard's models: the push is a **timed input** (written to the model's
   host port before Renode runs past it); a conversion whose sample instant
   is `s` (the end of its sampling phase, a clock limit) converts the latest
   push with `t < s`, strictly earlier, so a sample exactly on a lattice point
-  sees the previous cell's value. The stock model: External Control `ADC
-  SetValue` on the channel while paused at `t`, splitting the advance there.
-  Either way a conversion sees the value of the latest lattice point, at most
-  `L` old, in every partition.
+  sees the previous cell's value. A conversion sees the value of the latest
+  lattice point, at most `L` old, in every partition.
 - On Breadboard's models (`BbStm32F0Adc`, ADR-005; `BbNrf52Saadc`,
   ADR-008 D7) the pin is a **sampled input**
   (`spec/time-grant.md`, ADR-005 D3): the model reads it only at sample
@@ -205,10 +201,9 @@ boundary as `Analog` transitions of its trace, only at lattice points:
   does not watch it and a quiet grant does not stop at a push. The analog
   watchdog flag and interrupt appear at the end of a conversion only: an
   out-of-window push is reported at the next end of conversion of that
-  channel (RM0091 13.8). On the stock model a watched `adc_in` pin
-  (`advance_until`, CPU lookahead) stops the producer at its first push: a
-  change of the converted value is an input change of the CPU (the
-  code-change watch, ADR-003 D6).
+  channel (RM0091 13.8). (The code-change watch of ADR-003 D6, which
+  stopped the producer at a watched `adc_in` pin's first push, served only
+  the stock model, removed by ADR-015 D9.)
 
 Without `load` (or with `load = "none"`) there is no glue: the input is
 ideal (no load). The ADC channel follows from the pin and the platform, or

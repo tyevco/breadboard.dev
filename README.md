@@ -448,10 +448,10 @@ The run writes these files to `out/spike/`:
    through its ADC the divider it drives (below), then `scripts/check_adc.py`
    and the hashes of the one-cell reference that pushes the ADC value at
    every lattice point (lookahead changes only `grant` records);
-   `make adc-order` (the engines registered in the other order),
-   `make adc-stock` (the ADR-003 board on Renode's stock ADC, `--adc-model
-   stock`, against its own references) and `make adc-model` (the Renode-only
-   tests of Breadboard's ADC model and timer TRGO, ADR-005).
+   `make adc-order` (the engines registered in the other order) and
+   `make adc-model` (the Renode-only tests of Breadboard's ADC model and
+   timer TRGO, ADR-005). Renode's stock ADC (`--adc-model stock`,
+   `make adc-stock`) was removed in Phase 2 H6 (ADR-015 D9).
    `make nrf-saadc-model` (Phase 1 M8, ADR-008 D7/D8): the Renode-only tests
    of Breadboard's nRF52840 SAADC, then `examples/nrf-saadc`, whose AIN0
    input loads its pad (one charge transfer per acquisition, counted
@@ -507,9 +507,10 @@ outputs are byte-identical to the Phase 0 boards' committed hashes.
 `make feedback-determinism` (10 runs), `make feedback-open` (the partition
 gate of the open-loop variant), `make lookahead-inert` and
 `make lookahead-equiv` (the lookahead equivalence gate) run in their own CI
-job, and `make adc-equiv` (the ADC gates), `make adc-determinism` (10 runs)
-and `make adc-renode` (the Renode-only test of the stock ADC model) in
-another.
+job, and `make adc-equiv` (the ADC gates) and `make plugin-scope` in
+another. The nightly tier (Phase 2 H6, ADR-015 D11: `make nightly`, the
+`nightly` workflow) runs `make test POOL=0`, `make ec-long`,
+`make ngspice-stall`, `make dms-home` and `make dms-vsense`.
 
 ## Feedback example
 
@@ -570,9 +571,12 @@ whatever ADC_IN does, and an out-of-window value is reported at the next end
 of conversion, as on silicon. The run takes about 1 200 grants for 300 ms
 instead of 30 000, with byte-identical outputs (`make adc-equiv`).
 `board-open.cir` drives the divider from a circuit source instead (no loop):
-30 grants of 10 ms. `bb run --adc-model stock` (with
-`firmware/build/adc_board_isr.elf`) runs the ADR-003 board on Renode's stock
-`STM32F0_ADC` (`make adc-stock`).
+30 grants of 10 ms. Until Phase 2 H6, `bb run --adc-model stock` (with
+`firmware/build/adc_board_isr.elf`) ran the ADR-003 board on Renode's stock
+`STM32F0_ADC`; ADR-015 D9 removed it with its references. Its last speed
+gate (`make adc-speed`, also retired) measured Breadboard's model at
+1 209 grants and 4.75x less simulation than the stock model's 6 344 grants
+(ADR-005 Amendment 4).
 
 ## Result
 
@@ -621,7 +625,7 @@ fresh runs.
 | `examples/feedback-open`, defaults (10 ms grants) | 500 ms | 50 | **0.56 s** (44×) | 2.05 s | **0.10 s** | 2.66 s | 0.50 s |
 | `examples/adc --lookahead off` (one-cell grants; Breadboard's ADC model) | 300 ms | 30 000 | 11.50 s | 1.46 s | 0.09 s | 13.00 s | 11.26 s |
 | `examples/adc`, defaults (`make adc`: lookahead on, Breadboard's ADC model) | 300 ms | 1 209 | **1.11 s** (10.4×) | 1.43 s | **0.09 s** | 2.61 s | 0.97 s |
-| `examples/adc --adc-model stock` (the ADR-003 default: Renode's ADC, lookahead on) | 300 ms | 6 344 | 5.08 s | 1.38 s | | 6.53 s | |
+| `examples/adc --adc-model stock` (the ADR-003 default: Renode's ADC, lookahead on; removed in Phase 2 H6, the last measurement) | 300 ms | 6 344 | 5.08 s | 1.38 s | | 6.53 s | |
 | `examples/nrf-feedback --lookahead off` (Phase 1 M2: the feedback circuit on Breadboard's nRF52840, one-cell grants) | 500 ms | 50 000 | 13.93 s | 1.41 s | 0.05 s | 15.36 s | 14.23 s |
 | `examples/nrf-feedback`, defaults (`make nrf-feedback`: lookahead on) | 500 ms | 120 | **0.52 s** (27×) | 1.39 s | **0.05 s** | 1.95 s | 0.42 s |
 | `examples/adc/kicad --lookahead off` (Phase 1 M4: the ADC board drawn in KiCad, run as a `bb.toml` project; one-cell grants) | 300 ms | 30 000 | 12.66 s | 1.49 s | | 14.17 s | |

@@ -4,8 +4,17 @@
 # apt checks every .deb against the archive's index), so a cache hit saves the downloads and
 # nothing else changes. The key follows scripts/setup.sh, where the package list and the pinned
 # versions live; an older cache is restored as a starting point and saved again under the new key.
+#
+# Phase 2 H6 (ADR-015 D11, Amendment 5): `make setup` itself is cached too, as what it installs
+# under the runner's home: the pinned Rust toolchain (rustup's toolchain directory and its update
+# hash), the Renode portable tree and uv. On a hit setup.sh finds each one present and only checks
+# it (rustup toolchain install is a no-op for an installed toolchain, Renode's tree is used when
+# its `renode` is there, uv when its version matches). The key is exact (no restore-keys): a
+# change to scripts/setup.sh or rust-toolchain.toml, where the versions are pinned, installs
+# afresh. apt still installs its packages each run (from the cached .debs): they live outside the
+# home directory.
 name: bb setup
-description: make setup, with the Renode tarball and the apt packages cached
+description: make setup, with the downloads, the apt packages and the installed toolchain cached
 inputs:
   mode:
     description: The make setup mode (full, demo or zephyr)
@@ -23,6 +32,28 @@ runs:
         key: bb-setup-${{ runner.os }}-${{ inputs.mode }}-${{ hashFiles('scripts/setup.sh') }}
         restore-keys: |
           bb-setup-${{ runner.os }}-${{ inputs.mode }}-
+
+    # The pinned versions, read from scripts/setup.sh (the one place they are set).
+    - name: Read the pinned toolchain versions
+      id: pins
+      shell: bash
+      run: |
+        rust=$(sed -n 's/^RUST_VERSION="\(.*\)"$/\1/p' scripts/setup.sh)
+        renode=$(sed -n 's/^RENODE_VERSION="\(.*\)"$/\1/p' scripts/setup.sh)
+        [ -n "$rust" ] && [ -n "$renode" ] || { echo "bb-setup: no RUST_VERSION or RENODE_VERSION in scripts/setup.sh" >&2; exit 1; }
+        echo "rust=$rust" >> "$GITHUB_OUTPUT"
+        echo "renode=$renode" >> "$GITHUB_OUTPUT"
+
+    - name: Cache the installed toolchain (Rust, Renode, uv)
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.rustup/toolchains/${{ steps.pins.outputs.rust }}-x86_64-unknown-linux-gnu
+          ~/.rustup/update-hashes/${{ steps.pins.outputs.rust }}-x86_64-unknown-linux-gnu
+          ~/.local/opt/renode-${{ steps.pins.outputs.renode }}
+          ~/.local/bin/uv
+          ~/.local/bin/uvx
+        key: bb-setup-installed-${{ runner.os }}-${{ inputs.mode }}-${{ hashFiles('scripts/setup.sh', 'rust-toolchain.toml') }}
 
     - name: make setup SETUP=${{ inputs.mode }}
       shell: bash

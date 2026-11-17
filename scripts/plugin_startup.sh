@@ -3,6 +3,10 @@
 #
 #   plugin_startup.sh <bb> <out_root> <n> <max_warm_s> <max_cold_s> -- <bb run args...>
 #
+# Retired with `make adc-startup` in Phase 2 H6 (ADR-015 D9, Amendment 5): its stock arm
+# needs `bb run --adc-model stock`, which is gone. Kept to reproduce the recorded result
+# (ADR-005 Amendment 4) with a bb from before H6.
+#
 # Interleaved rounds, N of each, fresh Renode processes only (no pool):
 #   stock  the board with $STOCK_FLAGS (default --adc-model stock: the stock
 #          STM32F072 plus the lookahead plugin), warm caches
