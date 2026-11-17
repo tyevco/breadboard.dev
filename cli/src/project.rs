@@ -123,8 +123,12 @@ pub struct ConnectionEntry {
 pub struct Project {
     pub dir: PathBuf,
     pub name: Option<String>,
-    /// The simulated board's id.
+    /// The simulated board's id; in a system run (ADR-013 D2) the primary
+    /// board, the target's, whose ground is node 0.
     pub simulate: String,
+    /// Every simulated board (`[project] simulate`, ADR-013 D2): the one
+    /// board, or a system's list as written. `simulate` is one of them.
+    pub simulated: Vec<String>,
     pub boards: Vec<BoardEntry>,
     /// `[packages] paths`, relative to the project.
     pub package_paths: Vec<String>,
@@ -178,27 +182,28 @@ impl Project {
         if let Some(mut p) = o.table_opt("project")? {
             name = p.str_opt("name")?;
             // bb-project/1 (ADR-013 D2): simulate may be a list. One board
-            // is the Phase 1 meaning; several (a single-MCU system run) are
-            // milestone R2's.
+            // is the Phase 1 meaning; several are a single-MCU system run
+            // (milestone R2).
             simulate = match p.get("simulate") {
                 None => None,
-                Some(Value::String(s)) => Some(s.clone()),
+                Some(Value::String(s)) => Some(vec![s.clone()]),
                 Some(Value::Array(a)) => {
                     let ids: Vec<String> = a
                         .iter()
                         .map(|v| v.as_str().map(str::to_string))
                         .collect::<Option<_>>()
                         .ok_or("[project] simulate: expected a board id or a list of them")?;
-                    match ids.as_slice() {
-                        [one] => Some(one.clone()),
-                        [] => return Err("[project] simulate = []: name a board".into()),
-                        _ => {
+                    if ids.is_empty() {
+                        return Err("[project] simulate = []: name a board".into());
+                    }
+                    for (k, id) in ids.iter().enumerate() {
+                        if ids[..k].contains(id) {
                             return Err(format!(
-                                "[project] simulate = {ids:?}: a system run of several boards is \
-                                 milestone R2 (ADR-013 D2), not implemented in this build"
-                            ))
+                                "[project] simulate: board {id:?} is listed twice"
+                            ));
                         }
                     }
+                    Some(ids)
                 }
                 Some(v) => {
                     return Err(format!(
@@ -314,14 +319,16 @@ impl Project {
         if boards.is_empty() {
             return Err("no [[board]]: a project needs at least one".into());
         }
-        let simulate = match simulate {
-            Some(s) => {
-                if !boards.iter().any(|b| b.id == s) {
-                    return Err(format!("[project] simulate = {s:?}: no such [[board]]"));
+        let simulated: Vec<String> = match simulate {
+            Some(list) => {
+                for s in &list {
+                    if !boards.iter().any(|b| b.id == *s) {
+                        return Err(format!("[project] simulate = {s:?}: no such [[board]]"));
+                    }
                 }
-                s
+                list
             }
-            None if boards.len() == 1 => boards[0].id.clone(),
+            None if boards.len() == 1 => vec![boards[0].id.clone()],
             None => return Err(
                 "[project] simulate: required with more than one [[board]] (Phase 1 simulates one)"
                     .into(),
@@ -538,10 +545,21 @@ impl Project {
                 "[registries] is a bb-project/1 key (ADR-011 D4); this file is {schema}"
             ));
         }
+        // The primary board of a system run (ADR-013 D2): the target's, whose
+        // ground is node 0. It is the board a `[targets]` key names by its
+        // qualifier, when one names a simulated board, else the first one
+        // listed; `bb run` checks that the run's one target is on it.
+        let simulate = targets
+            .iter()
+            .filter_map(|(k, _): &(String, Vec<Image>)| k.split_once(':').map(|(b, _)| b))
+            .find(|b| simulated.iter().any(|s| s == b))
+            .map(str::to_string)
+            .unwrap_or_else(|| simulated[0].clone());
         Ok(Project {
             dir: dir.to_path_buf(),
             name,
             simulate,
+            simulated,
             registries,
             boards,
             package_paths,
@@ -1521,9 +1539,10 @@ b = "base:J3"
 
     #[test]
     fn bb_project_1_keys_of_the_schema_epoch() {
-        // Milestone S: simulate as a list (one board; several are R2's), [run]
-        // (R3's) refused with its milestone, [registries] (E1's) read and
-        // checked, the bb-pins/1 binding keys rail and rhiz accepted.
+        // Milestone S: simulate as a list (one board; several are R2's system
+        // run, each a declared board, none twice), [run] (R3's) refused with
+        // its milestone, [registries] (E1's) read and checked, the bb-pins/1
+        // binding keys rail and rhiz accepted.
         let v1 = P.replacen("bb-project/0", "bb-project/1", 1);
         let with = |from: &str, to: &str| v1.replacen(from, to, 1);
         let p = Project::parse(
@@ -1540,7 +1559,17 @@ b = "base:J3"
             Path::new("."),
         )
         .unwrap_err();
-        assert!(e.contains("milestone R2"), "{e}");
+        assert!(e.contains("\"base\": no such [[board]]"), "{e}");
+        let e = Project::parse(
+            &with(
+                "name = \"t\"",
+                "name = \"t\"\nsimulate = [\"main\", \"main\"]",
+            ),
+            Path::new("."),
+        )
+        .unwrap_err();
+        assert!(e.contains("listed twice"), "{e}");
+        assert_eq!(p.simulated, vec!["main".to_string()]);
         let e =
             Project::parse(&format!("{v1}\n[run]\ncpu = \"none\"\n"), Path::new(".")).unwrap_err();
         assert!(e.contains("[run] cpu") && e.contains("milestone R3"), "{e}");

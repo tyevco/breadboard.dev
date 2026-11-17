@@ -17,8 +17,11 @@ The suite's pad models (LSW_NRF_GPIO), U2's view and the LED ring stay the suite
             [--battery] [--options phase0|suite_fallback] [--tran 10u] [--tmax 10u] --stop <s> --out <deck.cir>
     run     --deck <deck.cir> --out <csv> [--timeout s]    ngspice -b; VLED on the run's 10 us grid,
                                                           linear between solver points (one JSON line)
-    compare --replay <csv> --run <nets.csv> [--limit-mv 5] [--label s]   max |dVLED| (one JSON line;
-                                                          exit 1 over the limit when --gate)
+    compare --replay <csv> --run <nets.csv> [--run-col VLED] [--limit-mv 5] [--label s]   max |dVLED|
+                                                          (one JSON line; exit 1 over the limit when --gate)
+
+With --battery the bench gives only the corner (its file name and temp_c), so a system bench (Phase 2
+R2, examples/dial-me-spinner/e1-system/bench, which has no VSYS supply) can name it.
 
 The decks hold the suite's models and, with the vendor-derived view, TI-derived text, so they are written
 outside the repository (scripts/dms_crosscheck.sh uses ~/.cache/bb-dms-crosscheck).
@@ -93,8 +96,13 @@ def cmd_deck(a):
     bench = tomllib.load(open(a.bench, "rb"))
     name = os.path.basename(a.bench).split(".")[0]
     corner, temp = CORNER[name]
-    v, rs, load, v3, drop, rs3, temp_c = bench_power(bench)
-    assert temp_c == temp, (temp_c, temp)
+    if a.battery:
+        # The suite's own power path: the bench gives only the corner (a system bench, Phase 2 R2,
+        # has no VSYS supply to read).
+        assert float(bench["temp_c"]) == temp, (bench["temp_c"], temp)
+    else:
+        v, rs, load, v3, drop, rs3, temp_c = bench_power(bench)
+        assert temp_c == temp, (temp_c, temp)
     got = {}
 
     def fake_run(deck, need=(), timeout=90):
@@ -188,7 +196,7 @@ def _load(path, col):
 def cmd_compare(a):
     import numpy as np
     tr, vr = _load(a.replay, "VLED")
-    tc, vc = _load(a.run, "VLED")
+    tc, vc = _load(a.run, a.run_col)
     n = min(len(tr), len(tc))
     assert (tr[:n] == tc[:n]).all(), "the two grids differ"
     dv = np.abs(vr[:n] - vc[:n])
@@ -223,6 +231,7 @@ def main():
     c = sub.add_parser("compare")
     c.add_argument("--replay", required=True)
     c.add_argument("--run", required=True)
+    c.add_argument("--run-col", default="VLED", help="the run's VLED column (a system run: main:VLED)")
     c.add_argument("--limit-mv", type=float, default=5.0)
     c.add_argument("--gate", action="store_true")
     c.add_argument("--label", default="")

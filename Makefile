@@ -98,7 +98,8 @@ WITH_POOL = bash scripts/with_pool.sh $(BB) $(POOL_SLOTS) --
 endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
                   nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test \
-                  bench-test bench-gate dms-home-project assert-test assert-gate bb-test-gate
+                  bench-test bench-gate dms-home-project assert-test assert-gate bb-test-gate \
+                  dms-e1-system dms-e1-system-test
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -166,6 +167,7 @@ pooled-test:
 	+$(STEP) gdb-test
 	+$(STEP) vscode-templates
 	+$(STEP) dms-system
+	+$(STEP) dms-e1-system-test
 	+$(STEP) registry-test
 
 bb:
@@ -420,6 +422,9 @@ cost-table-runs:
 	    -- $(DMS_HOME_TYP_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-home-project $(PERF_N) "--lookahead off" "" - - - \
 	    -- $(DMS_HOME_PSTEP_ARGS)
+	$(MAKE) --no-print-directory dms-e1-system-prepare
+	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/dms-e1-system $(PERF_N) "--max-quantum 10us" "" - - - \
+	    -- $(DMS_E1_SYSTEM_ARGS)
 
 # The Phase 1 M8 row alone (examples/nrf-saadc, the loading adc_in): lookahead off (one cell) vs
 # bb's defaults, fresh and on a 1-slot pool, with the protocol. Run it on an otherwise idle host.
@@ -515,7 +520,8 @@ measured-jit-profile-stress: firmware bb
 # it uses the pool.
 POOL_EQUIV_OUT    ?= out/pool-equiv
 POOL_EQUIV_ROUNDS ?= 2
-pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare bench-prepare
+pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare bench-prepare \
+            dms-e1-system-prepare
 	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
 	    "bench-stimulus;$(BENCH_GOLD)/stimulus.sha256;nongrant;$(BENCH_STIM_ARGS)" \
 	    "bench-trigger;$(BENCH_GOLD)/trigger.sha256;nongrant;$(BENCH_TRIG_ARGS)" \
@@ -546,7 +552,9 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare be
 	    "dms-home-step;$(DMS_HOME_GOLD)/step/outputs.sha256;all;$(DMS_HOME_STEP_ARGS)" \
 	    "dms-home;$(DMS_HOME_GOLD)/typ/outputs.sha256;all;$(DMS_HOME_TYP_ARGS)" \
 	    "dms-home-project-step;$(DMS_HOME_GOLD)/project-step/outputs.sha256;all;$(DMS_HOME_PSTEP_ARGS)" \
-	    "dms-home-project;$(DMS_HOME_GOLD)/project-typ/outputs.sha256;all;$(DMS_HOME_PTYP_ARGS)"
+	    "dms-home-project;$(DMS_HOME_GOLD)/project-typ/outputs.sha256;all;$(DMS_HOME_PTYP_ARGS)" \
+	    "dms-e1-system;$(DMS_E1_SYSTEM_GOLD)/ok-cold/outputs.sha256;nongrant;$(DMS_E1_SYSTEM_ARGS)" \
+	    "dms-e1-system-ref;$(DMS_E1_SYSTEM_GOLD)/ok-cold/outputs.sha256;all;$(DMS_E1_SYSTEM_ARGS) --max-quantum 10us"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -997,6 +1005,43 @@ kicad-import: bb
 dms-system: bb
 	bash scripts/dms_system.sh $(BB) out/dms-system
 
+# --- Phase 2 R2: single-MCU system runs (ADR-013 D2, gate G2) --------------
+# examples/dial-me-spinner/e1-system: E1 on the system (simulate = ["main", "base"]), the bench's
+# power path replaced by the base board's views (a [[battery]] at J2, ti/bq25180:pp, the base
+# board's capacitors, the link harness), at bench/cold.toml and bench/nominal.toml, each run on a
+# copy in $(DMS_E1_SYSTEM_WORK) (scripts/dms_e1_system.sh). dms-e1-system-test (in make test):
+# ok-cold, ok-nominal and ok-cold analog-first in parallel: check_system_run.py, E1's four checks,
+# the committed one-cell hashes, analog-first byte-identical, 120 ms in under 60 s. dms-e1-system
+# (local: the cross-check needs DMS_REPO and the suite venv): adds the one-cell references (the
+# equivalence), analog-first on nominal, the wrong-order firmware (exactly LSW-3 fails), 10-run
+# determinism, and VLED within 10 mV of the suite's led_rail_sequence battery-network deck at both
+# corners, with its negative control (the cell's R0 doubled must fail it).
+.PHONY: dms-e1-system dms-e1-system-test pooled-dms-e1-system pooled-dms-e1-system-test \
+        dms-e1-system-ref dms-e1-system-update dms-e1-system-prepare cost-table-dms-e1-system
+DMS_E1_SYSTEM_OUT  ?= out/dms-e1-system
+DMS_E1_SYSTEM_WORK ?= $(BB_SCRATCH)/bb-dms-e1-system
+export DMS_E1_SYSTEM_WORK
+DMS_E1_SYSTEM_GOLD := tests/golden/dms-e1-system
+DMS_E1_SYSTEM_ARGS  = --project $(DMS_E1_SYSTEM_WORK)/dms/e1-system-ok \
+                      --bench $(DMS_E1_SYSTEM_WORK)/dms/e1-system-ok/bench/cold.toml --for 120ms
+pooled-dms-e1-system-test: bb
+	bash scripts/dms_e1_system.sh test $(BB) $(DMS_E1_SYSTEM_OUT)-test
+pooled-dms-e1-system: bb
+	DMS_REPO=$(DMS_REPO) bash scripts/dms_e1_system.sh gate $(BB) $(DMS_E1_SYSTEM_OUT)
+dms-e1-system-ref: bb
+	bash scripts/dms_e1_system.sh ref $(BB) $(DMS_E1_SYSTEM_OUT)-ref
+dms-e1-system-update: dms-e1-system-ref
+	bash scripts/dms_e1_system.sh update $(DMS_E1_SYSTEM_OUT)-ref
+dms-e1-system-prepare: bb
+	bash scripts/dms_e1_system.sh prepare $(BB)
+# The R2 cost-table row alone (ok-cold: one-cell vs bb's defaults, fresh and on a 1-slot pool, with
+# the protocol; also in make cost-table). Run it on an otherwise idle host.
+measured-cost-table-dms-e1-system: firmware bb dms-e1-system-prepare
+	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/dms-e1-system $(PERF_N) \
+	    "--max-quantum 10us" "" - - - -- $(DMS_E1_SYSTEM_ARGS)
+	$(BB) pool run --slots 1 -- bash scripts/perf_ab.sh $(BB) $(COST_OUT)/pool/dms-e1-system $(PERF_N) \
+	    "--max-quantum 10us" "" - - - -- $(DMS_E1_SYSTEM_ARGS)
+
 # --- Phase 1 M3: component packages (ADR-006) ------------------------------
 # The example boards whose parts come from packages; each has a bb.lock.
 PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
@@ -1005,7 +1050,8 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/dial-me-spinner/system tests/device-smoke/board.cir \
               examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir examples/bench \
               examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step \
-              examples/dial-me-spinner/e2/none examples/dial-me-spinner/e2/c5 examples/dial-me-spinner/e2/c5-none
+              examples/dial-me-spinner/e2/none examples/dial-me-spinner/e2/c5 examples/dial-me-spinner/e2/c5-none \
+              examples/dial-me-spinner/e1-system
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages \
              examples/bench/packages examples/dial-me-spinner/e3/packages
@@ -1523,6 +1569,7 @@ worktree-test:
 # probe holds it (scripts/measure_lock_test.sh).
 MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-table-dms-rail \
                    cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home cost-table-dms-home-project \
+                   cost-table-dms-e1-system \
                    adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
                    setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \

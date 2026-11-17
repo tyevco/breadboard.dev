@@ -149,7 +149,8 @@ impl Instances<'_> {
 /// What net names resolve against: `(display name, board, KiCad name)`.
 pub struct Nets<'a> {
     pub items: Vec<(&'a str, &'a str, &'a str)>,
-    pub simulated: &'a str,
+    /// The simulated boards (one, or a system's, ADR-013 D2).
+    pub simulated: &'a [String],
 }
 
 fn leaf(kicad: &str) -> &str {
@@ -160,7 +161,9 @@ impl Nets<'_> {
     /// Tried in order, the first unique match wins: the exact display
     /// name; the board-qualified name `<board>:<KiCad name>`; a unique leaf
     /// name (after the last `/`) within the simulated board, then the
-    /// project. Ambiguity is an error that lists the candidates.
+    /// project. Ambiguity is an error that lists the candidates. In a system
+    /// run (several simulated boards, ADR-013 D2) a leaf name on two of them
+    /// is ambiguous: qualify it (`base:VBAT`).
     pub fn resolve(&self, name: &str) -> Result<String, String> {
         if let Some(d) = self.items.iter().find(|(d, ..)| *d == name) {
             return Ok(d.0.to_string());
@@ -186,7 +189,7 @@ impl Nets<'_> {
         let sim: Vec<_> = self
             .items
             .iter()
-            .filter(|(_, b, k)| *b == self.simulated && leaf(k) == name)
+            .filter(|(_, b, k)| self.simulated.iter().any(|s| s == b) && leaf(k) == name)
             .collect();
         if let Some(d) = pick(sim)? {
             return Ok(d);
@@ -271,6 +274,7 @@ mod tests {
             inst.resolve_pin("b:U1.P0.06").unwrap(),
             ("b".into(), "U1".into(), "P0.06".into())
         );
+        let sim_a = ["a".to_string()];
         let nets = Nets {
             items: vec![
                 ("a:VSYS", "a", "VSYS"),
@@ -279,7 +283,7 @@ mod tests {
                 ("b:/x/Y", "b", "/x/Y"),
                 ("b:/z/Y", "b", "/z/Y"),
             ],
-            simulated: "a",
+            simulated: &sim_a,
         };
         assert_eq!(
             nets.resolve("VSYS").unwrap(),
@@ -290,5 +294,16 @@ mod tests {
         assert_eq!(nets.resolve("LED_DIN").unwrap(), "a:/LED ring/LED_DIN");
         assert!(nets.resolve("Y").unwrap_err().contains("ambiguous"));
         assert!(nets.resolve("nope").is_err());
+        // A system run (ADR-013 D2, gate G3): a leaf name on two simulated
+        // boards is ambiguous, a qualified one or a unique leaf is not.
+        let sys = ["a".to_string(), "b".to_string()];
+        let nets = Nets {
+            items: nets.items.clone(),
+            simulated: &sys,
+        };
+        let e = nets.resolve("VSYS").unwrap_err();
+        assert!(e.contains("ambiguous") && e.contains("\"b:VSYS\""), "{e}");
+        assert_eq!(nets.resolve("b:VSYS").unwrap(), "b:VSYS");
+        assert_eq!(nets.resolve("LED_DIN").unwrap(), "a:/LED ring/LED_DIN");
     }
 }

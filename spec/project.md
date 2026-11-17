@@ -4,7 +4,8 @@ Status: normative. Decided by ADR-007 D5 and D7 (accepted 2026-11-09;
 implemented in Phase 1 M4, ADR-007 Amendment 1; module targets, the image
 hash of ADR-008 D5 and Norton bench supplies in M6, ADR-007 Amendment 3;
 systems in M11, ADR-007 Amendment 5; devices and digital-only nets in
-Phase 2 R1, ADR-013 D1 and Amendment 1, with ADR-014 D4's project rule).
+Phase 2 R1, ADR-013 D1 and Amendment 1, with ADR-014 D4's project rule;
+single-MCU system runs in Phase 2 R2, ADR-013 D2 and Amendment 3).
 Implementation:
 `cli/src/project.rs`, `names.rs`, `import.rs`, `elab.rs`, `open.rs`,
 `flash.rs`, `probe_cmd.rs`. JSON Schemas: `spec/schema/project.schema.json`
@@ -27,9 +28,16 @@ previous major (ADR-006 D11): `bb` reads it with a migration hint, and its
 migration is the schema line only (`bb pkg migrate --project`);
 `[[device]]` and `[registries]` in it are errors.
 
-- **`simulate`** is a board id, or a list of them. A list of one board
-  means that board. A list of several (a single-MCU system run) is
-  milestone R2's and refused until then, naming the milestone.
+- **`simulate`** is a board id, or a list of them (each a declared
+  `[[board]]`, none twice). A list of one board means that board. A list
+  of several is a **single-MCU system run** (ADR-013 D2, milestone R2):
+  every listed board is in one analog deck (section 4). Its **primary
+  board** is the target's, the board a `[targets]` key names by its
+  qualifier when one names a listed board, else the first listed; its
+  ground is node 0, and `bb run` refuses a run whose target is on another
+  board. Exactly one target across the listed boards: a second is refused
+  ("multi-MCU simulation is Phase 3"). A `[[device]]` of a system run is on
+  the primary board.
 - **`[run]`** (`cpu = "none"`, a run without a CPU target, and `lattice`,
   the engine-neutral name of the grant lattice) is milestone R3's, which is
   not in this build: it is refused, naming the milestone, so a project that
@@ -145,7 +153,8 @@ model = "dial-me-spinner/link-harness:wires"   # optional: the harness view
   listed in `board.bbm`'s `platforms`. The kernel net of a device pin is
   `<ref>.<pin>` without the board (`M1.HOME_N`), as the target MCU's is.
   - `ref` is `<board>:<ref>`, or a bare `<ref>` in a project with one
-    board; the device must be on the simulated board.
+    board; the device must be on the simulated board (in a system run,
+    the primary board).
   - **On a schematic symbol** (`virtual` false): the instance must exist
     and resolve to `package` (resolution stage 1, an `[instances]`
     override or its `bb:part` field), and each binding's net must be the
@@ -161,7 +170,8 @@ model = "dial-me-spinner/link-harness:wires"   # optional: the harness view
   - Device parameters are not board content: they are in `bb.toml` and
     `run.json` (`devices`, section 6), like an MCU binding's parameters.
 - **Targets** are a list of typed images; Phase 1 implements exactly one
-  image of `kind = "elf"` on one MCU of the simulated board. `bin`, `hex`,
+  image of `kind = "elf"` on one MCU of the simulated board (one across
+  the boards of a system run). `bin`, `hex`,
   `uf2` and `flash` are reserved. An `elf` image's `hash` is its **image
   hash** (ADR-008 D5): `sha256:` and the SHA-256 of the 15 bytes
   `bb-elf-image/0\n`, then for each `PT_LOAD` program header with
@@ -186,11 +196,13 @@ model = "dial-me-spinner/link-harness:wires"   # optional: the harness view
     pin n to pin n over every pin number, which both ends must have alike.
   - `bb open` prints each mated pair with its two nets. It warns about a
     mated pin on no net and about mated nets whose leaf names differ.
-  - Only `[project] simulate` is simulated (Phase 1). A bench name on
-    another board is an error. The nets at a simulated connector whose
+  - Only the boards `[project] simulate` lists are simulated. A bench name
+    on another board is an error. The nets at a simulated connector whose
     other end is not simulated are bench ports: a `[[supply]]` or `[[pwl]]`
     drives one, and `bb run` warns about the rest as left open (not the
-    simulated ground).
+    simulated ground). A connection between two simulated boards is in the
+    deck (section 4): through its harness view, or without one its mated
+    nets tied into one node.
 
 ## 2. Names (ADR-007 D7)
 
@@ -204,7 +216,10 @@ error that lists the candidates.
 - **Pins:** `<instance>.<pin name>` (`main:U10.P0.06`, `U1.PA4`).
 - **Nets**, the first unique match wins: the exact display name; the
   board-qualified name `<board>:<KiCad name>`; a unique leaf name (after
-  the last `/`), within the simulated board first, then the project.
+  the last `/`), within the simulated board first, then the project. In a
+  system run (ADR-013 D2) "the simulated board" is every listed board: a
+  leaf name on two of them is ambiguous, so a bench, a binding or a probe
+  qualifies it (`main:VSYS`, `base:VBAT`).
 - **Probe aliases** (test points) follow the instance rule: `main:TP1`, or
   `TP1` when only one board has it.
 - **A probe** is a net or an alias, else a bound MCU pin
@@ -544,6 +559,42 @@ The pin-model glue (`spec/pin-model.md`) is added by the analog engine, as
 for a board file. `bb run` writes the deck to `<out>/deck.cir` for review;
 its sha256 is in `run.json`.
 
+**A single-MCU system run** (ADR-013 D2, Amendment 3; section 1) builds
+one deck from every listed board; a one-board run's deck is unchanged:
+
+- The comment line names the boards in `simulate`'s order and the primary
+  board (`boards main, base (ground main)`).
+- **Each board keeps its own ground.** The primary board's ground net is
+  node `0`; another board's ground is its net's SPICE name (`base_GND`,
+  `spec/board-bbm.md` section 4). Every instance of a simulated board is a
+  candidate for the deck, by the same scope rule, in `board.bbm`'s order
+  (board, then reference).
+- **A bench element returns to its net's board's ground**: in item 4, the
+  `0` of a supply, battery, load, PWL or playback source, and a `short`
+  fault's other end, is that ground's node. A B-source term reads the net
+  against it, `V(<net>,<ground>)` (`V(<net>)` on node 0, so no one-board
+  deck changes). A bench control node (`bb_set_`, `bb_ctl_`,
+  `bb_fault<k>_ctl`) stays on node 0. A supply on another board's
+  ground net is refused as on the primary ground.
+- **A `[[connection]]` between two simulated boards with a harness view**
+  is one instance line after the instances, in `board.bbm`'s connection
+  order: `X_conn<k>_<a>_<b>` (`k` from 1, `a` and `b` the ends, made
+  SPICE-safe; `X_conn1_main_J1_base_J3`), its ports in the view's port
+  order, `A<pin>` on the net of `a`'s pin and `B<pin>` on `b`'s, then the
+  view's `params`. The view must be valid at the run's rung or a lower
+  one; `run.json` records the rung it runs at, and the view is checked
+  for its lattice qualification like an instance's. Per mated pair: both
+  nets in the analog scope, both ends on their nets; both outside it, a
+  dead wire, both ends on node `0` (it carries no current; `bb run` lists
+  such pairs in a warning); one in the scope and its mate not, an error
+  (list both or neither); a pin on no net, its end on its own node
+  `bb_conn<k>_<a>_<b>_<port>`.
+- **A connection between two simulated boards without a harness** ties
+  each mated pair's nets: they become one node, `0` if the group holds
+  the primary ground, else the bytewise first SPICE name among the
+  group's nets on the primary board, else among all of them.
+- A connection with one end simulated keeps section 1's bench ports.
+
 ## 5. The verbs
 
 - **`bb open [<dir>|<bb.toml>|<.kicad_pro>|<.net>|<board.cir>] [--check]
@@ -627,7 +678,9 @@ chosen at, `corner` when it runs at one (ADR-009 D8), provenance `source`
 and `confidence`, its qualifications and whether one covers the run; and per loading `adc_in`, its `pin_load` view
 under the bound pin, `kind = "pin_load"`; an explicit `load = "none"` on
 an `adc_in` binding is recorded the same way, with `view = "none"` and only
-`ref`, `package`, `version` and `kind`); `out_of_scope` and `not_simulated` (with
+`ref`, `package`, `version` and `kind`; and in a system run per harness
+in the deck, `ref` `<a>=<b>` with `kind = "harness"` and the instance
+keys); `out_of_scope` and `not_simulated` (with
 reasons); `devices`, only when the project has a `[[device]]` (per device
 `ref`, `package`, `version`, `device` (its id), `virtual` and `params` as
 written; ADR-013 D1); `digital_only`, only when a net is (its display
@@ -635,7 +688,8 @@ names, sorted; ADR-014 D4); `pi_glue`, only at `pi` (ADR-009 D5,
 milestone P2): per MCU `digital_out` on a circuit net, in binding order,
 `pin` (its kernel net), `rail` (the package pin) and `rail_net`, `rhiz`
 (Ω, a decimal string), `vss_net` (when the ground pins are on a net) and
-`oe` (`"pin_cnf_dir"` or `"fixed"`); `assert_files`, only when `bb run --assert`
+`oe` (`"pin_cnf_dir"` or `"fixed"`); `simulated`, only in a system run (the
+boards of `simulate`, as listed; ADR-013 D2); `assert_files`, only when `bb run --assert`
 names any (each file's name and text, in order; ADR-010 Amendment 3);
 `packages` (each one's id, version, `source`: `path` for a local package,
 else its `registry+<url>` source, ADR-011; and tree) and `platforms` (the

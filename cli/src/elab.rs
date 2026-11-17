@@ -160,7 +160,7 @@ fn kicad_name<'a>(board: &'a Board, display: &'a str) -> &'a str {
     }
 }
 
-fn nets<'a>(board: &'a Board, simulated: &'a str) -> Nets<'a> {
+fn nets<'a>(board: &'a Board, simulated: &'a [String]) -> Nets<'a> {
     Nets {
         items: board
             .nets
@@ -178,7 +178,7 @@ fn nets<'a>(board: &'a Board, simulated: &'a str) -> Nets<'a> {
 }
 
 /// A net name, a test point alias or a probe alias -> the net's display name.
-fn resolve_net_or_alias(board: &Board, simulated: &str, name: &str) -> Result<String, String> {
+fn resolve_net_or_alias(board: &Board, simulated: &[String], name: &str) -> Result<String, String> {
     match nets(board, simulated).resolve(name) {
         Ok(d) => Ok(d),
         Err(e) => {
@@ -217,7 +217,7 @@ enum ProbeTarget {
 
 /// A probe name: a net or an alias (D7's net rules), else a pin
 /// `<instance>.<pin>`. An error names the candidates when it is ambiguous.
-fn probe_target(board: &Board, simulated: &str, name: &str) -> Result<ProbeTarget, String> {
+fn probe_target(board: &Board, simulated: &[String], name: &str) -> Result<ProbeTarget, String> {
     match resolve_net_or_alias(board, simulated, name) {
         Ok(d) => Ok(ProbeTarget::Net(d)),
         Err(e1) => match instances(board).resolve_pin(name) {
@@ -266,7 +266,7 @@ pub fn check_names(p: &Project, board: &Board) -> Vec<String> {
         }
     }
     for pr in &p.probes {
-        match probe_target(board, &p.simulate, pr) {
+        match probe_target(board, &p.simulated, pr) {
             Ok(ProbeTarget::Net(_)) => {}
             Ok(ProbeTarget::Pin(b, r, pin)) => {
                 let bound = p.binds.iter().any(|x| {
@@ -518,14 +518,34 @@ fn prov_json(p: Option<&bbpkg::package::Provenance>) -> Json {
 /// Elaborate a project for `bb run`.
 pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     let p = a.project;
-    let board = &a.imp.board;
+    // A system run (ADR-013 D2): several simulated boards in one deck. A
+    // [[connection]] between two of them without a harness ties its mated
+    // nets directly: they become one node (`tied_board`).
+    let tied = tied_board(&a.imp.board, &p.simulated, &p.simulate);
+    let board = tied.as_ref().unwrap_or(&a.imp.board);
     let sim = p.simulate.as_str();
+    let simset: &[String] = &p.simulated;
+    let system = simset.len() > 1;
+    let simulated = |b: &str| simset.iter().any(|s| s == b);
     let insts = instances(board);
     let mut warnings = a.bench.warnings.clone();
+    // Each simulated board keeps its own ground (ADR-013 D2): the primary
+    // board's is node 0, another's a named node. A bench element returns to
+    // the ground of its net's board.
+    let ground_of = |d: &str| -> String {
+        let nb = &board.net(d).expect("net").board;
+        board
+            .boards
+            .iter()
+            .find(|b| b.id == *nb)
+            .and_then(|b| board.net(&b.ground))
+            .map(|n| n.spice.clone())
+            .unwrap_or_else(|| "0".into())
+    };
 
     // Names first, so a bad --probe fails before anything else is checked.
     for n in a.cli_probes {
-        probe_target(board, sim, n).map_err(|e| format!("--probe {n}: {e}"))?;
+        probe_target(board, simset, n).map_err(|e| format!("--probe {n}: {e}"))?;
     }
 
     // --- The target MCU and its firmware.
@@ -540,7 +560,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         })
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .filter(|(b, ..)| b == sim)
+        .filter(|(b, ..)| simulated(b))
         .collect();
     let (tb, tref, images) =
         match sim_targets.as_slice() {
@@ -549,8 +569,25 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 "no firmware target: run `bb flash --target <instance> <file.elf>` (ADR-007 D7)"
                     .into(),
             ),
+            many if system => {
+                return Err(format!(
+                    "targets {}: multi-MCU simulation is Phase 3 (ADR-013 D2): a system run has \
+                 exactly one target across its simulated boards ({})",
+                    many.iter()
+                        .map(|(b, r, _)| format!("{b}:{r}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    simset.join(", ")
+                ))
+            }
             _ => return Err("Phase 1 runs exactly one MCU target on the simulated board".into()),
         };
+    if tb != sim {
+        return Err(format!(
+            "the target {tb}:{tref} is on board {tb}, but the system's primary board (its ground \
+             node 0) is {sim}: qualify the [targets] key as \"{tb}:{tref}\" (ADR-013 D2)"
+        ));
+    }
     let tinst = board.instance(&tb, &tref).expect("resolved");
     let tpkg_ref = tinst
         .package
@@ -629,14 +666,15 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
 
     // --- Bench names.
     let net_by = |name: &str, what: &str| -> Result<String, String> {
-        let d = resolve_net_or_alias(board, sim, name)
+        let d = resolve_net_or_alias(board, simset, name)
             .map_err(|e| format!("bench {what} {name}: {e}"))?;
-        // Only the simulated board is in the deck (ADR-007 D5).
+        // Only the simulated boards are in the deck (ADR-007 D5, ADR-013 D2).
         match board.net(&d) {
-            Some(n) if n.board != sim => Err(format!(
-                "bench {what} {name}: {d} is on board {}, which is not simulated (Phase 1 \
-                 simulates {sim} only, ADR-007 D5)",
-                n.board
+            Some(n) if !simulated(&n.board) => Err(format!(
+                "bench {what} {name}: {d} is on board {}, which is not simulated (the run \
+                 simulates {} only, ADR-007 D5)",
+                n.board,
+                simset.join(", ")
             )),
             _ => Ok(d),
         }
@@ -706,7 +744,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         let netd = ip.net.clone();
         if let Some(want) = &b.net {
             let w =
-                resolve_net_or_alias(board, sim, want).map_err(|e| format!("{ctx}: net {e}"))?;
+                resolve_net_or_alias(board, simset, want).map_err(|e| format!("{ctx}: net {e}"))?;
             if netd.as_deref() != Some(w.as_str()) {
                 return Err(format!(
                     "{ctx}: net = {want:?} ({w}), but the pin is on {}",
@@ -867,10 +905,21 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     for d in &devs {
         let ctx = format!("bb.toml [[device]] {}:{}", d.board, d.part.reference);
         if d.board != sim {
-            return Err(format!(
-                "{ctx}: board {} is not simulated (a run simulates the devices of {sim})",
-                d.board
-            ));
+            // A device's kernel nets are `<ref>.<pin>` without the board, as
+            // the target's are; in a system run devices stay on the target's
+            // board (ADR-013 Amendment 3).
+            return Err(if simulated(&d.board) {
+                format!(
+                    "{ctx}: board {} is simulated, but a system run's devices are on the \
+                     target's board {sim} (ADR-013 Amendment 3)",
+                    d.board
+                )
+            } else {
+                format!(
+                    "{ctx}: board {} is not simulated (a run simulates the devices of {sim})",
+                    d.board
+                )
+            });
         }
         if d.part.reference == tref {
             return Err(format!("{ctx}: the reference is the target MCU's"));
@@ -1134,7 +1183,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     for (k, f) in a.bench.faults.iter().enumerate() {
         let d = net_by(&f.net, "[[fault]]")?;
         let n = board.net(&d).expect("net").spice.clone();
-        if n == "0" {
+        if n == ground_of(&d) {
             return Err(format!("bench {}: the net {d} is the ground", f.path));
         }
         if !scoped(&d) {
@@ -1144,7 +1193,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             ));
         }
         match f.kind {
-            crate::project::FaultKind::Short => fault_nodes.push((n, "0".into())),
+            crate::project::FaultKind::Short => fault_nodes.push((n, ground_of(&d))),
             crate::project::FaultKind::Open => {
                 let spec = f.pin.as_deref().expect("parsed");
                 let (b, r, pin) = insts
@@ -1191,10 +1240,12 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     }
     let no_open = BTreeMap::new();
     let mut emitted: BTreeSet<(String, String)> = BTreeSet::new();
-    for i in board.instances.iter().filter(|i| i.board == sim) {
+    // Every simulated board's instances (ADR-013 D2), sorted by board, then
+    // reference (board.bbm's order).
+    for i in board.instances.iter().filter(|i| simulated(&i.board)) {
         let q = format!("{}:{}", i.board, i.reference);
         let skip = |why: &str| Json::obj([("ref", Json::str(&q)), ("reason", Json::str(why))]);
-        if i.reference == tref {
+        if i.board == tb && i.reference == tref {
             continue;
         }
         // A device (ADR-013 D1) runs in the device engine (run.json
@@ -1434,6 +1485,209 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         }
         inst_json.push(ij);
     }
+    // --- Harnesses (ADR-013 D2, ADR-007 Amendment 5): a [[connection]]
+    // between two simulated boards is instantiated through its harness
+    // view, after the instances, in board.bbm's connection order. Port
+    // `A<pin>` is on the net of `a`'s pin, `B<pin>` on `b`'s. A mated pair
+    // whose two nets are both outside the analog scope is a dead wire, both
+    // ends on node 0 (no current); one net in scope and its mate not is an
+    // error, since the wire joins them. A connection without a harness was
+    // tied directly (`tied_board`).
+    for (k, c) in board.connections.iter().enumerate() {
+        let end_board = |e: &str| e.split_once(':').map(|x| x.0.to_string());
+        let (Some(ab), Some(bb_)) = (end_board(&c.a), end_board(&c.b)) else {
+            continue;
+        };
+        if !(simulated(&ab) && simulated(&bb_)) {
+            continue;
+        }
+        let Some(model) = &c.model else { continue };
+        let ctx = format!("[[connection]] {} - {}", c.a, c.b);
+        let (pid, vname) = model
+            .split_once(':')
+            .ok_or_else(|| format!("{ctx}: model {model:?} names no view (run `bb open`)"))?;
+        let pid = pid.split_once('@').map_or(pid, |x| x.0);
+        let pkg = a
+            .imp
+            .packages
+            .get(pid)
+            .ok_or_else(|| format!("{ctx}: harness package {pid} is not resolved"))?;
+        let view = pkg
+            .part
+            .analog
+            .iter()
+            .find(|v| v.name == vname)
+            .ok_or_else(|| format!("{ctx}: {pid} has no analog view {vname}"))?;
+        let start = LADDER
+            .iter()
+            .position(|r| *r == a.fidelity)
+            .expect("checked");
+        let rung = LADDER[..=start]
+            .iter()
+            .rev()
+            .find(|r| view.fidelity.iter().any(|f| f == *r))
+            .ok_or_else(|| {
+                format!(
+                    "{ctx}: harness view {pid}:{vname} is not valid at {} or below (it is valid \
+                     at {})",
+                    a.fidelity,
+                    view.fidelity.join(", ")
+                )
+            })?;
+        let inst_of = |e: &str| {
+            let (b, r) = e.split_once(':').expect("qualified");
+            board.instance(b, r)
+        };
+        let (ia, ib) = (inst_of(&c.a), inst_of(&c.b));
+        let net_at = |inst: Option<&Instance>, pin: &str| -> Option<String> {
+            inst?
+                .pins
+                .iter()
+                .find(|x| x.number == pin)
+                .and_then(|x| x.net.clone())
+                .filter(|n| !board.net(n).expect("net").unconnected)
+        };
+        let frag = element_fragment(&format!("conn{}_{}_{}", k + 1, c.a, c.b));
+        let mut port_node: BTreeMap<String, String> = BTreeMap::new();
+        let mut dead: Vec<String> = Vec::new();
+        for (pa, pb) in &c.pins {
+            let (na, nb) = (net_at(ia, pa), net_at(ib, pb));
+            let ins = |n: &Option<String>| n.as_deref().is_some_and(scoped);
+            let (pa_port, pb_port) = (format!("A{pa}"), format!("B{pb}"));
+            match (ins(&na), ins(&nb)) {
+                (true, true) => {
+                    port_node.insert(pa_port, node_of_net(board, na.as_deref().expect("in")));
+                    port_node.insert(pb_port, node_of_net(board, nb.as_deref().expect("in")));
+                }
+                (false, false) => {
+                    // A dead wire: both ends on node 0 carry no current. A
+                    // wire end on no net is its own node.
+                    if na.is_none() || nb.is_none() {
+                        for (port, n) in [(&pa_port, &na), (&pb_port, &nb)] {
+                            port_node.insert(
+                                port.clone(),
+                                match n {
+                                    None => format!("bb_{frag}_{port}"),
+                                    Some(_) => "0".into(),
+                                },
+                            );
+                        }
+                    } else {
+                        port_node.insert(pa_port, "0".into());
+                        port_node.insert(pb_port, "0".into());
+                    }
+                    dead.push(format!(
+                        "{}/{}",
+                        na.as_deref().unwrap_or("-"),
+                        nb.as_deref().unwrap_or("-")
+                    ));
+                }
+                (ina, _) => {
+                    let (i, o) = if ina { (&na, &nb) } else { (&nb, &na) };
+                    match o {
+                        // A mated pin on no net: the wire's far end is its
+                        // own node.
+                        None => {
+                            let (inp, outp) = if ina {
+                                (pa_port, pb_port)
+                            } else {
+                                (pb_port, pa_port)
+                            };
+                            port_node.insert(inp, node_of_net(board, i.as_deref().expect("in")));
+                            port_node.insert(outp.clone(), format!("bb_{frag}_{outp}"));
+                        }
+                        Some(o) => {
+                            return Err(format!(
+                                "{ctx}: pins {pa}/{pb}: {} is in the analog scope and its mate {o} \
+                                 is not; a harness wire joins them, so list both or neither in \
+                                 the bench's [analog] nets (ADR-013 D2)",
+                                i.as_deref().expect("in")
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+        let mut line = format!("X_{frag}");
+        for port in &view.ports {
+            let Port::Pin(name) = port else {
+                return Err(format!("{ctx}: harness view {vname} has a typed port"));
+            };
+            let n = port_node.get(name).ok_or_else(|| {
+                format!("{ctx}: harness port {name} is not one of the mated pins' ends")
+            })?;
+            line.push(' ');
+            line.push_str(n);
+            nodes_used.insert(n.clone());
+        }
+        line.push(' ');
+        line.push_str(&view.subckt);
+        for (pk, v) in &view.params {
+            let d = parse_number(v).map_err(|e| format!("{ctx}: view param {pk}: {e}"))?;
+            line.push_str(&format!(" {pk}={}", spice_number(d)));
+        }
+        let label = format!("{}:{}", pkg.part.id, view.name);
+        let text = std::fs::read_to_string(pkg.dir.join(&view.file))
+            .map_err(|e| format!("{ctx}: read view {}: {e}", view.file))?;
+        if seen_views.insert(label.clone()) {
+            deck_views.push((label.clone(), text));
+        }
+        lines.push(line);
+        if !dead.is_empty() {
+            warnings.push(format!(
+                "{ctx}: these mated pairs are outside the analog scope at both ends, so their \
+                 wires carry nothing: {}",
+                dead.join(", ")
+            ));
+        }
+        let prov = view.provenance.as_ref().or(pkg.part.provenance.as_ref());
+        if let Some(pv) = prov {
+            if pv.source == "estimated" || pv.source == "agent_generated" {
+                let f = format!("{label} ({})", pv.source);
+                if !flagged.contains(&f) {
+                    flagged.push(f);
+                }
+            }
+        }
+        let qualified = view
+            .qualified
+            .iter()
+            .any(|qq| lat_text(&qq.lattice) == Some(a.lattice) && qq.options == a.bench.options);
+        if !qualified
+            && !a
+                .allow_unqualified
+                .iter()
+                .any(|x| *x == label || *x == view.name)
+            && !unqualified.contains(&label)
+        {
+            unqualified.push(label.clone());
+        }
+        inst_json.push(Json::obj([
+            ("ref", Json::str(format!("{}={}", c.a, c.b))),
+            ("kind", Json::str("harness")),
+            ("package", Json::str(&pkg.part.id)),
+            ("version", Json::str(&pkg.part.version)),
+            ("view", Json::str(&view.name)),
+            ("fidelity", Json::str(a.fidelity)),
+            ("rung", Json::str(*rung)),
+            ("provenance", prov_json(prov)),
+            (
+                "qualified",
+                Json::Arr(
+                    view.qualified
+                        .iter()
+                        .map(|qq| {
+                            Json::obj([
+                                ("lattice", Json::str(&qq.lattice)),
+                                ("options", Json::str(&qq.options)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+            ("qualified_for_run", Json::Bool(qualified)),
+        ]));
+    }
     // ADR-009 D8: a per-instance corner for an instance that is not in the
     // deck, or a global corner no view in the deck declares, does nothing:
     // said, not silent.
@@ -1558,7 +1812,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     // A bench stimulus into the MCU names a bound digital_in pin; its kernel
     // net, or None for a net name.
     let mcu_in = |name: &str, what: &str| -> Result<Option<String>, String> {
-        match probe_target(board, sim, name) {
+        match probe_target(board, simset, name) {
             Ok(ProbeTarget::Pin(b, r, pin)) => {
                 if b != tb || r != tref {
                     return Err(format!(
@@ -1582,7 +1836,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         }
     };
     let mcu_out = |name: &str, what: &str| -> Result<String, String> {
-        match probe_target(board, sim, name) {
+        match probe_target(board, simset, name) {
             Ok(ProbeTarget::Pin(b, r, pin)) if b == tb && r == tref => match binding(&pin) {
                 Some(x) if matches!(x.kind, PinKind::Out { .. } | PinKind::OutUnconnected) => {
                     Ok(x.kernel_net())
@@ -1809,7 +2063,8 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         }
         let d = net_by(&pb.net, "[[playback]]")?;
         let n = node_of(&d);
-        if n == "0" {
+        let g = ground_of(&d);
+        if n == g {
             return Err(format!("bench [[playback]] on the ground net {d}"));
         }
         if !scoped(&d) {
@@ -1836,13 +2091,13 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         let f = element_fragment(&n);
         let src = format!("V_play_{f}");
         if pb.rs_uohm > 0 {
-            playback_lines.push(format!("{src} bb_play_{f} 0 dc 0 external"));
+            playback_lines.push(format!("{src} bb_play_{f} {g} dc 0 external"));
             playback_lines.push(format!(
                 "R_play_{f} bb_play_{f} {n} {}",
                 spice_number(to_decimal(pb.rs_uohm, Dim::Resistance))
             ));
         } else {
-            playback_lines.push(format!("{src} {n} 0 dc 0 external"));
+            playback_lines.push(format!("{src} {n} {g} dc 0 external"));
         }
         stim.tables.push(bb_analog_ngspice::TableSource {
             source: src,
@@ -2008,7 +2263,9 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             ));
         }
         let n = node_of(&d);
-        if n == "0" {
+        // The ground of the net's board (ADR-013 D2; node 0 on one board).
+        let g = ground_of(&d);
+        if n == g {
             return Err(format!("bench [[supply]] on the ground net {d}"));
         }
         let f = element_fragment(&n);
@@ -2025,7 +2282,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         };
         if let Some(src) = set_src.filter(|_| s.rs_uohm == 0 && s.track.is_none()) {
             // An ideal fixed supply: the set source is the supply itself.
-            bench_lines.push(format!("{src} {n} 0 dc 0 external"));
+            bench_lines.push(format!("{src} {n} {g} dc 0 external"));
             nodes_used.insert(n);
             continue;
         }
@@ -2037,7 +2294,8 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 let tnode = node_of(&td);
                 nodes_used.insert(tnode.clone());
                 format!(
-                    "min({v}, V({tnode}) - {})",
+                    "min({v}, {} - {})",
+                    volts_of(&tnode, &ground_of(&td)),
                     spice_number(to_decimal(*drop, Dim::Voltage))
                 )
             }
@@ -2049,13 +2307,14 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             // ngspice for node voltages below double resolution at phase0
             // (ADR-007 Amendment 3; AGENTS.md, ADR-006 Amendment 2).
             bench_lines.push(format!(
-                "B_bench_{f} 0 {n} I = ({target} - V({n})) / {}",
+                "B_bench_{f} {g} {n} I = ({target} - {}) / {}",
+                volts_of(&n, &g),
                 spice_number(to_decimal(s.rs_uohm, Dim::Resistance))
             ));
         } else if s.track.is_some() {
-            bench_lines.push(format!("B_bench_{f} {n} 0 V = {target}"));
+            bench_lines.push(format!("B_bench_{f} {n} {g} V = {target}"));
         } else {
-            bench_lines.push(format!("V_bench_{f} {n} 0 DC {target}"));
+            bench_lines.push(format!("V_bench_{f} {n} {g} DC {target}"));
         }
         nodes_used.insert(n);
     }
@@ -2080,7 +2339,8 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             ));
         }
         let n = node_of(d);
-        if n == "0" {
+        let g = ground_of(d);
+        if n == g {
             return Err(format!("bench {} on the ground net {d}", bt.path));
         }
         note_file(&bt.ocv, &mut csv_json);
@@ -2092,10 +2352,10 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         };
         let r0 = spice_number(to_decimal(bt.r0_uohm, Dim::Resistance));
         bench_lines.push(format!(
-            "I_bench_bat{k} 0 {n0} DC {{{} / {r0}}}",
+            "I_bench_bat{k} {g} {n0} DC {{{} / {r0}}}",
             spice_number(to_decimal(*ocv, Dim::Voltage)),
         ));
-        bench_lines.push(format!("R_bench_bat{k}_0 {n0} 0 {r0}"));
+        bench_lines.push(format!("R_bench_bat{k}_0 {n0} {g} {r0}"));
         for (j, (r, c)) in bt.rc.iter().enumerate() {
             let from = inner(j);
             let to = if j + 1 == bt.rc.len() {
@@ -2119,10 +2379,11 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     for (k, l) in a.bench.loads.iter().enumerate() {
         let d = net_by(&l.net, "[[load]]")?;
         let n = node_of(&d);
+        let g = ground_of(&d);
         let name = format!("I_bench_load{k}_{}", element_fragment(&n));
         match &l.profile {
             None => bench_lines.push(format!(
-                "{name} {n} 0 DC {}",
+                "{name} {n} {g} DC {}",
                 spice_number(to_decimal(l.amps_pa, Dim::Current))
             )),
             // A current profile (ADR-010 D2): an EXTERNAL current source
@@ -2135,7 +2396,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 }
                 note_file(file, &mut csv_json);
                 let t = csv(file, bbbench::csv::Column::Amps)?;
-                bench_lines.push(format!("{name} {n} 0 dc 0 external"));
+                bench_lines.push(format!("{name} {n} {g} dc 0 external"));
                 stim.tables.push(bb_analog_ngspice::TableSource {
                     source: name,
                     points: t.points,
@@ -2168,7 +2429,11 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                 )
             })
             .collect();
-        bench_lines.push(format!("V_pwl_{f} {src} 0 PWL({})", pts.join(" ")));
+        bench_lines.push(format!(
+            "V_pwl_{f} {src} {} PWL({})",
+            ground_of(&d),
+            pts.join(" ")
+        ));
         if pw.rs_uohm > 0 {
             bench_lines.push(format!(
                 "R_pwl_{f} {src} {n} {}",
@@ -2191,9 +2456,10 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     }
     bench_driven.extend(play_nets.iter().cloned());
     for c in &board.connections {
-        let on_sim = |end: &str| end.split_once(':').map(|x| x.0) == Some(sim);
+        let on_sim = |end: &str| end.split_once(':').is_some_and(|x| simulated(x.0));
         let a_side = on_sim(&c.a);
-        if !a_side && !on_sim(&c.b) {
+        if a_side == on_sim(&c.b) {
+            // Neither end simulated, or both (a system's harness, above).
             continue;
         }
         let (mine, other) = if a_side { (&c.a, &c.b) } else { (&c.b, &c.a) };
@@ -2213,16 +2479,21 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             else {
                 continue;
             };
-            if n.unconnected || n.spice == "0" || bench_driven.contains(&n.name) {
+            if n.unconnected || n.spice == ground_of(&n.name) || bench_driven.contains(&n.name) {
                 continue;
             }
             open.insert(n.name.clone());
         }
         if !open.is_empty() {
+            let who = if system {
+                format!("the run simulates {} only, ADR-013 D2", simset.join(", "))
+            } else {
+                format!("Phase 1 simulates {sim} only, ADR-007 D5")
+            };
             warnings.push(format!(
-                "[[connection]] {mine} - {other}: {other} is not simulated (Phase 1 simulates \
-                 {sim} only, ADR-007 D5), so these nets at {mine} are left open: {} (a bench \
-                 [[supply]] or [[pwl]] on one makes it a bench port)",
+                "[[connection]] {mine} - {other}: {other} is not simulated ({who}), so these nets \
+                 at {mine} are left open: {} (a bench [[supply]] or [[pwl]] on one makes it a \
+                 bench port)",
                 open.into_iter().collect::<Vec<_>>().join(", ")
             ));
         }
@@ -2238,10 +2509,20 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     }
 
     // --- The deck.
-    let mut deck = format!(
-        "* Breadboard elaborated deck (ADR-007 D7): board {sim}, fidelity {}, option set {}\n",
-        a.fidelity, a.bench.options
-    );
+    let mut deck = if system {
+        format!(
+            "* Breadboard elaborated deck (ADR-007 D7, ADR-013 D2): boards {} (ground {sim}), \
+             fidelity {}, option set {}\n",
+            simset.join(", "),
+            a.fidelity,
+            a.bench.options
+        )
+    } else {
+        format!(
+            "* Breadboard elaborated deck (ADR-007 D7): board {sim}, fidelity {}, option set {}\n",
+            a.fidelity, a.bench.options
+        )
+    };
     deck.push_str(&bbpkg::spice::assemble(&deck_views)?);
     for l in &lines {
         deck.push_str(l);
@@ -2272,7 +2553,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     }
     let mut probes: Vec<ProbeSpec> = Vec::new();
     for n in &names_in {
-        let spec = match probe_target(board, sim, n).map_err(|e| format!("probe {n}: {e}"))? {
+        let spec = match probe_target(board, simset, n).map_err(|e| format!("probe {n}: {e}"))? {
             ProbeTarget::Pin(b, r, pin) => {
                 let k = (b == tb && r == tref)
                     .then(|| bound.get(&pin).cloned())
@@ -2344,7 +2625,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         if u == Use::Digital && kernel_digital.contains(n) {
             return Ok((n.to_string(), None));
         }
-        match (u, probe_target(board, sim, n)?) {
+        match (u, probe_target(board, simset, n)?) {
             (Use::Digital, ProbeTarget::Pin(b, r, pin)) => (b == tb && r == tref)
                 .then(|| bound.get(&pin).cloned())
                 .flatten()
@@ -2405,7 +2686,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     let not_simulated: Vec<Json> = board
         .instances
         .iter()
-        .filter(|i| i.board == sim && i.status != "ok")
+        .filter(|i| simulated(&i.board) && i.status != "ok")
         .map(|i| {
             let mut o = vec![
                 (
@@ -2420,7 +2701,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             Json::Obj(o)
         })
         .collect();
-    let bbm_text = board.to_text();
+    let bbm_text = a.imp.board.to_text();
     let import_boards = a
         .imp
         .import_json
@@ -2555,6 +2836,15 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     if !pi_json.is_empty() {
         run_json.push(("pi_glue".to_string(), Json::Arr(pi_json)));
     }
+    // ADR-013 D2: a system run records its simulated boards, as bb.toml
+    // lists them (the target's board's ground is node 0); only then, so no
+    // one-board run.json changes.
+    if system {
+        run_json.push((
+            "simulated".to_string(),
+            Json::Arr(simset.iter().map(Json::str).collect()),
+        ));
+    }
     let mut parts = vec![part];
     let mut packages = vec![chip.clone()];
     for d in &devs {
@@ -2663,6 +2953,105 @@ fn port_nodes(
     Ok(Some(out))
 }
 
+/// The SPICE node of a net (its display name).
+fn node_of_net(board: &Board, display: &str) -> String {
+    board.net(display).expect("net").spice.clone()
+}
+
+/// A node's voltage against a ground node, as a B-source term: `V(n)` on
+/// node 0 (every one-board deck), `V(n,g)` against another board's ground.
+fn volts_of(node: &str, ground: &str) -> String {
+    if ground == "0" {
+        format!("V({node})")
+    } else {
+        format!("V({node},{ground})")
+    }
+}
+
+/// A system run's direct ties (ADR-013 D2): a `[[connection]]` between two
+/// simulated boards without a harness view ties each mated pair's nets,
+/// which become one node. Returns the board with the tied nets' SPICE names
+/// made one (node 0 if a group holds it, else the bytewise first name among
+/// the group's nets on the primary board, else among all of them), or
+/// `None` when nothing is tied (every one-board run).
+fn tied_board(board: &Board, simulated: &[String], primary: &str) -> Option<Board> {
+    let on = |end: &str| {
+        end.split_once(':')
+            .is_some_and(|(b, _)| simulated.iter().any(|s| s == b))
+    };
+    // Union-find over net display names.
+    let mut parent: BTreeMap<String, String> = BTreeMap::new();
+    fn find(p: &mut BTreeMap<String, String>, x: &str) -> String {
+        let mut r = x.to_string();
+        while let Some(n) = p.get(&r).filter(|n| **n != r) {
+            r = n.clone();
+        }
+        p.insert(x.to_string(), r.clone());
+        r
+    }
+    for c in &board.connections {
+        if c.model.is_some() || !on(&c.a) || !on(&c.b) {
+            continue;
+        }
+        let net_at = |end: &str, pin: &str| -> Option<String> {
+            let (b, r) = end.split_once(':')?;
+            board
+                .instance(b, r)?
+                .pins
+                .iter()
+                .find(|x| x.number == pin)
+                .and_then(|x| x.net.clone())
+                .filter(|n| !board.net(n).is_some_and(|x| x.unconnected))
+        };
+        for (pa, pb) in &c.pins {
+            let (Some(na), Some(nb)) = (net_at(&c.a, pa), net_at(&c.b, pb)) else {
+                continue;
+            };
+            let (ra, rb) = (find(&mut parent, &na), find(&mut parent, &nb));
+            if ra != rb {
+                let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
+                parent.insert(hi, lo);
+            }
+        }
+    }
+    if parent.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = parent.keys().cloned().collect();
+    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for n in names {
+        let r = find(&mut parent, &n);
+        groups.entry(r).or_default().push(n);
+    }
+    let mut out = board.clone();
+    for members in groups.values() {
+        let spices: BTreeSet<String> = members
+            .iter()
+            .map(|m| board.net(m).expect("net").spice.clone())
+            .collect();
+        let on_primary: BTreeSet<String> = members
+            .iter()
+            .map(|m| board.net(m).expect("net"))
+            .filter(|n| n.board == primary)
+            .map(|n| n.spice.clone())
+            .collect();
+        let node = if spices.contains("0") {
+            "0".to_string()
+        } else {
+            on_primary
+                .iter()
+                .next()
+                .or_else(|| spices.iter().next())
+                .expect("non-empty")
+                .clone()
+        };
+        for n in out.nets.iter_mut().filter(|n| members.contains(&n.name)) {
+            n.spice = node.clone();
+        }
+    }
+    Some(out)
+}
+
 /// A project directory's bench path as recorded (file name only, no
 /// absolute paths in run.json).
 pub fn bench_label(path: &Path) -> String {
@@ -2673,7 +3062,7 @@ pub fn bench_label(path: &Path) -> String {
 
 /// What a probe name resolves to, for `bb probe`: a net's display name, or
 /// `pin <board>:<ref>.<pin>`.
-pub fn describe_probe(board: &Board, simulated: &str, name: &str) -> Result<String, String> {
+pub fn describe_probe(board: &Board, simulated: &[String], name: &str) -> Result<String, String> {
     Ok(match probe_target(board, simulated, name)? {
         ProbeTarget::Net(d) => d,
         ProbeTarget::Pin(b, r, p) => format!("pin {b}:{r}.{p}"),

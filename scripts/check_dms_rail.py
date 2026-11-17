@@ -2,6 +2,10 @@
 """E1 checks on a `bb run` of examples/dial-me-spinner (Phase 1 plan section 2 E1, M6).
 
     python3 scripts/check_dms_rail.py <out> [--expect-fail LSW-3] [--project <dir>] [--json <file>]
+                                            [--board main]
+
+(--board: a run of a system project, Phase 2 R2's examples/dial-me-spinner/e1-system, whose nets.csv
+columns carry the board's prefix.)
 
 <out> is a `bb run --project examples/dial-me-spinner ... --out <out>` directory (nets.csv,
 events.jsonl, run.json). The checks use the dial-me-spinner suite's LIMITS (hardware/sim at
@@ -101,8 +105,10 @@ def bench_key(run):
     return None
 
 
-def resistor_ohms(bbm, ref):
+def resistor_ohms(bbm, ref, board=None):
     for i in bbm["instances"]:
+        if board is not None and i["board"] != board:
+            continue
         if i["ref"] == ref and i.get("value", {}).get("ohm_u") is not None:
             return i["value"]["ohm_u"] / 1e6
     raise SystemExit(f"check_dms_rail: {ref} has no resistance in board.bbm")
@@ -114,6 +120,9 @@ def main():
     ap.add_argument("--expect-fail", choices=["LSW-3"], default=None)
     ap.add_argument("--project", default=DEFAULT_PROJECT)
     ap.add_argument("--json", default=None, help="write the results as JSON")
+    ap.add_argument("--board", default=None,
+                    help="the main board's id in a system project (Phase 2 R2: main): its nets.csv "
+                         "columns are <board>:<name>, and R40, R41 are that board's")
     a = ap.parse_args()
 
     run = json.load(open(os.path.join(a.out, "run.json")))
@@ -121,8 +130,10 @@ def main():
     if "sha256:" + hashlib.sha256(bbm_bytes).hexdigest() != run["board_bbm"]:
         raise SystemExit("check_dms_rail: run.json's board_bbm is not this project's board.bbm")
     bbm = json.loads(bbm_bytes)
-    r40, r41 = resistor_ohms(bbm, "R40"), resistor_ohms(bbm, "R41")
+    r40, r41 = resistor_ohms(bbm, "R40", a.board), resistor_ohms(bbm, "R41", a.board)
     cols = load_csv(os.path.join(a.out, "nets.csv"))
+    if a.board:
+        cols = {k.split(":", 1)[1] if k.startswith(a.board + ":") else k: v for k, v in cols.items()}
     for c in (COL_VLED, COL_DIN, COL_MCU, COL_DIN_R):
         if c not in cols:
             raise SystemExit(f"check_dms_rail: nets.csv has no column {c!r} (probe it)")
