@@ -125,6 +125,12 @@ namespace Antmicro.Renode.Peripherals.Analog
         public uint LoadedMask { get; set; }
         public uint TraceMask { get; set; }
 
+        // ADR-009 D4 (milestone P3): each change of "active" (a buffer
+        // started, or a scan in progress) at its exact clock time, for the
+        // #saadc state output (bb_nrf52_state.cs). Unset unless a run binds
+        // #saadc; only then do START and STOP sync the CPU's time.
+        public Action<ulong, bool> ActiveChange { get; set; }
+
         public void Reset()
         {
             timer.Enabled = false;
@@ -151,6 +157,7 @@ namespace Antmicro.Renode.Peripherals.Analog
             latchedMax = 0;
             started = false;
             busy = false;
+            active = false;
             timerMode = false;
             scan = null;
             for(var i = 0; i < InputCount; i++)
@@ -256,7 +263,12 @@ namespace Antmicro.Renode.Peripherals.Analog
             case TaskStart:
                 if((value & 1) != 0)
                 {
+                    if(ActiveChange != null)
+                    {
+                        SyncCpu();
+                    }
                     TaskStartNow();
+                    UpdateActive();
                 }
                 break;
             case TaskSample:
@@ -264,12 +276,18 @@ namespace Antmicro.Renode.Peripherals.Analog
                 {
                     SyncCpu();
                     TaskSampleNow();
+                    UpdateActive();
                 }
                 break;
             case TaskStop:
                 if((value & 1) != 0)
                 {
+                    if(ActiveChange != null)
+                    {
+                        SyncCpu();
+                    }
                     TaskStopNow();
+                    UpdateActive();
                 }
                 break;
             case TaskCalibrate:
@@ -581,6 +599,7 @@ namespace Antmicro.Renode.Peripherals.Analog
             {
                 ScheduleTimerTick();
             }
+            UpdateActive();
         }
 
         private void ScheduleTimerTick()
@@ -615,6 +634,7 @@ namespace Antmicro.Renode.Peripherals.Analog
             {
                 started = false;
                 SetEvent(EvEnd);
+                UpdateActive();
             }
         }
 
@@ -814,6 +834,16 @@ namespace Antmicro.Renode.Peripherals.Analog
             return clock.CurrentValue.TotalNanoseconds;
         }
 
+        private void UpdateActive()
+        {
+            var a = started || busy;
+            if(a != active)
+            {
+                active = a;
+                ActiveChange?.Invoke(Now(), a);
+            }
+        }
+
         private void SyncCpu()
         {
             // Only for a register access by the CPU itself, never from this
@@ -862,7 +892,7 @@ namespace Antmicro.Renode.Peripherals.Analog
         private int inHandler;
 
         private uint ev, inten, resolution, oversample, samplerate, ptr, maxcnt, amount, latchedPtr, latchedMax;
-        private bool enable, started, busy, timerMode;
+        private bool enable, started, busy, timerMode, active;
         private List<int> scan;
         private int scanPos, burstLeft;
         private ulong timerBase, timerTicks, timerCc;

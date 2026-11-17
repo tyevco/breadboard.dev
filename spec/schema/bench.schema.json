@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/bench.schema.json",
   "title": "bb-bench/0 and bb-bench/1: a bench (spec/project.md section 3; ADR-007 D5, ADR-010 D1-D3)",
-  "description": "The JSON form of a bench file (TOML converted to JSON as is). bb-bench/1 keeps every bb-bench/0 key and its meaning (ADR-010 D1) and adds seed, [[action]], [[playback]], [[fault]] and a [[load]] profile (milestone B1), and fidelity, corner, [corners] and [[battery]] (milestone P1; ADR-009 D1, D8, Amendment 4). The other bb-bench/1 keys of ADR-010 D2 ([[activity]], [[env]], [probes], a [[load]] replace) are described loosely here and refused by bb until their milestone implements them. A bb-bench/0 file has none of the bb-bench/1 keys.",
+  "description": "The JSON form of a bench file (TOML converted to JSON as is). bb-bench/1 keeps every bb-bench/0 key and its meaning (ADR-010 D1) and adds seed, [[action]], [[playback]], [[fault]] and a [[load]] profile (milestone B1), and fidelity, corner, [corners] and [[battery]] (milestone P1; ADR-009 D1, D8, Amendment 4), and [[activity]] and a [[load]] replace (milestone P3; ADR-009 D4, Amendment 6). The other bb-bench/1 keys of ADR-010 D2 ([[env]], [probes]) are described loosely here and refused by bb until their milestone implements them. A bb-bench/0 file has none of the bb-bench/1 keys.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema"],
@@ -39,7 +39,7 @@
           "amps": { "type": "string" },
           "profile": { "type": "string", "description": "bb-bench/1: a CSV t,amps (ADR-010 D2, D3)" },
           "interp": { "$ref": "#/$defs/interp" },
-          "replace": { "type": "string", "description": "bb-bench/1: static-load mode (ADR-009 D4, milestone P3; refused until then)" }
+          "replace": { "type": "string", "description": "bb-bench/1: static-load mode (ADR-009 D4, milestone P3): the instance whose supply_load this load stands in for" }
         },
         "oneOf": [
           { "required": ["amps"], "not": { "anyOf": [{ "required": ["profile"] }, { "required": ["interp"] }] } },
@@ -209,7 +209,21 @@
       },
       "description": "bb-bench/1, ADR-010 D2 (milestone P1; ADR-009 Amendment 4): a cell as the Norton current OCV(soc)/R0 behind R0, then the RC pairs"
     },
-    "activity": { "type": "array", "items": { "type": "object" }, "description": "bb-bench/1, ADR-009 D4 (milestone P3; refused until then)" },
+    "activity": {
+      "type": "array",
+      "description": "bb-bench/1, ADR-009 D4 (milestone P3): a bench-scheduled internal state of an instance's supply_load view",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state", "for"],
+        "properties": {
+          "state": { "type": "string", "pattern": "^[^#]+#[a-z0-9_]+$" },
+          "at": { "type": "string" },
+          "every": { "type": "string" },
+          "for": { "type": "string" }
+        }
+      }
+    },
     "env": { "type": "array", "items": { "type": "object" }, "description": "bb-bench/1, ADR-010 D2 (a later milestone; refused until then)" },
     "probes": { "type": "object", "description": "bb-bench/1, ADR-010 D2 per-probe rates (a later milestone; refused until then)" }
   },

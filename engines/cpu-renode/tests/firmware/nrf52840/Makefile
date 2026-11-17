@@ -10,6 +10,8 @@
 #   build/nrf_saadc_burst.elf  RTC0-paced 8x BURST on AIN0, VDD, UARTE0 lines (nrf-saadc, D7/D8)
 #   build/nrf_pwm_step.elf     TEMP, an NVMC page erase, PWM0 microstepping 4 full steps (M10, D9)
 #   build/nrf_oe.elf           DIR writes next to GPIO writes for the #oe outputs (Phase 2 P2, ADR-009 D5)
+#   build/nrf_state.elf        WFI, HFCLK, NVMC erase and SAADC instants for the CPU state outputs (Phase 2 P3, ADR-009 D4)
+#   build/nrf_duty.elf         a known WFI duty (8 of 32 RTC ticks awake), HFXO on: the idd hand calculation (Phase 2 P3, ADR-009 G6)
 # Built against the vendored nrfx MDK and CMSIS-Core headers in vendor/
 # (scripts/nrf_vendor_headers.sh), with the pinned arm-none-eabi-gcc.
 # Deterministic build: no timestamps or absolute paths end up in the ELFs.
@@ -18,7 +20,7 @@ CC      := arm-none-eabi-gcc
 SIZE    := arm-none-eabi-size
 BUILD   := build
 LDSCRIPT := nrf52840.ld
-PROGS   := nrf_blinky nrf_feedback nrf_ppi nrf_busywait nrf_timer_sleep nrf_pincnf nrf_saadc_idle nrf_saadc_burst nrf_pwm_step nrf_oe
+PROGS   := nrf_blinky nrf_feedback nrf_ppi nrf_busywait nrf_timer_sleep nrf_pincnf nrf_saadc_idle nrf_saadc_burst nrf_pwm_step nrf_oe nrf_state nrf_duty
 TARGETS := $(PROGS:%=$(BUILD)/%.elf)
 HEADERS := nrf_gate.h $(wildcard vendor/nrfx/*.h vendor/cmsis/*.h vendor/cmsis/m-profile/*.h)
 

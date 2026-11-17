@@ -10,9 +10,9 @@ tree = "sha256:bbe045ea077c8c6ba46ce60f5223ce34a425843450f3e07a002870c28daa44b1"
 
 [[package]]
 id = "nordic/nrf52840-qiaa"
-version = "0.2.0"
+version = "0.3.0"
 source = "path+../../packages/nordic/nrf52840-qiaa"
-tree = "sha256:87eefb9a8765483f9a8f3ac875ec5eb66f5309eea8428b251c14e5cdedc9f354"
+tree = "sha256:d7217ff04a6504f36d66e4c97e3c9293ba1ab7d64e8e5cbcd58e2c19e3368344"
 
 [[platform]]
 id = "device:dms/mechanism@2"
@@ -20,6 +20,6 @@ content = "sha256:641dcb99feb4d9d285df6391c8344decd77688f6261a5dcbadcf1f7dafe0a1
 
 [[platform]]
 id = "renode:nrf52840-bb@3"
-content = "sha256:6e38d73767b8cc61877b897aa9c624a83d5a2c258c6964546f4438b68c137f42"
+content = "sha256:d2056617081861b52f81a36ce485d7dd0e5d843d82716592e84c77d6fcb8d1af"
 engine = "renode"
 engine_version = "1.17.0"

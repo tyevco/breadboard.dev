@@ -656,6 +656,41 @@ pub const SWITCH_SUBCKT: &str = "bb_switch";
 pub const SWITCH_RON: &str = "50m";
 pub const SWITCH_ROFF: &str = "100Meg";
 
+/// The parameters a `supply_load` view's instance takes from the package
+/// (ADR-009 D4, milestone P3): `i_<state>` = `[power] idd.<state>.typ` for
+/// each of the view's state ports, and `vdd_min` = `[power] vdd_min` when
+/// the package gives one; then the view's own `params`, which may restate or
+/// override them by name (a view, its corners or a vector can set a current
+/// the table does not give). Value-grammar strings, in that order, each name
+/// once.
+pub fn supply_load_params(pkg: &Package, view: &View) -> Result<Vec<(String, String)>, String> {
+    let power = pkg.part.power.as_ref();
+    let mut out = Vec::new();
+    for p in &view.ports {
+        if let Port::State { state } = p {
+            let idd = power
+                .and_then(|w| w.idd.iter().find(|i| &i.state == state))
+                .ok_or_else(|| {
+                    format!(
+                        "view {}: state port {state} has no [power] idd.{state} (ADR-009 D4)",
+                        view.name
+                    )
+                })?;
+            out.push((format!("i_{state}"), idd.typ.clone()));
+        }
+    }
+    if let Some(v) = power.and_then(|w| w.vdd_min.as_ref()) {
+        out.push(("vdd_min".into(), v.clone()));
+    }
+    for (k, v) in &view.params {
+        match out.iter_mut().find(|(x, _)| x == k) {
+            Some(e) => e.1 = v.clone(),
+            None => out.push((k.clone(), v.clone())),
+        }
+    }
+    Ok(out)
+}
+
 /// The definition of [`SWITCH_SUBCKT`] (ADR-010 D2), in the deck's view
 /// section like any view definition: `I = (V(a) - V(b)) * (1/roff +
 /// V(ctl) * (1/ron - 1/roff))`, with no branch-current unknown.

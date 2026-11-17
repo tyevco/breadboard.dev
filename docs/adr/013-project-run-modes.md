@@ -547,3 +547,36 @@ elaboration).
     (71 against 12 000); analog-first and 10-run determinism identical.
     The new hashes are the one-cell references (`make
     dms-e1-system-update`), which the default runs equal.
+11. **At the merge of P3 into main (after R2 and H5),
+    `tests/golden/dms-e1-system` re-recorded again.** P3 (ADR-009 D4,
+    Amendment 6; `nordic/nrf52840-qiaa` 0.3.0, glue rule 12) gives every
+    in-scope instance with a `supply_load` view that view at `pi`, with its
+    state nodes driven by the CPU engine's state outputs. The e1-system
+    benches are `fidelity = "pi"`, so main:U10 now draws its `idd` load
+    from `+3V3` (`run.json` `supply_load`: `run`, `hfxo`, `saadc` from the
+    CPU, `radio_tx`/`radio_rx` at 0), and the run gains eleven
+    `U10.#run` `pin_edge` records (the WFI entries and wakes; `#hfxo` and
+    `#saadc` do not change with this firmware). `make locks` relocked
+    `e1-system/bb.lock` and `board.bbm` to 0.3.0 and to the nRF platform's
+    new plugin list (and `tests/multi-producer/bb.lock`). Attributed:
+    - **The load alone.** The same project with a bench `[[load]] net =
+      "+3V3" amps = "0A" replace = "main:U10"` (static-load mode: no view,
+      no state output bound) gives R2's committed hashes (`nets.csv`,
+      `nets.vcd`, non-grant records) byte for byte at both corners, so
+      nothing but the `supply_load` and its state outputs moved.
+    - **Per sample** (merged default against that run, 12 001 samples,
+      120 ms): cold, the DIN chain (LED_DIN_MCU, LED_DIN, LED_DIN_R) at
+      most 0.032 mV (5 samples, at 30.20 ms), +3V3 0.031 mV (70 samples),
+      base:VSYS 0.010 mV, main:VSYS and base:VBAT 0.009 mV, VLED 0.002 mV;
+      nominal, +3V3 and the DIN chain 0.031 mV, main:VSYS 0.015 mV,
+      base:VSYS 0.014 mV, base:VBAT 0.012 mV, VLED 0.002 mV. The GPIO and
+      `#oe` `pin_edge` records are unchanged. This is the size P3 recorded
+      for P2's `pi-glue` references (0.032 mV).
+    E1's checks print the same values to the µV (VLED 2.969854 V cold,
+    3.682364 V nominal at the P0.06 rises; LSW-2 24.420 ms; ok LSW-3
+    0.000 V); wrong-cold still fails exactly LSW-3 (0.777394 V). `make
+    dms-e1-system` on the merged tree: gate PASS; cross-check 3.163 mV
+    (cold) and 3.217 mV (nominal), the negative control 49.201 mV, all as
+    item 10; default (71 grants) = one-cell reference (12 000) except
+    grants; analog-first and 10-run determinism identical. The new hashes
+    are the one-cell references (`make dms-e1-system-update`).

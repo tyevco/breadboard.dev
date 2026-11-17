@@ -10,7 +10,9 @@ from packages, named parameter sets and glue rule 7: ADR-006 (D4, Phase 1
 M3). Net naming in glue rule 3, glue rule 5 and rule 8 (unbound pins):
 ADR-007 (D5, D6; Phase 1 M4, Amendment 1). `adc_in` on the nRF52840's
 SAADC, the raw-microvolt push key, the loading `adc_in` (`load`, the `#smp`
-toggle) and glue rule 9: ADR-008 D7 (Phase 1 M8, Amendment 4).
+toggle) and glue rule 9: ADR-008 D7 (Phase 1 M8, Amendment 4). The `pi`
+form of `digital_out` and glue rule 11: ADR-009 D5 (Phase 2 P2, Amendment
+5). CPU state outputs and glue rule 12: ADR-009 D4 (Phase 2 P3, Amendment 6).
 
 Every component pin has **exactly one** pin model, supplied by its package
 from the package's `pins.toml` (ADR-006 D4, `spec/package.md`); `board.cir`
@@ -306,3 +308,31 @@ boundary; the analog engine handles it entirely.
     is driven by the CPU engine's `<pin>#oe` trace (kernel net
     `<part>.<pin>#oe`) on the nRF52840, else it is `dc 1`. At `fast` no
     such glue exists and no `#oe` output is bound.
+12. At `pi` an in-scope instance whose package has a `supply_load` view
+    (`spec/package.md` section 3) gets that view beside its other views,
+    instantiated `X_bb_idd_<ref>` (`<board>_<ref>` on a system board), its
+    pin ports on the nets of the package's pins of those names (a module
+    target: through its pinmap), its parameters `i_<state>` and `vdd_min`
+    from `[power]`, then the view's own. Each state port `#<state>` is a
+    node `bb_st_<ref>_<state>` driven by one source
+    `V_bb_st_<ref>_<state>`:
+    - the CPU engine's **state output** `#<state>` (kernel net
+      `<ref>.#<state>`), rule 1 with 0 V / 1 V, 1 ns edges and no `zout`,
+      for the target MCU's states the platform reports. On the nRF52840
+      (`bbState`, ADR-009 D4): `#run`, 1 while the CPU executes and 0
+      from the instant after a WFI/WFE instruction to the wake (1 after
+      reset); `#hfxo`, set by `TASKS_HFCLKSTART` and cleared by
+      `TASKS_HFCLKSTOP` at the write's virtual time; `#nvmc`, the NVMC
+      model's busy (an erase); `#saadc`, the SAADC model's active (a
+      buffer started or a scan in progress). Each change is stamped like a
+      GPIO edge (an instant on a lattice point is reported 1 fs after it)
+      and delivered, never coalesced. A state the view has no port for is
+      not bound;
+    - a bench `[[activity]]` (`spec/project.md` section 3.2): a table of
+      the analog engine, labelled bench-scheduled in `run.json`;
+    - otherwise `DC 0`.
+    A bench `[[load]]` with `replace` naming the instance removes the view
+    (static-load mode). At `fast` no `supply_load` view and no state output
+    is bound. A sleeping CPU's `quiet_until` covers its state outputs: they
+    change only at a wake, at a CPU write or at a model's own clock limit,
+    which the promise already bounds.

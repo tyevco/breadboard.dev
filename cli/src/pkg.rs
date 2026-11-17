@@ -510,7 +510,9 @@ fn write_qualified(pkg: &Package, views: &[(String, Vec<Pair>)]) -> Result<(), S
             let mut body = String::new();
             while k < block.len() {
                 let t = block[k].trim();
-                if new_pairs.is_some() && t == "[[analog.qualified]]" {
+                // The header as --record writes it carries a comment.
+                let head = t.split('#').next().unwrap_or("").trim();
+                if new_pairs.is_some() && head == "[[analog.qualified]]" {
                     k += 1;
                     while k < block.len() && !header(block[k].trim()) && !block[k].trim().is_empty()
                     {

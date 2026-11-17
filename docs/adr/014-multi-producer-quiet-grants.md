@@ -661,6 +661,18 @@ Amendment 3). One interaction needed a change, none a re-recording:
   0.2.0 (P2) with `make locks`; no other lock or `board.bbm` changed.
 - The pool-equiv rows of both sides are kept (E3's homing cases compared
   on non-grant records, R2's `dms-e1-system` cases added).
+- **Corrected at the P3 merge.** H5 had changed only the `typ` rows
+  (`dms-home`, `dms-home-project`) to non-grant records; the two `step`
+  rows (`dms-home-step`, `dms-home-project-step`) still compared the
+  default run with the one-cell hashes grant records included, and failed
+  in `make pool-equiv` (only `events.jsonl`): G4 above records `step`
+  going from 4 500 to 3 694 grants by design. The pre-P3 main `bb`
+  (`d98b56a`) and the merged one give the same 3 694-grant `events.jsonl`
+  for both rows, and their `nets.csv`, `nets.vcd` and non-grant records
+  equal `tests/golden/dms-home/{step,project-step}`; a `--lookahead off`
+  run of `step` equals its hashes with grants (4 500). The rows now
+  compare non-grant records, as the `typ` rows do; the goldens are
+  unchanged.
 
 On the merged tree: `make check` (pooled) green, `multi-producer` 25.3 s
 and `device-smoke` 27.3 s in it; `make dms-home` PASS (typ 433, worst

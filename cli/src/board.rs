@@ -54,7 +54,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bbcore::{AdcIn, DigitalIn, DigitalOut, Time};
+use bbcore::{AdcIn, DigitalIn, DigitalOut, Level, Time};
 use bbpkg::package::{param_set, parse_param, pin_model_params, Package, Param, ParamKind};
 use bbpkg::value::{to_f64, Dim};
 
@@ -246,6 +246,20 @@ pub struct Board {
     /// The `pi` glue of every MCU `digital_out` on a circuit net (ADR-009
     /// D5, milestone P2), by kernel net (`U10.P0.06`); empty at `fast`.
     pub pi_glue: BTreeMap<String, PiGlue>,
+    /// The CPU state outputs that drive the target's supply_load view at
+    /// `pi` (ADR-009 D4, milestone P3); empty at `fast`.
+    pub cpu_states: Vec<CpuState>,
+}
+
+/// One CPU state output into a supply_load's state node (ADR-009 D4): the
+/// CPU engine's output (`#run`), its kernel net (`U10.#run`), the deck's
+/// `EXTERNAL` source on the node, and its level after reset.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CpuState {
+    pub cpu_pin: String,
+    pub kernel_net: String,
+    pub source: String,
+    pub initial: Level,
 }
 
 /// The default high-Z leakage of a `pi` `digital_out` (ADR-009 D5 and its
@@ -782,6 +796,7 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         audit: None,
         digital_only,
         pi_glue: BTreeMap::new(),
+        cpu_states: Vec::new(),
     })
 }
 

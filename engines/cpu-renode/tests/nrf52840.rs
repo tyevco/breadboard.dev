@@ -179,6 +179,13 @@ fn drive(cfg: &RenodeConfig, mode: Mode, t_end: Time, fault: Option<Fault>) -> D
             let PinSignal::Digital { level, .. } = tr.signal else {
                 panic!("analog output from renode")
             };
+            // The kernel's causality rule: every change inside its grant.
+            assert!(
+                tr.t > now && tr.t <= g,
+                "{} at {} outside the grant ({now}, {g}]",
+                tr.pin,
+                tr.t
+            );
             d.edges.push((tr.t, tr.pin, level == bbcore::Level::High));
         }
         for r in e.drain_logs() {
@@ -813,4 +820,158 @@ fn nrf_startup_and_grant_costs() {
             load.trim()
         );
     }
+}
+
+/// One instruction at the platform's 64 MIPS (`nrf52840-bb@3`).
+const INSTR: Time = Time::from_fs(15_625_000);
+
+/// The instant an edge reports (the lattice rule of GPIO events, ADR-003
+/// D2: an instant on a lattice point is reported 1 fs after it).
+fn instant(t: Time) -> Time {
+    if t.as_fs() % L.as_fs() == 1 {
+        Time::from_fs(t.as_fs() - 1)
+    } else {
+        t
+    }
+}
+
+/// `nrf-state` (ADR-009 D4, Phase 2 milestone P3): the CPU state outputs at
+/// instants derived by hand from the gate firmware (`nrf_state.c`). With
+/// PRIMASK set, a pending RTC0 compare or SAADC END wakes WFI and no handler
+/// runs, so the code between two WFIs is a fixed straight line of
+/// instructions (one inline asm block):
+///
+/// - `#run` rises at each wake: at the SAADC's END, exactly `a + TACQ +
+///   tCONV` (22 us after the acquisition start `a`, the `#smp` edge, ADR-008
+///   D7), where `#saadc` falls; at an RTC compare, within Renode's clock
+///   grid (125 ns) after `k * 33 / 32768 s`;
+/// - `#run` falls exactly 9 instructions after an RTC wake (8 after the WFI
+///   and the second WFI itself) and exactly 7 after an END wake, at 15.625
+///   ns each: the instant after the WFI instruction, to the fs;
+/// - `#hfxo` rises at the HFCLKSTART store and falls at the HFCLKSTOP store
+///   of each cycle, in the block of the wake (Renode's write time), in
+///   program order before the sleep that follows;
+/// - `#nvmc` is high for exactly the NVMC model's tERASEPAGE, 85 ms, from
+///   the ERASEPAGE store before the first WFI;
+/// - `#saadc` rises with `#smp` (START and SAMPLE in one block) and falls
+///   at `a + 22 us`.
+///
+/// Identical at one-cell grants, 10 ms grants, plugin armed and lookahead
+/// on (no promise contains an edge); the GPIO and `#smp` edges are the same
+/// with and without the state outputs bound (they do not perturb the run).
+#[test]
+fn nrf_state_outputs_exact() {
+    let Some(mut base) = config("nrf_state", &["P0.13"]) else {
+        return;
+    };
+    base.pins.push(PinSpec::adc_sample(
+        "P0.02#smp",
+        bb_cpu_renode::BB_SAADC_NAME,
+        0,
+    ));
+    let mut cfg = base.clone();
+    for s in ["#run", "#hfxo", "#nvmc", "#saadc"] {
+        cfg.pins.push(PinSpec::nrf_state(s).unwrap());
+    }
+    let t_end = Time::from_ms(120);
+    let (reference, _on) = all_modes("nrf-state", &cfg, t_end);
+    let without = drive(&base, Mode::Reference, t_end, None);
+    assert!(without.err.is_none(), "{:?}", without.err);
+    let not_state: Vec<_> = reference
+        .edges
+        .iter()
+        .filter(|e| !e.1.starts_with('#'))
+        .cloned()
+        .collect();
+    assert_eq!(
+        not_state, without.edges,
+        "binding the state outputs changed the GPIO or #smp edges"
+    );
+
+    let run = edges_of(&reference, "#run");
+    let smp = edges_of(&reference, "P0.02#smp");
+    let saadc = edges_of(&reference, "#saadc");
+    let hfxo = edges_of(&reference, "#hfxo");
+    let nvmc = edges_of(&reference, "#nvmc");
+    // #nvmc: one erase, 85 ms exactly, started before the first WFI.
+    assert_eq!(nvmc.len(), 2, "{nvmc:?}");
+    assert!(nvmc[0].2 && !nvmc[1].2);
+    assert_eq!(nvmc[1].0 - nvmc[0].0, Time::from_ms(85), "tERASEPAGE");
+    assert!(
+        nvmc[0].0 < run[0].0,
+        "the erase starts before the first WFI"
+    );
+    // #run: the first edge is the first WFI after reset; then each cycle
+    // is RTC wake, sleep, END wake, sleep.
+    assert!(!run[0].2, "{:?}", run[0]);
+    let cycles = (run.len() - 1) / 4;
+    assert!(cycles >= 115, "{} #run edges", run.len());
+    assert_eq!(smp.len(), cycles + usize::from((run.len() - 1) % 4 >= 2));
+    let mut checked = 0;
+    for k in 0..cycles {
+        let j = 1 + 4 * k;
+        assert!(
+            run[j].2 && !run[j + 1].2 && run[j + 2].2 && !run[j + 3].2,
+            "cycle {k}"
+        );
+        let (wake_a, fall_b, wake_b, fall_a) = (
+            instant(run[j].0),
+            instant(run[j + 1].0),
+            instant(run[j + 2].0),
+            instant(run[j + 3].0),
+        );
+        // The RTC wakes about every 33 LFCLK ticks (Renode's RTC model
+        // times them; its own accuracy is not this gate's subject).
+        assert!(
+            wake_a > instant(run[j - 1].0) + Time::from_us(900),
+            "cycle {k}: RTC wake {wake_a}"
+        );
+        // The WFI instants, to the fs.
+        assert_eq!(
+            fall_b,
+            wake_a + Time::from_fs(9 * INSTR.as_fs()),
+            "cycle {k}: sleep B"
+        );
+        assert_eq!(
+            fall_a,
+            wake_b + Time::from_fs(7 * INSTR.as_fs()),
+            "cycle {k}: sleep A"
+        );
+        // The SAADC: a, START with SAMPLE, END at a + 22 us = the wake.
+        let a = instant(smp[k].0);
+        assert!(a >= wake_a && a < fall_b, "cycle {k}: a {a}");
+        assert_eq!(instant(saadc[2 * k].0), a, "cycle {k}: #saadc rise");
+        assert!(saadc[2 * k].2 && !saadc[2 * k + 1].2);
+        assert_eq!(
+            instant(saadc[2 * k + 1].0),
+            a + Time::from_us(22),
+            "cycle {k}: END"
+        );
+        assert_eq!(
+            wake_b,
+            instant(saadc[2 * k + 1].0),
+            "cycle {k}: the END wake"
+        );
+        // #hfxo: the stores' write times, in program order.
+        assert!(hfxo[2 * k].2 && !hfxo[2 * k + 1].2);
+        let (up, down) = (instant(hfxo[2 * k].0), instant(hfxo[2 * k + 1].0));
+        assert!(up >= wake_a && up <= a, "cycle {k}: HFCLKSTART {up}");
+        assert!(
+            down >= wake_b && down < fall_a,
+            "cycle {k}: HFCLKSTOP {down}"
+        );
+        checked += 1;
+    }
+    eprintln!(
+        "nrf-state: {checked} cycles exact; first WFI at {} ({} instructions from reset); RTC \
+         wake {} -> sleep {} (+9 instr), END wake {} -> sleep {} (+7 instr); #nvmc {} .. {}",
+        run[0].0,
+        run[0].0.as_fs() / INSTR.as_fs(),
+        run[1].0,
+        run[2].0,
+        run[3].0,
+        run[4].0,
+        nvmc[0].0,
+        nvmc[1].0
+    );
 }

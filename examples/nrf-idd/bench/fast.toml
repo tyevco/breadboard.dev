@@ -1,0 +1,18 @@
+# examples/nrf-idd at fast (Phase 1's glue; no supply_load, no state outputs): the baseline of the
+# lookahead gate (ADR-009 G6). VSUP: 3.0 V (the PS's figures are at 3 V) behind 10 mOhm.
+schema = "bb-bench/1"
+
+[[supply]]
+net = "VSUP"
+volts = "3.0V"
+rs = "10m"
+
+# VDD is behind R1 (10 Ohm): its nominal level, for voh = "VDD" at fast (ADR-006 D4).
+[nominal]
+VDD = "3.0V"
+
+[analog]
+nets = ["GND", "VSUP", "VDD", "DRV", "SENSE", "COPY", "LED_B"]
+
+[options]
+set = "phase0"

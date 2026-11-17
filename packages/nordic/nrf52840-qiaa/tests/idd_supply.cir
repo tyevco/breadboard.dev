@@ -1,0 +1,3 @@
+* idd_states: VDD from 3.0 V through 20 Ohm (the view's current is the drop / 20 Ohm).
+VSRC src 0 3.0
+RS src vdd 20

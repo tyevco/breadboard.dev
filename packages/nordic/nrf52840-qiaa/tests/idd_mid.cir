@@ -1,0 +1,8 @@
+* idd_pscale: VDD from 2.0 V through 10 Ohm.
+VSRC src 0 2.0
+RS src vdd 10
+* the other states held at 0 (only #run toggles)
+VHF hfxo 0 0
+VSA saadc 0 0
+VTX radio_tx 0 0
+VRX radio_rx 0 0

@@ -16,7 +16,12 @@
   mode on the package views (`make pi-static`). 5 (2026-11-16), P2 as
   implemented: the rail-tracking, tristate glue, `oe` from `PIN_CNF.DIR`
   (the prototype: exact, within the 5 %), G9 on twenty Phase 1 decks, E1
-  cold's LSW-3 without the pessimism, G8 (`make pi-glue`).
+  cold's LSW-3 without the pessimism, G8 (`make pi-glue`). 6 (2026-11-16),
+  P3 as implemented: the nRF52840's `[power] idd` and `supply_load` view,
+  the CPU state outputs (`bb_nrf52_state.cs`; Renode's WFI-entry hook comes
+  a slice late, so the entry is timed by instruction count), `[[activity]]`
+  and `[[load]] replace`, G6 (`make pi-idd`), P2's `pi` references
+  re-recorded.
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
@@ -1196,3 +1201,181 @@ byte-identical. No promise was broken.
   with the `nrf52840` binary's other tests (the binary took 44-53 s in
   these runs). The `cli` unit test takes under 0.1 s. `make pi-glue`: 2.0
   min (load 8-15).
+
+## Amendment 6 (2026-11-16): P3 as implemented (supply_load, `[power] idd`, CPU state outputs, `[[activity]]`; G6)
+
+Milestone P3 (plan section 4). `make pi-idd` is its gate (all pass);
+`make pi-idd-test` (in `make test`) is its fast part, and the Renode-only
+test `nrf_state_outputs_exact` (`engines/cpu-renode/tests/nrf52840.rs`)
+runs in `cargo-test` and in `make pi-idd`. `spec/pin-model.md` (glue rule
+12), `spec/package.md` (the `supply_load` instance parameters) and
+`spec/project.md` (`[[activity]]`, `[[load]] replace`, `run.json`
+`supply_load`) state what follows; `spec/schema/bench.schema.json` gives
+`[[activity]]` its shape.
+
+**The package** (`nordic/nrf52840-qiaa` 0.3.0). `[power] idd`, every `typ`
+from the PS v1.1 section 5.2 scenario currents at 3 V, 25 °C (the PS gives
+typical values only, so no `max`), regulator DC/DC (the plan's stated
+assumption, risk R2):
+
+| State | `typ` | Source |
+| --- | --- | --- |
+| `run` | 3.1 mA | ICPU4: CoreMark from flash, HFINT, DC/DC |
+| `hfxo` | 0.2 mA | ICPU0 − ICPU4 (3.3 − 3.1 mA), the same CPU on HFXO; section 5.2.1.9's ITIMER2 − ITIMER0 gives 228 µA for the same difference |
+| `saadc` | 1.24 mA | ISAADC,RUN: 16 ksps, TACQ 20 µs |
+| `radio_tx` | 6.4 mA | IRADIO_TX1: 0 dBm, 1 Mbps BLE |
+| `radio_rx` | 6.26 mA | IRADIO_RX0: 1 Mbps BLE |
+
+`vdd_min` is 1.7 V (section 5.3.8.1). The `supply_load` view `idd`
+(`analog/idd.lib`, `pi` only, `datasheet_checked`) is one I-type B source
+from VDD to VSS: `(ibase + Σ V(state)·i_state) · min(1, V/vdd_min)`, with
+`ibase` 2.35 µA (ION_RAMON_EVENT, always drawn) and the optional constant-
+power scaling `pscale` (off; D4: unverified). Below `vdd_min` the current
+falls linearly to 0 at 0 V (D2 rule 2). Three vectors from hand
+calculations (`idd_states`: each state adds its current through 20 Ω;
+`idd_collapse` at 1.0 V; `idd_pscale` at 2.0 V), all within 1 µV, qualified
+at (10 µs, `phase0`). `bb pkg test` now runs `supply_load` vectors (S had
+specified their port keys), and `--record` no longer duplicates a
+`[[analog.qualified]]` entry whose header carries its own comment (a
+pre-existing bug the second view of this package exposed).
+
+- **Instance parameters** (`bbpkg::package::supply_load_params`, used by
+  `bb pkg test` and by elaboration): `i_<state>` = the state's `typ` and
+  `vdd_min`, then the view's `params`, which may restate or override them
+  by name (S's fixture restates `i_run` and has a `worst_hot` corner).
+- **`#nvmc`** has no `idd` entry: the PS gives no flash write or erase
+  current. The CPU engine reports `#nvmc` (below) and the view has no port
+  for it, so it draws nothing (a deviation; a measured table can add it).
+
+**The deck at `pi`** (glue rule 12). Every in-scope instance whose package
+has a `supply_load` view valid at the rung gets it beside its other views,
+`X_bb_idd_<ref>`, its pin ports on the nets of the package's `VDD`/`VSS`
+pins (a module target through its pinmap), its state nodes
+`bb_st_<ref>_<state>` driven by `V_bb_st_<ref>_<state>`: the CPU engine's
+state output for the nRF52840 target's `run`, `hfxo` and `saadc` (0 V /
+1 V, 1 ns edges; `#run` starts at 1), a bench `[[activity]]` table, or
+`DC 0`. `run.json` gets `supply_load` (only at `pi`): per instance its
+package, view, provenance, qualification, `idd` and each state's driver
+(`"cpu"`, `"bench [[activity]] (bench-scheduled)"`, `"0"`). At `fast`
+nothing changes: no view, no state output, no `run.json` key.
+
+- **`[[activity]]`** (ADR-010 D2's shape plus an optional `at`, the first
+  burst's start, default 0): a table of the analog engine, 1 for `for`
+  every `every` (or once) up to the run's end, so no bench engine and no
+  grant boundary from the kernel; overlapping bursts and a state the CPU
+  engine reports are refused; at `fast` it is ignored with a warning.
+- **`[[load]] replace`** (static-load mode): removes the named instance's
+  `supply_load`; the load stands in for it. At `pi` naming an instance
+  without one is refused; at `fast` the load is added with a warning.
+  `run.json` records `replaced_by`.
+
+**The CPU state outputs** (`bb_nrf52_state.cs`, `Miscellaneous.
+BbNrf52State`). The engine maps the block (`bbState`, 0x5FFE0000) after the
+platform and the firmware only on a run that binds a state output and arms
+it with their mask, so `nrf52840-bb@3`'s `.repl` is unchanged; the source
+joins the platform's plugin list (its content hash changed: `make locks`
+relocked every nRF52840 lock, and `examples/nrf-idd` joined `PKG_BOARDS`).
+Its ring (2 048 entries of `t` in fs, the state and the level) and its
+notification line follow the PWM host port's (ADR-008 Amendment 9).
+`BbNrf52Saadc.ActiveChange` and `BbNrf52Nvmc.BusyChange` are null unless
+`#saadc`/`#nvmc` is bound, and only then do the SAADC's START and STOP
+sync the CPU's time; so no run without state outputs changes.
+
+- **`#run` and Renode's WFI hook (a finding).** Renode 1.17.0 calls the
+  WFI-entry hook only when the CPU thread next runs, at the start of the
+  next slice, with every clock already there: the hook of a WFI executed
+  at 1.007266 ms read 1.010 ms on the clock source and the time source,
+  with or without `cpu.SyncTime()`, and a WFI in a RUN_FOR's last slice is
+  hooked in the next RUN_FOR (the kernel rejected the first runs with a
+  causality violation). While the CPU runs, its virtual time is its
+  executed instructions at `PerformanceInMips`, and a WFI ends a
+  translation block, so the block keeps a reference (the clock time of the
+  last wake, its executed instruction count) and stamps a WFI entry at the
+  reference plus the instructions since it (15.625 ns each at 64 MIPS,
+  the count including the WFI): the instant after the WFI instruction,
+  exact to the fs. It records the entry at the first of the entry hook,
+  the wake's hook and the engine's SYNC read after every advance (a running
+  CPU's instructions always fill the time since the reference, so a
+  shortfall is a sleep). The wake is the clock time of the wake hook,
+  exact. With `#run` bound the engine reads SYNC after every advance (one
+  External Control read).
+- **`#hfxo`**: `TASKS_HFCLKSTART` raises it and `TASKS_HFCLKSTOP` lowers
+  it, through a write hook on the stock `NRF_CLOCK`, at the write's time as
+  Renode's peripherals see it (after `cpu.SyncTime()`, as the SAADC and
+  NVMC models time a write: the executing block's start on Renode's 125 ns
+  clock grid). The crystal's start-up is not modelled (D4: the level
+  follows the task).
+- **`#saadc`**: the SAADC model active, a buffer started or a scan in
+  progress, which covers the PS's ISAADC,RUN scenario (continuous
+  sampling) as well as a single burst. **`#nvmc`**: the NVMC model busy (an
+  erase, READY low); word writes still have no timing (ADR-008 Amendment
+  9).
+- **Lookahead.** The promise is unchanged: `#run` rises only at a wake,
+  which the audit already bounds, `#hfxo` changes only at a CPU write, and
+  `#saadc`/`#nvmc` at their models' own clock limits. A state change
+  stamped past a grant end is carried like a PWM change, ends a promise,
+  and the audit treats it like one.
+
+**Gates as run** (`make pi-idd`, `examples/nrf-idd`: U1 supplied from the
+bench's VSUP, 3.0 V behind 10 mΩ, through R1 10 Ω, with C1 4.7 µF on VDD,
+and examples/nrf-feedback's loop; a 1 kΩ resistor stands in for its red
+LED so every part has a first-party package):
+
+| Gate | Result |
+| --- | --- |
+| Renode-only, `#run` at the WFI instants, exact to fs (`nrf_state.elf`: with PRIMASK set a pending RTC compare or SAADC END wakes WFI and no handler runs, so the code between two WFIs is one fixed inline asm block) | 119 cycles in 120 ms: every rise at an END wake equals the SAADC's END, `a + TACQ + tCONV` = the `#smp` edge + 22 µs, exactly; every fall is exactly 9 instructions after an RTC wake and 7 after an END wake (140.625 and 109.375 ns), as the asm text counts them; the first WFI at 1.109375 µs (71 instructions from reset). `#nvmc` high for exactly 85 ms (tERASEPAGE); `#hfxo` and `#saadc` in program order; one-cell grants, 10 ms grants, plugin armed and lookahead on identical; the GPIO and `#smp` edges identical with and without the state outputs bound |
+| The total VDD current against a hand calculation (`nrf_duty.elf`: RTC0 every 32 ticks, 976.5625 µs; awake for a 2 × 7812-instruction delay loop, 244.125 µs, duty 0.249984; HFXO on from boot) | measured (V(VSUP) − V(VDD)) / R1 over 47 RTC periods: 0.977976 mA; hand 2.35 µA + 0.249984 × 3.1 mA + 0.2 mA = 0.977300 mA: **+0.069 %** (limit 1 %); the `#run` edges show a duty of 0.250192 (the ISR and loop overhead) |
+| The same with a bench-scheduled radio (`[[activity]]` `#radio_tx` 300 µs every 1 ms from 0.5 ms) | measured 2.896962 mA; hand + 0.300664 (the schedule's share of the window) × 6.4 mA = 2.901552 mA: **−0.158 %** |
+| Negative control | the duty firmware at `fast` (no `supply_load`): 0 mA, the check fails as required |
+| Static-load mode (`bench/pi-static.toml`: `[[load]] amps = "0.9773mA" replace = "main:U1"`, the hand-calculated average) | `run.json` lists U1's `idd` `replaced_by` the load, no state output is bound, and the current through R1 is the load to 0.0000 % |
+| Lookahead, the nRF feedback board with state outputs (`nrf_feedback.elf`, 500 ms) | **120 grants** at `pi` with `#run`, `#hfxo`, `#saadc` (39 `#run` edges), against 120 for examples/nrf-feedback's board and 120 for the project at `fast` (limit 2×); no promise broken |
+| G6's 1 ms waking firmware (`nrf_duty.elf`, a wake every 976.6 µs, 50 ms) | 1 774 grants at `pi` with the state outputs, exactly the count without them (`fast`): per wake 34 one-cell grants (the CPU is awake in a feedback loop, then the query back-off) and one promise grant to the next compare. The prediction is the count without state outputs; it holds exactly |
+| Equivalence against one-cell (`duty`, `radio`, `feedback`) | the default runs and 1 ms grants equal the one-cell references (`--max-quantum 10us --lookahead off`: 5 000, 5 000, 50 000 grants) in `nets.csv`, `nets.vcd` and every non-grant record; the references equal `tests/golden/pi-idd/<case>/outputs.sha256` (new), grant records included; `--engine-order analog-first` and a second run byte-identical |
+| `make pool-equiv` | the three `pi-idd` cases and the duty reference added: PASS, 34 configurations, 68 pooled runs by one Renode process, every one leased and byte-identical to its fresh run and to the committed hashes (23.4 min) |
+
+**Cost** (`make pi-idd-cost`, under the measurement lock, host load
+1.0-1.2: `nrf_duty.elf` 50 ms at `pi`, A = static-load mode, the same deck
+with the bench load in the view's place and no state output, B = the
+`supply_load` with `#run`, `#hfxo`, `#saadc`; N = 5 interleaved, medians):
+1 774 grants either way; simulation 0.74 s against 0.99 s, **B / A =
+1.34** (CPU 2.85 s against 3.09 s). A wake every 976.6 µs gives about 100
+`#run` edges per 50 ms, each a 1 ns ramp the solver lands on, and one SYNC
+read per grant; D4's estimate was +9 % solver points at a 1 kHz wake. The
+row is a report (risk R5: a cost row per example), not a gate.
+
+**The duty firmware's delay** is counted in instructions, not by polling
+RTC0 `COUNTER`: a running CPU sees `COUNTER` advance at its sync points (a
+poll for 8 ticks overshot by 9.4 µs, almost one cell), which would have
+put the designed duty 4 % off.
+
+**P2's `pi` references re-recorded** (`tests/golden/pi-glue`): at `pi`,
+dial-me-spinner's U10 (the module's nRF52840) now draws its `supply_load`
+from +3V3. With U10's `supply_load` replaced by a 0 A load (static-load
+mode) the three cases reproduce P2's committed hashes byte for byte, so the
+difference is the load alone: at most 0.032 mV per sample (+3V3,
+LED_PWR_EN, LED_DIN_MCU, LED_DIN, LED_DIN_R), 0.007 mV on VSYS, 0.003 mV on
+VLED; every GPIO `pin_edge` unchanged. The checks print the same values to
+the µV but one: LSW-3 with the wrong order 0.777443 V (P2: 0.777445 V);
+G8's VOH 2.821693 V at VDD 2.927342 V, unchanged. The G9 decks at `pi` (now
+with U10's `supply_load` on the dial-me-spinner decks) all solve. At the
+merge into main R2's `tests/golden/dms-e1-system` (E1 on the system, at
+`pi`) moved the same way, by at most 0.032 mV per sample, and was
+re-recorded (ADR-013 Amendment 3 item 11).
+
+**Deviations, recorded.**
+
+- `#nvmc` draws nothing (no PS figure); `#radio_tx`/`#radio_rx` are
+  bench-scheduled only (default 2).
+- A bench `corner` does not reach a `supply_load` view (its corners are
+  not applied in P3; a corner only it declares is warned of as unused).
+- STM32 targets have no state outputs and no `idd` tables (default 5).
+- `[[activity]]` takes an `at` that ADR-010 D2 does not show.
+- `examples/nrf-idd` has a resistor where examples/nrf-feedback has its LED.
+- **Budget:** `pi-idd-test` 4.3 s in a pooled `make check` (490 s in
+  all) and 7.2 s with `POOL=0` (582 s), seven runs in parallel, beside other
+  tracks (load 6-7); `nrf_state_outputs_exact` about 17 s of its own, in
+  parallel with the `nrf52840` binary's other tests (the binary took 31.4 s
+  and 52.9 s in those runs); within the +30 s. `make pi-idd` 69 s,
+  `make pi-glue` 60 s (P2's gate with the re-recorded references),
+  `make plugin-scope` 4.2 s and `make lock-scope` 63 s (`examples/nrf-idd`
+  among the 11 nRF52840 locks that change under the saadc edit).

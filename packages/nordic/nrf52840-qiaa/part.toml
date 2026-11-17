@@ -12,7 +12,7 @@ schema = "bb-part/1"
 
 [part]
 id = "nordic/nrf52840-qiaa"
-version = "0.2.0"
+version = "0.3.0"
 kind = "soc"
 manufacturer = "Nordic Semiconductor"
 mpn = ["NRF52840-QIAA", "NRF52840-QIAA-R", "NRF52840-QIAA-R7"]
@@ -32,8 +32,38 @@ platform = "nrf52840-bb@3"
 
 # ADR-009 D5 (milestone P2): at pi a digital_out drives from VDD, the GPIO supply (PS v1.1 section
 # 6.9.3.1: VOH and IOH are given against VDD).
+#
+# ADR-009 D4 (milestone P3): the supply current per CPU state, which the supply_load view `idd`
+# draws at pi (I = ibase + sum of the states' typ currents). PS v1.1 section 5.2 gives scenario
+# currents from VDD at 3 V, 25 degC; the CPU figures are CoreMark from flash. Regulator DC/DC (the
+# Phase 2 plan's stated assumption, risk R2): on the LDO the CPU figures are about twice these
+# (ICPU1 6.3 mA against ICPU0 3.3 mA). The PS gives typical values only, so no max is stated.
+# Scenario figures include their own clock and regulator base currents, so concurrent states sum
+# those twice (at most the 0.2 mA of HFXO). The PS gives no flash write or erase current, so the
+# CPU engine's #nvmc output has no idd entry here (recorded in ADR-009 Amendment 6).
 [power]
 io_rail = "VDD"
+vdd_min = "1.7V"   # PS v1.1 section 5.3.8.1 (VDD, normal voltage mode operating voltage, min 1.7 V)
+
+[power.idd.run]
+typ = "3.1mA"
+ref = "nRF52840 PS v1.1 section 5.2.1.3 ICPU4: CPU running CoreMark @64 MHz from flash, Clock = HFINT, Regulator = DC/DC"
+
+[power.idd.hfxo]
+typ = "0.2mA"
+ref = "nRF52840 PS v1.1 section 5.2.1.3 ICPU0 - ICPU4 (3.3 - 3.1 mA): the same CPU scenario on HFXO against HFINT (section 5.2.1.9 ITIMER2 - ITIMER0 gives 228 uA for the same difference)"
+
+[power.idd.saadc]
+typ = "1.24mA"
+ref = "nRF52840 PS v1.1 section 5.2.1.7 ISAADC,RUN: SAADC sampling @ 16 ksps, Acquisition time = 20 us, Clock = HFXO, Regulator = DC/DC"
+
+[power.idd.radio_tx]
+typ = "6.4mA"
+ref = "nRF52840 PS v1.1 section 5.2.1.5 IRADIO_TX1: Radio transmitting @ 0 dBm output power, 1 Mbps BLE mode, Clock = HFXO, Regulator = DC/DC"
+
+[power.idd.radio_rx]
+typ = "6.26mA"
+ref = "nRF52840 PS v1.1 section 5.2.1.5 IRADIO_RX0: Radio receiving @ 1 Mbps BLE mode, Clock = HFXO, Regulator = DC/DC"
 
 [provenance]
 source = "datasheet"
@@ -66,6 +96,36 @@ deviations = [
 not_modelled = ["the input resistor ladders RESP/RESN", "differential mode (PSELN)", "gain and offset errors", "the input's leakage"]
 generated_by = "Claude (Phase 1 M8)"
 confidence = "self_checked"   # tests/: the charge sharing against its closed form (ADR-008 Amendment 5)
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[[analog]]
+name = "idd"
+kind = "supply_load"
+purpose = "the SoC's VDD current per CPU state at pi (ADR-009 D4): I = (ibase + sum of s_k * [power] idd.<k>.typ), collapsing linearly below vdd_min"
+fidelity = ["pi"]
+file = "analog/idd.lib"
+subckt = "NORDIC_NRF52840_QIAA_IDD"
+ports = [{ role = "pin", pin = "VDD" }, { role = "pin", pin = "VSS" }, { role = "state", state = "run" }, { role = "state", state = "hfxo" }, { role = "state", state = "saadc" }, { role = "state", state = "radio_tx" }, { role = "state", state = "radio_rx" }]
+params = { ibase = "2.35uA", pscale = "0", vnom = "3V" }
+rails = ["VDD"]
+
+[analog.provenance]
+source = "datasheet"
+refs = [
+  "nRF52840 PS v1.1 section 5.2 (current consumption scenarios at 3 V, 25 degC): ICPU0, ICPU4, ISAADC,RUN, IRADIO_TX1, IRADIO_RX0, ION_RAMON_EVENT",
+  "nRF52840 PS v1.1 section 5.3.8.1: VDD minimum 1.7 V (normal voltage mode operating voltage)",
+]
+deviations = [
+  "the states' scenario currents are summed; each PS figure includes its own clock and regulator base, so concurrent states count them twice (at most HFXO's 0.2 mA)",
+  "below vdd_min the current falls linearly to 0 at 0 V (a conductance at every operating point, ADR-009 D2 rule 2); the PS does not specify the SoC below 1.7 V",
+  "constant current over VDD (the PS's 3 V figures) unless pscale = 1 (constant power), which is not verified",
+]
+not_modelled = ["flash write and erase current (the PS gives none; #nvmc has no idd entry)", "peripherals other than the CPU, HFXO, the SAADC and the radio (TIMERs, RTC, UARTE, GPIOTE, TEMP, PWM)", "the LDO regulator mode (figures are DC/DC)", "start-up currents (HFXO ISTART, the radio ramp-up)", "temperature dependence"]
+generated_by = "Claude (Phase 2 milestone P3)"
+confidence = "datasheet_checked"
 
 [[analog.qualified]]   # bb pkg test --record
 lattice = "10us"

@@ -50,7 +50,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make docs-plots` / `make docs-plots-check` | The docs site's waveform plots, `site/public/plots/<name>.{light,dark}.svg` (committed: the Pages build has no Renode): make demo's two E1 runs, the E2 cases `sag`, `rec`, `s50` and `s50-none` of `make dms-vsense`, the E3 cases `typ` and `step` of `make dms-home` and the spike, every Renode fresh and in parallel, drawn with plain Python (`scripts/docs_plots.sh`, `scripts/docs_plots.py`; outputs in `out/docs-plots`, about 5 min alone, most of it the E3 homing: 305 s in the M10 review, 450 s in M10 beside other gates). The SVGs are a pure function of the runs; `docs-plots-check` regenerates them into `out/docs-plots/svg` and requires the committed files byte for byte (CI job `dms-rail`). After a change to results, run `make docs-plots` and commit the figures |
 | `make doctor` | Print every tool's version; exits non-zero if anything is missing |
 | `make build` | `cargo build --workspace --all-targets` |
-| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, from B1 `bench-test`, from B2 `assert-test` (from B3 `dms-rail-test`, `dms-vsense-test` and `dms-home-test` are `bb test` files), from E4 `vscode-templates`, from E1 `registry-test`, from P1 `pi-static-test`, from P2 `pi-glue-test`, from R2 `dms-e1-system-test`, from H5 `multi-producer`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
+| `make test` | The exit gate: `cargo-test`, `spike`, `determinism`, `golden`, `feedback`, `feedback-order`, `adc`, `adc-order`, `adc-stock`, `adc-model`, `ec-reconnect` (since Phase 1 also `nrf-feedback`, `adc-kicad`, `dms-rail-test`, `packages`, from M8 `nrf-saadc-model` and `dms-vsense-test`, from M9 `gdb-test`, from M11 `dms-system`, and from M10 `nrf-pwm-model`, `device-smoke` and `dms-home-test`; from Phase 2 H0 `measure-lock-test`, from B1 `bench-test`, from B2 `assert-test` (from B3 `dms-rail-test`, `dms-vsense-test` and `dms-home-test` are `bb test` files), from E4 `vscode-templates`, from E1 `registry-test`, from P1 `pi-static-test`, from P2 `pi-glue-test`, from R2 `dms-e1-system-test`, from H5 `multi-producer`, from P3 `pi-idd-test`, and every step appends its wall time to `out/test-timing.tsv`), run on a warm Renode pool (ADR-004 Part B; `POOL=0` runs it fresh, `POOL_SLOTS` sets the pool size, default 5). `make check` took about 14 minutes in M10, 833 s pooled and 832 s with `POOL=0` beside other gates (ADR-008 Amendment 11; the pool's own gain was measured in Phase 0: 2 min 40 s against 3 min 10 s fresh, ADR-004 Amendment 4) |
 | `make cargo-test` | `cargo test --workspace` only |
 | `make spike` | Build firmware + `bb`, run 500 ms of co-simulation into `out/spike` (50 grants of the default 10 ms `--max-quantum`), check it (`scripts/check_spike.py`) |
 | `make spike-verify-every` | The spike again with `--verify every` (Renode cross-check after every grant, ADR-003 D1.2); outputs must be byte-identical to `out/spike` (CI job `verify-every`) |
@@ -120,6 +120,7 @@ Run every command inside WSL (Ubuntu 24.04) or Linux, from the repo root.
 | `make fw-rebuild` / `make dms-firmware` | ADR-008 D5 (M6, M8, M10): rebuild the E1, E2 and E3 images (with E3's negative control `homing_fast.elf`) in a FRESH west workspace from `examples/dial-me-spinner/firmware/west.yml` (Zephyr v4.5.0, SDK 1.0.1 in `~/.local/opt`) and require the image hashes of `firmware/prebuilt/SHA256SUMS`; `dms-firmware` rebuilds the prebuilt images (`scripts/dms_zephyr.sh`; `make setup SETUP=zephyr` installs the SDK and host tools). Never uses a developer's workspace |
 | `make cost-table-dms-rail` | The M6 cost-table row alone (E1 cold, one-cell vs defaults, fresh and on a 1-slot pool); `make cost-table` includes it. Run on an idle host |
 | `make dms-vsense` | Phase 1 M8 gate, second half (plan section 2 E2; ADR-008 Amendment 5): `examples/dial-me-spinner` with `vsense.elf` (a reading every 1 s) and `vsense_50ms.elf` reading VSYS_SENSE through the SAADC with the loading `adc_in`, at `bench/vsense.toml` (the suite's sampling worst case) and `bench/sag.toml` (the battery ramps down through the LED shed), each run on a copy of the project in `~/.cache/bb-dms-vsense` (`scripts/dms_vsense.sh gate`, about 14 min fresh): seven cases (s1, s50, c5 with C5 at 10 nF, their `load = "none"` twins, sag) at bb's defaults and as their every-lattice-point references (`--lookahead off --adc-push every`); `scripts/check_dms_vsense.py` (the per-sample error against the `load = "none"` run and the suite's charge-sharing arithmetic, which must also reproduce the suite's 356/761 uV and 3.47 mV at its corner; codes; C5 / 10; the shed within one burst period of the threshold crossing; no `stop:`); defaults equal to the references except grants, the references equal to `tests/golden/dms-vsense`; analog-first byte-identical; the TACQ refusal; 10-run determinism (sag). `make dms-vsense-test` (in `make test`, about 1 min) is s50, c5 and their twins with the checks and hashes; `make dms-vsense-update` rewrites the goldens; `make cost-table-dms-vsense` is its cost-table row (idle host) |
+| `make pi-idd` / `make pi-idd-test` | Phase 2 P3 (ADR-009 D4, gate G6, Amendment 6; `pi-idd-test` in `make test`, about 6 s): the nRF52840's `supply_load` view `idd` (`[power] idd` of `nordic/nrf52840-qiaa` 0.3.0) and the CPU state outputs `#run`, `#hfxo`, `#nvmc`, `#saadc` (`bb_nrf52_state.cs`, mapped at 0x5FFE0000 only when bound) on `examples/nrf-idd` (`scripts/pi_idd.sh`, `pi_idd.py`): `nrf_duty.elf`'s total VDD current against the hand calculation of the duty-weighted average within 1 % (and with a bench `[[activity]]` radio), its negative control at fast, the nRF feedback firmware with the state outputs at most 2x the board's grants, the defaults against `tests/golden/pi-idd`. `pi-idd-test` also runs static-load mode (`bench/pi-static.toml`, `[[load]] replace`). `make pi-idd` adds `nrf_state_outputs_exact` (`#run` at the WFI instants of `nrf_state.elf`, to the fs), one-cell / 1 ms / default equality, analog-first and a second run; `make pi-idd-update` rewrites the hashes; `make pi-idd-cost` (measurement lock) is the state outputs' cost row against static-load mode |
 | `make dms-values` | ADR-006 G3: `bb pkg value --kicad` on the 29 distinct passive values of the dial-me-spinner main board equals the suite's `spicelib.parse_value` (re-derived from `git show 6854d25:hardware/sim/spicelib.py` when `DMS_REPO` exists, else the committed fixture `tests/fixtures/values/dms-main.json`) |
 | `make fmt` / `make fmt-check` | `cargo fmt --all` (`-- --check` in CI) |
 | `make clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
@@ -248,7 +249,7 @@ milestone may add to `make test` (wall time, on the baseline host). The
 | P0 | — (spike) | 0 s (`make pi-spike` is not in `make test`) | `make pi-spike` 84 s (85 runs, 8 jobs, host load 0.3-3.9; before D-W1 102 s, 82 runs, load 8-11) |
 | P1 | +30 s | `pi-static-test` 13.9 s in a `POOL=0` `make check` of 557 s (load 5), 20.6 s in a pooled one of 837 s (load 21-25); the new `bb pkg test` vectors and corner operating points 0.6 s; `cli/tests/fidelity.rs` 0.8 s | `make pi-static` 18 s (10 runs on 8 jobs, W2 old the long pole); `make dms-vsense` 12.9 min (E2's sag and rec re-recorded, ADR-009 Amendment 4) |
 | P2 | +15 s | `pi-glue-test` 5.9 s pooled, 11.9 s `POOL=0` (`make check` runs of 1 009 s and 1 076 s beside other tracks, load 7-15; earlier 8.0 s and 9.7 s); the two `nrf_oe_*` Renode tests in `cargo-test` 17-21 s of their own, in parallel with the `nrf52840` binary's others; the `cli` unit test under 0.1 s | `make pi-glue` 2.0 min (load 8-15); `make pi-oe-cost` B / A 1.000 (N = 9, load 7-12; ADR-009 Amendment 5) |
-| P3 | +30 s | | |
+| P3 | +30 s | `pi-idd-test` 4.3 s pooled, 7.2 s `POOL=0` (`make check` runs of 490 s and 582 s, load 6-7); `nrf_state_outputs_exact` in `cargo-test` about 17 s of its own, in parallel with the `nrf52840` binary's others (31.4 s and 52.9 s for the binary) | `make pi-idd` 69 s; `make pi-glue` 60 s; `make lock-scope` 63 s; `make pool-equiv` 23.4 min (34 configurations); `make pi-idd-cost` B / A 1.34 (N = 5, load 1; ADR-009 Amendment 6) |
 | W-fw | — | | |
 | P4 | +40 s | | |
 | P5 | +40 s | | |
@@ -375,9 +376,14 @@ examples/dial-me-spinner/bench/cold-pi.toml, cold-pi-ioh.toml (+ data/led_pwr_en
                         load on LED_PWR_EN (make pi-glue)
 examples/nrf-feedback/  examples/feedback's circuit on the nRF52840 (Phase 1 M2; firmware
                         engines/cpu-renode/tests/firmware/nrf52840/nrf_feedback.c)
+examples/nrf-idd/       Phase 2 P3: the nRF52840 supply_load board (U1 behind R1 10 Ohm from the
+                        bench's VSUP; examples/nrf-feedback's loop), make_netlist.py, bench/
+                        (fast, pi, pi-radio with a [[activity]])
 examples/nrf-saadc/     Phase 1 M8: the loading adc_in board (AIN0 through the package's
                         saadc_se view, VDD, UARTE0 lines; firmware nrf_saadc_burst.c) and
                         bb_saadc_test.py (the SAADC model's Renode-only tests)
+engines/cpu-renode/platforms/bb_nrf52_state.cs  BbNrf52State (0x5FFE0000): the CPU state outputs
+                        #run, #hfxo, #nvmc, #saadc (ADR-009 D4, Phase 2 P3), mapped by the engine
 engines/cpu-renode/platforms/bb_nrf52_saadc.cs  BbNrf52Saadc, BbSaadcHostPort (0x5FFF0100),
                         BbUartLog (0x5FFF8000; ADR-008 D7, D8), loaded by nrf52840-bb.repl (@2)
 engines/cpu-renode/platforms/bb_nrf52_pwm.cs  BbNrf52Pwm (PWM0-3), BbNrf52Temp, BbNrf52Nvmc and
@@ -617,6 +623,18 @@ feedback board).
   with the co-author trailer given by the orchestrator.
 
 ## Known bad ideas (do not do these)
+
+- **Trusting Renode's WFI-entry hook time.** Renode 1.17.0 calls the hook
+  (`AddHookAtWfiStateChange`, entered) only when the CPU thread next runs,
+  at the next slice's start, with every clock already there, and a WFI in
+  a RUN_FOR's last slice is hooked in the next RUN_FOR. `bb_nrf52_state.cs`
+  times the entry by the instructions executed since the last wake and
+  records it at the engine's SYNC read after every advance (ADR-009
+  Amendment 6). The wake hook's time is exact.
+- **Timing a firmware delay by polling a Renode timer.** A running CPU sees
+  RTC0 `COUNTER` (and the other timers' values) advance at its sync points,
+  so a poll overshoots by up to one lattice cell; count instructions for a
+  known duty (`nrf_duty.c`).
 
 - **Stepping ngspice per instruction.** ngspice advances one *grant* at a
   time, to a breakpoint at `g`.
