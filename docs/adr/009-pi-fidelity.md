@@ -1118,8 +1118,16 @@ outputs, all solve:
 | `spike`, `nrf-saadc` | 1 |
 | `feedback`, `adc`, `nrf-feedback`, `adc-kicad`, dial-me-spinner at `nominal`, `cold`, `vsense`, `sag`, `sag-recover` | 2 |
 | `nrf-pwm` | 4 |
-| E3 `board.cir`, `board-step.cir`, `board-ts75.cir`, `board-park.cir`, the `e3/step` project | 5 |
-| `feedback-open`, `adc-open`, the `e3/home` project (its MOT nets are digital-only) | 0: no MCU output on a circuit net |
+| E3 `board-step.cir`, the `e3/step` project | 5 |
+| `feedback-open`, `adc-open`, the `e3/home` project (its MOT nets are digital-only), E3 `board.cir`, `board-ts75.cir`, `board-park.cir` (since H5) | 0: no MCU output on a circuit net |
+
+At P2 the E3 homing board files had 5 `pi` outputs. Phase 2 H5 made
+their five driver nets digital-only (`*bb digital`, ADR-014 D4), so at the
+merge of H5 into main they have none, like the `e3/home` project: an
+output on a digital-only net gets no glue at all (ADR-014 D4), and the
+board-file stand-in rail of `--operating-point --fidelity pi` skips it, as
+the project route already did (`cli/src/main.rs`; ADR-014 Amendment 1,
+"Merged into main"). `scripts/pi_glue.sh` states 0 for the three decks.
 
 - A board file names no rail, and P1 refuses `pi` on one. `--operating-
   point` alone accepts `--fidelity pi` on a board file and gives its MCU

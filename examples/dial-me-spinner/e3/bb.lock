@@ -4,9 +4,9 @@ schema = "bb-lock/1"
 
 [[package]]
 id = "dms/detent-mechanism"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../../packages/dms/detent-mechanism"
-tree = "sha256:ca8013893567552bf0f795bff5a147d3f7c23f3687ad8d93a72866af307ac565"
+tree = "sha256:bbe045ea077c8c6ba46ce60f5223ce34a425843450f3e07a002870c28daa44b1"
 
 [[package]]
 id = "nordic/nrf52840-qiaa"
@@ -17,6 +17,10 @@ tree = "sha256:87eefb9a8765483f9a8f3ac875ec5eb66f5309eea8428b251c14e5cdedc9f354"
 [[platform]]
 id = "device:dms/mechanism@1"
 content = "sha256:2967684c80a6b7a9527550f7b16cb745e5353d5a7341952b3c894d7d8f8ce698"
+
+[[platform]]
+id = "device:dms/mechanism@2"
+content = "sha256:641dcb99feb4d9d285df6391c8344decd77688f6261a5dcbadcf1f7dafe0a1fd"
 
 [[platform]]
 id = "renode:nrf52840-bb@3"

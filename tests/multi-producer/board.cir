@@ -1,0 +1,55 @@
+* Multi-producer quiet-grant board (Phase 2 H5, ADR-014 gate G1; make multi-producer): a small
+* synthetic board with a CPU, a device whose inputs cannot end its promise, and an ngspice sampled
+* input.
+*
+*   U1 (nRF52840, homing.elf): PWM0 on P0.26, P0.05, P0.07, P0.11 and nSLEEP on P1.15 drive M1's
+*        inputs (digital-only nets: kernel routes only, no glue, ADR-014 D4); P1.14 reads M1.HOME_N
+*        directly; P0.02 (adc_in, load=none: a sampled input, ADR-005 D3) reads VSYS_SENSE and VDD reads
+*        P3V3 from ngspice
+*   M1 (dms/detent-mechanism, device dms/mechanism@2, tS 5 ms): its promise is its next sample (an
+*        output timer); its five inputs are promise-independent (ADR-014 D2); HOME_N also feeds
+*        ngspice through rule-1 glue into RHOME
+*   ngspice: VSYS 3.7 V behind 0.2 Ohm (a Norton source), the VSYS reading (R1 2.2 MOhm over R2 1 MOhm,
+*        C5 100 nF), +3V3 behind 50 mOhm, and RHOME
+*
+* The binding graph is cyclic (U1 -> M1 -> U1, ngspice -> U1, M1 -> ngspice). With Q = {M1} its
+* out-edges are cut and ngspice -> U1 -> M1 remains: acyclic, and no producer feeds M1 through an input
+* that can end its promise (P is empty, ADR-014 D1), so every engine advances to M1's next sample (or
+* max_quantum) while U1 runs the PWM. With one MOT net glued into ngspice instead (the scope control of
+* make multi-producer) U1 -> ngspice -> U1 is a cycle no promise cuts, and every grant is one cell.
+*
+*bb part U1 package=nordic/nrf52840-qiaa
+*bb pin U1.P0.26 net=MOT_A_IN1 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U1.P0.05 net=MOT_A_IN2 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U1.P0.07 net=MOT_B_IN1 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U1.P0.11 net=MOT_B_IN2 model=digital_out set=S0S1_bound voh=3.3
+*bb pin U1.P1.15 net=MOT_NSLEEP model=digital_out set=S0S1_bound voh=3.3
+*bb pin U1.P1.14 net=HOME_N model=digital_in vih=2.31 vil=0.99
+*bb pin U1.P0.02 net=VSYS_SENSE model=adc_in vref=3.6 load=none
+*bb pin U1.VDD net=P3V3 model=adc_in vref=3.6
+*bb part M1 package=dms/detent-mechanism s0=500 ts=5ms
+*bb pin M1.IN_A1 net=MOT_A_IN1 model=digital_in
+*bb pin M1.IN_A2 net=MOT_A_IN2 model=digital_in
+*bb pin M1.IN_B1 net=MOT_B_IN1 model=digital_in
+*bb pin M1.IN_B2 net=MOT_B_IN2 model=digital_in
+*bb pin M1.NSLEEP net=MOT_NSLEEP model=digital_in
+*bb pin M1.HOME_N net=HOME_N model=digital_out
+*bb digital MOT_A_IN1
+*bb digital MOT_A_IN2
+*bb digital MOT_B_IN1
+*bb digital MOT_B_IN2
+*bb digital MOT_NSLEEP
+
+* Circuit body. Node 0 is GND.
+BVSYS 0 VSYS I = (3.7 - V(VSYS))/0.2
+CVSYS VSYS 0 10u
+R1 VSYS VSYS_SENSE 2.2Meg
+R2 VSYS_SENSE 0 1Meg
+C5 VSYS_SENSE 0 100n
+B3V3 0 P3V3 I = (3.3 - V(P3V3))/0.05
+C3V3 P3V3 0 10u
+RHOME HOME_N 0 1Meg
+
+* phase0 (spec/package.md section 8).
+.options RELTOL=1e-5 VNTOL=1e-8 ABSTOL=1e-13
+.end

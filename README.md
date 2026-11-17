@@ -232,7 +232,7 @@ Three new pieces carry it:
   Amendment 9). The Renode engine reads every PWM pin change from the
   model's ring and reports it at its exact instant, arbitrated with the
   pin's GPIO level (Amendment 11).
-- **A device**, `dms/mechanism@1` (ADR-006 D7, Amendment 6): the lead
+- **A device**, `dms/mechanism@2` (ADR-006 D7, Amendment 6; ADR-014 D2): the lead
   screw, carriage, magnet and DRV5032 as one Rust model in `bb`, placed in
   a board file as a part (`*bb part M1 package=dms/detent-mechanism`). It
   reads the bridges' inputs and drives HOME_N.
@@ -278,12 +278,15 @@ What the gate checks (`scripts/dms_home.sh`, `scripts/check_dms_home.py`):
   the DRV5032FB (tS 200 ms and 286 ms) fails exactly the latency check.
 - **Equivalence and determinism.** Each case equals its one-cell reference
   (`--lookahead off`) and the committed hashes in `tests/golden/dms-home/`,
-  and the other engine order is identical too. On these boards bb's
-  defaults, `--lookahead off` and `--max-quantum 1ms` build the same
-  one-cell partition (no quiet grant forms), so that equality is a
-  consistency check; the device's partition independence is gated by
-  `bbdev`'s tests and `make device-smoke`. The typical homing is identical
-  over 10 runs.
+  and the other engine order is identical too. Since Phase 2 H5 the homing
+  boards' five driver nets are digital-only (`*bb digital`, ADR-014 D4: no
+  glue, so U10's PWM edges reach the device M1 through the kernel only),
+  and the device's promise (its next DRV5032 sample, which its inputs
+  cannot end) gives quiet grants beside the awake CPU (ADR-014 D1-D3): the
+  typical homing runs in 433 grants instead of 270 000, about 32x less
+  simulation time, with every output equal to the one-cell run's (a true
+  equivalence: the partitions differ). The typical homing is identical over
+  10 runs.
 
 The firmware is in `examples/dial-me-spinner/firmware/homing/`; both images
 are prebuilt (with the negative control `homing_fast.elf`), and `make
@@ -629,8 +632,8 @@ fresh runs.
 | `examples/nrf-saadc`, defaults (`make nrf-saadc-model`: lookahead on) | 30 ms | 209 | **0.30 s** (5.2×) | 1.59 s | **0.11 s** | 1.95 s | 0.33 s |
 | `examples/dial-me-spinner` E2 s50, `--lookahead off --adc-push every` (Phase 1 M8: `vsense_50ms.elf`, an 8× burst on the loaded VSYS_SENSE every 50 ms, `bench/vsense.toml`; the every-lattice-point reference) | 650 ms | 65 000 | 39.51 s | 1.63 s | 0.07 s | 41.18 s | 39.88 s |
 | `examples/dial-me-spinner` E2 s50, defaults (`make dms-vsense`: lookahead on) | 650 ms | 732 | **12.85 s** (3.1×) | 1.58 s | **0.07 s** | 14.48 s | 12.84 s |
-| `examples/dial-me-spinner/e3` E3 typ, `--lookahead off` (Phase 1 M10: `homing.elf` from the click end, PWM0 at 25 kHz, the device M1; one-cell grants) | 2 700 ms | 270 000 | 165.06 s | 1.47 s | 0.08 s | 166.61 s | 165.38 s |
-| `examples/dial-me-spinner/e3` E3 typ, defaults (`make dms-home`: lookahead on, no quiet grant) | 2 700 ms | 270 000 | **163.93 s** (1.0×) | 1.51 s | **0.10 s** | 165.54 s | 165.30 s |
+| `examples/dial-me-spinner/e3` E3 typ, `--lookahead off` (Phase 1 M10: `homing.elf` from the click end, PWM0 at 25 kHz, the device M1; one-cell grants; since H5 the MOT nets digital-only) | 2 700 ms | 270 000 | 222.89 s | 2.00 s | | 224.92 s | |
+| `examples/dial-me-spinner/e3` E3 typ, defaults (`make dms-home`: lookahead on, since Phase 2 H5 quiet grants with several producers, ADR-014) | 2 700 ms | 433 | **6.91 s** (32×) | 2.21 s | | 9.12 s | |
 
 The two `examples/nrf-feedback` rows (ADR-008 Amendment 2) were measured
 later, with the same protocol (`make cost-table`'s nRF row, N = 5,
@@ -672,18 +675,21 @@ TMAX = 10 µs through 650 ms whatever the grants are, so lookahead gains
 3.1× here, not the 5× of `examples/nrf-saadc`. The pool saves only the
 1.6 s of startup.
 
-The two E3 rows (Phase 1 M10, ADR-008 Amendment 11) were measured with
-`make cost-table-dms-home PERF_N=3` (N = 3, not 5: a run takes almost
-three minutes; interleaved, medians): fresh at load 0.6–1.3 and on a
-one-slot pool at load 1.0–1.3, all 6 pooled runs leased, every B run
-identical to A except grant records. The board has no quiet grant (two
-engines feed the CPU, ADR-003 D5 builds one for one producer), so bb's
-defaults run the one-cell partition: both rows are 270 000 grants, about
-0.6 ms each with the PWM ring read in most of them. While the motor runs,
-a sleeping CPU's promise would end at its next PWM edge anyway, at most
-40 µs away. The analog side is the bench and the bridges' inputs; the full
-detent sheet in ngspice (the one-step board) costs 0.25–0.5 s per simulated
-millisecond of PWM.
+The two E3 rows are Phase 2 H5's ADR-014 G0 measurement (`make
+dms-home-g0`: the ADR-003 protocol, N = 3 interleaved rounds, medians,
+every Renode fresh; ADR-014 Amendment 1), fresh only and on a host that was
+not idle (load 3.8–14 from other gates), so their absolute times are high;
+every B run was identical to A except grant records. Before H5 (Phase 1
+M10, `make cost-table-dms-home PERF_N=3` at load 0.6–1.3) both rows were
+270 000 one-cell grants, 165.06 s and 163.93 s: two engines fed the CPU
+and ADR-003 D5 builds a quiet grant for one producer. ADR-014 counts only
+inputs that can end a promise (the device's inputs cannot, ngspice's
+`adc_in` inputs are sampled), so the device's promise, its next sample up
+to 50 ms away, lifts the loop cap while the CPU runs the PWM: 433 grants
+(271 of them `max_quantum` or up to the next sample). The model change
+alone (D4 at one cell) gained 1.11×: Renode's fixed cost of about 0.8 ms
+per grant is the cost, not ngspice. The full detent sheet in ngspice (the
+one-step board) costs 0.25–0.5 s per simulated millisecond of PWM.
 
 The two `examples/adc/kicad` rows (ADR-007 Amendment 1) were measured
 fresh only, with `make cost-table-adc-kicad` (N = 5, interleaved, medians,

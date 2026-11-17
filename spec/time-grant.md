@@ -16,7 +16,9 @@ the Part B half of example 3 are ADR-003 plan step 8 (Amendment 9); ADC
 pushes (`Analog` trace entries at lattice points), their delivery at their
 own time and the code-change watch are ADR-003 D6 (plan step 9, Amendment
 10); sampled inputs (`input_is_sampled`) and their exclusion from the
-early-stop watch are ADR-005 D3 (plan step 3).
+early-stop watch are ADR-005 D3 (plan step 3); promise-independent inputs
+(`input_ends_promise`), quiet grants with several producers or none, the
+choice of `Q` and sequence example 4 are ADR-014 D1-D3 (Phase 2 H5).
 Implementation: `bbcore::Scheduler`. Changing this file requires an ADR (see
 `AGENTS.md`).
 
@@ -101,6 +103,15 @@ touch an engine adapter.
   configuration. Renode: an `adc_in` pin on Breadboard's STM32F072 ADC model,
   which reads a channel only at the end of its sampling phase, a clock limit
   (`spec/pin-model.md`).
+- **promise-independent input** (ADR-014 D2): an input pin of an engine
+  where a change can never make an output change before the promise its
+  `quiet_until` last returned. The engine declares it through
+  `input_ends_promise(pin) == false` (default `true`), a pure query of its
+  configuration. `bbdev`: every input of a device that declares
+  promise-independent inputs (its outputs change only at its own output
+  timers, and its promise is its next output timer; `spec/package.md`
+  section 12). Renode keeps the default. An input **can end a promise**
+  when it is neither sampled nor promise-independent.
 - **lookahead:** a scheduler setting, on by default (`SchedulerConfig`,
   and `bb` on every board that loads Renode's lookahead plugin, i.e. every
   board with a feedback loop). Off, every grant of a cyclic graph is
@@ -109,7 +120,8 @@ touch an engine adapter.
 - **lookahead candidates:** the engines in a feedback loop (a component of
   more than one engine, or reading a net they drive) for which a quiet grant
   with `Q = {c}` passes the structural checks below. Only candidates are
-  asked for `quiet_until`.
+  asked for `quiet_until`. Any engine can be one: a CPU that sleeps, or a
+  device whose next output timer is far away.
 - **early stop:** `advance_until(t, watch)` on an engine with
   `can_stop_early()`: it advances towards `t` and, at the first change of a
   pin in `watch` at `t_x`, stops at `r = ceil_L(t_x)` (at most `t`) and
@@ -279,26 +291,53 @@ Only while the binding graph is cyclic and the loop cap binds, i.e.
 the `loop_quantum` term:
 
 1. **Query.** Every lookahead candidate *c* that is not backed off is asked
-   `q_c = quiet_until(now)`. Let `G = floor_L(min(g', q_c))` over the useful
-   promises (`floor_L(q_c) > now`) and `Q = {c : floor_L(q_c) >= G}`. With
-   no useful promise, the grant is the one-cell grant.
+   `q_c = quiet_until(now)`. With no useful promise (`floor_L(q_c) > now`),
+   the grant is the one-cell grant. Otherwise `Q` is chosen to maximise the
+   grant (ADR-014 D3): sort the useful promises by `floor_L(q_c)`
+   descending (ties by registration index); for each distinct
+   `G_k = floor_L(min(g', q_k))` in that order, try
+   `Q_k = {c : floor_L(q_c) >= G_k}` against step 2. The first `Q_k` that
+   passes is `Q`, with `G = G_k`; if none passes, the grant is the one-cell
+   grant of the static plan (`loop_quantum`, plan order). ADR-003 D5's rule
+   (`Q` = every useful promise, `G` their minimum) is the last candidate of
+   the sequence. A pure function of the promises and the bindings.
 2. **Structure.** With the out-edges of every engine in `Q` removed, the
-   remaining graph must be acyclic; exactly one engine `p` outside `Q` may
-   drive a net read by an engine in `Q`; `p.can_stop_early()` must hold; and
-   `p` must be first in the remaining graph's Kahn order (ties by
-   registration index). Otherwise the grant is the one-cell grant of the
-   static plan (`loop_quantum`, plan order).
-3. **Early stop.** The grant's order is that Kahn order. Engine `p` runs
-   `advance_until(G, watch)`, with `watch` its output pins whose nets an
-   engine in `Q` reads through an input that is **not** sampled (ADR-005
-   D3: a sampled input is read only at sample instants at or after the
-   promise, so a change of it cannot end the quiet window), and returns
-   `r`. The `grant` record `(now, r]` is
+   remaining graph must be acyclic. The **producers** `P` are the engines
+   outside `Q` that drive a net an engine in `Q` reads through an input
+   that **can end its promise** (not sampled, ADR-005 D3; not
+   promise-independent, ADR-014 D2); `|P| <= 1`. With `P = {p}`,
+   `p.can_stop_early()` must hold and `p` must be first in the remaining
+   graph's Kahn order, which prefers `p` among the ready engines (then
+   registration index): an engine `p` reads must not run before it. With
+   `P` empty the order is the Kahn order with ties broken by the **static
+   plan order** (ADR-014 Amendment 1): an engine of `Q` may change an output
+   exactly at `G` (a device's timer on a lattice point; a CPU never does,
+   ADR-003 D2), and its consumers must receive that change as the one-cell
+   plan delivers it, before they advance when the plan puts them after it.
+   Other
+   engines feeding `Q` (through sampled or promise-independent inputs only)
+   run in that order like any engine.
+3. **Early stop.** The grant's order is that Kahn order. With `P = {p}`,
+   engine `p` runs `advance_until(G, watch)`, with `watch` its output pins
+   whose nets an engine in `Q` reads through an input that can end its
+   promise (a sampled input is read only at sample instants at or after
+   the promise, and a promise-independent one cannot move an output before
+   it, so neither change can end the quiet window), and returns `r`. The
+   `grant` record `(now, r]` is
    emitted then, labelled `stop:<p>` when `r < G` and otherwise by `G`'s
    bound. Every later engine gets its pre-advance delivery as usual and
    `advance_to(r)`. Engines of `Q` thus receive a change of `p` at `t_x`
    before they advance and, lattice-bound, apply it at `ceil_L(t_x) = r`:
-   exactly where a one-cell run applies it.
+   exactly where a one-cell run applies it. With `P` empty no engine stops
+   early: the `grant` record `(now, G]` is emitted at once, labelled by
+   `G`'s bound, and every engine runs `advance_to(G)` in the Kahn order, so
+   each engine of `Q` consumes the complete traces of the engines before
+   it, as in a one-cell run where they precede it.
+   **Scope:** the remaining graph must be acyclic, so an awake engine with
+   edges both into and out of another engine outside `Q` (a CPU driving
+   ngspice through glue and reading it through `adc_in`) keeps the one-cell
+   grant; a sampled back edge still counts for acyclicity (ADR-014,
+   "Rejected alternatives").
 4. **Audit** (invariant 8) after each engine of `Q` is collected.
 5. **Back-off.** Per candidate: after `k` consecutive Queries without a
    useful promise, the next `min(2^k, 64)` loop-capped grants (those where
@@ -494,6 +533,52 @@ PA6 not loaded) leaves only ngspice → U1. The plan is [ngspice, U1] and grants
 are `max_quantum` long: ngspice reports `PB0 High @ t_x` in the trace of the
 grant holding it, U1 receives it before it advances and splits its `RunFor`
 at `ceil_L(t_x)`, so the outputs equal the one-cell run's byte for byte.
+
+## Sequence example 4: a device beside an awake CPU (several producers, ADR-014)
+
+E3's typical homing (`examples/dial-me-spinner/e3/board.cir`, `make
+dms-home`). U10 (the nRF52840) drives the five driver nets, declared
+digital-only (`*bb digital`, `spec/package.md` section 12), into the device
+M1 through the kernel nets; M1 drives HOME_N to U10 (directly) and to
+ngspice (glue); ngspice feeds U10 two **sampled** `adc_in` inputs
+(VSYS_SENSE, P3V3). The binding graph is one component, plan order
+[U10, ngspice, devices]. M1 (`dms/mechanism@2`) declares
+promise-independent inputs, and its promise is its next DRV5032 sample, an
+output timer: the first at 41.618454360975 ms (its seeded phase plus
+tACTIVE 40 µs), then every 50 ms. U10 runs the PWM at 25 kHz: its promise,
+when it gives one, ends within a PWM period. The measured `grant` records
+of the default run (2 700 ms in 433 grants instead of 270 000; every other
+record, `nets.csv` and `nets.vcd` are the one-cell run's byte for byte):
+
+```
+Query @40.00      M1: quiet_until = 41.618454.. ms (useful; U10 gives none)
+                  G_1 = floor_L(min(40.00 + 10 ms, 41.618..)) = 41.61 ms, Q_1 = {devices}
+                  M1's out-edges cut: ngspice -> U10 -> devices, acyclic
+                  P = {}: U10 feeds M1 only through promise-independent inputs
+                  (ngspice feeds U10 only through sampled ones, and not Q anyway)
+Grant (40.00, 41.61] limited_by=engine:devices    emitted at once: nobody stops early
+  ng   advance_to(41.61): its ADC pushes at lattice points, in its trace
+  U10  pre-advance: the pushes (timed inputs); advance_to(41.61), HOME_N
+       constant by M1's promise -> 148 PWM edges in its trace
+  M1   pre-advance: U10's whole trace; advance_to(41.61): every edge at its
+       own time (the rotor), no output change (audit: none before 41.618..)
+Query @41.61      M1: 41.618.. ms again, floor_L = now: no useful promise
+                  (back-off: the next two Queries skip it)
+Grant (41.61, 41.62] limited_by=loop_quantum      one cell, plan order: M1's
+                                                  sample at 41.618454.. ms
+Grant (41.62, 41.63], (41.63, 41.64]              one cell each
+Query @41.64      M1: the next sample, 91.618454.. ms -> Q = {devices}
+Grant (41.64, 51.64] limited_by=max_quantum
+...               (three more)
+Grant (81.64, 91.61] limited_by=engine:devices
+```
+
+M1's sample changes HOME_N (at 541.618454.. ms, the only change of the run)
+inside a one-cell grant, as in the one-cell run, and U10 and ngspice see it
+at the boundary 541.62 ms. With one driver net glued into ngspice instead
+(the scope control of `make multi-producer`), U10 -> ngspice -> U10 is a
+cycle that M1's promise cannot cut: the grant stays one cell while U10 is
+awake.
 
 ## What engines MUST NOT do
 

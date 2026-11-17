@@ -2,18 +2,20 @@
 # behavioural device (Phase 1 M10; ADR-006 D7 and Amendment 6, ADR-008 Amendment 9).
 #
 # The micro linear stepper's rotor, the lead screw and carriage, the detent magnet's field at U42
-# and the DRV5032FA itself are one `bbdev` device, `dms/mechanism@1` (bbdev/src/dms_mechanism.rs),
+# and the DRV5032FA itself are one `bbdev` device, `dms/mechanism@2` (bbdev/src/dms_mechanism.rs),
 # because the switch's input is the magnet's field: internal state, not a net. It reads the two
 # DRV8837s' commands (IN1/IN2 of U40 and U41, and the shared nSLEEP) and drives HOME_N. The bridge
 # and the coils' electrical side are the analog view of ti/drv8837 in ngspice. A board file names
 # it with `*bb part M1 package=dms/detent-mechanism` and binds its pins (spec/package.md section
 # 12); its parameters (ts, die, s0, ...) go on that line. It is not on the schematic, so an
 # imported project cannot hold it yet (route B, a Phase 2 item: approver decision 2, 2026-11-14).
+# 0.2.0 (Phase 2 H5, ADR-014 D2): the device is dms/mechanism@2, whose sample timer is an output timer
+# and whose inputs cannot end its quiet promise; its results are 0.1.0's (dms/mechanism@1), gate G2.
 schema = "bb-part/1"
 
 [part]
 id = "dms/detent-mechanism"
-version = "0.1.0"
+version = "0.2.0"
 kind = "mechanical"
 license = "Apache-2.0"
 description = "dial-me-spinner detent mechanism: stepper rotor, lead screw, carriage, detent magnet field and the DRV5032FA home switch (U42), as one device"
@@ -23,7 +25,7 @@ file = "pins.toml"
 
 [behavioral]
 engine = "device"
-device = "dms/mechanism@1"
+device = "dms/mechanism@2"
 
 [provenance]
 source = "agent_generated"

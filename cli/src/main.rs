@@ -1821,22 +1821,23 @@ fn run(a: RunArgs) -> Result<(), String> {
             ));
         }
     }
+    let engine_name = |i: usize| -> &str {
+        if i == cpu_id.index() {
+            part.reference.as_str()
+        } else if Some(i) == dev_id.map(|d| d.index()) {
+            "devices"
+        } else if Some(i) == bench_id.map(|d| d.index()) {
+            bbbench::ENGINE_NAME
+        } else {
+            analog_name.as_str()
+        }
+    };
     let plan = match sched.plan() {
         Some(p) => {
             let names = p
                 .order
                 .iter()
-                .map(|&i| {
-                    if i == cpu_id.index() {
-                        part.reference.as_str()
-                    } else if Some(i) == dev_id.map(|d| d.index()) {
-                        "devices"
-                    } else if Some(i) == bench_id.map(|d| d.index()) {
-                        bbbench::ENGINE_NAME
-                    } else {
-                        analog_name.as_str()
-                    }
-                })
+                .map(|&i| engine_name(i))
                 .collect::<Vec<_>>()
                 .join(" -> ");
             format!("{names}{}", if p.cyclic { ", feedback loop" } else { "" })
@@ -1845,10 +1846,29 @@ fn run(a: RunArgs) -> Result<(), String> {
     };
     // Lookahead diagnostics (ADR-003 D5): grants with a Query and quiet
     // grants. Every quiet grant was audited; a broken promise would have
-    // failed the run with PromiseBroken above.
+    // failed the run with PromiseBroken above. ADR-014: the quiet sets used,
+    // with their counts, and how many of their grants had a producer stop
+    // early.
     let plans = sched.plan_log();
     let queries = plans.iter().filter(|p| !p.queried.is_empty()).count();
     let quiet = plans.iter().filter(|p| !p.quiet.is_empty()).count();
+    let mut quiet_sets: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    for p in plans.iter().filter(|p| !p.quiet.is_empty()) {
+        let key = p
+            .quiet
+            .iter()
+            .map(|&i| engine_name(i))
+            .collect::<Vec<_>>()
+            .join("+");
+        let e = quiet_sets.entry(key).or_default();
+        e.0 += 1;
+        e.1 += usize::from(p.stop.is_some());
+    }
+    let quiet_sets = quiet_sets
+        .iter()
+        .map(|(k, (n, s))| format!("{{{k}}} {n} ({s} with an early stop)"))
+        .collect::<Vec<_>>()
+        .join(", ");
     drop(sched); // stops Renode and releases ngspice
     let total_s = wall.elapsed().as_secs_f64();
 
@@ -1983,6 +2003,9 @@ fn run(a: RunArgs) -> Result<(), String> {
             "bb run: lookahead: {queries} grants with a Query, {quiet} quiet grants, \
              0 promises broken"
         );
+        if quiet > 0 {
+            let _ = writeln!(so, "bb run: lookahead: quiet sets: {quiet_sets}");
+        }
     }
     let _ = writeln!(so, "bb run: renode: {renode_how}");
     if let Some(g) = &gdb {
@@ -2218,7 +2241,9 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         let fidelity = a.fidelity.clone().unwrap_or_else(|| "fast".into());
         if fidelity == "pi" {
             for p in &board.pins {
-                if matches!(p.kind, PinKind::Out { .. })
+                // A digital-only net (ADR-014 D4) has no analog glue, as on
+                // the project route (elab.rs).
+                if matches!(&p.kind, PinKind::Out { net, .. } if !board.digital_only.contains(net))
                     && Some(p.part.as_str()) == a.target.as_deref()
                 {
                     board.pi_glue.insert(
@@ -2241,6 +2266,25 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         let firmware = a.firmware.clone().expect("checked");
         if !firmware.is_file() {
             return Err(format!("firmware {} not found", firmware.display()));
+        }
+        // A digital-only net (ADR-014 D4) has no analog value: its level is
+        // its driver's kernel net, as on the project route (ADR-013 D1).
+        for n in &a.probes {
+            if board.digital_only.iter().any(|d| d.eq_ignore_ascii_case(n)) {
+                let driver = board
+                    .pins
+                    .iter()
+                    .find(|p| {
+                        matches!(&p.kind, board::PinKind::Out { net, .. }
+                            if net.eq_ignore_ascii_case(n))
+                    })
+                    .map(board::PinBinding::kernel_net)
+                    .unwrap_or_default();
+                return Err(format!(
+                    "--probe net:{n}: a digital-only net (ADR-014 D4); probe its driver's pin \
+                     {driver}"
+                ));
+            }
         }
         let (asserts, _) = assert_files(&a.asserts)?;
         return Ok(FrontEnd {

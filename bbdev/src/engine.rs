@@ -5,7 +5,9 @@
 //!   at its exact time ("I report everything", `spec/time-grant.md`).
 //! - `quiet_until` is the earliest pending timer: by rule 1 an output
 //!   changes only at a timer, so with constant inputs nothing changes
-//!   before it.
+//!   before it. For a device with promise-independent inputs (ADR-014 D2)
+//!   it is the earliest pending *output* timer, and the device's inputs
+//!   cannot end it (`input_ends_promise` is `false` for them).
 //! - An input change delivered before an advance (`t > now`) is applied at
 //!   its own time; one delivered at a boundary (`t <= now`) at `now`.
 //! - Devices are called only at their events (rule 3), timers before inputs
@@ -43,8 +45,10 @@ struct Instance {
     reference: String,
     device: Box<dyn Device>,
     rng: Rng,
-    /// Pending timers: id -> time.
-    timers: BTreeMap<u32, Time>,
+    /// Pending timers: id -> (time, output timer).
+    timers: BTreeMap<u32, (Time, bool)>,
+    /// The device declares promise-independent inputs (ADR-014 D2).
+    independent: bool,
     /// Engine pin index of each device pin.
     pins: Vec<usize>,
 }
@@ -134,6 +138,7 @@ impl DeviceEngine {
             }
             e.instances.push(Instance {
                 rng: Rng::for_instance(cfg.seed, &p.reference),
+                independent: p.device.promise_independent_inputs(),
                 reference: p.reference,
                 device: p.device,
                 timers: BTreeMap::new(),
@@ -167,10 +172,13 @@ impl DeviceEngine {
     fn call(&mut self, k: usize, what: Call) -> Result<(), EngineError> {
         let now = self.now;
         let inst = &mut self.instances[k];
-        let mut ctx = Ctx::new(now, matches!(what, Call::Pin(..)), &mut inst.rng);
+        // ADR-014 D2: an internal timer of a device with promise-independent
+        // inputs must not set a pin.
+        let internal = inst.independent && matches!(what, Call::Timer(_, false));
+        let mut ctx = Ctx::new(now, matches!(what, Call::Pin(..)), internal, &mut inst.rng);
         match what {
             Call::Start => inst.device.start(&mut ctx),
-            Call::Timer(id) => inst.device.on_timer(&mut ctx, id, now),
+            Call::Timer(id, _) => inst.device.on_timer(&mut ctx, id, now),
             Call::Pin(pin, level) => inst.device.on_pin_change(&mut ctx, pin, level, now),
         }
         let Ctx { cmds, error, .. } = ctx;
@@ -182,15 +190,15 @@ impl DeviceEngine {
         }
         for c in cmds {
             match c {
-                Cmd::Schedule(id, at) => {
+                Cmd::Schedule(id, at, output) => {
                     let inst = &mut self.instances[k];
-                    if let Some(old) = inst.timers.insert(id, at) {
+                    if let Some((old, _)) = inst.timers.insert(id, (at, output)) {
                         self.queue.remove(&(old, k, id));
                     }
                     self.queue.insert((at, k, id));
                 }
                 Cmd::Cancel(id) => {
-                    if let Some(old) = self.instances[k].timers.remove(&id) {
+                    if let Some((old, _)) = self.instances[k].timers.remove(&id) {
                         self.queue.remove(&(old, k, id));
                     }
                 }
@@ -272,8 +280,11 @@ impl DeviceEngine {
                 break;
             }
             self.queue.pop_first();
-            self.instances[k].timers.remove(&id);
-            self.call(k, Call::Timer(id))?;
+            let output = self.instances[k]
+                .timers
+                .remove(&id)
+                .is_some_and(|(_, output)| output);
+            self.call(k, Call::Timer(id, output))?;
         }
         while let Some((&(at, s), &(ep, level))) = self.inputs.first_key_value() {
             if at != next {
@@ -317,7 +328,8 @@ impl DeviceEngine {
 
 enum Call {
     Start,
-    Timer(u32),
+    /// `(id, output timer)`.
+    Timer(u32, bool),
     Pin(usize, Level),
 }
 
@@ -395,11 +407,33 @@ impl Engine for DeviceEngine {
         Ok(())
     }
 
+    /// The earliest timer that may set a pin: every timer of a device
+    /// without promise-independent inputs, only the output timers of one
+    /// with them (ADR-014 D2).
     fn quiet_until(&mut self, now: Time) -> Time {
-        match self.next_timer() {
+        let next = self
+            .instances
+            .iter()
+            .flat_map(|i| {
+                i.timers
+                    .values()
+                    .filter(move |(_, output)| !i.independent || *output)
+                    .map(|(t, _)| *t)
+            })
+            .min();
+        match next {
             Some(t) if t > now => t,
             Some(_) => now,
             None => Time::MAX,
+        }
+    }
+
+    /// ADR-014 D2: an input of a device with promise-independent inputs
+    /// cannot end its promise.
+    fn input_ends_promise(&self, pin: &str) -> bool {
+        match self.by_name.get(pin) {
+            Some(&ep) => !self.instances[self.pins[ep].instance].independent,
+            None => true,
         }
     }
 

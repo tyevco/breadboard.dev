@@ -39,6 +39,14 @@
 //!   value that differs from the package's is reported as a warning. An
 //!   `adc_in` pin's channel is the package's `adc = { channel }`.
 //!
+//! **Digital-only nets** (ADR-014 D4): `*bb digital <net>` declares a net
+//! that a bound `digital_out` drives digital-only. It gets no glue: its pins
+//! are routed through the kernel net only (every reader must be a device or
+//! read a device's output, the direct route of ADR-006 Amendment 6), the
+//! analog engine has no input or output on it, and a SPICE element on it is
+//! an error, so the directive cannot silently drop a part. A probe of it is
+//! refused (probe its driver's pin). Without the directive nothing changes.
+//!
 //! [`parse`] reads boards without packages; [`parse_with`] resolves
 //! `package=` through a lookup (the package search path, ADR-006 D1).
 //!
@@ -68,7 +76,7 @@ pub struct Part {
     pub reference: String,
     pub engine: String,
     /// A Renode part: the board-file platform name (`nrf52840`); a device
-    /// part: the device id (`dms/mechanism@1`).
+    /// part: the device id (`dms/mechanism@2`).
     pub platform: String,
     /// The package id when the part is given as `package=` (ADR-006).
     pub package: Option<String>,
@@ -230,9 +238,10 @@ pub struct Board {
     /// without a drive).
     pub audit: Option<Vec<(String, AuditExpect)>>,
     /// Digital-only nets, by SPICE node (ADR-014 D4, ADR-013 D1): a project's
-    /// bound digital nets outside the bench's `[analog] nets`. Their pins are
-    /// routed through the kernel net only; the analog engine has no glue,
-    /// input or output on them. Empty for a board file.
+    /// bound digital nets outside the bench's `[analog] nets`, or a board
+    /// file's `*bb digital` nets (spelled as their driver's `net=`). Their
+    /// pins are routed through the kernel net only; the analog engine has no
+    /// glue, input or output on them.
     pub digital_only: BTreeSet<String>,
     /// The `pi` glue of every MCU `digital_out` on a circuit net (ADR-009
     /// D5, milestone P2), by kernel net (`U10.P0.06`); empty at `fast`.
@@ -570,6 +579,8 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
     let mut pins: Vec<PinBinding> = Vec::new();
     let mut packages: BTreeMap<String, Package> = BTreeMap::new();
     let mut warnings: Vec<String> = Vec::new();
+    // `*bb digital <net>` (ADR-014 D4): (line, net), checked after the pins.
+    let mut digital: Vec<(usize, String)> = Vec::new();
     for (i, line) in text.lines().enumerate() {
         let lineno = i + 1;
         let Some(rest) = line.trim_start().strip_prefix("*bb") else {
@@ -593,6 +604,18 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
             .ok_or_else(|| format!("line {lineno}: *bb {keyword} needs a name"))?;
         let mut kv = parse_kv(lineno, toks)?;
         match keyword {
+            "digital" => {
+                if let Some(k) = kv.keys().next() {
+                    return Err(format!(
+                        "line {lineno}: *bb digital {name}: unknown key {k} (the directive takes \
+                         only the net)"
+                    ));
+                }
+                if digital.iter().any(|(_, n)| n.eq_ignore_ascii_case(name)) {
+                    return Err(format!("line {lineno}: *bb digital {name}: declared twice"));
+                }
+                digital.push((lineno, name.to_string()));
+            }
             "part" => {
                 if parts.iter().any(|p| p.reference == name) {
                     return Err(format!("line {lineno}: part {name} declared twice"));
@@ -749,6 +772,7 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
             other => return Err(format!("line {lineno}: unknown directive *bb {other}")),
         }
     }
+    let digital_only = digital_nets(&digital, &parts, &pins, text)?;
     Ok(Board {
         parts,
         pins,
@@ -756,9 +780,114 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         packages: packages.into_values().collect(),
         warnings,
         audit: None,
-        digital_only: BTreeSet::new(),
+        digital_only,
         pi_glue: BTreeMap::new(),
     })
+}
+
+/// The `*bb digital` nets (ADR-014 D4), each spelled as its driver's
+/// `net=`: a bound `digital_out` drives it, every `digital_in` on it is
+/// routed directly (its part or the driver's is a device), no `adc_in`
+/// reads it, and no SPICE element names it.
+fn digital_nets(
+    decl: &[(usize, String)],
+    parts: &[Part],
+    pins: &[PinBinding],
+    spice: &str,
+) -> Result<BTreeSet<String>, String> {
+    let is_dev = |part: &str| parts.iter().any(|p| p.reference == part && p.is_device());
+    let mut out = BTreeSet::new();
+    for (lineno, net) in decl {
+        let ctx = format!("line {lineno}: *bb digital {net}");
+        let driver = pins
+            .iter()
+            .find(|p| matches!(&p.kind, PinKind::Out { net: n, .. } if n.eq_ignore_ascii_case(net)))
+            .ok_or_else(|| format!("{ctx}: no bound digital_out drives it"))?;
+        let PinKind::Out { net: spelled, .. } = &driver.kind else {
+            unreachable!("matched above")
+        };
+        for r in pins {
+            match &r.kind {
+                PinKind::Adc { net: n, .. } if n.eq_ignore_ascii_case(net) => {
+                    return Err(format!(
+                        "{ctx}: {} reads it as adc_in (a digital-only net has no analog value)",
+                        r.kernel_net()
+                    ));
+                }
+                PinKind::In { net: n, .. }
+                    if n.eq_ignore_ascii_case(net) && !is_dev(&r.part) && !is_dev(&driver.part) =>
+                {
+                    return Err(format!(
+                        "{ctx}: {} reads it through the analog engine's threshold (only a \
+                         device, or a pin reading a device's output, reads a digital-only net \
+                         directly)",
+                        r.kernel_net()
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if let Some((l, text)) = element_on(spice, net) {
+            return Err(format!(
+                "{ctx}: line {l} puts a SPICE element on it ({}); a digital-only net has no \
+                 analog side, so remove the element or the directive (ADR-014 D4)",
+                text.trim()
+            ));
+        }
+        out.insert(spelled.clone());
+    }
+    Ok(out)
+}
+
+/// The first SPICE element line (outside `.subckt` definitions) that names
+/// node `net` (case-insensitive), as `(line number, line)`. An element's
+/// tokens after its name are split on whitespace, parentheses, commas and
+/// `=`, so a B-source expression `V(net)` counts too.
+fn element_on(spice: &str, net: &str) -> Option<(usize, String)> {
+    let mut depth = 0usize;
+    let mut found: Option<(usize, String)> = None;
+    let mut current: Option<(usize, String)> = None;
+    let names = |line: &str| -> bool {
+        let line = line.split(['$', ';']).next().unwrap_or("");
+        line.split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | ',' | '=' | '{' | '}'))
+            .filter(|t| !t.is_empty())
+            .skip(1)
+            .any(|t| t.eq_ignore_ascii_case(net))
+    };
+    for (i, raw) in spice.lines().enumerate() {
+        let t = raw.trim_start();
+        if let Some(cont) = t.strip_prefix('+') {
+            if let Some((_, l)) = current.as_mut() {
+                l.push(' ');
+                l.push_str(cont);
+            }
+            continue;
+        }
+        if let Some((l, text)) = current.take() {
+            if found.is_none() && names(&text) {
+                found = Some((l, text));
+            }
+        }
+        let lower = t.to_ascii_lowercase();
+        if lower.starts_with(".subckt") {
+            depth += 1;
+            continue;
+        }
+        if lower.starts_with(".ends") {
+            depth = depth.saturating_sub(1);
+            continue;
+        }
+        if t.is_empty() || t.starts_with('*') || t.starts_with('.') || depth > 0 {
+            continue;
+        }
+        current = Some((i + 1, t.to_string()));
+    }
+    if let Some((l, text)) = current {
+        if found.is_none() && names(&text) {
+            found = Some((l, text));
+        }
+    }
+    found
 }
 
 /// A device part's pin (spec/package.md section 12): one of the device's
@@ -1466,6 +1595,66 @@ mod tests {
         assert_eq!(nrf_adc_input("P0.05"), Some(3));
         assert_eq!(nrf_adc_input("P0.28"), Some(4));
         assert_eq!(nrf_adc_input("P0.27"), None);
+    }
+
+    /// ADR-014 D4 (gate G5): `*bb digital <net>`.
+    #[test]
+    fn digital_only_directive() {
+        let base = "*bb part U1 package=nordic/nrf52840-qiaa\n\
+                    *bb part M1 package=dms/detent-mechanism s0=500\n\
+                    *bb pin U1.P0.26 net=MOT_A_IN1 model=digital_out voh=3.3\n\
+                    *bb pin U1.P1.14 net=HOME_N model=digital_in vih=2.31 vil=0.99\n\
+                    *bb pin M1.IN_A1 net=MOT_A_IN1 model=digital_in\n\
+                    *bb pin M1.HOME_N net=HOME_N model=digital_out\n";
+        // Without the directive nothing is digital-only.
+        let b = parse_pkg(&format!("{base}R1 HOME_N 0 100k\n")).unwrap();
+        assert!(b.digital_only.is_empty());
+        // With it the net is, spelled as its driver's net=.
+        let b = parse_pkg(&format!("{base}*bb digital mot_a_in1\nR1 HOME_N 0 100k\n")).unwrap();
+        assert_eq!(b.digital_only.iter().collect::<Vec<_>>(), vec!["MOT_A_IN1"]);
+        // HOME_N too: U1 reads a device's output directly.
+        let b = parse_pkg(&format!("{base}*bb digital HOME_N\n")).unwrap();
+        assert!(b.digital_only.contains("HOME_N"));
+        for (extra, why) in [
+            // An element on a digital-only net is refused (also through a
+            // continuation line and inside a B expression).
+            (
+                "*bb digital MOT_A_IN1\nRPD MOT_A_IN1 0 100k\n",
+                "SPICE element",
+            ),
+            (
+                "*bb digital MOT_A_IN1\nRPD X\n+ mot_a_in1 0 100k\n",
+                "SPICE element",
+            ),
+            (
+                "*bb digital MOT_A_IN1\nB1 X 0 V = V(MOT_A_IN1)*2\n",
+                "SPICE element",
+            ),
+            ("*bb digital HOME_N\nR4 HOME_N 0 100k\n", "SPICE element"),
+            ("*bb digital NOPE\n", "no bound digital_out"),
+            (
+                "*bb digital MOT_A_IN1\n*bb digital MOT_A_IN1\n",
+                "declared twice",
+            ),
+            ("*bb digital MOT_A_IN1 x=1\n", "unknown key"),
+        ] {
+            let e = parse_pkg(&format!("{base}{extra}")).unwrap_err();
+            assert!(e.contains(why), "{extra}: {e}");
+        }
+        // A node of the same name inside a .subckt definition is not on it.
+        let sub = ".subckt S MOT_A_IN1 b\nR1 MOT_A_IN1 b 1k\n.ends\n";
+        assert!(parse_pkg(&format!("{base}*bb digital MOT_A_IN1\n{sub}")).is_ok());
+        // A CPU input reading a CPU output's net goes through ngspice's
+        // threshold, which a digital-only net does not have.
+        let cpu = "*bb part U1 package=nordic/nrf52840-qiaa\n\
+                   *bb pin U1.P0.26 net=A model=digital_out voh=3.3\n\
+                   *bb pin U1.P0.27 net=A model=digital_in vih=2.31 vil=0.99\n\
+                   *bb pin U1.P0.02 net=B model=adc_in vref=3.6\n\
+                   *bb pin U1.P0.28 net=B model=digital_out voh=3.3\n";
+        let e = parse_pkg(&format!("{cpu}*bb digital A\n")).unwrap_err();
+        assert!(e.contains("threshold"), "{e}");
+        let e = parse_pkg(&format!("{cpu}*bb digital B\n")).unwrap_err();
+        assert!(e.contains("adc_in"), "{e}");
     }
 
     #[test]

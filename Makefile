@@ -154,6 +154,7 @@ pooled-test:
 	+$(STEP) nrf-saadc-model
 	+$(STEP) nrf-pwm-model
 	+$(STEP) device-smoke
+	+$(STEP) multi-producer
 	+$(STEP) adc-kicad
 	+$(STEP) dms-rail-test
 	+$(STEP) dms-vsense-test
@@ -550,9 +551,9 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare be
 	    "dms-vsense;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;nongrant;$(DMS_VSENSE_ARGS)" \
 	    "dms-vsense-ref;$(DMS_VSENSE_GOLD)/s50/outputs.sha256;all;$(DMS_VSENSE_ARGS) --lookahead off --adc-push every" \
 	    "dms-home-step;$(DMS_HOME_GOLD)/step/outputs.sha256;all;$(DMS_HOME_STEP_ARGS)" \
-	    "dms-home;$(DMS_HOME_GOLD)/typ/outputs.sha256;all;$(DMS_HOME_TYP_ARGS)" \
+	    "dms-home;$(DMS_HOME_GOLD)/typ/outputs.sha256;nongrant;$(DMS_HOME_TYP_ARGS)" \
 	    "dms-home-project-step;$(DMS_HOME_GOLD)/project-step/outputs.sha256;all;$(DMS_HOME_PSTEP_ARGS)" \
-	    "dms-home-project;$(DMS_HOME_GOLD)/project-typ/outputs.sha256;all;$(DMS_HOME_PTYP_ARGS)" \
+	    "dms-home-project;$(DMS_HOME_GOLD)/project-typ/outputs.sha256;nongrant;$(DMS_HOME_PTYP_ARGS)" \
 	    "dms-e1-system;$(DMS_E1_SYSTEM_GOLD)/ok-cold/outputs.sha256;nongrant;$(DMS_E1_SYSTEM_ARGS)" \
 	    "dms-e1-system-ref;$(DMS_E1_SYSTEM_GOLD)/ok-cold/outputs.sha256;all;$(DMS_E1_SYSTEM_ARGS) --max-quantum 10us"
 
@@ -810,7 +811,7 @@ nrf-pwm-model: firmware bb
 
 # --- Phase 1 M10 (second step): device parts (ADR-006 D7, Amendment 6) ------
 # tests/device-smoke/board.cir: examples/feedback's MCU and firmware with the
-# dms/mechanism@1 device in a loop with it (U1.PA5 -> M1.NSLEEP, M1.IN_A1;
+# dms/mechanism@2 device in a loop with it (U1.PA5 -> M1.NSLEEP, M1.IN_A1;
 # M1.HOME_N -> U1.PB0, both direct digital routes). make device-smoke (in
 # make test, about 20 s): the one-cell reference (--lookahead off), the
 # default (lookahead on), analog-first and a second default run, each with a
@@ -837,6 +838,20 @@ device-smoke: firmware bb
 	    cmp $(DEVICE_SMOKE_OUT)/ref/$$f $(DEVICE_SMOKE_OUT)/$$r/$$f; done; done
 	@echo "device-smoke: grants ref $$(grep -c '"type":"grant"' $(DEVICE_SMOKE_OUT)/ref/events.jsonl), on $$(grep -c '"type":"grant"' $(DEVICE_SMOKE_OUT)/on/events.jsonl)"
 	@echo "device-smoke: PASS"
+
+# --- Phase 2 H5: quiet grants with several producers (ADR-014) ------------
+# make multi-producer (ADR-014 G1; in make test, about 15 s): the synthetic board
+# tests/multi-producer/board.cir (an nRF52840 running homing.elf, dms/mechanism@2 at tS 5 ms on
+# digital-only nets, ngspice behind sampled adc_in inputs), 100 ms, fresh Renode (--renode-pool off:
+# not in pool-equiv): bb's defaults equal the one-cell reference except grant records with quiet
+# grants Q = {devices} and no early stop, at most MP_MAX_GRANTS grants against 10 000;
+# analog-first byte-identical; the scope control (MOT_NSLEEP glued into ngspice) never takes
+# Q = {devices}; and bbdev/tests/multi_producer.rs (the kernel part, and the PromiseBroken control).
+# scripts/multi_producer.sh.
+MULTI_PRODUCER_OUT ?= out/multi-producer
+.PHONY: multi-producer
+multi-producer: firmware bb
+	bash scripts/multi_producer.sh $(BB) $(MULTI_PRODUCER_OUT)
 
 # ADR-005 test plan 1-3: Renode-only tests of Breadboard's STM32F072 ADC
 # model and BbStm32Timer TRGO (examples/adc/bb_adc_test.py: pwm, trgo,
@@ -1051,7 +1066,7 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir examples/bench \
               examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step \
               examples/dial-me-spinner/e2/none examples/dial-me-spinner/e2/c5 examples/dial-me-spinner/e2/c5-none \
-              examples/dial-me-spinner/e1-system
+              examples/dial-me-spinner/e1-system tests/multi-producer/board.cir
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages \
              examples/bench/packages examples/dial-me-spinner/e3/packages
@@ -1295,7 +1310,7 @@ measured-cost-table-dms-vsense: firmware bb dms-vsense-prepare
 # --- Phase 1 M10: E3, the detent homing H0-H5 on dial-me-spinner (route A) ---------------------
 # examples/dial-me-spinner/e3: hand-written board files (scripts/dms_home_boards.py writes them)
 # carrying the main board's detent sheet, the nRF52840 (PWM0, TEMP, SAADC) and the mechanism and
-# DRV5032 device M1 (dms/mechanism@1), with firmware/prebuilt/homing.elf (the procedure) and
+# DRV5032 device M1 (dms/mechanism@2), with firmware/prebuilt/homing.elf (the procedure) and
 # homing_step.elf (one full step at 446 PPS). scripts/dms_home.sh; ADR-008 Amendments 9-11.
 .PHONY: pooled-dms-home pooled-dms-home-test pooled-dms-home-project dms-home-ref dms-home-update \
         cost-table-dms-home cost-table-dms-home-project dms-home-rss
@@ -1303,13 +1318,18 @@ DMS_HOME_OUT  ?= out/dms-home
 DMS_HOME_GOLD := tests/golden/dms-home
 DMS_HOME_E3   := examples/dial-me-spinner/e3
 DMS_HOME_FW   := examples/dial-me-spinner/firmware/prebuilt
-DMS_HOME_PINS  = --probe net:VSYS --probe net:HOME_N --probe net:MOT_NSLEEP --probe net:U10.P0.26 \
+# The step board keeps MOT_NSLEEP analog (the bridges load it); on the homing boards it is digital-only
+# (Phase 2 H5, ADR-014 D4), and U10.P1.15 is its level.
+DMS_HOME_STEP_PINS = --probe net:VSYS --probe net:HOME_N --probe net:MOT_NSLEEP --probe net:U10.P0.26 \
+                 --probe net:U10.P0.05 --probe net:U10.P0.07 --probe net:U10.P0.11 --probe net:U10.P1.15 \
+                 --probe net:M1.HOME_N
+DMS_HOME_PINS  = --probe net:VSYS --probe net:HOME_N --probe net:U10.P0.26 \
                  --probe net:U10.P0.05 --probe net:U10.P0.07 --probe net:U10.P0.11 --probe net:U10.P1.15 \
                  --probe net:M1.HOME_N
 DMS_HOME_TYP_ARGS  = --netlist $(DMS_HOME_E3)/board.cir --firmware $(DMS_HOME_FW)/homing.elf --target U10 \
                      --for 2700ms $(DMS_HOME_PINS) --sample-rate 10kHz
 DMS_HOME_STEP_ARGS = --netlist $(DMS_HOME_E3)/board-step.cir --firmware $(DMS_HOME_FW)/homing_step.elf \
-                     --target U10 --for 45ms $(DMS_HOME_PINS) --probe net:MOT_A_OUT1 --probe net:COILA_L \
+                     --target U10 --for 45ms $(DMS_HOME_STEP_PINS) --probe net:MOT_A_OUT1 --probe net:COILA_L \
                      --probe net:MOT_B_OUT1 --probe net:COILB_L --probe net:NB_VBAT --probe net:NB_VSYS \
                      --sample-rate 1MHz
 # Phase 2 R1 (ADR-013 D1): the same two cases on the project route, examples/dial-me-spinner/e3/home
@@ -1378,10 +1398,11 @@ measured-cost-table-dms-home-project: firmware bb
 
 # --- Phase 2 H1: ngspice robustness (ADR-015 D1-D4) --------------------------------------------
 # ADR-015 G1, the progress watchdog (D1), with the lattice snap off (--ngspice-lattice-snap off,
-# the step clamp before H2): the SAADC stall repro (e3/board.cir with P0.02 on the loading saadc_se
-# view, homing_step.elf, 100 ms) ends in NoProgress:ngspice at 77.43 ms in the cell
-# (77.43 ms, 77.44 ms] within STALL_MAX_S (120 s) and with bb's peak RSS under STALL_MAX_RSS_KB
-# (500 MB); the outputs before the error equal a run that ends at 77.43 ms; a lower limit trips
+# the step clamp before H2): the SAADC stall repro (e3/board-glued.cir, E3's typ board before H5,
+# with P0.02 on the loading saadc_se view, homing_step.elf, 100 ms) ends in NoProgress:ngspice at
+# 77.43 ms in the cell (77.43 ms, 77.44 ms] within STALL_MAX_S (120 s) and with bb's peak RSS under
+# STALL_MAX_RSS_KB (500 MB); the outputs before the error equal a run that ends at the last
+# completed grant (67.94 ms since H5's quiet grants, ADR-014 Amendment 1); a lower limit trips
 # identically twice; the committed board (load=none) is the negative control. Then Phase 2 H2
 # (ADR-015 Amendment 4, the lattice snap, bb's default): the repro completes 300 ms at
 # --renode-quantum 5us, 10us and 20us and 1 s, and the committed E3 board completes 1 s (with the
@@ -1390,6 +1411,17 @@ measured-cost-table-dms-home-project: firmware bb
 NGSPICE_STALL_OUT ?= out/ngspice-stall
 measured-ngspice-stall: firmware bb
 	bash scripts/ngspice_stall.sh $(BB) $(NGSPICE_STALL_OUT)
+
+# Phase 2 H5, ADR-014 gate G0 (the prototype measurement): E3 typ three ways with the ADR-003 protocol
+# (G0_N interleaved rounds, default 3, medians of the simulation time, fresh Renode): the committed run
+# before H5 (G0_BASE_BB on the checkout G0_BASE_TREE, e.g. a detached worktree of the commit before
+# H5 and its bb; skipped when unset), the model change alone (D4: the digital-only MOT nets at one-cell
+# grants, --lookahead off) and D1-D4 (bb's defaults). D1-D4 must equal D4 alone except grant records,
+# and the protocol gain (D4 alone / D1-D4) must be at least G0_MIN (3), else ADR-014 is withdrawn.
+# scripts/dms_home_g0.sh; about 20 minutes with the base case. Run it on an otherwise idle host.
+DMS_HOME_G0_OUT ?= out/dms-home-g0
+measured-dms-home-g0: firmware bb
+	bash scripts/dms_home_g0.sh $(BB) $(DMS_HOME_G0_OUT) $(G0_BASE_BB) $(G0_BASE_TREE)
 
 # ADR-015 G2, engine-owned .save (D2): E3 typ (homing.elf, 2700 ms, bb's defaults) with bb's peak RSS
 # at most DMS_HOME_RSS_MAX_KB: the full-length measurement with .save plus 20 % (ADR-015 Amendment 1;
@@ -1573,7 +1605,7 @@ MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-tabl
                    adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
                    setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \
-                   ngspice-stall bench-perf bb-test-cost pi-oe-cost
+                   ngspice-stall bench-perf bb-test-cost pi-oe-cost dms-home-g0
 .PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
 $(MEASURE_TARGETS):
 	@bash scripts/measure_lock.sh $@ $(MAKE) --no-print-directory measured-$@

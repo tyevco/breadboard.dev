@@ -20,7 +20,8 @@
   decided (Approver decisions (2026-11-14); the HOME_N gate, Amendment 10).
   Amendment 11's Finding 2 (the SAADC stall) resolved by ADR-015
   Amendment 4 (Phase 2 H2, 2026-11-16; a resolution note under the
-  finding).
+  finding). Its Finding 3 (no quiet grant on E3's boards) resolved by
+  ADR-014 (Phase 2 H5, 2026-11-16; a resolution note under the finding).
 - **Part of:** the Phase 1 plan (`docs/phase1-plan.md`): M1, M2, M6, M8, M9,
   and M10 for D9.
 - **Builds on:**
@@ -2588,6 +2589,19 @@ ends at its next PWM edge, at most 40 us away, while the motor runs. The
 gate still runs the variants (`--lookahead off`, `--max-quantum 1ms`,
 `--engine-order analog-first`) and requires them identical; the PWM
 lookahead path itself is gated on `examples/nrf-pwm` (above).
+
+**Resolved (Phase 2 H5, ADR-014 and its Amendment 1, 2026-11-16).** The
+wider rule is ADR-014: the kernel counts only producers that feed the
+quiet set through an input able to end its promise, and `dms/mechanism@2`'s
+inputs cannot end its promise (its next DRV5032 sample). With the five
+driver nets digital-only on the homing boards (ADR-014 D4, a recorded model
+change that moved no sample or record but the MOT_NSLEEP column), the
+device's promise lifts the loop cap while U10 runs the PWM: `typ` takes
+433 grants instead of 270 000, 32x less simulation time (ADR-014 G0), and
+its defaults now build a different partition from `--lookahead off`, so
+`make dms-home`'s equality is a true equivalence there. The estimate above
+("it would also gain little") held for a promise of U10's; the device's is
+the one that pays.
 
 #### The gate (`make dms-home`; `make dms-home-test` in `make test`)
 

@@ -19,6 +19,20 @@
 //!    changes), never at grant boundaries: the engine never calls a device
 //!    at a boundary.
 //!
+//! **Output timers and promise-independent inputs** (ADR-014 D2). A timer
+//! scheduled with [`Ctx::schedule_output`] is an *output timer*: its handler
+//! may call [`Ctx::set_pin`]. A device that declares
+//! [`Device::promise_independent_inputs`] promises more: its outputs change
+//! only at its output timers, a timer scheduled with [`Ctx::schedule`] is
+//! internal (its handler calling `set_pin` fails the run), and
+//! `on_pin_change` never schedules an output timer earlier than the device's
+//! pending ones. Its quiet promise is then its next output timer, and an
+//! input change cannot end it, so the kernel does not count the device's
+//! input drivers as producers of a quiet grant (ADR-014 D1). The kernel's
+//! promise audit (`PromiseBroken`) catches a device that breaks this. A
+//! device that does not declare it keeps the Phase 1 rule: every timer may
+//! set a pin, and its promise is its next timer of any kind.
+//!
 //! A package names a device with `[behavioral] engine = "device"` and
 //! `device = "<id>@<major>"`; the table [`DEVICES`] holds every device this
 //! `bb` provides, with the sources that decide its behaviour (their content
@@ -131,12 +145,20 @@ pub trait Device {
     fn on_pin_change(&mut self, ctx: &mut Ctx, pin: usize, level: Level, t: Time);
     /// A timer the device scheduled fired at `t` (`== ctx.now()`).
     fn on_timer(&mut self, ctx: &mut Ctx, id: u32, t: Time);
+    /// ADR-014 D2: the device's outputs change only at its output timers
+    /// ([`Ctx::schedule_output`]), its other timers never set a pin, and
+    /// `on_pin_change` never schedules an output timer earlier than a
+    /// pending one. A fixed property of the device. Default `false`.
+    fn promise_independent_inputs(&self) -> bool {
+        false
+    }
 }
 
 /// What a device asked for during one call.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Cmd {
-    Schedule(u32, Time),
+    /// `(id, at, output timer)`.
+    Schedule(u32, Time, bool),
     Cancel(u32),
     SetPin(usize, Level),
     Log(LogLevel, String),
@@ -148,16 +170,20 @@ pub struct Ctx<'a> {
     now: Time,
     /// Inside `on_pin_change` (rule 1).
     in_input: bool,
+    /// Inside the handler of an internal timer of a device with
+    /// promise-independent inputs (ADR-014 D2).
+    in_internal: bool,
     pub(crate) cmds: Vec<Cmd>,
     pub(crate) error: Option<String>,
     rng: &'a mut Rng,
 }
 
 impl<'a> Ctx<'a> {
-    pub(crate) fn new(now: Time, in_input: bool, rng: &'a mut Rng) -> Ctx<'a> {
+    pub(crate) fn new(now: Time, in_input: bool, in_internal: bool, rng: &'a mut Rng) -> Ctx<'a> {
         Ctx {
             now,
             in_input,
+            in_internal,
             cmds: Vec::new(),
             error: None,
             rng,
@@ -171,7 +197,20 @@ impl<'a> Ctx<'a> {
 
     /// Schedule timer `id` at `at`, replacing a pending timer with the same
     /// id. `at` must be strictly after [`Ctx::now`] (ADR-006 Amendment 6).
+    /// For a device with promise-independent inputs (ADR-014 D2) this is an
+    /// internal timer, whose handler must not call [`Ctx::set_pin`].
     pub fn schedule(&mut self, at: Time, id: u32) {
+        self.schedule_kind(at, id, false);
+    }
+
+    /// Schedule output timer `id` at `at` (ADR-014 D2): its handler may call
+    /// [`Ctx::set_pin`], and the device's quiet promise ends at it.
+    /// Otherwise as [`Ctx::schedule`].
+    pub fn schedule_output(&mut self, at: Time, id: u32) {
+        self.schedule_kind(at, id, true);
+    }
+
+    fn schedule_kind(&mut self, at: Time, id: u32, output: bool) {
         if at <= self.now {
             self.fail(format!(
                 "timer {id} scheduled at {at}, not after now {} (a reaction must be strictly later)",
@@ -179,7 +218,7 @@ impl<'a> Ctx<'a> {
             ));
             return;
         }
-        self.cmds.push(Cmd::Schedule(id, at));
+        self.cmds.push(Cmd::Schedule(id, at, output));
     }
 
     /// Cancel timer `id` (no effect if it is not pending).
@@ -195,6 +234,15 @@ impl<'a> Ctx<'a> {
             self.fail(format!(
                 "set_pin({pin}) inside on_pin_change at {}: an output changes only in on_timer \
                  (schedule a timer after the input; ADR-006 Amendment 6, rule 1)",
+                self.now
+            ));
+            return;
+        }
+        if self.in_internal {
+            self.fail(format!(
+                "set_pin({pin}) in an internal timer at {}: a device with promise-independent \
+                 inputs changes an output only in an output timer (Ctx::schedule_output; \
+                 ADR-014 D2)",
                 self.now
             ));
             return;
@@ -291,7 +339,7 @@ pub const API_SOURCES: [(&str, &str); 2] = [
 
 /// Every device this `bb` provides.
 pub const DEVICES: &[DeviceDef] = &[DeviceDef {
-    id: "dms/mechanism@1",
+    id: "dms/mechanism@2",
     sources: &[
         ("lib.rs", include_str!("lib.rs")),
         ("engine.rs", include_str!("engine.rs")),
@@ -382,8 +430,8 @@ mod tests {
     #[test]
     fn device_table() {
         let ids = ids();
-        assert_eq!(ids, vec!["dms/mechanism@1".to_string()]);
-        let d = find("dms/mechanism@1").unwrap();
+        assert_eq!(ids, vec!["dms/mechanism@2".to_string()]);
+        let d = find("dms/mechanism@2").unwrap();
         assert!(d.sources.iter().any(|(n, _)| *n == "dms_mechanism.rs"));
         for (n, s) in API_SOURCES {
             assert!(d.sources.iter().any(|(m, t)| *m == n && *t == s));

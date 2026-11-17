@@ -169,7 +169,7 @@ mod board_tests {
         let b = parse(BOARD).unwrap();
         let m1 = b.parts.iter().find(|p| p.reference == "M1").unwrap();
         assert!(m1.is_device());
-        assert_eq!(m1.platform, "dms/mechanism@1");
+        assert_eq!(m1.platform, "dms/mechanism@2");
         assert_eq!(m1.package.as_deref(), Some("dms/detent-mechanism"));
         assert_eq!(
             m1.params,

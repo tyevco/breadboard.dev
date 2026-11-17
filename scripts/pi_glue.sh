@@ -91,6 +91,9 @@ EOF
 }
 
 # --- G9: the operating point of every Phase 1 board at pi with every oe = 0.
+# Since H5 the E3 homing boards' five driver nets are digital-only (`*bb digital`, ADR-014
+# D4), so, like e3-project-typ, they have no MCU digital_out on a circuit net and no pi glue;
+# e3-step keeps the bridges in scope and its five pi outputs.
 g9_cases() {
   cat <<EOF
 spike|1|--netlist $ROOT/examples/spike/board.cir --firmware $ROOT/examples/spike/firmware/build/blinky.elf --target U1 --probe net:LED_A
@@ -101,10 +104,10 @@ adc-open|0|--netlist $ROOT/examples/adc/board-open.cir --firmware $ROOT/examples
 nrf-feedback|2|--netlist $ROOT/examples/nrf-feedback/board.cir --firmware $NRF_FW/nrf_feedback.elf --target U1 --probe net:SENSE
 nrf-saadc|1|--netlist $ROOT/examples/nrf-saadc/board.cir --firmware $NRF_FW/nrf_saadc_burst.elf --target U1 --probe net:AIN
 nrf-pwm|4|--netlist $ROOT/examples/nrf-pwm/board.cir --firmware $NRF_FW/nrf_pwm_step.elf --target U1 --probe net:A1
-e3-typ|5|--netlist $E3/board.cir --firmware $FWD/homing.elf --target U10 --probe net:VSYS
+e3-typ|0|--netlist $E3/board.cir --firmware $FWD/homing.elf --target U10 --probe net:VSYS
 e3-step|5|--netlist $E3/board-step.cir --firmware $FWD/homing_step.elf --target U10 --probe net:VSYS
-e3-worst|5|--netlist $E3/board-ts75.cir --firmware $FWD/homing.elf --target U10 --probe net:VSYS
-e3-park|5|--netlist $E3/board-park.cir --firmware $FWD/homing.elf --target U10 --probe net:VSYS
+e3-worst|0|--netlist $E3/board-ts75.cir --firmware $FWD/homing.elf --target U10 --probe net:VSYS
+e3-park|0|--netlist $E3/board-park.cir --firmware $FWD/homing.elf --target U10 --probe net:VSYS
 adc-kicad|2|--project $WORK/adc-kicad --bench $WORK/g9/adc-kicad.toml
 dms-nominal|2|--project $WORK/proj-ok --bench $WORK/g9/nominal.toml
 dms-cold|2|--project $WORK/proj-ok --bench $WORK/g9/cold.toml

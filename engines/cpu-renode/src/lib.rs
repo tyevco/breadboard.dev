@@ -3176,7 +3176,16 @@ impl Engine for RenodeEngine {
             return Err(self.failure(e));
         }
         // A promise holds for the one advance that starts where it was given.
-        let promise = self.la.promise.take().filter(|(from, _)| *from == self.now);
+        // An advance past it means the kernel did not use it: with several
+        // promises the quiet set is the one that gives the longest grant
+        // (ADR-014 D3), so a shorter promise may be left out, and this
+        // engine's inputs are then not held constant by anyone. A used
+        // promise always covers the grant (`t <= floor_L(until)`).
+        let promise = self
+            .la
+            .promise
+            .take()
+            .filter(|(from, until)| *from == self.now && t <= *until);
         let from = self.now;
         self.la.cached = None;
         self.advance_inner(t).map_err(|e| self.failure(e))?;

@@ -1,6 +1,6 @@
 //! ADR-006 Gate G6 (Amendment 6, A6.6): `DeviceEngine` under the real
 //! `Scheduler`, with a mock lattice-bound CPU in a feedback loop with the
-//! `dms/mechanism@1` device, as E3's homing will run (ADR-008 Amendment 9).
+//! `dms/mechanism@2` device, as E3's homing will run (ADR-008 Amendment 9).
 //!
 //! The CPU `U1` microsteps the mechanism towards the park stop (8 microsteps
 //! per full step, 25 kHz PWM with slow decay, at 446 PPS) until it reads
@@ -268,7 +268,7 @@ fn run(lookahead: bool, max_quantum: Time, device_first: bool, seed: u64) -> Run
     })
     .unwrap();
     s.record_plans(true);
-    let def = bbdev::find("dms/mechanism@1").unwrap();
+    let def = bbdev::find("dms/mechanism@2").unwrap();
     let dev = def
         .instantiate(&[("s0".into(), ParamValue::Real(330.0))])
         .unwrap();
@@ -355,7 +355,7 @@ fn device_loop_is_partition_and_order_independent() {
             reference.events.len(),
             "lookahead {lookahead} max_quantum {mq} device first {first}"
         );
-        // The device's records (dms/mechanism@1's field and stop records)
+        // The device's records (dms/mechanism@2's field and stop records)
         // are made at the CPU's edge instants; the kernel orders records of
         // one instant by registration order (ADR-003 D3), so with the device
         // registered first they come before the CPU's pin edges at that

@@ -571,7 +571,7 @@ files. `bb` embeds the table (`bbdev::DEVICES`):
 
 | Device | Sources |
 | --- | --- |
-| `dms/mechanism@1` | `bbdev/src/lib.rs`, `bbdev/src/engine.rs`, `bbdev/src/dms_mechanism.rs` (ADR-008 Amendment 9) |
+| `dms/mechanism@2` | `bbdev/src/lib.rs`, `bbdev/src/engine.rs`, `bbdev/src/dms_mechanism.rs` (ADR-008 Amendment 9; ADR-014 D2: its sample timer is an output timer and its inputs are promise-independent. It replaced `dms/mechanism@1` in Phase 2 H5, with `@1`'s results, ADR-014 G2) |
 
 **`bb.lock`** (`bb-lock/1`, ADR-011 D5), next to the project's `bb.toml`,
 or next to a hand-written `board.cir`:
@@ -832,9 +832,52 @@ others in `alt`).
   rule 2).
 - A device's id and content hash are locked as `device:<id>@<major>`
   (section 9).
+- **Output timers and promise-independent inputs** (ADR-014 D2). A
+  device schedules timers with `ctx.schedule(at, id)` or
+  `ctx.schedule_output(at, id)`; the latter is an *output timer*. A device
+  may declare `promise_independent_inputs` (a fixed property of the
+  device, stated in its source) only if `on_pin_change` never calls
+  `set_pin` (rule 1, every device) and never schedules an output timer
+  earlier than a pending one, and only its output timers' handlers call
+  `set_pin`: then its outputs change only at its output timers. For such
+  a device the engine refuses `set_pin` in any other timer's handler, its
+  quiet promise (`quiet_until`) is its next **output** timer, and its
+  inputs cannot end that promise (`input_ends_promise` is `false`,
+  `spec/time-grant.md`), so the CPU driving them is not a producer of its
+  quiet grant. The kernel's promise audit (`PromiseBroken`) catches a
+  device that breaks the declaration. A device that does not declare it
+  keeps the Phase 1 rule: every timer may set a pin, and its promise is
+  its next timer of any kind. A change of a device's promise is a change
+  of behaviour: the major bumps (section 9), even when, as for
+  `dms/mechanism@2`, every result stays the same.
 - A device part exists in a board file, or in a project's `[[device]]`
   (`spec/project.md` section 1; ADR-013 D1, Phase 2 R1). The rules above
   apply to both.
+
+**Digital-only nets** (ADR-014 D4):
+
+```
+*bb digital MOT_A_IN1
+```
+
+- `*bb digital <net>` declares the net a bound `digital_out` drives
+  (`net=`, matched without regard to case) **digital-only**. The line has
+  no keys, and a net is declared once.
+- A digital-only net gets no glue: the driver's pin is routed through its
+  kernel net only, the analog engine has no input or output on it, and
+  every `digital_in` on it reads that kernel net directly. So every reader
+  must be a device, or read a device's output (the direct route above); a
+  CPU `digital_in` on a CPU output's net, or an `adc_in` on the net, is an
+  error.
+- A SPICE element on a digital-only net (a line outside `.subckt`
+  definitions that names the node, a B expression's `V(<net>)` included)
+  is an error, so the directive cannot silently drop a part.
+- `--probe net:<net>` on a digital-only net is refused: its level is the
+  driver's kernel net (`<ref>.<pin>`), as on the project route
+  (`spec/project.md` section 4).
+- Without the directive nothing changes: no existing board's deck or
+  results move. Declaring one changes the board's deck, so its results:
+  a model change (ADR-014 D4: E3's homing boards, Phase 2 H5).
 
 ## 13. Examples
 

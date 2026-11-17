@@ -36,11 +36,15 @@ echo "schema-epoch: building the base commit's bb ($BASE) in $WORK/target"
 ( cd "$WORK/old" && CARGO_TARGET_DIR="$WORK/target" cargo build --release -q -p bb-cli )
 OLD_BB=$WORK/target/release/bb
 
+# <base path>[=<path in this tree>]. Phase 2 H5 (ADR-014 D4, a recorded model change) made the homing
+# boards' five driver nets digital-only; their pre-H5 deck is e3/board-glued.cir's (M1's parameters,
+# which tell board.cir, board-ts75.cir and board-park.cir apart, are not in the deck).
+E3H=examples/dial-me-spinner/e3
 BOARDS=(examples/spike/board.cir examples/feedback/board.cir examples/feedback-open/board.cir
         examples/adc/board.cir examples/adc/board-open.cir examples/nrf-saadc/board.cir
-        examples/nrf-pwm/board.cir tests/device-smoke/board.cir examples/dial-me-spinner/e3/board.cir
-        examples/dial-me-spinner/e3/board-ts75.cir examples/dial-me-spinner/e3/board-step.cir
-        examples/dial-me-spinner/e3/board-park.cir)
+        examples/nrf-pwm/board.cir tests/device-smoke/board.cir "$E3H/board.cir=$E3H/board-glued.cir"
+        "$E3H/board-ts75.cir=$E3H/board-glued.cir" examples/dial-me-spinner/e3/board-step.cir
+        "$E3H/board-park.cir=$E3H/board-glued.cir")
 PROJECTS=(examples/adc/kicad examples/bench examples/dial-me-spinner examples/dial-me-spinner/system
           examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step)
 
@@ -63,14 +67,15 @@ check_bc() {
 }
 : > "$OUT/renames.txt"
 
-for b in "${BOARDS[@]}"; do
+for bb_ in "${BOARDS[@]}"; do
+  b=${bb_%%=*} bn=${bb_#*=}
   name=$(echo "$b" | tr '/' '_')
   # A board file's run needs a firmware file, a target and a probe; an
   # elaboration reads none of them (it starts no engine).
-  cpu=$(grep -m1 -E '^\*bb part [^ ]+ (package=(st|nordic)/|engine=renode)' "$ROOT/$b" | awk '{print $3}')
-  fw=(--firmware "$b" --target "$cpu" --probe net:ELAB)
+  cpu=$(grep -m1 -E '^\*bb part [^ ]+ (package=(st|nordic)/|engine=renode)' "$ROOT/$bn" | awk '{print $3}')
+  fw=(--firmware "$bn" --target "$cpu" --probe net:ELAB)
   elaborate "$BB" "$WORK/old" "$WORK/old/packages" "$OUT/b/$name" --netlist "$b" "${fw[@]}"
-  elaborate "$BB" "$ROOT" "$ROOT/packages" "$OUT/c/$name" --netlist "$b" "${fw[@]}"
+  elaborate "$BB" "$ROOT" "$ROOT/packages" "$OUT/c/$name" --netlist "$bn" "${fw[@]}"
   check_bc "$name"
 done
 for p in "${PROJECTS[@]}"; do

@@ -270,6 +270,29 @@ impl Engine for Idle {
     }
 }
 
+/// An engine that drives one constant digital output `O` (low from t = 0).
+struct Constant(String);
+
+impl Engine for Constant {
+    fn name(&self) -> &str {
+        &self.0
+    }
+    fn next_safe_time(&mut self, _now: Time) -> Time {
+        Time::MAX
+    }
+    fn advance_to(&mut self, _t: Time) -> Result<(), EngineError> {
+        Ok(())
+    }
+    fn read_outputs(&mut self) -> Result<PinSignals, EngineError> {
+        let mut m = PinSignals::new();
+        m.insert("O".into(), PinSignal::digital(Level::Low, Time::ZERO));
+        Ok(m)
+    }
+    fn apply_inputs(&mut self, _: &PinSignals) -> Result<(), EngineError> {
+        Ok(())
+    }
+}
+
 const WAKES: [Time; 3] = [
     Time::from_ms(5),          // on the lattice: reported at q itself
     Time::from_ns(12_345_678), // off the lattice
@@ -455,10 +478,33 @@ fn assert_one_cell(o: &Outcome) {
 }
 
 /// Gate: a stopping engine that is not first in the remaining graph's
-/// topological order (an unconnected engine registered before it wins the
-/// index tie) falls back to one cell.
+/// topological order (it reads an engine registered before it, which must
+/// therefore advance first) falls back to one cell. An unconnected engine
+/// registered before it does not: the Kahn order prefers the producer
+/// among ready engines (ADR-014 D1; under ADR-003 D5 alone the index tie
+/// made it fall back).
 #[test]
 fn a_stopping_engine_that_is_not_first_falls_back() {
+    let j: Journal = Rc::default();
+    let mut s = Scheduler::new(cfg(true)).unwrap();
+    s.record_plans(true);
+    let x = s.add_engine(Box::new(Constant("x".into()))).unwrap();
+    let u = s.add_engine(Box::new(Cpu::new("u", &WAKES, &j))).unwrap();
+    let n = s
+        .add_engine(Box::new(Stopper::new("n", &n_edges(), &j)))
+        .unwrap();
+    s.bind(x, "O", "X.O", Direction::Output).unwrap();
+    s.bind(n, "C", "X.O", Direction::Input).unwrap();
+    s.bind(u, "P", "U.P", Direction::Output).unwrap();
+    s.bind(n, "A", "U.P", Direction::Input).unwrap();
+    s.bind(n, "B", "U.IN", Direction::Output).unwrap();
+    s.bind(u, "IN", "U.IN", Direction::Input).unwrap();
+    let o = run(s, &j, Time::from_ms(1)).unwrap();
+    assert_one_cell(&o);
+    assert_eq!(o.grants.len(), 100);
+
+    // The same with x unconnected: n is preferred among the ready engines,
+    // so the quiet grants of the feedback board apply (n first, then x).
     let j: Journal = Rc::default();
     let mut s = Scheduler::new(cfg(true)).unwrap();
     s.record_plans(true);
@@ -471,9 +517,31 @@ fn a_stopping_engine_that_is_not_first_falls_back() {
     s.bind(n, "A", "U.P", Direction::Input).unwrap();
     s.bind(n, "B", "U.IN", Direction::Output).unwrap();
     s.bind(u, "IN", "U.IN", Direction::Input).unwrap();
-    let o = run(s, &j, Time::from_ms(1)).unwrap();
-    assert_one_cell(&o);
-    assert_eq!(o.grants.len(), 100);
+    let o = run(s, &j, Time::from_ms(50)).unwrap();
+    let quiet: Vec<&GrantPlan> = o.plans.iter().filter(|p| !p.quiet.is_empty()).collect();
+    assert!(!quiet.is_empty());
+    for p in quiet {
+        assert_eq!(p.order, vec![2, 0, 1], "{p:?}");
+        assert_eq!(p.stop, Some(2));
+        assert_eq!(p.quiet, vec![1]);
+    }
+    // ... and its outputs equal the one-cell run's.
+    let (s1, j1) = {
+        let j: Journal = Rc::default();
+        let mut s = Scheduler::new(cfg(false)).unwrap();
+        s.add_engine(Box::new(Idle("x".into()))).unwrap();
+        let u = s.add_engine(Box::new(Cpu::new("u", &WAKES, &j))).unwrap();
+        let n = s
+            .add_engine(Box::new(Stopper::new("n", &n_edges(), &j)))
+            .unwrap();
+        s.bind(u, "P", "U.P", Direction::Output).unwrap();
+        s.bind(n, "A", "U.P", Direction::Input).unwrap();
+        s.bind(n, "B", "U.IN", Direction::Output).unwrap();
+        s.bind(u, "IN", "U.IN", Direction::Input).unwrap();
+        (s, j)
+    };
+    let off = run(s1, &j1, Time::from_ms(50)).unwrap();
+    assert_eq!(o.non_grant(), off.non_grant());
 
     // A producer that cannot stop early falls back too.
     let j: Journal = Rc::default();
