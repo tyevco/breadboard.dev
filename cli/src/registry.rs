@@ -355,8 +355,18 @@ fn init(args: &[String]) -> Result<(), String> {
 }
 
 /// Lint a package as `bb pkg lint --publish` does (the D11 names, the D7
-/// licence gate); errors only.
-fn publish_lint(pkg: &Package, schemas: &Schemas, chip: Option<&Package>) -> Vec<String> {
+/// licence gate); errors only. `check_behavioral` is false where `bb registry
+/// check` re-reads a version already in the index: versions are immutable
+/// (D2), so a platform or device this bb has since retired is not an error
+/// there; `bb registry publish` (and the PR check's `bb pkg lint --publish` on
+/// the changed packages, D8) check it for every new version (ADR-011
+/// Amendment 3).
+fn publish_lint(
+    pkg: &Package,
+    schemas: &Schemas,
+    chip: Option<&Package>,
+    check_behavioral: bool,
+) -> Vec<String> {
     let pl = platforms::ids();
     let devs = bbdev::ids();
     let ctx = lint::Context {
@@ -365,6 +375,7 @@ fn publish_lint(pkg: &Package, schemas: &Schemas, chip: Option<&Package>) -> Vec
         first_party: false,
         chip,
         publish: true,
+        check_behavioral,
     };
     lint::lint(pkg, &ctx, schemas)
         .into_iter()
@@ -446,7 +457,7 @@ pub fn publish_one(
         chip_pkg = Some(package::load(&tmp, schemas)?);
         let _ = std::fs::remove_dir_all(&tmp);
     }
-    let errs = publish_lint(&pkg, schemas, chip_pkg.as_ref());
+    let errs = publish_lint(&pkg, schemas, chip_pkg.as_ref(), true);
     if !errs.is_empty() {
         return Err(format!(
             "{id} {vers} cannot be published:\n  {}",
@@ -786,7 +797,7 @@ pub fn check_dir(
                         }
                         package::load(&cx, &schemas).ok()
                     });
-                    for e in publish_lint(&p, &schemas, chip.as_ref()) {
+                    for e in publish_lint(&p, &schemas, chip.as_ref(), false) {
                         errs.push(format!("{id} {}: {e}", l.vers));
                     }
                     // D11: a top-level name defined by two packages.

@@ -153,6 +153,7 @@ fn lint_cmd(args: &[String]) -> Result<bool, String> {
             first_party: is_first_party(&dir),
             chip: chip.as_ref(),
             publish,
+            check_behavioral: true,
         };
         let f = lint::lint(&pkg, &ctx, &reg);
         for x in &f {

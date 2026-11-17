@@ -102,6 +102,7 @@ fn errors(dir: &Path, first_party: bool) -> Vec<String> {
         first_party,
         chip: None,
         publish: false,
+        check_behavioral: true,
     };
     lint(&pkg, &ctx, &reg)
         .into_iter()
@@ -380,6 +381,7 @@ fn findings(dir: &Path, chip: Option<&Path>) -> Vec<(Level, String)> {
         first_party: false,
         chip: chip.as_ref(),
         publish: false,
+        check_behavioral: true,
     };
     lint(&pkg, &ctx, &reg)
         .into_iter()

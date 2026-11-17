@@ -118,6 +118,7 @@ fn findings(dir: &Path, publish: bool) -> Vec<(Level, String)> {
         first_party: false,
         chip: None,
         publish,
+        check_behavioral: true,
     };
     lint(&pkg, &ctx, &reg)
         .into_iter()

@@ -34,9 +34,9 @@ tree = "sha256:7c425acffb376f90f2a6b0f4096a0bcfc5d992bf683edffaeeb98f8c81ee832d"
 
 [[package]]
 id = "raytac/mdbt50q-u1mv2"
-version = "0.1.0"
+version = "0.1.1"
 source = "path+../../packages/raytac/mdbt50q-u1mv2"
-tree = "sha256:6573375bbc7294c42057c7e80ab986d5264b17db8d08cfd03a5e80f4e3bc88ca"
+tree = "sha256:cff8a6c6b08437727e52958bcc645bf513b80d94924f882bcb5d8df889066ce0"
 
 [[package]]
 id = "richtek/rt9080"

@@ -732,3 +732,47 @@ other tracks' gates (1-minute load 4-36), against H0's idle baseline of
   CI job was added. `registry-test` itself, in `make test`, runs its `bb
   run` in a network namespace where one is available and otherwise with a
   recording `curl` only.
+
+## Amendment 3 (2026-11-17): the technical exit's registry findings (immutable versions and retired platforms)
+
+Found by `make registry-gate` (G7) at the Phase 2 technical exit
+(plan section 5 item 6), on `main` at f91d025. `make registry-test` (in
+`make test`) passed; G7, which re-publishes every first-party package into
+the local public registry repository (`~/src/bb-registry`, serial 1 from
+E1), failed 17 checks for two reasons:
+
+1. **A first-party package changed without a version bump.** P4 changed a
+   comment in `raytac/mdbt50q-u1mv2/part.toml` (the platform it names,
+   `nrf52840-bb@3` to `@4`), so its tree hash changed while it stayed
+   0.1.0. `bb registry publish` refused it, as D2 requires ("versions are
+   immutable, bump the version"). Fixed: `raytac/mdbt50q-u1mv2` 0.1.1;
+   `make locks` changed only that entry in the ten dial-me-spinner
+   projects' `bb.lock` and `board.bbm` files (version and tree). No deck, run or output
+   hash changes (a module's part.toml has no view).
+2. **`bb registry check` re-linted every published version against the
+   running bb.** It ran `bb pkg lint --publish`'s rules, including D3's
+   "the platform (device) is one this bb provides", on every version in
+   the index. Since H5 (`dms/mechanism@1` became `@2`) and P4 (`nrf52840-bb@3`
+   became `@4`), bb no longer provides what `dms/detent-mechanism` 0.1.0
+   and `nordic/nrf52840-qiaa` 0.1.0 name, so the registry's own merge check
+   (`ci/publish.sh`) and every PR check (`ci/pr-check.sh`) failed on
+   versions that D2 forbids changing. D8 asks for `bb pkg lint` on a PR's
+   packages, which `ci/pr-check.sh` runs on the changed ones, and `bb
+   registry publish` lints every new version. Fixed: `bb registry check`
+   reads published versions with that one rule off (`lint::Context`'s new
+   `check_behavioral`, false only there); every other check of a published
+   version (the tree, the archive form, the id, version, schema and
+   licence against its line, the licence gate, the D11 names) is
+   unchanged. A lock on such an old version still fails at `bb open` and
+   `bb run`, which refuse a platform this bb does not provide (D3).
+   `make registry-test` gains two checks (106): a registry holding a
+   version whose platform this bb lacks (`retired-bb@1`, written as a
+   published line with its archive) passes `bb registry check`, and a new
+   version naming it is refused by `bb registry publish`. The control: the
+   bb of f91d025 fails exactly the first new check.
+
+`make registry-gate` then passed (106/106 and G7): the local registry
+repository at serial 2 with every first-party package (15), E1 ok-cold
+from the registry with a cold cache and offline with a warm one, equal to
+`tests/golden/dms-rail/ok-cold`, and `ci/pr-check.sh` passing for an owner
+and refused for a non-owner. Nothing was pushed or published.

@@ -43,6 +43,12 @@ pub struct Context<'a> {
     /// The package is checked for publication (`bb pkg lint --publish`,
     /// ADR-011 D11): the view-name rule is an error, not a warning.
     pub publish: bool,
+    /// Check `[behavioral] platform` and `device` against `platforms` and
+    /// `devices`. Off only where `bb registry check` re-reads a version that
+    /// is already published: versions are immutable (ADR-011 D2), and the bb
+    /// that runs the check may have retired a platform or device that bb
+    /// provided when the version was published (ADR-011 Amendment 3).
+    pub check_behavioral: bool,
 }
 
 /// The prefix every top-level name of a package's views must start with
@@ -263,7 +269,7 @@ pub fn lint(pkg: &Package, ctx: &Context, reg: &Registry) -> Vec<Finding> {
         }
     }
     // ---- behavioural layer (D3, D8).
-    if let Some(b) = &p.behavioral {
+    if let Some(b) = p.behavioral.as_ref().filter(|_| ctx.check_behavioral) {
         if let Some(pl) = &b.platform {
             if !ctx.platforms.contains(pl) {
                 o.e(format!(

@@ -6,7 +6,7 @@ schema = "bb-part/1"
 
 [part]
 id = "raytac/mdbt50q-u1mv2"
-version = "0.1.0"
+version = "0.1.1"
 kind = "module"
 manufacturer = "Raytac"
 mpn = ["MDBT50Q-U1MV2"]

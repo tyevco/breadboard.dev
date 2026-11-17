@@ -243,6 +243,32 @@ NPKG=$(find "$REPO/packages" -name part.toml | wc -l)
 check "$NPKG index files" test "$(find "$R/index" -name '*.jsonl' | wc -l)" = "$NPKG"
 sign "$R"
 check "bb registry check (the PR checks) passes" "$BB" registry check "$R"
+# ADR-011 Amendment 3 (the technical exit): versions are immutable (D2), so a version published
+# while bb provided its platform stays valid in the index after a later bb retires that platform
+# (as nrf52840-bb@3 and dms/mechanism@1 were); `bb registry check` does not re-lint the published
+# versions' [behavioral] ids, while a NEW version naming a platform this bb lacks is still refused.
+RT="$W/retired"
+rm -rf "$RT" "$W/pkg-retired" "$W/pkg-retired-new"
+cp -a "$R" "$RT"
+fixture "$W/pkg-retired" fixture/retired 0.1.0
+"$BB" registry publish "$RT" --pubtime $PUBTIME "$W/pkg-retired" >/dev/null
+sed -i 's#^platform = "stm32f103-offline@1"#platform = "retired-bb@1"#' "$W/pkg-retired/part.toml"
+"$BB" pkg pack "$W/pkg-retired" -o "$RT/dl/fixture/retired/0.1.0.tar" >/dev/null
+"$PYTHON" - "$RT/index/fixture/retired.jsonl" "$RT/dl/fixture/retired/0.1.0.tar" \
+    "$("$BB" pkg tree "$W/pkg-retired")" <<'EOF'
+import json, os, sys
+idx, tar, tree = sys.argv[1:]
+l = json.loads(open(idx).read())
+l.update(tree=tree, size=os.path.getsize(tar), platforms=["renode:retired-bb@1"])
+open(idx, "w").write(json.dumps(l, sort_keys=True, separators=(",", ":")) + "\n")
+EOF
+"$BB" registry snapshot "$RT" >/dev/null
+check "bb registry check: a published version whose platform this bb has retired stays valid (D2)" \
+    "$BB" registry check "$RT"
+fixture "$W/pkg-retired-new" fixture/retired-new 0.1.0
+sed -i 's#^platform = "stm32f103-offline@1"#platform = "retired-bb@1"#' "$W/pkg-retired-new/part.toml"
+refused "  a new version naming that platform is refused by publish" "this bb provides" \
+    "$BB" registry publish "$RT" --pubtime $PUBTIME "$W/pkg-retired-new"
 check "index lines, snapshot and config valid against spec/schema" "$PYTHON" - "$R" "$REPO" <<'EOF'
 import json, pathlib, sys, jsonschema
 r, repo = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
