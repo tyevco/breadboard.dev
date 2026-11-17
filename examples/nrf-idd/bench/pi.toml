@@ -1,5 +1,6 @@
 # examples/nrf-idd at pi (ADR-009 D1): U1's supply_load view `idd` draws (2.35 uA + the sum of
-# its states' [power] idd currents) from VDD, its state nodes driven by the CPU engine's #run,
+# its states' [power] idd currents in the part's default supply mode, the LDO, which nrf_duty.elf
+# runs on: ADR-009 Amendment 12) from VDD, its state nodes driven by the CPU engine's #run,
 # #hfxo and #saadc (the radio states held at 0); the outputs drive from VDD (ADR-009 D5).
 # VSUP: 3.0 V (the PS's figures are at 3 V) behind 10 mOhm.
 schema = "bb-bench/1"

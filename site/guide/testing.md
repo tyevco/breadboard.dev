@@ -100,8 +100,9 @@ order they run in):
     `scripts/check_dms_w1.py` (which reads each run's corner from its
     `run.json`) and the committed hashes.
 29. **`dms-w2-test`**: W2, the brown-out reboot loop, as `tests/w2.toml`
-    through `bb test`, with `scripts/check_dms_w2.py` and the committed
-    hashes.
+    through `bb test` (200 ms per case: the old rule must brown out at
+    least once, counted by its `reset` records with phase `enter`), with
+    `scripts/check_dms_w2.py` and the committed hashes.
 30. **`registry-test`**: the package registry against local fixtures
     (signed snapshots, tampering, rollback, yanking, routed namespaces;
     ADR-011).

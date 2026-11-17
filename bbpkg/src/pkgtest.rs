@@ -70,6 +70,9 @@ pub struct Vector {
     pub sample: Time,
     pub ports: BTreeMap<String, String>,
     pub params: Vec<(String, String)>,
+    /// A `supply_load` view's supply mode (`[power] modes`, ADR-009
+    /// Amendment 12): its currents in that mode; `None`, the default mode.
+    pub mode: Option<String>,
     pub edges: Vec<Edge>,
     pub expects: Vec<Expect>,
 }
@@ -250,6 +253,7 @@ pub fn parse_vector(path: &Path, text: &str, reg: &Registry) -> Result<Vector, S
         sample,
         ports,
         params: o.str_map("params")?,
+        mode: o.str_opt("mode")?,
         edges,
         expects,
     };
@@ -370,9 +374,13 @@ pub fn deck_at(
     // A supply_load view's currents come from [power] (ADR-009 D4), then
     // its own params.
     let mut params: BTreeMap<String, String> = if view.kind == "supply_load" {
-        crate::package::supply_load_params(pkg, view)?
+        crate::package::supply_load_params(pkg, view, v.mode.as_deref())?
             .into_iter()
             .collect()
+    } else if let Some(m) = &v.mode {
+        return Err(format!(
+            "mode {m:?}: only a supply_load view takes a supply mode (ADR-009 Amendment 12)"
+        ));
     } else {
         view.params.iter().cloned().collect()
     };

@@ -1,0 +1,6 @@
+# W1 ramped static +3V3 load (bench/w1-collapse.toml): 0 A until 0.1 ms, linear to 60 mA at 0.2 ms,
+# then held (decision D-close 5). scripts/dms_w1.sh writes the sweep's ramp-<L>mA.csv in this form.
+t,I
+0,0
+0.0001,0
+0.0002,0.06

@@ -1,6 +1,7 @@
 # examples/nrf-idd at pi in static-load mode (ADR-009 D4): a DC load on VDD stands in for U1's
-# supply_load (`replace`), here the hand-calculated average current of nrf_duty.elf, 2.35 uA +
-# 0.249984 x 3.1 mA + 0.2 mA = 0.9773 mA. The firmware still runs; U1 draws no state-driven current
+# supply_load (`replace`), here the hand-calculated average current of nrf_duty.elf on the LDO (the
+# part's default supply mode, which nrf_duty.elf runs on; ADR-009 Amendment 12), 2.35 uA + 0.249984 x
+# 6.072 mA + 0.228 mA = 1.7483 mA. The firmware still runs; U1 draws no state-driven current
 # and the CPU engine binds no state output. scripts/pi_idd.sh checks that the load replaced the view
 # and uses this bench as the cost row's baseline (the state outputs against none).
 schema = "bb-bench/1"
@@ -13,7 +14,7 @@ rs = "10m"
 
 [[load]]
 net = "VDD"
-amps = "0.9773mA"
+amps = "1.7483mA"
 replace = "main:U1"
 
 # VDD is behind R1 (10 Ohm): its nominal level, for voh = "VDD" at fast (ADR-006 D4).

@@ -982,6 +982,11 @@ pub enum Fault {
     /// The next quiet promise is `ns` nanoseconds longer than the block
     /// says (an over-long promise: the wake audit must catch it).
     StretchPromise { ns: u64 },
+    /// The next brown-out's read-back of the POWER model's control register
+    /// disagrees with the hold or release the engine wrote (a reset that
+    /// failed, ADR-009 D7): the engine fails, and a pool must not reuse the
+    /// process (ADR-009 Amendment 12, decision D-close 7).
+    BorReadback,
 }
 
 /// Configuration of a [`RenodeEngine`].
@@ -1044,6 +1049,14 @@ pub struct RenodeConfig {
     /// Turn every line the firmware writes to UARTE0/1 into an `info` log
     /// record (ADR-008 D8; [`Platform::Nrf52840Bb`] only).
     pub uart_log: bool,
+    /// The regulator the run's `supply_load` view draws its figures for
+    /// (ADR-009 Amendment 12, decision D-close 3; [`Platform::Nrf52840Bb`]
+    /// only): `Some(true)` DC/DC, `Some(false)` the LDO. At the run's end the
+    /// engine reads the POWER model's `DCDCEN` record and fails the run when
+    /// the firmware's regulator setting differs (LDO: it never set `DCDCEN`;
+    /// DC/DC: `DCDCEN` is 1 at the end). Read after the last grant, so it
+    /// changes no result. `None`: no check.
+    pub regulator_dcdc: Option<bool>,
     /// Report the PWM models' pin changes (ADR-008 D9, Amendment 9;
     /// [`Platform::Nrf52840Bb`] only): every change of a pin that a PWM
     /// channel drives (`PSEL.OUT[n]` connected, generation running), read
@@ -1139,6 +1152,7 @@ impl RenodeConfig {
             pin_cnf_audit: Vec::new(),
             adc_trace: Vec::new(),
             uart_log: false,
+            regulator_dcdc: None,
             pwm: false,
             gdb: None,
             ec_hook: None,
@@ -1844,6 +1858,9 @@ pub struct RenodeEngine {
     /// POFCON write fails the run at its end when no state block reported it
     /// during the run (a run without the comparator's outputs, at `fast`).
     power_check: bool,
+    /// ADR-009 Amendment 12: the regulator the run's idd view assumes,
+    /// checked against the firmware's `DCDCEN` at the run's end.
+    regulator_dcdc: Option<bool>,
     /// ADR-008 Amendment 9: the PWM pin ring.
     pwm: Option<PwmPoll>,
     /// ADR-009 D4 (milestone P3): the CPU state block's ring.
@@ -2066,6 +2083,7 @@ impl RenodeEngine {
         // UART lines exist on Breadboard's nRF52840 only.
         let nrf_only = cfg.uart_log
             || cfg.pwm
+            || cfg.regulator_dcdc.is_some()
             || !cfg.adc_trace.is_empty()
             || cfg.pins.iter().any(|p| {
                 matches!(
@@ -2592,6 +2610,7 @@ impl RenodeEngine {
                 carried: Vec::new(),
             }),
             power_check: cfg.platform == Platform::Nrf52840Bb,
+            regulator_dcdc: cfg.regulator_dcdc,
             uart: cfg.uart_log.then(|| UartPoll {
                 seen: 0,
                 lines: [Vec::new(), Vec::new()],
@@ -3698,6 +3717,39 @@ impl Engine for RenodeEngine {
                 return self.power_event(t_ns * FS_PER_NS, STATE_EVENT + 1, r[0]);
             }
         }
+        // ADR-009 Amendment 12 (decision D-close 3): the supply mode the
+        // run's idd view draws must match the firmware's regulator setting.
+        if let Some(dcdc) = self.regulator_dcdc {
+            let r = self
+                .sysbus_read_u32s(NRF_POWER_HOST + 0x2C, 4)
+                .map_err(|e| self.failure(e))?;
+            let (now, sets) = (r[0] & 1 == 1, r[1]);
+            let t_ns = u64::from(r[2]) | (u64::from(r[3]) << 32);
+            let why = match (dcdc, now, sets) {
+                (false, _, n) if n > 0 => Some(format!(
+                    "the firmware enabled the DC/DC regulator (POWER.DCDCEN = 1, first at {t_ns} ns, \
+                     {n} write(s)), but the run's idd view draws the LDO's figures: select the \
+                     part's power mode \"dcdc\" ([instances.\"<ref>\"] power_mode)"
+                )),
+                (true, false, _) => Some(format!(
+                    "the run's idd view draws the DC/DC regulator's figures, but the firmware {} \
+                     (POWER.DCDCEN = 0 at the run's end): it runs on the LDO; select the part's \
+                     power mode \"ldo\" or enable the DC/DC in the firmware",
+                    if sets == 0 {
+                        "never enabled it".to_string()
+                    } else {
+                        format!("cleared it after {sets} write(s) that set it")
+                    }
+                )),
+                _ => None,
+            };
+            if let Some(w) = why {
+                return Err(EngineError::Protocol(format!(
+                    "{}: {w} (ADR-009 Amendment 12)",
+                    self.name
+                )));
+            }
+        }
         if self.verify == Verify::Every {
             return Ok(());
         }
@@ -3981,7 +4033,11 @@ impl RenodeEngine {
         self.poll_pin_cnf_writes()?;
         self.read_hook_lines()?;
         self.sysbus_write_u32(NRF_POWER_HOST + 0x24, if enter { 1 } else { 2 })?;
-        let held = self.sysbus_read_u32s(NRF_POWER_HOST + 0x24, 1)?[0] == 1;
+        let mut held = self.sysbus_read_u32s(NRF_POWER_HOST + 0x24, 1)?[0] == 1;
+        if matches!(self.fault, Some(Fault::BorReadback)) {
+            self.fault = None;
+            held = !enter;
+        }
         if held != enter {
             return Err(EngineError::Protocol(format!(
                 "{}: the POWER model did not {} the machine at {at_ns} ns (brown-out control                  reads {}; ADR-009 D7)",

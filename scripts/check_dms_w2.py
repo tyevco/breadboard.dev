@@ -15,7 +15,8 @@ Cases (--case):
             each boot after a release reads RESETREAS as 0; after a release the firmware enables the
             OLED again (when the run lasts that long); the static-load tolerance against the suite
             (ADR-009 Amendment 1: the VBOR crossing, OLED_VCC_EN to #bor's rise, within 500 us of the
-            suite's crossing of the bench's VBOR corner, --vbor). REPORTED: the number of brown-outs,
+            suite's crossing of the bench's VBOR corner, --vbor); at least one brown-out (`reset`
+            records with phase `enter`, decision D-close 1). REPORTED: the number of brown-outs,
             +3V3 and VSYS minima of each OLED attempt (the first against the suite's, which no reset
             ends), and whether the loop repeats
   rule      the rule firmware (GATED): every assertion passes with rung pi (no reset record, +3V3 >=
@@ -178,6 +179,12 @@ def main():
             check("static-load VBOR crossing", False, f"OLED_VCC_EN rises {oled}, #bor rises {rises}")
         if case == "old":
             n = len(rises)
+            # Approver decision D-close 1 (ADR-009 Amendment 12): W2 counts BROWN-OUTS, the holds
+            # (`reset` records with phase `enter`), not reset records; at least one.
+            enters = sum(1 for r in resets if r["phase"] == "enter")
+            check("brown-outs", enters >= 1 and enters == n,
+                  f"{enters} brown-out(s) (reset records with phase enter) in {t_end / MS:.1f} ms, "
+                  f"{len(resets)} reset records, {n} #bor rises (at least 1, D-close 1)")
             report("brown-outs", f"{n} in {t_end / MS:.1f} ms ({len(resets)} reset records)", n)
             for k, on in enumerate(oled):
                 nxt = oled[k + 1] if k + 1 < len(oled) else t_end

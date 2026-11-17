@@ -23,10 +23,11 @@
 # references but for grant records, and the references equal tests/golden/dms-w2.
 #
 #   scripts/dms_w2.sh test <bb> <out>     make dms-w2-test (in make test): tests/w2.toml through bb test
-#                                         (old and rule at bb's defaults, rule with --engine-order
-#                                         analog-first byte-identical; test.json, junit.xml), then
-#                                         check_dms_w2.py and the committed one-cell hashes (non-grant
-#                                         records) on its outputs
+#                                         (old and rule, 200 ms each, at bb's defaults, rule with
+#                                         --engine-order analog-first byte-identical; test.json,
+#                                         junit.xml), then check_dms_w2.py and the committed one-cell
+#                                         hashes of old-200 and rule-200 (non-grant records) on its
+#                                         outputs (decision D-close 1: the plan's 200 ms window)
 #   scripts/dms_w2.sh gate <bb> <out>     make dms-w2: every case with its checks; the equivalence set at
 #                                         bb's defaults (10 ms grants, lookahead on), at --max-quantum 1ms
 #                                         and as one-cell references (--max-quantum 10us --lookahead off):
@@ -172,7 +173,8 @@ test)
     [[ -f $OUT/$c/events.jsonl ]] || { fail "$c: no outputs"; continue; }
     grep -v '"type":"grant"' "$OUT/$c/events.jsonl" > "$OUT/$c/non-grant-records"
     checks "$OUT" "$c"
-    hashes "$OUT/$c" "$c" nongrant
+    # tests/w2.toml runs 200 ms (D-close 1): its cases are old-200 and rule-200.
+    hashes "$OUT/$c" "$c-200" nongrant
   done
   echo "dms-w2: test wall $(echo "$(date +%s.%N) - $t0" | bc) s"
   ;;

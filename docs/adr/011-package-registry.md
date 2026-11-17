@@ -7,7 +7,10 @@
   (every Phase 2 schema major of ADR-009 to ADR-013), `bb-lock/1`, the
   D11 renames and the one relock. 2 (2026-11-15), milestone E1 as built:
   the client, the archives, the registry's CI tools and repository, the
-  local fixtures and gates.
+  local fixtures and gates. 3 (2026-11-17), the technical exit's registry
+  findings. 4 (2026-11-17), `bb pkg init --from-svd/--from-ibis` in no
+  milestone. 5 (2026-11-17), the approver's decision D-close 7: it is
+  Phase 3, and `bb pkg init` refuses naming Phase 3.
 - **Part of:** the Phase 2 plan, milestones E0-E1, then E3 and E5.
   `bb-lock/1` lands in milestone S, the schema epoch, before anything is
   published.
@@ -793,3 +796,17 @@ milestone, or name it in the plan's section 10 as out of this build (with
 the IBIS scaffolding of section 3's "Out of Phase 2" table), so the scope
 table matches the build. The plan's "Review notes: technical exit" lists
 it with the other scope gaps the review found.
+
+## Amendment 5 (2026-11-17): `bb pkg init --from-svd/--from-ibis` is Phase 3 (approver decision D-close 7)
+
+The approver answered Amendment 4: `bb pkg init --from-svd/--from-ibis`
+moves to Phase 3 (decision D-close 7, 2026-11-17; plan sections 3 and 10).
+It is not built in Phase 2. So that a user who reads the plan or this ADR
+gets an answer rather than a usage error, `bb pkg init` is now a refusal:
+`bb pkg: init: `bb pkg init --from-svd/--from-ibis` (ADR-011) is Phase 3,
+not built in Phase 2 (ADR-011 Amendment 5); write the package's part.toml
+and pins.toml by hand (spec/package.md)`, exit status 1 (`cli/src/pkg.rs`;
+`bb pkg --help` lists it as refused, and `site/reference/cli.md` says so,
+checked by `make docs-sync`). The vendor-file machinery it would read (D4's
+`vendor_file`, Amendment 2) is unchanged. The plan's section 3 moves the
+row's `init` item and the IBIS scaffolding to "Out of Phase 2".

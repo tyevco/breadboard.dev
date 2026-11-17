@@ -1,0 +1,102 @@
+* =====================================================================================================
+* examples/dial-me-spinner/pi-spike/tps22917_lsw_fit_p0.lib: a HISTORICAL RECORD, not a package view.
+* The committed ti/tps22917 view `lsw` (packages/ti/tps22917/analog/lsw_fit.lib) as it was when P0 measured
+* make pi-spike (git 0883d7b, before P1's restatement under decision D-TPS, ADR-009 Amendment 4). Approver
+* decision D-close 4 (2026-11-17; ADR-009 Amendment 12) pins P0's spike to the view it was measured with, so
+* its 37 gates hold as P0 recorded them; the restated view's convergence on the spike's decks is REPORTED
+* beside them (variant pi_lswnow). It is the datasheet-fitted first-party view (Apache-2.0, no TI text):
+* not local-only (ADR-006 D9 rule 4 concerns the TI-derived view, which stays in local-packages/). Below,
+* byte for byte, the file at 0883d7b.
+* =====================================================================================================
+* ti/tps22917 view "lsw" (breadboard.dev, Apache-2.0): TPS22917 load switch, DATASHEET-FITTED behavioural
+* model.  Written for Phase 1 plan M5b (ADR-006 D9 rule 4): the committed default view.  It contains no
+* text of TI's SLVMCE8 PSpice model and no element of the dial-me-spinner suite's vendor-derived view; every
+* number below is a datasheet value (TI SLVSDW8B) or a stated assumption.
+*
+* Datasheet: TI SLVSDW8B (TPS22917, Sept 2017, revised Dec 2021).  SLVSDW8B itself was NOT opened when this
+* view was written (no network); every figure is the datasheet value as the dial-me-spinner repository at
+* 6854d25 quotes it, with the table it cites (secondary sources, ADR-006 Amendment 5):
+*   Table 7.3  ON thresholds: VIH >= 1.0 V, VIL <= 0.35 V (guaranteed window only).
+*              [hardware/sim/tests/test_load_switches.py SW_VIH_MIN, SW_VIL_MAX]
+*   Table 7.5  RON typ 90 mOhm @ VIN 3.6 V, 80 mOhm @ 5 V (IOUT 200 mA, 25 C)
+*              [hardware/sim/tests/test_power_integrity.py LSW_RON; docs/bringup.md "VLED steady"];
+*              QOD 150 Ohm typ [test_load_switches.py SW_QOD]; RPD (ON smart pull-down) 750 kOhm
+*              [hardware/sim/models/sleep_current__tps22917.lib and oled_boost__tps22917.lib headers].
+*   Table 7.6  CT = 1000 pF: tON 3.8 / 4.0 ms and tR 1.6 / 1.8 ms at VIN 3.6 / 5 V (3.8/4.0 us and 1.6/1.8 us
+*              per pF) [test_load_switches.py SW_TON_K, SW_TR_K]; tON per pF 3.0 / 3.4 / 3.6 us at VIN
+*              1 / 1.2 / 1.8 V with SRON 1100 / 1000 / 1100 (mV/us) pF there; CT open: tON 120 us @ 3.6 V
+*              [the header comments of hardware/sim/models/load_switches__tps22917.lib, the suite's own
+*              description of its turn-on block, quoting Table 7.6].  tOFF 10 us typ [oled_boost__tps22917.lib].
+*
+* Structure (all pass-path and pin elements are B CURRENT sources or plain R/C: no branch-current unknown in
+* series with a milliohm path, so the view runs at the phase0 option set; AGENTS.md "Known bad ideas"):
+*   enable   ON comparator with hysteresis (rising 0.68 V, falling 0.63 V: inside Table 7.3's window; the
+*            datasheet gives no typical trip point), followed by a 2 us RC (enable delay).
+*   CT       while enabled the CT pin sinks I = VINF / tONk, so the CT-to-VIN capacitance (external CT plus
+*            C_int) swings x = (VIN - V(CT)) / VINF from 0 to 1 in exactly tON = tONk * (CT + C_int); the
+*            sink fades out at x = 1.10..1.12 (the CT pin then sits about 0.1 VIN below ground; the real pin
+*            voltage is not specified).  While disabled CT is reset to VIN through 10 kOhm.  VINF is VIN
+*            low-passed with 1 ms, so a VIN sag of the switch's own making cannot steer its slew constants.
+*   target   Vt = VINF * (0.9 - 0.8 * (1 - x) * tONk / tRk): a linear ramp that crosses 10 % of VIN at
+*            tON - tR and 90 % at tON (Table 7.6 tON and tR at the test condition CT = 1000 pF exactly;
+*            the slope is 0.8 VIN / tR, about 5 % below Table 7.6's SRON, which a linear ramp cannot
+*            match together with tR and tON).  A 50 mV softplus rounds the start of the ramp.
+*   pass     I(VIN -> VOUT) = en * max(0, min(GF * (Vt - VOUT), (VIN - VOUT) / RON)): VOUT follows the
+*            ramp (GF = 20 S) and the switch is RON once the ramp passes VIN.  Forward only: VOUT above
+*            VIN draws no reverse current (reverse current blocking).
+*   QOD      150 Ohm from QOD to GND while disabled (Table 7.5).  1 GOhm from QOD to VOUT keeps the pin
+*            defined when it is left floating (the datasheet's way to disable QOD): without it the QOD
+*            node has no DC path while enabled and the matrix is singular (ADR-006 Amendment 5).
+*   ON pin   750 kOhm pull-down while the comparator reads low (Table 7.5 RPD).
+*   supply   IQ 0.5 uA while enabled, ISD 5 nA while disabled (inside Figures 7-1/7-2's ranges; ASSUMED
+*            values, they matter for nothing at the fast rung).
+*
+* tONk, tRk (s/F) are interpolated in VIN between the Table 7.6 columns and scaled by 1000/(1000 + 32) so
+* that CT = 1000 pF gives the table values with C_int = 32 pF included; C_int = 32 pF gives the CT-open tON
+* (123 us in the datasheet test circuit against 120 us typ @ 3.6 V).  tRk at 1 / 1.2 / 1.8 V is 0.8 VIN / SRON.
+* Measured in the datasheet test circuit (CT 1 nF, CL 1 uF, RL 10 Ohm) through NgspiceEngine at phase0:
+* tON 3.818 / 4.020 ms and tR 1.613 / 1.815 ms at VIN 3.6 / 5 V (the follower lags the ramp by the 360 / 500 mA
+* load over GF); RON 90.0 / 80.0 mOhm (package vectors table76_*, ron_*).
+*
+* Parameters (the same as the vendor-derived view, so the two are interchangeable in a project):
+*   ron_add  extra pass resistance (Ohm), e.g. Table 7.5's RON max rows.
+*   isd_out  VIN -> VOUT leakage (A) while disabled (Table 7.5 ISD max as a worst case).
+*
+* NOT modelled: temperature; RON below 3.6 V except by linear extrapolation of Table 7.5's two points (an
+*   ASSUMPTION; clamped at 0.25 Ohm); QOD's dependence on VIN (150 Ohm flat); the current-limited ramp
+*   when the load exceeds GF * error; reverse current blocking thresholds and timing (reverse current is
+*   simply never conducted); thermal shutdown; ESD structures; tolerance and part-to-part spread.
+* Ports: CT GNDP ON QOD VIN VOUT (the package's pin names CT GND ON QOD VIN VOUT; GND is renamed GNDP, the
+*   gnd rule of spec/package.md section 5).
+* =====================================================================================================
+.subckt TI_TPS22917_LSW_FIT CT GNDP ON QOD VIN VOUT params: ron_add=0 isd_out=0
+* ---- enable: comparator with hysteresis, then a 2 us RC
+B_ONT    lsf_ont GNDP V = 0.5 + 0.5*tanh((V(ON,GNDP) - 0.68 + 0.05*V(lsf_en,GNDP))/0.005)
+R_EN     lsf_ont lsf_en 2k
+C_EN     lsf_en GNDP 1n
+B_RPD    ON GNDP I = V(ON,GNDP)/750k * (1 - V(lsf_en,GNDP))
+* ---- VIN low-passed (1 ms), for the slew constants only
+B_VF     GNDP lsf_vinf I = (V(VIN,GNDP) - V(lsf_vinf,GNDP))*1u
+C_VF     lsf_vinf GNDP 1n
+* ---- tONk, tRk (s/F) at VINF; scaled by 1000/1032 for C_int (header)
+B_TONK   lsf_tonk GNDP V = 0.968992 * pwl(V(lsf_vinf,GNDP), 0,3.0e6, 1,3.0e6, 1.2,3.4e6, 1.8,3.6e6, 3.6,3.8e6, 5,4.0e6, 5.5,4.0e6)
+B_TRK    lsf_trk  GNDP V = 0.968992 * pwl(V(lsf_vinf,GNDP), 0,0.727273e6, 1,0.727273e6, 1.2,0.96e6, 1.8,1.309091e6, 3.6,1.6e6, 5,1.8e6, 5.5,1.8e6)
+* ---- CT: internal capacitance, sink while enabled, reset to VIN while disabled
+C_INT    CT VIN 32p
+R_CTL    CT VIN 1G
+B_CT     CT GNDP I = V(lsf_en,GNDP) * max(V(lsf_vinf,GNDP),0)/V(lsf_tonk,GNDP) * min(1, max(0, (1.12 - V(VIN,CT)/max(V(lsf_vinf,GNDP),0.5))/0.02))
+B_CTR    VIN CT I = (1 - V(lsf_en,GNDP)) * V(VIN,CT)/10k
+* ---- VOUT target: linear ramp through 10 % at tON - tR and 90 % at tON, softplus start
+B_VT     lsf_vt GNDP V = max(V(lsf_vinf,GNDP),0) * (0.9 - 0.8*(1 - V(VIN,CT)/max(V(lsf_vinf,GNDP),0.5)) * V(lsf_tonk,GNDP)/V(lsf_trk,GNDP))
+B_VTS    lsf_vts GNDP V = V(lsf_vt,GNDP) > 1 ? V(lsf_vt,GNDP) : 0.05*ln(1 + exp(min(V(lsf_vt,GNDP)/0.05, 40)))
+* ---- RON (Table 7.5, linear in VIN through 90 mOhm @ 3.6 V and 80 mOhm @ 5 V; clamped) + ron_add
+B_RON    lsf_ron GNDP V = min(0.25, max(0.08, 0.09 - (V(VIN,GNDP) - 3.6)*0.01/1.4)) + {ron_add}
+* ---- pass element: forward-only follower of the target, limited by RON
+B_PASS   VIN VOUT I = V(lsf_en,GNDP) * max(0, min(20*(V(lsf_vts,GNDP) - V(VOUT,GNDP)), V(VIN,VOUT)/V(lsf_ron,GNDP)))
+* ---- quick output discharge while disabled
+B_QOD    QOD GNDP I = V(QOD,GNDP)/150 * (1 - V(lsf_en,GNDP))
+R_QODL   QOD VOUT 1G
+* ---- supply current, and the optional disabled-state leakage to VOUT
+B_IQ     VIN GNDP I = (0.5u*V(lsf_en,GNDP) + 5n*(1 - V(lsf_en,GNDP))) * min(1, max(0, V(VIN,GNDP)))
+B_ISD    VIN VOUT I = {isd_out} * (1 - V(lsf_en,GNDP))
+.ends TI_TPS22917_LSW_FIT

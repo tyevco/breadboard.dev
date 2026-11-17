@@ -2025,6 +2025,42 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     cpu_states.append(&mut pof_states);
     let mut supply_json: Vec<Json> = Vec::new();
     let mut replaced_used: BTreeSet<(String, String)> = BTreeSet::new();
+    // ADR-009 Amendment 12 (decision D-close 3): the supply mode per instance
+    // (`[instances."<ref>"] power_mode`); without one, the part's default (the
+    // first of its `[power] modes`). Every named mode must be one its package
+    // declares, at every rung.
+    let mut power_modes: BTreeMap<(String, String), String> = BTreeMap::new();
+    for (k, ov) in &p.instances {
+        let Some(m) = &ov.power_mode else { continue };
+        let key = insts
+            .resolve(k)
+            .map_err(|e| format!("bb.toml [instances.{k:?}] power_mode: {e}"))?;
+        let inst = board
+            .instances
+            .iter()
+            .find(|i| i.board == key.0 && i.reference == key.1)
+            .ok_or_else(|| format!("bb.toml [instances.{k:?}] power_mode: no such instance"))?;
+        let pk = if key.0 == tb && key.1 == tref {
+            Some(chip)
+        } else {
+            inst.package
+                .as_ref()
+                .and_then(|pr| a.imp.packages.get(&pr.id))
+        };
+        let power = pk.and_then(|x| x.part.power.as_ref()).ok_or_else(|| {
+            format!(
+                "bb.toml [instances.{k:?}] power_mode = {m:?}: the instance's package has no \
+                 [power] modes (ADR-009 Amendment 12)"
+            )
+        })?;
+        power
+            .mode(Some(m))
+            .map_err(|e| format!("bb.toml [instances.{k:?}]: {e}"))?;
+        power_modes.insert(key, m.clone());
+    }
+    // The target's regulator as its idd view draws it (ADR-009 Amendment 12):
+    // the nRF52840's CPU engine checks it against the firmware's DCDCEN.
+    let mut regulator_dcdc: Option<bool> = None;
     for i in board.instances.iter().filter(|i| i.board == sim) {
         if i.is_virtual
             || dev_refs.contains(&(i.board.clone(), i.reference.clone()))
@@ -2051,6 +2087,13 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             continue;
         };
         let q = format!("{}:{}", i.board, i.reference);
+        let power_mode: Option<String> = match pkg.part.power.as_ref() {
+            Some(w) => w
+                .mode(power_modes.get(&key).map(String::as_str))
+                .map_err(|e| format!("{q}: {e}"))?
+                .map(str::to_string),
+            None => None,
+        };
         if let Some(by) = replaced.get(&key) {
             replaced_used.insert(key.clone());
             supply_json.push(Json::obj([
@@ -2160,13 +2203,13 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                         source_lines.push(format!("{src} {node} 0 DC 0"));
                         states_json.push((state.clone(), Json::str("0")));
                     }
-                    if let Some(d) = pkg
-                        .part
-                        .power
-                        .as_ref()
-                        .and_then(|w| w.idd.iter().find(|x| &x.state == state))
-                    {
-                        idd_json.push((state.clone(), Json::str(&d.typ)));
+                    if let Some(w) = pkg.part.power.as_ref() {
+                        if let Some(d) = w.idd.iter().find(|x| &x.state == state) {
+                            let (typ, _) = d
+                                .in_mode(power_mode.as_deref(), w.modes.first().map(String::as_str))
+                                .map_err(|e| format!("{q}: {e}"))?;
+                            idd_json.push((state.clone(), Json::str(typ)));
+                        }
                     }
                     nodes.push(node);
                 }
@@ -2179,8 +2222,8 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             }
         }
         let mut params: Vec<(String, String)> = Vec::new();
-        for (k, v) in
-            &bbpkg::package::supply_load_params(pkg, view).map_err(|e| format!("{q}: {e}"))?
+        for (k, v) in &bbpkg::package::supply_load_params(pkg, view, power_mode.as_deref())
+            .map_err(|e| format!("{q}: {e}"))?
         {
             let d = parse_number(v).map_err(|e| format!("{q}: supply_load param {k}: {e}"))?;
             params.push((k.clone(), spice_number(d)));
@@ -2190,6 +2233,19 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             .map_err(|e| format!("{q}: read view {}: {e}", view.file))?;
         if seen_views.insert(label.clone()) {
             deck_views.push((label.clone(), text));
+        }
+        if is_target && pdef.board_name == "nrf52840" {
+            regulator_dcdc = match power_mode.as_deref() {
+                None => None,
+                Some("ldo") => Some(false),
+                Some("dcdc") => Some(true),
+                Some(m) => {
+                    return Err(format!(
+                        "{q}: power mode {m:?}: the nRF52840's CPU engine checks the modes ldo \
+                         and dcdc against the firmware's POWER.DCDCEN (ADR-009 Amendment 12)"
+                    ))
+                }
+            };
         }
         lines.extend(source_lines);
         let mut line = format!("X_bb_idd_{frag}");
@@ -2217,16 +2273,21 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         {
             unqualified.push(label.clone());
         }
-        supply_json.push(Json::obj([
-            ("ref", Json::str(&q)),
-            ("package", Json::str(&pkg.part.id)),
-            ("version", Json::str(&pkg.part.version)),
-            ("view", Json::str(&view.name)),
-            ("provenance", prov_json(prov)),
-            ("qualified_for_run", Json::Bool(qualified)),
-            ("idd", Json::Obj(idd_json)),
-            ("states", Json::Obj(states_json)),
-        ]));
+        let mut sj = vec![
+            ("ref".to_string(), Json::str(&q)),
+            ("package".to_string(), Json::str(&pkg.part.id)),
+            ("version".to_string(), Json::str(&pkg.part.version)),
+            ("view".to_string(), Json::str(&view.name)),
+            ("provenance".to_string(), prov_json(prov)),
+            ("qualified_for_run".to_string(), Json::Bool(qualified)),
+        ];
+        // ADR-009 Amendment 12: the supply mode its currents are drawn for.
+        if let Some(m) = &power_mode {
+            sj.push(("mode".to_string(), Json::str(m)));
+        }
+        sj.push(("idd".to_string(), Json::Obj(idd_json)));
+        sj.push(("states".to_string(), Json::Obj(states_json)));
+        supply_json.push(Json::Obj(sj));
     }
     for (key, by) in &replaced {
         if !replaced_used.contains(key) {
@@ -3441,6 +3502,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             pi_glue,
             cpu_states,
             pof: pof_glue,
+            regulator_dcdc,
         },
         target: tref,
         firmware,

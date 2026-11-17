@@ -181,7 +181,8 @@
           "match": { "type": "string" },
           "source": { "type": "string" },
           "field": { "type": "string" },
-          "present": { "type": "boolean" }
+          "present": { "type": "boolean" },
+          "phase": { "enum": ["enter", "exit", "stop"], "description": "kind event with event = reset only: count the reset records of this phase (enter: brown-outs; ADR-010 Amendment 7)" }
         }
       }
     },

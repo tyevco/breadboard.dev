@@ -136,6 +136,27 @@ pub enum ResetPhase {
     Stop,
 }
 
+impl ResetPhase {
+    /// The record's `phase` string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ResetPhase::Enter => "enter",
+            ResetPhase::Exit => "exit",
+            ResetPhase::Stop => "stop",
+        }
+    }
+
+    /// The phase named `s` (`enter`, `exit` or `stop`).
+    pub fn parse(s: &str) -> Option<ResetPhase> {
+        match s {
+            "enter" => Some(ResetPhase::Enter),
+            "exit" => Some(ResetPhase::Exit),
+            "stop" => Some(ResetPhase::Stop),
+            _ => None,
+        }
+    }
+}
+
 /// The event stream's schema version (`spec/event-stream.md`; version 2
 /// with the Phase 2 schema epoch). The stream carries no version field: a
 /// version 1 file is a version 2 file, since version 2 only adds records.

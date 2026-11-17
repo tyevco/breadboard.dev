@@ -135,6 +135,9 @@ struct Drive {
     findings: Option<Vec<bb_cpu_renode::PinCnfFinding>>,
     /// Every log record drained after an advance: (t, level, msg).
     logs: Vec<(Time, LogLevel, String)>,
+    /// Whether the engine's Renode was leased from a pool, and its pid.
+    leased: bool,
+    pid: u32,
 }
 
 fn floor_l(t: Time) -> Time {
@@ -990,10 +993,26 @@ fn drive_bor(
     t_end: Time,
     bor: &[(Time, bool)],
 ) -> (Drive, Vec<(Time, bbcore::ResetPhase)>) {
+    drive_bor_fault(cfg, mode, t_end, bor, None)
+}
+
+/// [`drive_bor`] with an injected fault.
+fn drive_bor_fault(
+    cfg: &RenodeConfig,
+    mode: Mode,
+    t_end: Time,
+    bor: &[(Time, bool)],
+    fault: Option<Fault>,
+) -> (Drive, Vec<(Time, bbcore::ResetPhase)>) {
     let cfg = with_mode(cfg, mode);
     let mut e = RenodeEngine::start(&cfg).expect("start renode");
+    if let Some(f) = fault {
+        e.inject_fault(f);
+    }
     let mut d = Drive {
         startup: e.lookahead_startup(),
+        leased: e.leased(),
+        pid: e.renode_pid(),
         ..Drive::default()
     };
     let mut resets = Vec::new();
@@ -1067,6 +1086,68 @@ fn drive_bor(
     }
     d.stats = e.lookahead_stats();
     (d, resets)
+}
+
+/// ADR-009 D7 and P5's pool rule (approver decision D-close 7; ADR-009
+/// Amendment 12): a pool process is never reused after a reset that failed.
+/// A private 1-slot pool; `nrf_bor.elf` with a brown-out at 10.0034 ms whose
+/// read-back is made to disagree (`Fault::BorReadback`, the engine's fault
+/// knob): the leased run fails with the engine's "did not hold" error, the
+/// pool discards that process, and the same run without the fault leases a
+/// new process and equals a fresh Renode's edges and reset records.
+#[test]
+fn nrf_bor_failed_reset_is_discarded() {
+    let Some(mut cfg) = config("nrf_bor", &["P0.13", "P0.14", "P0.15", "P0.16"]) else {
+        return;
+    };
+    cfg.pins.push(PinSpec::nrf_oe("P0.13#oe").unwrap());
+    cfg.pins.push(PinSpec::nrf_oe("P0.15#oe").unwrap());
+    cfg.pins.push(PinSpec::nrf_state("#run").unwrap());
+    cfg.pins.push(PinSpec::nrf_bor());
+    let dir = std::env::temp_dir().join(format!("bb-pool-bor-{}", std::process::id()));
+    let mut pc = bb_cpu_renode::manager::PoolConfig::new(cfg.renode.clone(), dir);
+    pc.slots = 1;
+    let m = bb_cpu_renode::manager::Manager::start(pc).expect("start the pool");
+    let warm = std::time::Duration::from_secs(300);
+    m.wait_warm(warm).expect("pre-warm");
+    let mut pooled = cfg.clone();
+    pooled.pool = Some(m.socket().to_path_buf());
+    cfg.pool = None;
+    let bor = [
+        (Time::from_ns(10_003_400), true),
+        (Time::from_ns(12_007_100), false),
+    ];
+    let t_end = Time::from_ms(15);
+    let (bad, _) = drive_bor_fault(&pooled, Mode::On, t_end, &bor, Some(Fault::BorReadback));
+    assert!(bad.leased, "the faulted run did not lease from the pool");
+    match &bad.err {
+        Some((t, EngineError::Protocol(msg))) => {
+            assert!(
+                msg.contains("did not hold the machine"),
+                "unexpected protocol error at {t}: {msg}"
+            );
+        }
+        other => panic!("expected the failed hold's protocol error, got {other:?}"),
+    }
+    m.wait_warm(warm).expect("warm again");
+    let (ok, r_ok) = drive_bor(&pooled, Mode::On, t_end, &bor);
+    assert!(ok.err.is_none(), "{:?}", ok.err);
+    assert!(ok.leased, "the run after the failure did not lease");
+    assert_ne!(ok.pid, bad.pid, "the process of a failed reset was reused");
+    let (fresh, r_fresh) = drive_bor(&cfg, Mode::On, t_end, &bor);
+    assert!(fresh.err.is_none() && !fresh.leased, "{:?}", fresh.err);
+    assert_eq!(
+        ok.edges, fresh.edges,
+        "the new lease's edges against a fresh Renode"
+    );
+    assert_eq!(r_ok, r_fresh, "the reset records");
+    assert_eq!(r_ok.len(), 2, "one brown-out: its hold and its release");
+    assert_eq!(m.status().1.discarded, 1, "{:?}", m.status());
+    eprintln!(
+        "nrf-bor-pool: failed reset on pid {} discarded; the next lease pid {}",
+        bad.pid, ok.pid
+    );
+    m.shutdown();
 }
 
 /// `nrf-bor` (ADR-009 D7, Phase 2 P5; the prototype of risk R3 made a gate):

@@ -1331,6 +1331,9 @@ fn run(a: RunArgs) -> Result<(), String> {
         rcfg.pins
             .push(PinSpec::nrf_oe(&o.cpu_pin).map_err(|e| e.to_string())?);
     }
+    // ADR-009 Amendment 12: the regulator the target's idd view draws,
+    // checked against the firmware's DCDCEN at the run's end.
+    rcfg.regulator_dcdc = board.regulator_dcdc;
     // ADR-009 D4 (milestone P3): the CPU state outputs into the target's
     // supply_load (at pi; none otherwise).
     for c in &board.cpu_states {

@@ -71,8 +71,10 @@ technical exit" in the plan):
   ([Fidelity](../concepts/fidelity)). **W1**, POF blanking on a dead
   battery, passes with the firmware in the loop at a labelled stress corner
   and is the README quickstart's last line; **W2**, the brown-out reboot,
-  passes its checks, and whether its one brown-out counts as the loop is
-  the approver's call.
+  passes: the old rule browns out (once in 200 ms; on these models the
+  second boot completes, so the loop does not repeat), the rule does not.
+  The nRF52840's supply current follows the regulator the firmware runs on
+  (the LDO by default).
 - **The registry (E1)** and **the viewer and VS Code templates (E4)**: the
   registry, signing and `bb-lock/1` work end to end against local
   fixtures; publishing it is a human step that has not been taken.
@@ -80,6 +82,11 @@ technical exit" in the plan):
 Not started in this build: `bb capture import` (B4), runs without a CPU
 target (R3), W3 (P6), the package pipeline and the first 200 packages
 (E2, E3) and the adoption work (E5).
+
+Moved to Phase 3 by the approver (2026-11-17): bench environment signals
+(`[[env]]`) and per-probe rates (`[probes]`), the bench engine's lockfile
+entry, and `bb pkg init --from-svd/--from-ibis`. `bb` refuses each of them
+with a message that says Phase 3.
 
 ## Out of Phase 1
 

@@ -30,6 +30,9 @@ paths = ["packages"]                 # searched before the first-party packages
 package = "none"                     # a package id[@version], or none with a reason
 reason = "NFC coil pads: no RF model in Phase 1"
 
+[instances."main:U10"]
+power_mode = "ldo"                   # the supply mode its idd view draws at pi (default: the part's first)
+
 [targets."main:U10"]                 # written by bb flash
 images = [{ file = "firmware/prebuilt/led_rail.elf", kind = "elf", hash = "sha256:…" }]
 
@@ -67,6 +70,12 @@ systems, below.)
   gives the pin model and the CPU engine's pin.
 - **Targets.** A list of typed images. Phase 1 implements exactly one image
   of `kind = "elf"` on one MCU of the simulated board.
+- **Supply modes.** At `pi` a part's `supply_load` view draws the currents
+  of one of its `[power] modes`: the first (the part's reset state) unless
+  `[instances."<ref>"] power_mode` names another. The nRF52840's modes are
+  its regulator, `ldo` (the default) and `dcdc`; the mode must match the
+  firmware's, and `bb run` fails a run whose firmware sets `POWER.DCDCEN`
+  differently. `run.json` records the mode.
 - **Devices** (`bb-project/1`). A `[[device]]` runs a device package (a
   mechanism, a switch) in the device engine beside the MCU, with a board
   file's device rules. A device on a schematic symbol is that instance; a

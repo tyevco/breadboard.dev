@@ -28,6 +28,13 @@ ground = "GND"
 package = "none"
 reason = "NFC coil pads: no RF model in Phase 1"
 
+# ADR-009 Amendment 12 (approver decision D-close 3): U10's idd view draws the LDO's figures, the
+# regulator every committed dial-me-spinner image runs on (Zephyr v4.5.0's nrf52840.dtsi sets reg1 to
+# NRF5X_REG_MODE_LDO; firmware/ overrides no regulator). The CPU engine fails a run whose firmware
+# sets POWER.DCDCEN while this says ldo.
+[instances."main:U10"]
+power_mode = "ldo"
+
 # Written by `bb flash --target U10 firmware/prebuilt/led_rail.elf` (the hash
 # is the ELF image hash of ADR-008 D5); the demo flashes
 # firmware/prebuilt/led_rail_wrong_order.elf the same way.

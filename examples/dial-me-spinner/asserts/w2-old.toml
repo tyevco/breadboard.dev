@@ -5,19 +5,26 @@
 #
 # What they cannot say, scripts/check_dms_w2.py does: that the reset records pair up (a hold, then
 # its release) at ceil_L of #bor's crossings, that every boot after a release read RESETREAS as 0,
-# the VBOR crossing against the suite, and how many brown-outs the run had. The plan's "at least 2
-# reset records" counts records: one brown-out gives two, its hold (`enter`) and its release
-# (`exit`); check_dms_w2.py reports the number of brown-outs separately (ADR-009 Amendment 9).
+# the VBOR crossing against the suite, and whether the loop repeats.
+#
+# `brownout` counts BROWN-OUTS, not reset records (approver decision D-close 1, 2026-11-17; ADR-009
+# Amendment 12): one brown-out writes two records, its hold (`enter`) and its release (`exit`), so the
+# old "at least 2 reset records" passed with one brown-out. It counts the `enter` records instead, at
+# least one in tests/w2.toml's 200 ms. The old rule causes a brown-out but, on these models, not a
+# repeating loop: the first OLED attempt charges the TPS61040's output before the reset cuts its
+# input, so the attempt after the release completes (ADR-009 Amendment 9 item 5).
 schema = "bb-bench/1"
 
-# The plan's check: at least two `reset` records (ADR-009 D7).
+# The plan's check (section 5 item 2 as amended by D-close 1): at least one brown-out, counted by its
+# hold (`reset` records with phase `enter`; ADR-009 D7).
 [[assert]]
 name = "brownout"
 kind = "event"
 event = "reset"
-min = 2
+phase = "enter"
+min = 1
 requires = "pi"
-msg = "W2 old rule: the brown-out holds the CPU in reset and releases it (at least 2 reset records)"
+msg = "W2 old rule: at least one brown-out holds the CPU in reset (reset records with phase enter)"
 
 # Every boot reads RESETREAS (the firmware prints it with the rule): the power-on boot and the reboot
 # after the brown-out read 0 (a brown-out leaves no reset reason).

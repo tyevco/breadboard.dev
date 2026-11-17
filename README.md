@@ -17,7 +17,13 @@ supply currents, POFWARN and brown-out reset from the rail), benches with
 assertions and `bb test`, runs of the main and base boards together, and a
 package registry tested against local fixtures. Its technical exit was
 measured on 2026-11-17 ("Review notes: technical exit" in the plan); its
-worked example W1 is the quickstart's last line.
+worked example W1 is the quickstart's last line. The approver's closing
+decisions (D-close, the same day) settled the exit review's open items:
+W2 counts brown-outs (the old rule browns out once in 200 ms on these
+models, the rule never), the nRF52840's supply currents follow the
+regulator the firmware runs on (the LDO by default, checked against the
+firmware's `DCDCEN`), and bench `[[env]]`/`[probes]`, the bench engine's
+lock entry and `bb pkg init --from-svd/--from-ibis` are Phase 3.
 
 ## Quickstart: the reference demo
 

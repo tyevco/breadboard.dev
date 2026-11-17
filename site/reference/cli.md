@@ -229,6 +229,7 @@ usage: bb pkg lint [--publish] [<dir>...]     lint packages (default: first-part
        bb pkg pack <package dir> [-o <file>]  write its deterministic archive (ADR-011 D6)
        bb pkg unpack <archive> <dir>          extract an archive (strictly) and print its tree hash
        bb pkg value [--kicad R|C|L] [--dim voltage|time|resistance|capacitance|inductance|current|temperature|count|percent] <text>...
+       bb pkg init --from-svd|--from-ibis ... refused: Phase 3 (ADR-011 Amendment 5)
 ```
 
 - `bb pkg lint --publish` makes the view-name rule of ADR-011 D11 an error
@@ -242,6 +243,9 @@ usage: bb pkg lint [--publish] [<dir>...]     lint packages (default: first-part
   a registry serves, keyed by the package's tree hash.
 - `bb pkg value` parses values in the package value grammar, or with
   `--kicad` as a KiCad value field of a generic R, C or L.
+- `bb pkg init` (a package scaffolded from an SVD or an IBIS file) is
+  Phase 3: it is refused with that message. Write a package's `part.toml`
+  and `pins.toml` by hand.
 
 See [Component packages](./packages).
 

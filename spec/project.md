@@ -75,6 +75,7 @@ fields = ["Value2"]                  # fields read besides MPN, Manufacturer, LC
 package = "none"                     # a package id[@version], or none with a reason
 reason = "NFC coil pads: no RF model in Phase 1"
 # analog = "lsw"                     # the view to use (ADR-006 D3 selection step 1)
+# power_mode = "ldo"                 # the part's [power] mode its supply_load view draws at pi (ADR-009 Amendment 12)
 
 [targets."main:U10"]                 # written by bb flash
 images = [{ file = "firmware/prebuilt/led_rail.elf", kind = "elf", hash = "sha256:…" }]
@@ -115,6 +116,16 @@ model = "dial-me-spinner/link-harness:wires"   # optional: the harness view
 # pins = [["1", "1"], ...]           # optional: the mated pins (a, b)
 ```
 
+- **`power_mode`** (ADR-009 Amendment 12, approver decision D-close 3): an
+  `[instances."<ref>"]` entry may name the supply mode of the part's
+  `[power] modes` (`spec/package.md` section 2) that its `supply_load` view
+  draws at `pi`; without one the part's first mode applies. A mode the
+  package does not declare, or a package without modes, is an error at
+  every rung. The entry needs no `package` (resolution is unchanged).
+  `run.json`'s `supply_load` records the instance's `mode`. On the
+  nRF52840 target the CPU engine fails the run at its end when the
+  firmware's `POWER.DCDCEN` disagrees (mode `ldo` and DCDCEN ever set, or
+  mode `dcdc` and DCDCEN 0 at the end).
 - **Bindings.** The pin model and its parameters come from the target
   package's `pins.toml` (`models` lists what each pin allows); `set` picks
   a parameter set; explicit keys override it (a warning when they differ).
@@ -435,9 +446,9 @@ at = "260ms"
   max(0, V(<net>,<ground>)/0.5))`, P1's static-load form, the full current
   above 0.5 V. Every other `amps` load is a DC sink at every rung.
   `run.json`'s `supply_load` records the instance `replaced_by` the load.
-- **Refused, not ignored:** the `bb-bench/1` keys of ADR-010 D2 that later
-  milestones implement (`[[env]]`, `[probes]`), and an `after` on a `log`
-  record.
+- **Refused, not ignored:** the `bb-bench/1` keys of ADR-010 D2 that
+  Phase 3 implements (`[[env]]`, `[probes]`; approver decision D-close 7,
+  ADR-010 Amendment 7), and an `after` on a `log` record.
 
 ### 3.3 The bench CSV (ADR-010 D3)
 
@@ -493,7 +504,7 @@ a pattern means.
 | `count` | `net`, `level` (optional), `min`/`max` (integers) | the number of changes (`count`) |
 | `frequency` | `net`, `level` (default 1), `period` with `tol` (`"2%"`), or `min`/`max` (times) | the worst period between changes to `level` (`fs`) |
 | `log` | `match` (a pattern), `source`; `present = true` or `false`, or `min`/`max` counts, or `field = "<name>"` with `min`/`max` | the number of matching records (`count`), or the worst field value (integer limits: `count`; otherwise `fs` or `uV` by the limits' unit) |
-| `event` | `event = "reset"`, `"warn"` or `"error"`; `min`/`max` | the number of `reset` records, or of `log` records of that level (`count`) |
+| `event` | `event = "reset"`, `"warn"` or `"error"`; with `"reset"` optionally `phase = "enter"`, `"exit"` or `"stop"` (ADR-010 Amendment 7: `enter` counts brown-outs, which write `enter` and then `exit`); `min`/`max` | the number of `reset` records (of that phase), or of `log` records of that level (`count`) |
 
 - **What a check reads.** Analog values are the producing engine's
   accepted solver points (`Engine::solver_points`, in the kernel's

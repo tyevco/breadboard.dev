@@ -407,11 +407,21 @@ pub fn parse_tables(o: &mut Obj) -> Result<Vec<Spec>, String> {
                 }
             }
             "event" => {
-                let what = match a.str_req("event")?.as_str() {
-                    "reset" => EventWhat::Reset,
-                    "warn" => EventWhat::Warn,
-                    "error" => EventWhat::Error,
-                    e => return Err(format!("{at}.event {e:?}: reset, warn or error")),
+                let ev = a.str_req("event")?;
+                // `phase` (ADR-009 Amendment 12, decision D-close 1): count
+                // only the `reset` records of one phase; `enter` counts
+                // brown-outs (each writes `enter`, then `exit`).
+                let phase = a.str_opt("phase")?;
+                let what = match (ev.as_str(), phase) {
+                    ("reset", None) => EventWhat::Reset,
+                    ("reset", Some(p)) => EventWhat::ResetPhase(
+                        bbcore::event::ResetPhase::parse(&p)
+                            .ok_or_else(|| format!("{at}.phase {p:?}: enter, exit or stop"))?,
+                    ),
+                    (_, Some(_)) => return Err(format!("{at}.phase: only with event = \"reset\"")),
+                    ("warn", None) => EventWhat::Warn,
+                    ("error", None) => EventWhat::Error,
+                    (e, None) => return Err(format!("{at}.event {e:?}: reset, warn or error")),
                 };
                 Kind::Event {
                     what,

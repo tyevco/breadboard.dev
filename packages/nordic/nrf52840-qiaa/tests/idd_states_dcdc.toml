@@ -1,0 +1,86 @@
+# nordic/nrf52840-qiaa idd (supply_load, ADR-009 D4, Phase 2 P3; ADR-009 Amendment 12): idd_states in
+# supply mode dcdc (decision D-close 3): each state adds its [power] idd.<state>.dcdc typ. VDD from
+# 3.0 V through 20 Ohm; the states rise one by one, 0 V / 1 V with 1 ns edges like the glue's state
+# sources. Expected V(vdd) = 3 V - 20 Ohm * (2.35 uA + the sum of the states' typ currents so far), by
+# hand: 3.1 mA run, 0.2 mA hfxo, 1.24 mA saadc, 6.4 mA radio_tx, 6.26 mA radio_rx (PS v1.1 section
+# 5.2 DC/DC figures in part.toml). These are the P3 vector's values, unchanged.
+schema = "bb-pkgtest/0"
+view = "idd"
+mode = "dcdc"
+circuit = "idd_supply.cir"
+stop = "120us"
+
+[ports]
+VDD = "vdd"
+VSS = "0"
+run = "run"
+hfxo = "hfxo"
+saadc = "saadc"
+radio_tx = "radio_tx"
+radio_rx = "radio_rx"
+
+[[edge]]
+net = "run"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = [["20us", "high"]]
+
+[[edge]]
+net = "hfxo"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = [["40us", "high"]]
+
+[[edge]]
+net = "saadc"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = [["60us", "high"]]
+
+[[edge]]
+net = "radio_tx"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = [["80us", "high"]]
+
+[[edge]]
+net = "radio_rx"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = [["100us", "high"]]
+
+[[expect]]
+meas = { node = "vdd", at = "10us" }
+value = "2.999953V"
+tol = "1uV"
+source = "hand calculation: 3 V - 20 Ohm * 2.35 uA (ibase, ION_RAMON_EVENT)"
+
+[[expect]]
+meas = { node = "vdd", at = "30us" }
+value = "2.937953V"
+tol = "1uV"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 mA)"
+
+[[expect]]
+meas = { node = "vdd", at = "50us" }
+value = "2.933953V"
+tol = "1uV"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 + 0.2 mA)"
+
+[[expect]]
+meas = { node = "vdd", at = "70us" }
+value = "2.909153V"
+tol = "1uV"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 + 0.2 + 1.24 mA)"
+
+[[expect]]
+meas = { node = "vdd", at = "90us" }
+value = "2.781153V"
+tol = "1uV"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 + 0.2 + 1.24 + 6.4 mA)"
+
+[[expect]]
+meas = { node = "vdd", at = "110us" }
+value = "2.655953V"
+tol = "1uV"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 + 0.2 + 1.24 + 6.4 + 6.26 mA)"

@@ -1390,11 +1390,16 @@ impl Scheduler {
                     level: Some(*level),
                     msg,
                 }),
-                Event::Reset { t_fs, source, .. } => logs.push(LogRec {
+                Event::Reset {
+                    t_fs,
+                    source,
+                    phase,
+                    ..
+                } => logs.push(LogRec {
                     t: *t_fs,
                     source,
                     level: None,
-                    msg: "",
+                    msg: phase.as_str(),
                 }),
                 _ => {}
             }

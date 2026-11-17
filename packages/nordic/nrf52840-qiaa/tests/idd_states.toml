@@ -1,8 +1,10 @@
-# nordic/nrf52840-qiaa idd (supply_load, ADR-009 D4, Phase 2 P3): each state adds its [power] idd typ.
-# VDD from 3.0 V through 20 Ohm; the states rise one by one, 0 V / 1 V with 1 ns edges like the
-# glue's state sources. Expected V(vdd) = 3 V - 20 Ohm * (2.35 uA + the sum of the states' typ
-# currents so far), by hand: 3.1 mA run, 0.2 mA hfxo, 1.24 mA saadc, 6.4 mA radio_tx, 6.26 mA radio_rx
-# (PS v1.1 section 5.2 figures in part.toml).
+# nordic/nrf52840-qiaa idd (supply_load, ADR-009 D4, Phase 2 P3): each state adds its [power] idd typ,
+# in the part's default supply mode, the LDO (ADR-009 Amendment 12, decision D-close 3; idd_states_dcdc
+# is the same circuit in mode dcdc). VDD from 3.0 V through 20 Ohm; the states rise one by one, 0 V /
+# 1 V with 1 ns edges like the glue's state sources. Expected V(vdd) = 3 V - 20 Ohm * (2.35 uA + the
+# sum of the states' typ currents so far), by hand: 6.072 mA run (ICPU1 6.3 mA less 0.228 mA), 0.228 mA
+# hfxo (ITIMER2 - ITIMER0), 1.24 mA saadc (ISAADC,RUN: no LDO figure), 10.8 mA radio_tx (IRADIO_TX3),
+# 10.1 mA radio_rx (IRADIO_RX1) (PS v1.1 section 5.2 figures in part.toml).
 schema = "bb-pkgtest/0"
 view = "idd"
 circuit = "idd_supply.cir"
@@ -55,30 +57,30 @@ source = "hand calculation: 3 V - 20 Ohm * 2.35 uA (ibase, ION_RAMON_EVENT)"
 
 [[expect]]
 meas = { node = "vdd", at = "30us" }
-value = "2.937953V"
+value = "2.878513V"
 tol = "1uV"
-source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 mA)"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 6.072 mA)"
 
 [[expect]]
 meas = { node = "vdd", at = "50us" }
-value = "2.933953V"
+value = "2.873953V"
 tol = "1uV"
-source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 + 0.2 mA)"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 6.072 + 0.228 mA)"
 
 [[expect]]
 meas = { node = "vdd", at = "70us" }
-value = "2.909153V"
+value = "2.849153V"
 tol = "1uV"
-source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 + 0.2 + 1.24 mA)"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 6.072 + 0.228 + 1.24 mA)"
 
 [[expect]]
 meas = { node = "vdd", at = "90us" }
-value = "2.781153V"
+value = "2.633153V"
 tol = "1uV"
-source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 + 0.2 + 1.24 + 6.4 mA)"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 6.072 + 0.228 + 1.24 + 10.8 mA)"
 
 [[expect]]
 meas = { node = "vdd", at = "110us" }
-value = "2.655953V"
+value = "2.431153V"
 tol = "1uV"
-source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 3.1 + 0.2 + 1.24 + 6.4 + 6.26 mA)"
+source = "hand calculation: 3 V - 20 Ohm * (2.35 uA + 6.072 + 0.228 + 1.24 + 10.8 + 10.1 mA)"

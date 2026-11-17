@@ -96,7 +96,7 @@ milestones use them: no `fast` deck, output or `run.json` depends on them.
 | `[[analog]]` | no | analog views (section 3) |
 | `[provenance]` | no | the package-level default for views without their own block |
 | `[tests] dir` | no | the test vector directory (section 8) |
-| `[power]` | no | `bb-part/1` (ADR-009 D4, D5; used from milestones P2 and P3): `idd = { <state> = { typ, max, ref } }`, the supply current per CPU state (a state name is lower case `[a-z0-9_]`; `typ` and `max` currents, `max >= typ`; `ref` the source); `vdd_min` (a voltage, the operating minimum); `io_rail` (a `power_in`/`power_out` pin, the default `rail` of a `pi` `digital_out`) |
+| `[power]` | no | `bb-part/1` (ADR-009 D4, D5; used from milestones P2 and P3): `idd = { <state> = { typ, max, ref } }`, the supply current per CPU state (a state name is lower case `[a-z0-9_]`; `typ` and `max` currents, `max >= typ`; `ref` the source); `vdd_min` (a voltage, the operating minimum); `io_rail` (a `power_in`/`power_out` pin, the default `rail` of a `pi` `digital_out`); `modes` (optional, ADR-009 Amendment 12: the supply modes the idd figures depend on, at least two distinct names `[a-z0-9_]`, not `typ`, `max` or `ref`; the first is the part's reset mode and the default): then each `idd.<state>`'s `typ`/`max`/`ref` are the first mode's figure and `idd.<state>.<mode> = { typ, max, ref }` gives every other mode's (every state, every mode) |
 | `[[document]]` | no | `bb-part/1` (ADR-012 D3; used from milestone E2): `id` (lower case `[a-z0-9._-]`, unique), `sha256` (64 lower-case hex digits: the document's identity), and optional `title`, `revision`, `url` (informative) and `fetched_by` (`agent:<who>` or `user:<who>`). The PDF is never committed |
 | `[claims] file` | no | `bb-part/1` (ADR-012 D4): the package's `claims.toml` (`bb-claims/0`, milestone E2; this build checks only that the file exists) |
 
@@ -163,7 +163,13 @@ empty). Its instance parameters are `i_<state>` = `[power] idd.<state>.typ`
 for each state port and `vdd_min` = `[power] vdd_min`, then the view's own
 `params` (which may restate or override them by name), then a test
 vector's; the subckt declares them. In a test vector a state port is keyed
-by its state name.
+by its state name. **Supply modes** (ADR-009 Amendment 12): when `[power]`
+has `modes`, `i_<state>` is the figure of the instance's mode, the
+project's `[instances."<ref>"] power_mode` (`spec/project.md` section 1)
+or else the first mode; a vector's `mode` selects it. The nRF52840's modes
+are its regulator, `ldo` (the reset state, the default) and `dcdc`, and
+its CPU engine fails a run whose firmware's `POWER.DCDCEN` disagrees with
+the mode the idd view draws.
 
 **The `pof_comparator` view kind** (`bb-part/1`, ADR-009 D6; milestone
 P4, Amendment 8). A CPU's power-fail comparator: its output rises where
@@ -480,6 +486,7 @@ lattice = "10us"               # optional, default 10us
 options = "phase0"             # optional, default phase0
 sample = "10us"                # optional: the sampling period of crossing measurements (default the lattice)
 params = { value = "1k" }      # optional: the instance's view parameters
+# mode = "dcdc"                # optional, a supply_load view only: its [power] mode (ADR-009 Amendment 12)
 
 [ports]                        # every view port -> a circuit node
 1 = "in"

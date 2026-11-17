@@ -7,7 +7,8 @@
 *   vss       the VSS pins' net (where it returns)
 *   run hfxo saadc radio_tx radio_rx   the state nodes s_k, 0..1
 * I(vdd -> vss) = (ibase + sum_k s_k * i_k) * min(1, V(vdd,vss) / vdd_min) * scale, where
-*   i_k     [power] idd.<k>.typ of part.toml (bb passes them as i_<k>, and vdd_min);
+*   i_k     [power] idd.<k>.typ of part.toml in the run's supply mode (the LDO by default, or the
+*           DC/DC: [power] modes, ADR-009 Amendment 12; bb passes them as i_<k>, and vdd_min);
 *   ibase   the sleep floor: System ON, full RAM retention, wake on any event (PS v1.1 5.2.1.1
 *           ION_RAMON_EVENT, 2.35 uA), always drawn;
 *   the collapse: below the operating minimum vdd_min the current falls linearly to 0 at 0 V, so

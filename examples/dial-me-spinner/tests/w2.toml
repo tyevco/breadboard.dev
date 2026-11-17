@@ -2,9 +2,11 @@
 # plan section 5 item 2: W2 "the same way" as W1, through bb test; ADR-009 D7, Amendment 9; ADR-010
 # D8-D10). W2, the S4 brown-out reboot loop on a dead battery, with the firmware in the loop on the
 # dial-me-spinner system (../w2) in static-load mode (the suite's 50 mA +3V3 budget), USB at ILIM
-# 100 mA, 20 ms each at bb's defaults. Each case's image is given by `targets` (bb run --image).
-#   - old (w2_old_rule): ../asserts/w2-old.toml (brownout: at least 2 `reset` records; boots;
-#     resetreas-zero; oled-en-in-reset), rung `pi`.
+# 100 mA, 200 ms each at bb's defaults (the plan's window, approver decision D-close 1, 2026-11-17;
+# ADR-009 Amendment 12). Each case's image is given by `targets` (bb run --image).
+#   - old (w2_old_rule): ../asserts/w2-old.toml (brownout: at least one brown-out, `reset` records
+#     with phase `enter`; boots; resetreas-zero; oled-en-in-reset), rung `pi`. The old rule causes
+#     one brown-out on these models, not a repeating loop (check_dms_w2.py reports the loop).
 #   - rule (w2_rule): ../asserts/w2-rule.toml (no-reset, vcc, oled-off).
 #   - rule with --engine-order analog-first byte-identical to rule (ADR-003 D3).
 # scripts/dms_w2.sh test runs it (make dms-w2-test), then on the same outputs what is not a kind:
@@ -15,7 +17,7 @@ schema = "bb-test/0"
 project = "../w2"
 
 [defaults]
-for = "20ms"
+for = "200ms"
 
 [[case]]
 name = "old"
