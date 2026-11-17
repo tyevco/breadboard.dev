@@ -277,8 +277,9 @@ jobs:
       - name: Viewer check (VCD through wellen)
         run: make vcd-check
 
-  # ADR-008 D5: the committed E1 images rebuilt in a fresh west workspace (the pinned manifest,
-  # Zephyr v4.5.0, SDK 1.0.1) must have the image hashes of firmware/prebuilt/SHA256SUMS.
+  # ADR-008 D5: the committed E1-E3, W1 and W2 images rebuilt in a fresh west workspace (the pinned
+  # manifest, Zephyr v4.5.0, SDK 1.0.1) must have the image hashes of firmware/prebuilt/SHA256SUMS;
+  # then the W1 and W2 images' Renode-only configuration test (Phase 2 W-fw).
   fw-rebuild:
     runs-on: ubuntu-24.04
     env:
@@ -302,5 +303,8 @@ jobs:
         with:
           mode: zephyr
 
-      - name: Rebuild the E1 firmware in a fresh workspace
+      - name: Rebuild the E1-E3, W1 and W2 firmware in a fresh workspace
         run: make fw-rebuild
+
+      - name: W1 and W2 firmware configuration (Renode only, make dms-wfw-test)
+        run: make dms-wfw-test

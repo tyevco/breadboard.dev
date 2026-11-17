@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+config W2_OLD_RULE
+	bool "The old rule: enable the OLED boost at boot (the S4 reboot loop)"
+	help
+	  The one switch between w2_rule.elf (the NEW-1 rule: OLED_VCC_EN stays
+	  low, the LEDs show the charging cue) and w2_old_rule.elf (OLED_VCC_EN
+	  rises at every boot) (Phase 2 milestone W-fw).
+
+config W2_START_DELAY_MS
+	int "Delay from main() to the rule's enable (ms)"
+	default 1
+	help
+	  The boot steps before section 7.2 step 22 that Phase 2 cannot run
+	  (the charger's I2C setup, the OLED's SPI), as one sleep.
+
+config W2_DIN_DELAY_MS
+	int "The rule: delay from LED_PWR_EN high to P0.06 high (ms)"
+	default 15
+	help
+	  At least 10 ms with P0.06 low after VLED is switched on
+	  (firmware.md section 6.4, LED-DATA-V4), as in W1.
+
+source "Kconfig.zephyr"

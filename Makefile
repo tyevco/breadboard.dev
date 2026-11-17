@@ -1289,15 +1289,26 @@ dms-rail-prepare: bb
 dms-crosscheck: dms-local-packages
 	DMS_REPO=$(DMS_REPO) bash scripts/dms_crosscheck.sh $(BB)
 
-# ADR-008 D5: rebuild the committed E1 and E2 images in a FRESH west workspace (pinned manifest
-# examples/dial-me-spinner/firmware/west.yml, Zephyr SDK 1.0.1) and require the image hashes of
-# firmware/prebuilt/SHA256SUMS (CI job fw-rebuild, where a workspace can be created; downloads
-# about 400 MB the first time). dms-firmware rebuilds the prebuilt images (review the diff).
+# ADR-008 D5: rebuild the committed E1-E3, W1 and W2 images in a FRESH west workspace (pinned
+# manifest examples/dial-me-spinner/firmware/west.yml, Zephyr SDK 1.0.1) and require the image
+# hashes of firmware/prebuilt/SHA256SUMS (CI job fw-rebuild, where a workspace can be created;
+# downloads about 400 MB the first time). dms-firmware rebuilds the prebuilt images (review the diff).
 fw-rebuild: bb
 	bash scripts/dms_zephyr.sh check
 dms-firmware: bb
 	bash scripts/dms_zephyr.sh ws
 	bash scripts/dms_zephyr.sh update
+
+# Phase 2 W-fw (plan section 4; ADR-009 D6, Amendment 7): the Renode-only test of the W1 and W2
+# images' POWER and GPIO configuration (examples/dial-me-spinner/firmware/bb_wfw_test.py, about
+# 30 s on 4 jobs, WFW_JOBS): the PIN_CNF of the enables, POFCON at V28, the blanking's start and
+# end against the LED_PWR_EN edge in each W1 build, the cue held or shed with the stress corner's
+# 2.94 V window as the comparator input, and W2's RESETREAS read and its OLED rule; every case run
+# twice, byte-identical. The POWER registers are power_double.py's until P4's BbNrf52Power
+# replaces Renode's NRF_CLOCK. Needs only Renode and the prebuilt images (CI job fw-rebuild).
+.PHONY: dms-wfw-test
+dms-wfw-test:
+	$(PYTHON) examples/dial-me-spinner/firmware/bb_wfw_test.py --out out/dms-wfw-test
 
 # --- Phase 1 M8 (second half): E2, battery reading and LED shed on dial-me-spinner ---------
 # examples/dial-me-spinner with firmware/prebuilt/vsense.elf (a reading every 1 s) and

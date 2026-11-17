@@ -21,7 +21,11 @@
   the CPU state outputs (`bb_nrf52_state.cs`; Renode's WFI-entry hook comes
   a slice late, so the entry is timed by instruction count), `[[activity]]`
   and `[[load]] replace`, G6 (`make pi-idd`), P2's `pi` references
-  re-recorded.
+  re-recorded. 7 (2026-11-16), W-fw as implemented: the W1 app in four
+  blanking builds and the W2 old-rule and rule apps, prebuilt and
+  reproduced by `make fw-rebuild`; their Renode-only configuration test
+  (`make dms-wfw-test`) runs on a POWER test double until P4's model
+  exists, and P4 re-runs it on the model.
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
@@ -1379,3 +1383,121 @@ re-recorded (ADR-013 Amendment 3 item 11).
   `make pi-glue` 60 s (P2's gate with the re-recorded references),
   `make plugin-scope` 4.2 s and `make lock-scope` 63 s (`examples/nrf-idd`
   among the 11 nRF52840 locks that change under the saadc edit).
+
+## Amendment 7 (2026-11-16): W-fw as implemented (the W1 and W2 firmware)
+
+Milestone W-fw (plan section 4; ADR-008 D5). Two Zephyr v4.5.0
+applications in `examples/dial-me-spinner/firmware/`, on the out-of-tree
+board of Phase 1, built by `scripts/dms_zephyr.sh` into
+`firmware/prebuilt/` with their image hashes in `SHA256SUMS` and
+`PROVENANCE` (the `sources` hash now covers `w1_cue/` and `w2_oled/`).
+The seven Phase 1 images rebuild to their committed hashes, unchanged.
+`make fw-rebuild` reproduces all thirteen in a fresh west workspace.
+`make dms-wfw-test` is the Renode-only configuration test (not in
+`make test`; CI job `fw-rebuild`). No `spec/` file changes.
+
+**W1 (`w1_cue`), four images from one Kconfig switch, `W1_BLANK_MS`:**
+`w1_rule.elf` (10 ms, firmware.md section 12.4), `w1_blank4.elf` (4 ms,
+the window-midpoint control of Amendment 2: the whole ms nearest 3.672 ms),
+`w1_blank5.elf` (the 5 ms report) and `w1_blank_off.elf` (0: POFCON stays
+enabled through the edge). What the firmware does:
+
+- Boot: P1.04 (LED_PWR_EN), P0.06 (LED_DIN_MCU, H0H1) and P1.02
+  (OLED_VCC_EN) outputs driven low; POFCON = POF | V28 (0x1F) and
+  INTENSET.POFWARN through `nrfx_power` (`CONFIG_NRFX_POWER`; Zephyr
+  v4.5.0's `clock_control_nrf_common_irq_handler` calls
+  `nrfx_power_irq_handler` first on the shared POWER_CLOCK interrupt).
+- 1 ms after `main()` (`W1_CUE_DELAY_MS`, the boot steps Phase 2 cannot
+  run, as one sleep): the blanking starts (`nrfx_power_pof_disable()`:
+  POFCON.POF = 0, INTENCLR.POFWARN), LED_PWR_EN rises, and TIMER1 (1 MHz,
+  Zephyr's counter API) starts a relative alarm of `W1_BLANK_MS`. Its
+  callback calls `nrfx_power_pof_enable()` and stops TIMER1. The "already
+  below at enable" rule of D6 then sheds a cue whose dip outlasts the
+  blanking.
+- POFWARN outside the blanking sheds the cue in the ISR, in section 6.4's
+  order (P0.06 low, then LED_PWR_EN low); the cue stays off. P0.06 rises
+  15 ms after LED_PWR_EN (`W1_DIN_DELAY_MS`: at least 10 ms, LED-DATA-V4,
+  and clear of the 10 ms blanking's end) unless the cue was shed. The
+  console (UARTE0 TX on P1.00, the tap of ADR-008 D8) prints a boot line
+  and one line per POFWARN.
+
+Three choices, each forced by the timing:
+
+- **LED_PWR_EN is a plain GPIO**, not the regulator framework: Zephyr
+  v4.5.0's `regulator_enable()` sleeps `off-on-delay-us` (30 ms) inside the
+  call (ADR-008 Amendment 3), so the blanking could not start at the edge.
+  The applications' overlays delete the board's `vled` node (one owner for
+  P1.04) and give `board-signals` two optional properties,
+  `led-pwr-en-gpios` and `oled-vcc-en-gpios`; the E1-E3 images do not use
+  them and are unchanged.
+- **The blanking is timed by TIMER1, not the system timer.** RTC1's
+  30.5 µs tick and the one tick Zephyr adds to every relative timeout would
+  end a 4 ms blanking 4.03-4.06 ms after the edge, within three lattice
+  cells of the stress window's end (4.089 ms). On TIMER1 it ends 3.0 µs
+  after the observed edge (below).
+- **nrfx writes POFCON twice per call** (`nrf_power_pofcon_set`, then
+  `nrf_power_pofcon_vddh_set`'s read-modify-write of THRESHOLDVDDH at its
+  reset value). P4's model must not count the second, identical write as a
+  reconfiguration that re-raises POFWARN (D6 raises on enable or on a
+  threshold change).
+
+**W2 (`w2_oled`), two images from `W2_OLD_RULE`:** every boot reads
+RESETREAS, clears the bits it read and prints them with the rule.
+`w2_old_rule.elf` raises OLED_VCC_EN 1 ms after `main()` (section 7.2 step
+22, the uncapped boot; the brown-out loop repeats it). `w2_rule.elf`
+applies NEW-1: the supplement cannot be known (no STAT1, no battery-only
+reading: Phase 2 has no TWIM bus device, plan section 2's recorded
+deviation), so OLED_VCC_EN stays low and the LEDs show only the charging
+cue (LED_PWR_EN, then P0.06 15 ms later). W2 does not use POFCON: the old
+rule's +3V3 crosses VBOR 3.83-4.09 ms after the enable (plan section 2),
+inside firmware.md's 10 ms blanking of that edge, so a POF handler could not
+act before the reset, and the rule's +3V3 stays at 3.22 V or above.
+
+**The Renode-only test, and the deviation it carries.** The plan's gate is
+"each app's POWER and GPIO configuration checked by a Renode-only test on
+the P4 model". P4's `BbNrf52Power` does not exist yet, and P4 needs W-fw
+(plan section 4's order), so the test runs now on a **test double**,
+`firmware/power_double.py`: POFCON, EVENTS_POFWARN, INTEN.POFWARN and
+RESETREAS on a write hook and a read hook of Renode's `NRF_CLOCK`, which has
+none of them (Context). The double raises POFWARN on a rising comparator
+input with POF enabled and on enable with the input high, and pends IRQ 0
+while the event and the enable are set. It has no thresholds, hysteresis,
+timing or refusals; those are P4's register and timing tests. Its
+comparator input is a control word the test writes at lattice points, as
+the engine applies a `digital_in`. **P4 runs `bb_wfw_test.py` on
+`BbNrf52Power`** with the double removed and the comparator input moved to
+the model's `#pofwarn` input, and keeps its expectations; that is part of
+P4's gate. `make dms-wfw-test` (all pass, 24 runs, 30.5 s on 4 jobs; every
+case twice, byte-identical):
+
+| Case | Result (t_e: the LED_PWR_EN rise the test observes) |
+| --- | --- |
+| PIN_CNF, every image | P1.04 0x3, P1.02 0x3, P0.06 0x303 (H0H1), P1.00 0x3 (console TX), every other pin 0x2 |
+| W1 boot | POFCON 0x1F and INTENSET.POFWARN once each, before t_e; POFCON only ever enabled at V28 |
+| W1 blanking start (10, 5, 4 ms) | POFCON.POF = 0 and INTENCLR.POFWARN in the same lattice cell as t_e (0 ns before it) |
+| W1 blanking end | POFCON 0x1F at t_e + 10.003 ms, + 5.003 ms, + 4.003 ms (gate: [B, B + 10 µs]) |
+| W1 off | POFCON never written after boot |
+| W1 config, every build | no POFWARN; P0.06 rises once, 15 ms after t_e; OLED_VCC_EN never rises |
+| W1 window: comparator high t_e + 3.26-4.09 ms (Amendment 2's window, at lattice points) | 10 and 5 ms: the cue held, no POFWARN; 4 ms: POFWARN at the re-enable, LED_PWR_EN falls 4.0046 ms after t_e (1.6 µs after the re-enable, 84 µs before the window ends), P0.06 never rises, "w1: pofwarn n=1 cue=shed"; off: LED_PWR_EN falls at the window's start (3.260 ms), the same line |
+| W2 RESETREAS | preset 0 (a brown-out): one read, printed 0x00000000; preset 0x4 (SREQ): read, printed and cleared by writing 0x4 |
+| W2 rules | old: OLED_VCC_EN rises 1.1 ms after the RESETREAS read, LED_PWR_EN and P0.06 stay low; rule: OLED_VCC_EN stays low, the cue rises, P0.06 15 ms later; POFCON never written |
+
+The observed edge is the lattice point at which the CPU wakes from WFI
+(Renode stamps the GPIO event and the hook with the time of that sync
+point); TIMER1 starts about 3 µs of instructions later, hence the
++3.0 µs. For P4: the 4 ms control re-enables POFCON 4.003 ms after the
+observed edge, so Amendment 2's condition ("the window ends before 4 ms,
+or within one lattice cell after it") is to be read against that instant.
+
+**Deviations, recorded.**
+
+- The Renode-only test runs on a test double until P4 (above).
+- firmware.md's SHIP after 100 ms of POF is not implemented (it needs the
+  charger's I2C, plan section 3 Out); W1 sheds the cue and keeps it off.
+- The cue's frames are P0.06 high, as in E1 (Renode's I2S drives no pin).
+- The applications have a console, which E1 did not: its boot and POFWARN
+  lines are the firmware's own record of what it saw.
+- **Budget:** none (the plan's W-fw row); nothing is added to `make test`.
+  `make dms-wfw-test` 30.5 s (CI `fw-rebuild`); `make fw-rebuild` 7 min
+  (419 s: a fresh west workspace and thirteen images, every hash equal to
+  `SHA256SUMS` and to the committed ELF; beside a `make check`).
