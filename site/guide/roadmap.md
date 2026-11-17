@@ -1,8 +1,9 @@
 # Status and roadmap
 
 This page separates what exists in the repository from what is planned. The
-plan is `docs/phase1-plan.md`; its status lines and review notes are the
-authority. Nothing on this page under "Planned" is implemented.
+plans are `docs/phase1-plan.md` and `docs/phase2-plan.md`; their status
+lines and review notes are the authority. Nothing on this page under
+"Planned" is implemented.
 
 ## Done
 
@@ -45,7 +46,47 @@ the image's default apt sources: the README took 68.2 s against the
 
 Every Phase 1 milestone (M0–M11) is done.
 
+## Phase 2: the technical exit
+
+Phase 2 (`docs/phase2-plan.md`, ADR-009 to ADR-016) is power integrity,
+benches with assertions and a package ecosystem. This build's scope is
+merged, and its technical exit was measured on 2026-11-17 ("Review notes:
+technical exit" in the plan):
+
+- **Hardening (H0–H6):** track worktrees and a measurement lock; an
+  ngspice progress watchdog and engine-owned `.save`; the lattice snap
+  that fixed the SAADC stall; a reverse-connection External Control client
+  that refuses foreign clients; scoped platform hashes; quiet grants with
+  several producers (E3's homing in 433 grants instead of 270 000); a
+  nightly CI tier. `make check` takes 478 s on an idle ext4 worktree.
+- **The schema epoch (S)** and **benches, assertions and `bb test`
+  (B1–B3)**: `bb-bench/1` with CSV playback and faults, assertions
+  evaluated at solver points, `bb test` files with `test.json` and JUnit
+  ([Testing](./testing)). E1–E3 and W1–W2 are `bb test` files.
+- **Run modes (R1–R2):** devices in `bb.toml`, and the main and base
+  boards simulated together in one deck.
+- **The `pi` rung (P0–P5, W-fw):** power views for the RT9080, BQ25180,
+  TPS61040 and the battery, rail-tracking tristate pins, supply currents
+  from the CPU's states, POFWARN and brown-out reset from the rail
+  ([Fidelity](../concepts/fidelity)). **W1**, POF blanking on a dead
+  battery, passes with the firmware in the loop at a labelled stress corner
+  and is the README quickstart's last line; **W2**, the brown-out reboot,
+  passes its checks, and whether its one brown-out counts as the loop is
+  the approver's call.
+- **The registry (E1)** and **the viewer and VS Code templates (E4)**: the
+  registry, signing and `bb-lock/1` work end to end against local
+  fixtures; publishing it is a human step that has not been taken.
+
+Not started in this build: `bb capture import` (B4), runs without a CPU
+target (R3), W3 (P6), the package pipeline and the first 200 packages
+(E2, E3) and the adoption work (E5).
+
 ## Out of Phase 1
+
+Several of these rows were Phase 2 work and are now done (above): the
+registry and signing (against local fixtures), the `pi` rung with
+rail-tracking pins and brown-out reset, devices in imported projects, and
+bench files, `bb test` and JUnit.
 
 The plan names these as decisions, not gaps ("Scope", `docs/phase1-plan.md`):
 

@@ -1959,3 +1959,73 @@ and every non-grant record; the references equal `tests/golden/dms-w2`
   fixed` the pins keep driving in reset (a warning).
 - VSYS and +3V3 minima of the old rule are reported, not gated, against the
   suite (the reset ends the collapse); P1's static decks gate them.
+
+## Amendment 10 (2026-11-17): the technical exit (W1 and W2 through `bb test`; two numerics findings)
+
+Plan section 5 items 1 and 2, measured on `main` (f91d025 and the
+registry fix after it; the plan's "Review notes: technical exit").
+
+**1. W1 and W2 through `bb test`.** As merged, `make dms-w1-test` and
+`make dms-w2-test` ran `bb run --assert` from their scripts, so neither
+went through `bb test` and neither wrote a `junit.xml` for CI's reporter
+step; the README quickstart had no W1 step (item 4). Now:
+
+- `examples/dial-me-spinner/tests/w1.toml` (`bb-test/0`): `rule`,
+  `blank4` and `off` (the controls: `expect = { "cue-held" = "fail" }`;
+  `no-reset`, an `event` assertion expected to pass, satisfies ADR-010
+  G9), `margin` and `margin-off` at the suite's 50 mA, `rule-order`
+  (analog-first, `same_as = "rule"`), each on the committed project `../w1`
+  with its image by `targets`. `tests/w2.toml`: `old`, `rule`,
+  `rule-order`.
+- `scripts/dms_w1.sh test` and `dms_w2.sh test` run the file through `bb
+  test --pool env`, then `check_bb_test.py`, `check_dms_w1.py` /
+  `check_dms_w2.py` and the committed one-cell hashes on `bb test`'s
+  outputs. `tests/golden/dms-w1` and `dms-w2` hold the records with the
+  assert records (as `make dms-w1` writes them), so the script checks them
+  rather than a `golden` key, which compares the records without them
+  (`spec/test.md` section 1). Every hash is unchanged.
+- `out/dms-w1-test/junit.xml` and `out/dms-w2-test/junit.xml` match
+  `ci.yml`'s `out/dms-*-test/junit.xml`. `make bb-test-gate` runs both
+  files 10 times (`test.json` byte-identical, the tenth with every Renode
+  fresh: `e64a815fa48a766b`, `c23f9af3242b70f2`) and reads their
+  `junit.xml` with dorny/test-reporter v3.2.0's java-junit parser (7
+  files). The reporter step itself runs only on a push.
+- The README quickstart's last line is `bb test tests/w1.toml --out
+  out/w1` (exit 0, 5.9 s in the stranger test's clean container).
+
+**2. Finding: `make pi-spike` fails one gate since P1 (D-TPS).** On
+f91d025, 36 of 37 gates pass; the failing one is P0's numerics gate "w2old
+pi at phase0: VSYS and +3V3 at every 10 µs within 2 mV of the converged
+run (TMAX 1 µs)": 14.761 mV (VSYS, 4.73 ms) and 10.726 mV (+3V3, 4.69 ms).
+Measured at earlier `main` commits: 1caac69 (P0) and 0883d7b (S, before
+P1) pass 37/37 (1.027 mV, 0.965 mV); a944cf2 (P1 merged), 29e5006 (H2)
+and f91d025 give exactly 14.761 / 10.726 mV. f91d025 with only
+`packages/ti/tps22917/analog/lsw_fit.lib` of 0883d7b passes 37/37 again,
+so the cause is P1's restatement of the TPS22917 view (decision D-TPS),
+which the spike's `pi` variant reads from `packages/`; P1 did not re-run
+`make pi-spike`. Every replica gate and every other gate passes, among them
+W1 at its stress corner and the margin check. Not changed here: the gate's
+2 mV is P0's tolerance on P0's deck, so re-basing it, or pinning the
+spike to the pre-D-TPS view, is the approver's call.
+
+**3. Finding: W2 old's collapse is not converged at the 10 µs lattice.**
+The same effect reaches the gated W2 run (package views, firmware in the
+loop): W2 old (8 ms) at `--renode-quantum` 10, 5, 2 and 1 µs
+(`--allow-unqualified` for the finer lattices): against the 10 µs run, at
+its 10 µs samples, the 5, 2 and 1 µs runs differ by at most 9.212, 14.115
+and 14.106 mV on VSYS (4.25 ms) and 5.748, 8.813 and 8.806 mV on +3V3
+(4.48 ms), so the 2 and 1 µs runs agree and the 10 µs run is about 14 mV
+off during the collapse. The verdicts do
+not move: the hold is at 5.160 ms at every lattice, the release at
+`ceil_L` of the same fall (5.330, 5.320, 5.318, 5.317 ms), RESETREAS 0,
+and the static-load VBOR crossing's +83.8 µs is far inside its 500 µs.
+W1 is converged: at 10, 5, 2 and 1 µs, `rule` gives +3V3 min 2.917427,
+2.917450, 2.917452, 2.917451 V and `margin` 2.962615 to 2.962655 V, with
+every assertion's verdict unchanged and `pof-dip` within 0.4 µs. So the
+finding bounds W2's waveform during the collapse (about 14 mV at 10 µs),
+not a W1 or W2 verdict; it is reported, not gated.
+
+**4. Still the approver's:** W2's loop is one brown-out on these views
+(Amendment 9, item 5): the plan's "at least 2 `reset` records" passes
+literally (`brownout`, min 2) with one brown-out's hold and release, and
+`check_dms_w2.py` reports "loop: does not repeat" over the plan's 200 ms.

@@ -45,7 +45,9 @@ and the TPS22917's datasheet-fitted view.
 
 ## No silent defaults
 
-- **The fidelity ladder** is `fast < pi < si < em`. Phase 1 runs `fast` only.
+- **The fidelity ladder** is `fast < pi < si < em`. Phase 1 ran `fast` only;
+  Phase 2 adds `pi`, the power-integrity rung (`bb run --fidelity pi` on a
+  project, ADR-009), and `bb run` refuses `si` and `em`.
   An instance uses the view its project override names, else the view that is
   the default for the requested rung, else the default of the first lower
   rung. Otherwise it has **no analog model**: it is listed as unmodelled,
@@ -76,5 +78,8 @@ checks.
 Benches state their own limits. The E1 cold bench, for example, says in its
 comments that it does not reproduce the BQ25180 power-path dynamics, the
 base-board VSYS capacitance, tolerances, DC bias or Monte Carlo corners.
-Higher fidelity rungs (`pi`, `si`, `em`) and rail-tracking pin outputs are
-[Phase 2 roadmap items](../guide/roadmap), not features.
+At `pi`, Phase 2's system runs put the base board's power path in the deck
+instead, with rail-tracking pin outputs and named corners; a stress corner
+that is not the suite's own is labelled in the bench and in `run.json`
+(W1's 55 mA, approver decision D-W1). The `si` and `em` rungs are not
+features ([Status and roadmap](../guide/roadmap)).

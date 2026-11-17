@@ -11,7 +11,13 @@ simulated time couples them at the pin boundary.
 project, resolves its parts to component packages (`packages/`,
 `spec/package.md`), and runs Zephyr firmware on an nRF52840 against the
 analog part of the board. Its reference demo is below. Phase 0, the spike
-described further below, came first.
+described further below, came first. **Phase 2** (`docs/phase2-plan.md`)
+adds power integrity at the `pi` fidelity rung (rail-tracking pins,
+supply currents, POFWARN and brown-out reset from the rail), benches with
+assertions and `bb test`, runs of the main and base boards together, and a
+package registry tested against local fixtures. Its technical exit was
+measured on 2026-11-17 ("Review notes: technical exit" in the plan); its
+worked example W1 is the quickstart's last line.
 
 ## Quickstart: the reference demo
 
@@ -61,9 +67,13 @@ bb test tests/w1.toml --out out/w1                               # W1 at --fidel
 packages, Rust 1.99.1, Renode 1.17.0 and ngspice 42, then builds `bb`.
 Each run then takes a few seconds. Timed from a local clone, the whole
 block took 1 min 54 s in a clean `ubuntu:24.04` container and 1 min 47 s
-in a fresh WSL distro. `make setup` took about 50 s of that, the local
-clone 25–45 s, and each run under 4 s. That was on a 24-CPU host with a working Ubuntu mirror
-(Phase 1 plan, "Review notes: M7"). The 15-minute budget leaves room for a
+in a fresh WSL distro at Phase 1's exit; `make setup` took about 50 s of
+that, the local clone 25–45 s, and each run under 4 s (Phase 1 plan,
+"Review notes: M7"). At Phase 2's technical exit, with the W1 line, it
+took 8 min 25 s (504.6 s) in a clean container: the clone from the
+Windows-mounted checkout 404.5 s, `make setup` 64.6 s, the W1 line 5.9 s
+(Phase 2 plan, "Review notes: technical exit"). Both on a 24-CPU host with
+a working Ubuntu mirror. The 15-minute budget leaves room for a
 slower network, but it assumes a reachable Ubuntu mirror: almost all of the
 time is apt and the downloads, and Breadboard's own steps take seconds.
 

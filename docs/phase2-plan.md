@@ -6,6 +6,14 @@
   review round 1 the same day (see "Review notes" at the end). When it was
   accepted nothing in this plan or its ADRs was implemented, and no
   `spec/` file had been changed.
+- **Technical exit measured (2026-11-17):** every milestone of this
+  build's scope is merged, and section 5's items were measured on `main`
+  ("Review notes: technical exit", at the end): items 1 and 3-6 pass
+  (item 5e as an estimate from local job-equivalents, item 6 against local
+  fixtures, both by decision); item 2 passes its stated checks, with W2's
+  one-brown-out loop left to the approver (ADR-009 Amendment 9), as is one
+  P0 spike gate broken by D-TPS (ADR-009 Amendment 10). The adoption exit
+  is not attempted in this build (section 10).
 - **Decisions it depends on (all Accepted 2026-11-15, ADR-014 behind its
   gate G0; written with this plan):**
   - ADR-009, `pi` fidelity;
@@ -864,3 +872,45 @@ adopted, most of them changed by a measurement made for this revision.
 - **"Pick another worked example if W1 cannot discriminate."** Measured:
   no other suite POF case crosses a settable threshold (`floor_probe.py`).
   W1 stays, at the +5 % corner, with Q1's stress-corner fallback.
+
+## Review notes: technical exit (2026-11-17)
+
+Every milestone of this build's scope (section 10) is merged. The
+technical exit (section 5) was measured item by item on `main` at
+f91d025, in the ext4 worktree `~/src/bb-p` (on `main`'s commit) and, for
+the stranger test, from a local clone of the main checkout. Three gaps
+were found and closed in this round, each with its own commit: W1 and W2
+did not run through `bb test` and the quickstart had no W1 step (items 1,
+2, 4; ADR-009 Amendment 10), and the registry's G7 failed (item 6; ADR-011
+Amendment 3). `make check` on the result (the registry fix and the
+relock): green pooled (497 s) and with `POOL=0` (597 s); `make
+registry-gate` PASS; the docs site builds (`npm run docs:build`). Nothing
+was pushed or published.
+
+| Item | Verdict | Evidence |
+| --- | --- | --- |
+| 1. W1 at `pi` through `bb test` | **PASS**, with Amendment 8's recorded deviation (the anti-vacuity check is `pof-dip` with the paired control, not "`pofwarn` fired") | `make dms-w1-test` is `tests/w1.toml` through `bb test` (6 cases: `rule` passes cue-held, pof-dip, flash-vcc, no-reset at rung `pi`; `blank4` and `off` fail exactly `cue-held`; `margin`, `margin-off`; analog-first `same_as`); `make dms-w1` PASS (37 checks, 0 failures: every gated case and both co-simulations equal their one-cell references except grant records at bb's defaults and 1 ms, the references equal `tests/golden/dms-w1`, analog-first, 10 runs byte-identical); static-load against the suite at 55 mA: +3V3 min +109.6 mV, VSYS +101.0 mV, window start +18.8 µs (tolerances 200 mV, 200 mV, 50 µs); margin at 50 mA: +3V3 min 2.962615 V (+22.6 mV), no POFWARN, both builds; halved capacitance reported (2.9189 V, −21.1 mV, `make pi-spike`); `run.json`'s bench and every `check_dms_w1.py` line name the stress corner; the suite replica (local-only TPS22917) passes every replica gate of `make pi-spike` (see finding A); `make bb-test-gate`: 10 runs, `test.json` byte-identical, `junit.xml` read by the reporter's own parser. W1 is converged in the lattice (Amendment 10 item 3). "JUnit is published by CI": the step reads `out/dms-*-test/junit.xml`, which now includes W1's; it runs only on a push |
+| 2. W2 (P5's prototype passed, so in full) | **PASS on its stated checks; the loop's verdict is the approver's** | `tests/w2.toml` through `bb test` (old: brownout ≥ 2 `reset` records, boots, resetreas-zero, oled-en-in-reset; rule: no-reset, vcc, oled-off); `make dms-w2` PASS (23 checks: VBOR crossings at 1.57/1.60/1.63 V within 500 µs of the suite, the rule's minima within 20 / 10 mV, partition independence, goldens, analog-first, 10 runs); 10 `bb test` runs byte-identical. **needs approval:** one brown-out writes two `reset` records (hold, release), so "at least 2" passes literally while the loop does not repeat in 200 ms (ADR-009 Amendment 9) |
+| 3. dms-* checks as `bb test` files; `fast` unchanged | **PASS** | `make dms-rail-test`, `dms-vsense-test`, `dms-home-test` (in `make test`) run `tests/e1.toml`, `e2.toml`, `e3.toml`; `make assert-gate` PASS (83 checks, every negative control failing exactly as before); `make bb-test-gate` PASS (e1-e3, w1, w2: 10 runs each, `test.json` byte-identical, the tenth fresh). Every `fast` golden changed since aaebe43 was changed by an approved, recorded decision: H2 (D-SNAP, ADR-015 Amendment 4), P1 (D-TPS, ADR-009 Amendment 4: E1's and E2 sag/rec's hashes, the e1-rail plots), H5 (Q4's D4 model change, ADR-014 Amendment 1: E3 typ/worst/park), H6 (Q8/ADR-015 D9: `adc-stock` removed); the spike's goldens are unchanged; `make test` re-checks every committed hash |
+| 4. Stranger `pi` demo | **PASS** | README quickstart gains `bb test tests/w1.toml --out out/w1`; `make stranger-test-container` from a local clone (`file:///repo`, the main checkout read-only) at f91d025: **504.6 s** against 900 s (apt 21.3 s, clone 404.5 s from the Windows-mounted checkout, `make setup SETUP=demo` 64.6 s, every `bb` line under 6 s, the W1 line 5.9 s, exit 0); both E1 runs equal their committed hashes |
+| 5a. No unbounded hang (H1) | **PASS** | `make ngspice-stall` PASS (NoProgress at 77.43 ms in 23.8 s, 38 MB; H2's completion runs; the 502.47 ms negative control); a long quiet E3 run, `homing.elf` on `e3/board.cir` for 30 s (2.7 s of homing, then 27.3 s of the parked board with every engine quiet): completed in 50.4 s wall (47.7 s simulation), 3 175 grants (3 003 quiet), 0 promises broken, bb's peak RSS 137 MB (335 MB for the process tree) |
+| 5b. External Control refuses foreign clients (H3) | **PASS** | `make ec-exposure`: 20/20 starts (4 fresh, 16 leased) refused their foreign client and every reconnect's, none read a byte, Renode listened on no port |
+| 5c. ADR-014 built, G3 met | **PASS** | `make dms-home-g0` (N = 3, idle, lock): the protocol gain **27.8x** in simulation time (d4 123.25 s / proto 4.43 s; H5 measured 32.3x), proto equal to d4 except grant records; `make dms-home` PASS (`typ` 433 grants ≤ 5 000, 270 000 one-cell; peak RSS 31 MB; negative controls) |
+| 5d. `make check` ≤ H0 + 4 min | **PASS** | `make baseline` (N = 3 + warm-up, idle ext4 worktree, lock) at f91d025: **478 s** (478, 481, 478; warm-up 491 s) against H0's 470 s and the target **710 s**; green 4 of 4. `make check POOL=0` 725 s, green |
+| 5e. Slowest CI PR job ≤ 15 min | **PASS (estimate)** | `make ci-jobs-local` with `fw-rebuild` (lock, all 8 jobs green, setup aside): `fw-rebuild` 642 s (a fresh west workspace over this host's network; H0's CI ran 7 images in 1:41 plus 1:12 setup, so 13 images estimate about 5 min on CI), `dms-rail` 376 s, `test` 343 s, `cargo-test` 152 s, `feedback` 103 s, `adc` 42 s, `partition` 20 s, `verify-every` 6 s. With H0's CI setup medians the worst is `fw-rebuild` at 642 + 72 s = 11.9 min, under 15; CI confirms on the first push. Moved to nightly by H6, with its saving: the `fresh` job (11:30 CI median), `ec-long`, `ngspice-stall`, the full `dms-home` and `dms-vsense` (ADR-015 Amendment 5) |
+| 6. Registry (against local fixtures, decision "No publishing") | **PASS after a fix** | `make registry-gate` first FAILED G7 (17 checks): `raytac/mdbt50q-u1mv2` changed in P4 without a version bump, and `bb registry check` re-linted already-published versions against platforms this bb has retired. Fixed (ADR-011 Amendment 3: 0.1.1 and `make locks`; published versions not re-linted for platform/device availability, with a check and its control). Then `make registry-gate` PASS: 106/106 and G7 (every first-party package, 15, in the local registry repository at serial 2, signed; dial-me-spinner's E1 with a cold cache from the HTTPS fixture and offline with a warm one, equal to `tests/golden/dms-rail/ok-cold`; tampering, rollback, yanking, the routed namespace in `registry-test`). `make test-offline` PASS (`make test` and `make packages` with no route, 955 s). The live registry is the human's publishing step (`docs/registry-publish.md`) |
+
+**Findings that are not exit items** (ADR-009 Amendment 10):
+
+- **A. `make pi-spike` fails one of 37 gates since P1** (the W2-old `pi`
+  deck at 10 µs against its TMAX 1 µs run: 14.8 mV against 2 mV), caused
+  by D-TPS's TPS22917 restatement (shown by restoring the pre-P1 view
+  alone). **needs approval:** re-base P0's tolerance or pin the spike's
+  view; nothing was changed.
+- **B. W2 old's collapse is about 14 mV off at the 10 µs lattice** in the
+  gated run too (converged at 2 µs); no W1 or W2 verdict moves, and W1
+  is converged to 0.04 mV.
+
+**Not shown here, by decision:** GitHub runs (the CI jobs, the JUnit
+reporter step, `nightly.yml`), the public registry and its Pages site;
+the adoption exit (B4, R3, P6, E2, E3, E5 not started).

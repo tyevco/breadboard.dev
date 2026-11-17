@@ -16,8 +16,11 @@ on which MCU, runs the co-simulation and writes waveforms and an event log.
 
 ## What it does today
 
-Breadboard is in **Phase 1**. Phase 1 runs a real board that nobody wrote for
-Breadboard:
+Breadboard is in **Phase 2**, whose technical exit was measured on
+2026-11-17 ([Status and roadmap](./roadmap)): power integrity at the `pi`
+fidelity rung on the same board, benches with assertions and `bb test`, and
+a package registry tested against local fixtures. Phase 1 runs a real board
+that nobody wrote for Breadboard:
 
 > Import a real KiCad project, resolve its parts to packages, load real
 > firmware on the real MCU, and reproduce, in a co-simulation, a result that
