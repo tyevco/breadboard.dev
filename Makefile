@@ -92,7 +92,7 @@ endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
                   nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test \
                   bench-test bench-gate dms-home-project assert-test assert-gate bb-test-gate \
-                  dms-e1-system dms-e1-system-test cargo-test dms-w1 dms-w1-test
+                  dms-e1-system dms-e1-system-test cargo-test dms-w1 dms-w1-test dms-w2 dms-w2-test
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -140,7 +140,7 @@ TEST_STEPS := measure-lock-test cargo-test spike determinism golden feedback fee
               nrf-feedback adc adc-order adc-model nrf-saadc-model nrf-power-model nrf-pwm-model \
               device-smoke multi-producer adc-kicad dms-rail-test dms-vsense-test dms-home-test \
               bench-test assert-test ec-reconnect packages pi-static-test pi-glue-test pi-idd-test \
-              gdb-test vscode-templates dms-system dms-e1-system-test dms-w1-test registry-test
+              gdb-test vscode-templates dms-system dms-e1-system-test dms-w1-test dms-w2-test registry-test
 TEST_SKIP ?=
 pooled-test:
 	@mkdir -p $(dir $(TEST_TIMING)) && : > $(TEST_TIMING)
@@ -476,7 +476,7 @@ measured-jit-profile-stress: firmware bb
 POOL_EQUIV_OUT    ?= out/pool-equiv
 POOL_EQUIV_ROUNDS ?= 2
 pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare bench-prepare \
-            dms-e1-system-prepare pi-idd-prepare dms-w1-prepare
+            dms-e1-system-prepare pi-idd-prepare dms-w1-prepare dms-w2-prepare
 	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
 	    "bench-stimulus;$(BENCH_GOLD)/stimulus.sha256;nongrant;$(BENCH_STIM_ARGS)" \
 	    "bench-trigger;$(BENCH_GOLD)/trigger.sha256;nongrant;$(BENCH_TRIG_ARGS)" \
@@ -515,7 +515,10 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare be
 	    "dms-w1;$(DMS_W1_GOLD)/rule/outputs.sha256;nongrant;$(DMS_W1_ARGS)" \
 	    "dms-w1-ref;$(DMS_W1_GOLD)/rule/outputs.sha256;all;$(DMS_W1_ARGS) --max-quantum 10us --lookahead off" \
 	    "dms-w1-blank4;$(DMS_W1_GOLD)/blank4/outputs.sha256;nongrant;$(DMS_W1_BLANK4_ARGS)" \
-	    "dms-w1-off;$(DMS_W1_GOLD)/off/outputs.sha256;nongrant;$(DMS_W1_OFF_ARGS)"
+	    "dms-w1-off;$(DMS_W1_GOLD)/off/outputs.sha256;nongrant;$(DMS_W1_OFF_ARGS)" \
+	    "dms-w2-old;$(DMS_W2_GOLD)/old/outputs.sha256;nongrant;$(DMS_W2_OLD_ARGS)" \
+	    "dms-w2-old-ref;$(DMS_W2_GOLD)/old/outputs.sha256;all;$(DMS_W2_OLD_ARGS) --max-quantum 10us --lookahead off" \
+	    "dms-w2-rule;$(DMS_W2_GOLD)/rule/outputs.sha256;nongrant;$(DMS_W2_RULE_ARGS)"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -1041,7 +1044,7 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step \
               examples/dial-me-spinner/e2/none examples/dial-me-spinner/e2/c5 examples/dial-me-spinner/e2/c5-none \
               examples/dial-me-spinner/e1-system tests/multi-producer/board.cir \
-              examples/nrf-idd examples/dial-me-spinner/w1
+              examples/nrf-idd examples/dial-me-spinner/w1 examples/dial-me-spinner/w2
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages \
              examples/bench/packages examples/dial-me-spinner/e3/packages
@@ -1288,6 +1291,37 @@ dms-w1-update: dms-w1-ref
 	bash scripts/dms_w1.sh update $(DMS_W1_OUT)-ref
 dms-w1-prepare: bb
 	bash scripts/dms_w1.sh prepare $(BB)
+
+# --- Phase 2 P5: W2, the S4 brown-out reboot loop on a dead battery (plan section 2 W2; ADR-009 D7) --
+# dms-w2-test (in make test): the old-rule firmware (20 ms: the brown-out's hold and release, the reboot
+# reading RESETREAS 0 and enabling the OLED again) and the rule firmware (20 ms) on
+# examples/dial-me-spinner/w2 in static-load mode, at bb's defaults, with scripts/check_dms_w2.py and
+# the committed one-cell hashes, and the rule analog-first byte-identical (scripts/dms_w2.sh test).
+# dms-w2: every case of scripts/dms_w2.sh (the VBOR corners min and max, the plan's 200 ms of each
+# firmware with the brown-outs and the loop reported), partition independence at 10 us, 1 ms and
+# 10 ms grants, the references against tests/golden/dms-w2, analog-first, 10-run determinism.
+# dms-w2-update rewrites tests/golden/dms-w2 from fresh one-cell references (review the diff).
+.PHONY: dms-w2 dms-w2-test pooled-dms-w2 pooled-dms-w2-test dms-w2-ref dms-w2-update dms-w2-prepare
+DMS_W2_OUT  ?= out/dms-w2
+DMS_W2_WORK ?= $(BB_SCRATCH)/bb-dms-w2
+export DMS_W2_WORK
+DMS_W2_GOLD := tests/golden/dms-w2
+# The pool-equiv configurations (ADR-004 G4; ADR-009 G7's reset case): the old rule's brown-out and
+# the rule (scripts/dms_w2.sh).
+DMS_W2_OLD_ARGS  = --project $(DMS_W2_WORK)/dms/w2-old --bench $(DMS_W2_WORK)/dms/w2-old/bench/w2-old.toml \
+                   --for 20ms --assert $(DMS_W2_WORK)/dms/asserts/w2-old.toml
+DMS_W2_RULE_ARGS = --project $(DMS_W2_WORK)/dms/w2-rule --bench $(DMS_W2_WORK)/dms/w2-rule/bench/w2-rule.toml \
+                   --for 20ms --assert $(DMS_W2_WORK)/dms/asserts/w2-rule.toml
+pooled-dms-w2-test: bb
+	bash scripts/dms_w2.sh test $(BB) $(DMS_W2_OUT)-test
+pooled-dms-w2: bb
+	bash scripts/dms_w2.sh gate $(BB) $(DMS_W2_OUT)
+dms-w2-ref: bb
+	bash scripts/dms_w2.sh ref $(BB) $(DMS_W2_OUT)-ref
+dms-w2-update: dms-w2-ref
+	bash scripts/dms_w2.sh update $(DMS_W2_OUT)-ref
+dms-w2-prepare: bb
+	bash scripts/dms_w2.sh prepare $(BB)
 
 # --- Phase 1 M8 (second half): E2, battery reading and LED shed on dial-me-spinner ---------
 # examples/dial-me-spinner with firmware/prebuilt/vsense.elf (a reading every 1 s) and

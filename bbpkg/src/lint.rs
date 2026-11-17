@@ -644,9 +644,10 @@ fn lint_pins(pkg: &Package, o: &mut Out) {
 /// `pi` beside the CPU target's views, like a `supply_load` (never at
 /// `fast`, never a rung's default). Its ports are exactly: supply and
 /// ground pins (at least one supply), the state ports `pofthr0..3` (the
-/// threshold code's bits) and one observe port `pofwarn` (its output).
+/// threshold code's bits), one observe port `pofwarn` (its output) and at
+/// most one observe port `bor` (the brownout detector's output, ADR-009 D7).
 fn lint_pof_comparator(pkg: &Package, v: &crate::package::View, at: &str, o: &mut Out) {
-    use crate::package::{POF_OUTPUT_SIGNAL, POF_THRESHOLD_STATES};
+    use crate::package::{POF_BOR_SIGNAL, POF_OUTPUT_SIGNAL, POF_THRESHOLD_STATES};
     if v.fidelity.iter().any(|r| r == "fast") {
         o.e(format!(
             "{at}: a pof_comparator view is not valid at fast (it enters the deck at pi, \
@@ -661,6 +662,7 @@ fn lint_pof_comparator(pkg: &Package, v: &crate::package::View, at: &str, o: &mu
     }
     let mut states: Vec<&str> = Vec::new();
     let mut outputs = 0;
+    let mut bors = 0;
     let mut supply = false;
     for port in &v.ports {
         match port {
@@ -683,9 +685,10 @@ fn lint_pof_comparator(pkg: &Package, v: &crate::package::View, at: &str, o: &mu
                 states.push(state);
             }
             Port::Observe { signal } if signal == POF_OUTPUT_SIGNAL => outputs += 1,
+            Port::Observe { signal } if signal == POF_BOR_SIGNAL => bors += 1,
             Port::Observe { signal } => o.e(format!(
-                "{at}: observe port {signal}: a pof_comparator view's output is \
-                 {POF_OUTPUT_SIGNAL} (ADR-009 D6)"
+                "{at}: observe port {signal}: a pof_comparator view's outputs are \
+                 {POF_OUTPUT_SIGNAL} and {POF_BOR_SIGNAL} (ADR-009 D6, D7)"
             )),
             _ => o.e(format!(
                 "{at}: a pof_comparator view's ports are pin, state and observe ports (ADR-009 D6)"
@@ -707,6 +710,11 @@ fn lint_pof_comparator(pkg: &Package, v: &crate::package::View, at: &str, o: &mu
     if outputs != 1 {
         o.e(format!(
             "{at}: needs exactly one observe port {POF_OUTPUT_SIGNAL} (ADR-009 D6)"
+        ));
+    }
+    if bors > 1 {
+        o.e(format!(
+            "{at}: at most one observe port {POF_BOR_SIGNAL} (ADR-009 D7)"
         ));
     }
 }

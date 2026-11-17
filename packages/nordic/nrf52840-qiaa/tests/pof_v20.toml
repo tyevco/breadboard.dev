@@ -17,6 +17,7 @@ pofthr1 = "t1"
 pofthr2 = "t2"
 pofthr3 = "t3"
 pofwarn = "warn"
+bor = "bor"
 
 [[edge]]
 net = "t0"

@@ -1,0 +1,81 @@
+# examples/dial-me-spinner/w2/bb.toml: W2, the S4 brown-out reboot loop on a dead battery, with the
+# firmware in the loop on the dial-me-spinner system (Phase 2 P5; plan section 2 W2; ADR-009 D7,
+# Amendment 9).
+#
+# USB at ILIM 100 mA with a dead cell. Under the old rule (w2_old_rule.elf, the default image) the
+# firmware enables the OLED boost 1 ms after main(): VSYS collapses, +3V3 falls below VBOR, U10's
+# brownout reset detector (the `bor` output of nordic/nrf52840-qiaa:pof) holds the CPU in reset, the
+# enables fall through their pull-downs (OLED_VCC_EN through R25: every digital_out is high-Z in
+# reset, ADR-009 D5), VSYS and +3V3 recover, the CPU is released, boots, enables the OLED again, and
+# the loop repeats. Under the rule (w2_rule.elf, by `bb run --image`) the OLED stays off and only the
+# charging cue (LED_PWR_EN, then P0.06 15 ms later) runs.
+#
+# Both boards in one deck, as ../w1 (a single-MCU system run, ADR-013 D2): the power path is the
+# boards' own `pi` views end to end, USB VBUS into the BQ25180 (base U1), the dead cell (a bench
+# [[battery]]), the harness, the main board's RT9080 (main U1) onto +3V3 with the board's +3V3
+# capacitors, the OLED load switch U21 (ti/tps22917) and the averaged TPS61040 boost U20 with its
+# surge, and (the rule's cue) U2 and the LED ring.
+#
+# The benches (bench/) are W2's two suite cases in static-load mode (ADR-009 D4): the suite's 50 mA
+# +3V3 budget in place of U10's supply_load.
+#
+# Each board keeps its own ground: main:GND is node 0 (the target's board), base:GND is the node
+# base_GND, joined to it by the harness's three GND wires.
+schema = "bb-project/1"
+
+[project]
+name = "dial-me-spinner rev A: W2 (the S4 brown-out reboot loop on a dead battery) on the system (main + base)"
+simulate = ["main", "base"]
+
+[[board]]
+id = "main"
+netlist = "../kicad/main/dial-me-spinner-main.net"
+ground = "GND"
+
+[[board]]
+id = "base"
+netlist = "../kicad/base/dial-me-spinner-base.net"
+ground = "GND"
+
+# The link harness (../system/packages): not on either schematic.
+[packages]
+paths = ["../system/packages"]
+
+# As in ../bb.toml: the NFC coil pads need a decision (ADR-007 D4).
+[instances."main:J11"]
+package = "none"
+reason = "NFC coil pads: no RF model in Phase 1"
+
+# Main J1 and base J3, straight through (as ../system/bb.toml).
+[[connection]]
+a = "main:J1"
+b = "base:J3"
+model = "dial-me-spinner/link-harness:wires"
+
+# W2's old-rule firmware (the uncapped boot, section 7.2 step 22); the rule by `bb run --image`
+# (the image hashes of ADR-008 D5, firmware/prebuilt/SHA256SUMS).
+[targets."main:U10"]
+images = [{ file = "../firmware/prebuilt/w2_old_rule.elf", kind = "elf", hash = "sha256:fa062b633261fa33e29ebd9cd74ddf332df118ca8bb71345ad9e61baaa0c023a" }]
+
+# The pins the W2 firmware drives (firmware.md section 1.3): OLED_VCC_EN (P1.02, S0S1), and the
+# charging cue's LED_PWR_EN (P1.04, S0S1) and LED_DIN_MCU (P0.06, H0H1_max), as ../w1's.
+[[bind]]
+pin = "main:U10.P1.02"
+model = "digital_out"
+set = "S0S1"
+net = "main:OLED_VCC_EN"
+
+[[bind]]
+pin = "main:U10.P1.04"
+model = "digital_out"
+set = "S0S1"
+net = "main:LED_PWR_EN"
+
+[[bind]]
+pin = "main:U10.P0.06"
+model = "digital_out"
+set = "H0H1_max"
+net = "main:LED_DIN_MCU"
+
+[probes]
+nets = ["+3V3", "main:VSYS", "base:VSYS", "OLED_VIN", "+13V_OLED", "OLED_VCC_EN", "base:VBUS"]

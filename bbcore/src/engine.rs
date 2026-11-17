@@ -2,7 +2,7 @@
 //!
 //! Protocol: `docs/adr/002-time-grant-protocol.md` and `spec/time-grant.md`.
 
-use crate::event::LogRecord;
+use crate::event::{LogRecord, ResetRecord};
 use crate::signal::{PinSignal, PinSignals, Transition};
 use crate::time::Time;
 
@@ -192,6 +192,13 @@ pub trait Engine {
 
     /// Log lines produced since the last call (e.g. UART). Default: none.
     fn drain_logs(&mut self) -> Vec<LogRecord> {
+        Vec::new()
+    }
+
+    /// Machine resets since the last call (ADR-009 D7, milestone P5: a CPU
+    /// engine's brown-out hold and release), each a `reset` record that sorts
+    /// like a log record of the engine at its time. Default: none.
+    fn drain_resets(&mut self) -> Vec<ResetRecord> {
         Vec::new()
     }
 

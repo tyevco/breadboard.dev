@@ -1269,6 +1269,16 @@ fn run(a: RunArgs) -> Result<(), String> {
     // from its PIN_CNF write hook; elsewhere (or --pi-oe fixed) oe = 1.
     let oe_dir = nrf && !a.pi_oe_fixed;
     let (pi_deck, pi_inputs, pi_oes) = pi_glue_deck(&board, &mcu_pins, oe_dir, a.operating_point)?;
+    // ADR-009 D7 (milestone P5): with --pi-oe fixed every oe is `dc 1`, so a
+    // brown-out's hold cannot make the outputs high-Z (D5: "always 0 while
+    // held in reset" needs the PIN_CNF.DIR source). Said, not silent.
+    if a.pi_oe_fixed && board.pof.as_ref().is_some_and(|p| p.bor.is_some()) && !pi_deck.is_empty() {
+        eprintln!(
+            "bb run: warning: --pi-oe fixed: the digital_out pins keep driving while the brownout \
+             detector holds the CPU in reset (ADR-009 D5, D7: high-Z in reset needs the PIN_CNF.DIR \
+             oe source)"
+        );
+    }
     // The assertions' nets (ADR-010 D5): a project's are resolved by its
     // elaboration; a board file's are its own names (an MCU or device pin's
     // kernel net `<ref>.<pin>` is digital, any other name a circuit node).
@@ -1312,10 +1322,14 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
     // ADR-009 D6 (milestone P4): the POWER model's #pofen output and its
     // #pofwarn input (the comparator's output, glue rule 13).
-    if board.pof.is_some() {
+    if let Some(p) = &board.pof {
         rcfg.pins
             .push(PinSpec::nrf_state("#pofen").map_err(|e| e.to_string())?);
         rcfg.pins.push(PinSpec::nrf_pofwarn());
+        // ADR-009 D7 (milestone P5): the brownout detector's #bor input.
+        if p.bor.is_some() {
+            rcfg.pins.push(PinSpec::nrf_bor());
+        }
     }
     rcfg.adc_trace = mcu_pins
         .iter()
@@ -1384,6 +1398,22 @@ fn run(a: RunArgs) -> Result<(), String> {
             net: p.kernel_net.clone(),
             dir: Direction::Input,
         });
+        // The brownout detector's output into the CPU engine's `#bor`
+        // (ADR-009 D7).
+        if let Some((_, net)) = &p.bor {
+            binds.push(devices::Bind {
+                engine: devices::ANALOG,
+                pin: net.clone(),
+                net: net.clone(),
+                dir: Direction::Output,
+            });
+            binds.push(devices::Bind {
+                engine: devices::CPU,
+                pin: "#bor".into(),
+                net: net.clone(),
+                dir: Direction::Input,
+            });
+        }
     }
     // The pi glue's oe sources (ADR-009 D5): `<pin>#oe` of the CPU engine
     // into the analog engine, like a loading adc_in's `#smp`.
@@ -1516,6 +1546,14 @@ fn run(a: RunArgs) -> Result<(), String> {
             node: p.node.clone(),
             model: board::POFWARN_IN,
         });
+        // ADR-009 D7: the brownout detector's output, the same thresholds.
+        if let Some((node, net)) = &p.bor {
+            ncfg.digital_outputs.push(DigitalOutputBinding {
+                pin: net.clone(),
+                node: node.clone(),
+                model: board::POFWARN_IN,
+            });
+        }
     }
     for p in &mcu_pins {
         match &p.kind {

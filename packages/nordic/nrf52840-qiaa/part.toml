@@ -9,12 +9,13 @@
 # view is the SAADC's pin_load view saadc_se (plan M8, ADR-008 D7), the load a bound adc_in puts on
 # its pad; the behavioural platform nrf52840-bb@4 has the SAADC model it feeds. Since Phase 2 P4 (ADR-009
 # D6) the platform also has Breadboard's POWER model (BbNrf52Power), and the package the power-fail
-# comparator `pof` it reads at pi.
+# comparator `pof` it reads at pi; since P5 (ADR-009 D7) the same view's brownout reset detector,
+# whose output the CPU engine holds the machine in reset by.
 schema = "bb-part/1"
 
 [part]
 id = "nordic/nrf52840-qiaa"
-version = "0.4.0"
+version = "0.5.0"
 kind = "soc"
 manufacturer = "Nordic Semiconductor"
 mpn = ["NRF52840-QIAA", "NRF52840-QIAA-R", "NRF52840-QIAA-R7"]
@@ -136,42 +137,44 @@ options = "phase0"
 [[analog]]
 name = "pof"
 kind = "pof_comparator"
-purpose = "the power-fail comparator at pi (ADR-009 D6): #pofwarn = V(VDD) below VPOF = POFCON.THRESHOLD's voltage x (1 + VPOFTOL), released at VPOF + VPOFHYST"
+purpose = "the power supply supervisor at pi: the power-fail comparator (ADR-009 D6), #pofwarn = V(VDD) below VPOF = POFCON.THRESHOLD's voltage x (1 + VPOFTOL), released at VPOF + VPOFHYST; and the brownout reset detector (ADR-009 D7), #bor = V(VDD) below VBOR,ON, released at VBOR,ON + bhyst"
 fidelity = ["pi"]
 file = "analog/pof.lib"
 subckt = "NORDIC_NRF52840_QIAA_POF"
-ports = [{ role = "pin", pin = "VDD" }, { role = "pin", pin = "VSS" }, { role = "state", state = "pofthr0" }, { role = "state", state = "pofthr1" }, { role = "state", state = "pofthr2" }, { role = "state", state = "pofthr3" }, { role = "observe", signal = "pofwarn" }]
-params = { tol = "0", hyst = "50mV" }
+ports = [{ role = "pin", pin = "VDD" }, { role = "pin", pin = "VSS" }, { role = "state", state = "pofthr0" }, { role = "state", state = "pofthr1" }, { role = "state", state = "pofthr2" }, { role = "state", state = "pofthr3" }, { role = "observe", signal = "pofwarn" }, { role = "observe", signal = "bor" }]
+params = { tol = "0", hyst = "50mV", vbor = "1.6V", bhyst = "10mV" }
 rails = ["VDD"]
 
 [[analog.corners]]
 name = "typ"
-params = { tol = "0" }
-ref = "nRF52840 PS v1.1 section 5.3.8.4: VPOF at its nominal value (VPOFTOL 0)"
+params = { tol = "0", vbor = "1.6V" }
+ref = "nRF52840 PS v1.1 section 5.3.8.4: VPOF at its nominal value (VPOFTOL 0); VBOR,ON typ 1.6 V"
 
 [[analog.corners]]
 name = "min"
-params = { tol = "-0.05" }
-ref = "nRF52840 PS v1.1 section 5.3.8.4: VPOFTOL -5 % (V28: 2.66 V), the comparator that trips latest"
+params = { tol = "-0.05", vbor = "1.57V" }
+ref = "nRF52840 PS v1.1 section 5.3.8.4: VPOFTOL -5 % (V28: 2.66 V), the comparator that trips latest; VBOR,ON min 1.57 V, the detector that trips latest"
 
 [[analog.corners]]
 name = "max"
-params = { tol = "0.05" }
-ref = "nRF52840 PS v1.1 section 5.3.8.4: VPOFTOL +5 % (V28: 2.94 V), the comparator that trips earliest: the corner a firmware rule must survive (ADR-009 D6; W1 gates there, decision D-W1)"
+params = { tol = "0.05", vbor = "1.63V" }
+ref = "nRF52840 PS v1.1 section 5.3.8.4: VPOFTOL +5 % (V28: 2.94 V), the comparator that trips earliest: the corner a firmware rule must survive (ADR-009 D6; W1 gates there, decision D-W1); VBOR,ON max 1.63 V, the detector that trips earliest"
 
 [analog.provenance]
 source = "datasheet"
 refs = [
   "nRF52840 PS v1.1 section 5.3.8.4 (power-fail comparator): VPOF V17..V28 in normal-voltage mode, VPOFTOL +-5 %, VPOFHYST 40/50/60 mV",
   "nRF52840 MDK nrf52840_bitfields.h: POWER_POFCON_THRESHOLD_V17..V28 = codes 4..15 (codes 0-3 \"should not be used\")",
+  "nRF52840 PS v1.1 sections 5.3.1.5 and 5.3.6.6 (brownout reset: the system is held in reset while VDD is below VBOR) and 5.3.8.4: VBOR,ON 1.57 / 1.6 / 1.63 V in System ON mode",
 ]
 deviations = [
   "the response is immediate (the PS gives no response time for the comparator)",
   "the hysteresis is the digital_in thresholds' (1 V / 0 V on the view's output, which spans VPOFHYST linearly)",
   "the output is not gated by POFCON.POF: the POWER model applies POF (ADR-009 D6)",
+  "the brownout detector's hysteresis is 10 mV (bhyst), a numerics floor: the PS gives none",
 ]
-not_modelled = ["the high-voltage mode's VDDH comparator (THRESHOLDVDDH; the POWER model refuses a non-reset value)", "the comparator's own supply current (in the SoC's idd figures)", "temperature dependence of VPOF"]
-generated_by = "Claude (Phase 2 milestone P4)"
+not_modelled = ["the high-voltage mode's VDDH comparator (THRESHOLDVDDH; the POWER model refuses a non-reset value)", "the comparator's own supply current (in the SoC's idd figures)", "temperature dependence of VPOF", "VBOR,OFF (System OFF mode)", "the power-on reset time tPOR after a brownout's release (PS section 5.3.8.3) and VDD,POR"]
+generated_by = "Claude (Phase 2 milestone P4; the brownout detector P5)"
 confidence = "datasheet_checked"
 
 [[analog.qualified]]   # bb pkg test --record

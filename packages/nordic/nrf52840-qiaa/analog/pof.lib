@@ -1,5 +1,6 @@
-* nordic/nrf52840-qiaa pof: the power-fail comparator (nRF52840 PS v1.1 section 5.3.8.4, POFCON;
-* ADR-009 D6, Phase 2 milestone P4), a pof_comparator view. It enters the deck at pi beside the CPU
+* nordic/nrf52840-qiaa pof: the power supply supervisor's comparators (nRF52840 PS v1.1 sections
+* 5.3.1.5 and 5.3.8.4): the power-fail comparator (POFCON; ADR-009 D6, Phase 2 milestone P4) and the
+* brownout reset detector (ADR-009 D7, Phase 2 milestone P5), a pof_comparator view. It enters the deck at pi beside the CPU
 * target's views; bb drives its threshold ports from the CPU engine's outputs #pofthr0..3 (the bits of
 * POFCON.THRESHOLD that BbNrf52Power reports, 0 V / 1 V) and returns its output as the CPU engine's
 * watched digital_in #pofwarn, thresholded by the analog engine at vih = 1 V and vil = 0 V (glue
@@ -16,6 +17,12 @@
 *                          crossing interpolation (rounded up to fs, ADR-003 D3) puts each at the VDD
 *                          level itself, independent of the solver's step there, and the view adds no
 *                          state and no timestep constraint to the deck.
+*   bor                    the brownout reset detector's output (ground-referenced),
+*                          V(bor) = (VBOR + bhyst - V(vdd,vss)) / bhyst clamped to [-1, 2], the same form:
+*                          1 V where V(vdd,vss) falls to VBOR (the CPU engine's #bor rises: the machine is
+*                          held in reset) and 0 V where it rises to VBOR + bhyst (#bor falls: the reset is
+*                          released), thresholded by the analog engine at vih = 1 V, vil = 0 V (glue rule
+*                          13). It does not depend on POFCON: the detector is fixed.
 * VPOF = (1.7 V + 0.1 V * (code - 4)) * (1 + tol), code = sum_k 2^k V(pofthr<k>): V17..V28 for the
 * codes 4..15 (MDK nrf52840_bitfields.h POWER_POFCON_THRESHOLD_V17..V28); the codes 0..3 do not
 * exist in normal-voltage mode and the POWER model refuses them with POF enabled, so their value
@@ -23,13 +30,22 @@
 *   tol    VPOFTOL, the threshold's tolerance: 0 typ; the corners min (-5 %) and max (+5 %), the
 *          corner at which the comparator trips earliest (ADR-009 D6: the corner a firmware rule
 *          must survive);
-*   hyst   VPOFHYST, 50 mV typ (the PS gives 40/50/60 mV).
+*   hyst   VPOFHYST, 50 mV typ (the PS gives 40/50/60 mV);
+*   vbor   VBOR,ON, 1.60 V typ; the corners min (1.57 V) and max (1.63 V: the detector that trips
+*          earliest), PS v1.1 section 5.3.8.4;
+*   bhyst  the brownout detector's hysteresis, 10 mV: the PS gives none, so this is a numerics floor
+*          (the output's linear span), stated as such. The power-on reset time tPOR after the release
+*          (PS section 5.3.8.3) is not modelled: the CPU engine releases the machine at the lattice
+*          point after the release (ADR-009 D7).
 * The output is not gated by POFCON.POF: the comparator compares whenever its threshold is set, and
 * the POWER model raises EVENTS_POFWARN only while POF = 1 (a rising #pofwarn, or POF enabled with
 * #pofwarn already high: ADR-009 D6). The response is immediate (the PS gives no response time).
 * One I-type B source into 1 Ohm, no branch-current unknown (D2 rule 1), a DC path on its one node
 * (rule 2); the comparator draws no current from VDD (its supply current is in the SoC's idd figures).
-.subckt NORDIC_NRF52840_QIAA_POF vdd vss pofthr0 pofthr1 pofthr2 pofthr3 pofwarn params: tol=0 hyst=0.05
+.subckt NORDIC_NRF52840_QIAA_POF vdd vss pofthr0 pofthr1 pofthr2 pofthr3 pofwarn bor params: tol=0 hyst=0.05
++ vbor=1.6 bhyst=0.01
 Bpof 0 pofwarn I=min(max(((1.7+0.1*(V(pofthr0)+2*V(pofthr1)+4*V(pofthr2)+8*V(pofthr3)-4))*(1+{tol})+{hyst}-V(vdd,vss))/{hyst},-1),2)
 Rpof pofwarn 0 1
+Bbor 0 bor I=min(max(({vbor}+{bhyst}-V(vdd,vss))/{bhyst},-1),2)
+Rbor bor 0 1
 .ends NORDIC_NRF52840_QIAA_POF

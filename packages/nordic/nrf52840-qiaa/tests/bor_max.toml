@@ -1,0 +1,61 @@
+# nordic/nrf52840-qiaa pof (pof_comparator): the brownout reset detector (ADR-009 D7, Phase 2 P5),
+# VBOR,ON max 1.63 V. The output bor = (VBOR + bhyst - V(VDD)) / bhyst reaches 1 V (#bor's vih:
+# the hold) where VDD falls to 1.63 V, at (3.0 - 1.63) ms = 1.37 ms, and 0 V (#bor's vil: the
+# release) where VDD rises to 1.63 V + 10 mV = 1.64 V, at 1.5 ms + (1.64 - 1.5) ms =
+# 1.64 ms, by hand. The threshold code is 0 (POFCON's reset value): the detector does not
+# depend on it.
+schema = "bb-pkgtest/0"
+view = "pof"
+circuit = "pof_ramp.cir"
+stop = "3ms"
+sample = "1us"
+
+[params]
+tol = "0.05"
+vbor = "1.63V"
+
+[ports]
+VDD = "vdd"
+VSS = "0"
+pofthr0 = "t0"
+pofthr1 = "t1"
+pofthr2 = "t2"
+pofthr3 = "t3"
+pofwarn = "warn"
+bor = "bor"
+
+[[edge]]
+net = "t0"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = []
+
+[[edge]]
+net = "t1"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = []
+
+[[edge]]
+net = "t2"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = []
+
+[[edge]]
+net = "t3"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = []
+
+[[expect]]
+meas = { node = "bor", when = "1V", rise = "1" }
+value = "1.37ms"
+tol = "10ns"
+source = "nRF52840 PS v1.1 section 5.3.8.4: VBOR,ON max 1.63 V, crossed falling at 1 V/ms from 3.0 V"
+
+[[expect]]
+meas = { node = "bor", when = "0V", fall = "1" }
+value = "1.64ms"
+tol = "10ns"
+source = "released at VBOR,ON + bhyst = 1.64 V (bhyst 10 mV, a numerics floor: the PS gives no hysteresis), rising at 1 V/ms from 1.5 V"

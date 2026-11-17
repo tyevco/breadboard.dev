@@ -10,8 +10,12 @@ Version 2 adds the `reset` record and gives `assert` its version 2 keys
 and the stream carries no version field, so every version 1 file is a
 version 2 file. `assert` records are emitted since milestone B2, for a
 run's assertions (`spec/project.md` section 3.4; ADR-010 Amendment 3);
-nothing in this build emits `reset` (milestone P5). A run without
-assertions gives exactly the stream it gave before.
+`reset` records since milestone P5, by the nRF52840's CPU engine at `pi`
+when its brownout detector (`spec/pin-model.md` glue rule 13) holds or
+releases the machine (ADR-009 Amendment 9; `phase = "stop"` is not
+emitted: the reset works under External Control, so the fallback is not
+needed). A run without assertions gives exactly the stream it gave before,
+and a run without a brown-out has no `reset` record.
 
 Net names (ADR-007 D6, Phase 1 M4): `net` in `pin_edge` and `net_sample`
 is the net's **display name** (a project's KiCad net name, or the kernel

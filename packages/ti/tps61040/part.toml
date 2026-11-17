@@ -10,7 +10,7 @@ schema = "bb-part/1"
 
 [part]
 id = "ti/tps61040"
-version = "0.1.0"
+version = "0.2.0"
 kind = "power"
 manufacturer = "Texas Instruments"
 mpn = ["TPS61040DBVR", "TPS61040DBVT"]
@@ -34,7 +34,12 @@ file = "analog/tps61040_boost_avg.lib"
 subckt = "TI_TPS61040_BOOST_AVG"
 ports = ["VIN", "SW", "FB", "EN", "GND"]
 rails = ["VIN"]
-params = { lind = "10u", ilim = "0.4", toffmin = "400n", tonmax = "6u", uvlo = "1.5", uvlo_hys = "0.05", iq = "28u", isd = "0.1u", eta = "0.85", vdf = "0.4", tfilt = "2u", vout = "13", cout = "1u", rload = "1Meg" }
+params = { lind = "10u", ilim = "0.4", toffmin = "400n", tonmax = "6u", uvlo = "1.5", uvlo_hys = "0.05", iq = "28u", isd = "0.1u", eta = "0.85", vdf = "0.4", tfilt = "2u", vout = "13", cout = "1u", rload = "1Meg", rdamp = "1k" }
+
+[[analog.corners]]
+name = "suite_compat"
+params = { cout = "14.8uF", rload = "551.3k", vout = "12.9972" }
+ref = "the dial-me-spinner main board's U20 output at 6854d25, as the suite's W2 decks and Breadboard's static-load decks set it (scripts/pi_static.py, examples/dial-me-spinner/pi/static_load.toml [boost]): every capacitor on +13V_OLED (14.8 uF), the FB divider as the load (551.3 kOhm) and VOUT = VREF 1.233 V x (1 + Rtop / Rbot) = 12.9972 V (SLVS413L section 5.5). The view's output is its own state, not a board net, and a project has no instance parameters, so a bench sets them through this corner (ADR-009 Amendment 9)"
 
 [analog.provenance]
 source = "datasheet"
@@ -51,6 +56,7 @@ deviations = [
   "the regulation fades the average over the output's equivalent of a 30 mV FB band below VREF",
   "the output is the view's own state (cout, rload, vout: instance parameters), precharged to VIN - vdf as the board's inductor and rectifier would; the board's output net is not driven",
   "the UVLO hysteresis 50 mV (the datasheet gives none); the EN switch at 0.85 V",
+  "a 1 kOhm damping resistance from SW to VIN stands in for the switching losses that damp SW's ringing (the board's inductor against the rectifier's capacitance) when the converter stops (Phase 2 P5: undamped, it held ngspice at nanosecond steps after W2's brown-out); it carries L di/dt / 1 kOhm of the averaged current",
 ]
 not_modelled = ["switching ripple", "the regulation loop's dynamics and accuracy", "IFB", "thermal shutdown", "RDS(on) loss (in eta)", "SW leakage", "the board's output net"]
 generated_by = "Claude (Phase 2 P0, packaged in P1)"

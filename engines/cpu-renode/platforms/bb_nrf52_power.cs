@@ -64,6 +64,19 @@
 //                                           its time in ns (low, high): the Renode
 //                                           engine fails the run with them at its end
 //                                           when no state block reported the refusal
+//   0xF24 brown-out control (ADR-009 D7, Phase 2 P5): write 1 when #bor
+//         rises (hold in reset), 2 when it falls (release); read: 1 while
+//         held. Both reset the machine (Machine.Reset: every peripheral and
+//         the CPU; RAM and flash are memories, which a reset keeps), set
+//         RESETREAS to 0 (a brown-out leaves no reset reason) and tell the
+//         state block (the state outputs low while held, #run 1 at the
+//         release). A CPU in WFI leaves it through tlib's WFI hook, so the
+//         lookahead block's WFI flag follows (its first-exit latch then holds
+//         the reset's instant, which the engine's audit does not count: the
+//         brown-out is an input). While held the CPU is halted
+//         (TranslationCPU.IsHalted): no instruction runs, the clock source
+//         and every other clock still advance with virtual time.
+//   0xF28 the number of brown-out holds (writes of 1)
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -109,6 +122,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public Action<ulong, int, uint> PofEvent { get; set; }
 
         public uint Raises { get; private set; }
+
+        // ADR-009 D7 (Phase 2 P5): the state block's view of a brown-out's
+        // hold (true, before the machine reset) and release (false, after it),
+        // at the lattice point's time in fs (bb_nrf52_state.cs; unset unless
+        // the state block is armed).
+        public Action<bool, ulong> BrownOutChange { get; set; }
 
         // POF blocks NVMC erases (ADR-009 D6): asked by BbNrf52Nvmc.
         public bool BlocksNvmc => (pofcon & 1) != 0 && input.IsSet;
@@ -169,6 +188,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 case 0xF18: return refusedWord;
                 case 0xF1C: return (uint)refusedNs;
                 case 0xF20: return (uint)(refusedNs >> 32);
+                case 0xF24: return held ? 1u : 0u;
+                case 0xF28: return holds;
                 default: return 0;
                 }
             }
@@ -205,6 +226,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 {
                 case 0xF04: resetreas = value; return;
                 case 0xF0C: error = 0; return;
+                case 0xF24:
+                    if(value == 1 || value == 2)
+                    {
+                        BrownOut(value == 1);
+                    }
+                    return;
                 default: return;
                 }
             }
@@ -318,6 +345,49 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             }
         }
 
+        // ADR-009 D7: a brown-out's hold (#bor rose) or release (#bor fell),
+        // called by the Renode engine while Renode is paused on the lattice
+        // point ceil_L of the crossing (an External Control SYSTEM_BUS write).
+        private void BrownOut(bool enter)
+        {
+            var tFs = Now();
+            var cpu = machine.SystemBus.GetCPUs().OfType<TranslationCPU>().FirstOrDefault();
+            // The hold's state outputs before the reset clears what they
+            // report; the release's after it (the new reference).
+            if(enter)
+            {
+                BrownOutChange?.Invoke(true, tFs);
+            }
+            if(cpu != null && !enter)
+            {
+                cpu.IsHalted = false;
+                // IsHalted defers the time handle's re-enable to its next
+                // unlatch, after the first quantum of the next RUN_FOR; the
+                // handle is not latched while Renode is paused, so the CPU
+                // runs from this lattice point on.
+                if(cpu.TimeHandle != null)
+                {
+                    cpu.TimeHandle.Enabled = true;
+                }
+            }
+            ((Machine)machine).Reset();
+            if(cpu != null && enter)
+            {
+                cpu.IsHalted = true;
+            }
+            if(!enter)
+            {
+                BrownOutChange?.Invoke(false, tFs);
+            }
+            resetreas = 0;
+            held = enter;
+            if(enter)
+            {
+                holds++;
+            }
+            this.Log(LogLevel.Info, "bb_nrf52_power: brown-out {0} at {1} fs (machine reset; RAM kept)", enter ? "hold" : "release", tFs);
+        }
+
         private void Raise(ulong tFs, string why)
         {
             evPofwarn = true;
@@ -395,5 +465,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private uint error;
         private uint refusedWord;
         private ulong refusedNs;
+        private bool held;
+        private uint holds;
     }
 }

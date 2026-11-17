@@ -1,0 +1,49 @@
+# examples/dial-me-spinner/w2/bench/w2-old-min.toml: W2's old-rule case at U10's brownout detector
+# corner min, VBOR,ON 1.57 V (the detector that trips latest; nRF52840 PS v1.1 section 5.3.8.4), for the static-load VBOR
+# crossing against the suite's at 1.57 V (Phase 2 P5; ADR-009 D7, Amendment 1's 500 us, Amendment 9).
+# Otherwise as w2-old.toml (its header lists the corners, the supply, the dead cell and the 50 mA
+# static load).
+schema = "bb-bench/1"
+temp_c = "25"
+fidelity = "pi"
+corner = "suite_compat"
+
+[corners]
+"main:U1" = "worst_dropout"
+"base:U1" = "worst_ilim100"
+"main:U10" = "min"
+
+[[battery]]
+net = "base:VBAT"
+ocv = "cell-dead.csv"
+soc = "0.5"
+r0 = "0.25"
+temp_c = "25"
+
+[[supply]]
+net = "base:VBUS"
+volts = "5.0V"
+rs = "10m"
+
+# Static-load mode: the suite's 50 mA +3V3 budget.
+[[load]]
+net = "+3V3"
+amps = "50mA"
+replace = "main:U10"
+
+[analog]
+nets = [
+  "main:GND", "main:VSYS", "+3V3", "VSYS_SENSE",
+  "OLED_VIN", "OLED_VCC_EN", "+13V_OLED",
+  "main:/OLED display & 13 V boost/OLED_BST_SW", "main:/OLED display & 13 V boost/OLED_BST_FB",
+  "main:/OLED display & 13 V boost/OLED_LSW_CT",
+  "main:VBUS", "main:I2C_SCL", "main:I2C_SDA", "main:CHG_INT_N",
+  "base:GND", "base:VSYS", "base:VBAT", "base:VBUS", "base:/Base board/I2C_SCL",
+  "base:/Base board/I2C_SDA", "base:/Base board/CHG_INT_N", "CHG_TSMR",
+]
+
+[nominal]
+"+3V3" = "3.3V"
+
+[options]
+set = "phase0"

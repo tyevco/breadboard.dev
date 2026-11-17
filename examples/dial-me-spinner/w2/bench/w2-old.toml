@@ -1,0 +1,66 @@
+# examples/dial-me-spinner/w2/bench/w2-old.toml: W2's OLD-RULE case in static-load mode (Phase 2 P5;
+# plan section 2 W2; ADR-009 D4, D7, Amendment 9).
+#
+# The dial-me-spinner suite's strict xfail test_u21_turn_on_dead_battery_usb_100ma (hardware/sim/tests
+# at 6854d25; VSYS min 1.4614 V, +3V3 min 1.4172 V against the 1.57 V limit) on the system's `pi`
+# views, with the old-rule firmware (w2_old_rule.elf) in the loop: the OLED's VCC enabled 1 ms after
+# main(), on a dead cell from USB at ILIM 100 mA.
+#
+#   * USB: VBUS 5.0 V (the suite's _dead corner), a Norton source behind 10 mOhm at base:VBUS (as W1).
+#   * The dead cell, below BUVLO, as the suite models it: 0 V behind RPACK 0.25 Ohm (25 C).
+#   * base:U1 (ti/bq25180:pp) at its corner worst_ilim100: ILIM at the suite's 100 mA and SYS_REG
+#     4.5 V, with the suite's ungated supplement. DEVIATION (plan section 2 W1/W2, ADR-009 default 4):
+#     the firmware cannot set ILIM and SYS_REG over I2C (no TWIM bus device in Phase 2); the bench
+#     sets them, through the view's corner.
+#   * main:U1 (richtek/rt9080:ldo) at worst_dropout, as P1's static-load decks of W2.
+#   * main:U20 (ti/tps61040:boost, averaged) at suite_compat: its own output state set to the board's
+#     +13V_OLED capacitors (14.8 uF), FB divider load (551.3 kOhm) and VOUT (12.9972 V), as the suite's
+#     deck and P1's static-load decks (a project has no instance parameters; ADR-009 Amendment 9).
+#   * The suite's static +3V3 budget, 50 mA, IN PLACE OF U10's supply_load ([[load]] replace,
+#     static-load mode); the firmware still runs.
+#   * U10's brownout reset detector (nordic/nrf52840-qiaa:pof, output bor) at its corner typ: VBOR,ON
+#     1.60 V (the min and max corners, 1.57 and 1.63 V, are the -min and -max benches).
+schema = "bb-bench/1"
+temp_c = "25"
+fidelity = "pi"
+corner = "suite_compat"
+
+[corners]
+"main:U1" = "worst_dropout"
+"base:U1" = "worst_ilim100"
+"main:U10" = "typ"
+
+[[battery]]
+net = "base:VBAT"
+ocv = "cell-dead.csv"
+soc = "0.5"
+r0 = "0.25"
+temp_c = "25"
+
+[[supply]]
+net = "base:VBUS"
+volts = "5.0V"
+rs = "10m"
+
+# Static-load mode: the suite's 50 mA +3V3 budget.
+[[load]]
+net = "+3V3"
+amps = "50mA"
+replace = "main:U10"
+
+[analog]
+nets = [
+  "main:GND", "main:VSYS", "+3V3", "VSYS_SENSE",
+  "OLED_VIN", "OLED_VCC_EN", "+13V_OLED",
+  "main:/OLED display & 13 V boost/OLED_BST_SW", "main:/OLED display & 13 V boost/OLED_BST_FB",
+  "main:/OLED display & 13 V boost/OLED_LSW_CT",
+  "main:VBUS", "main:I2C_SCL", "main:I2C_SDA", "main:CHG_INT_N",
+  "base:GND", "base:VSYS", "base:VBAT", "base:VBUS", "base:/Base board/I2C_SCL",
+  "base:/Base board/I2C_SDA", "base:/Base board/CHG_INT_N", "CHG_TSMR",
+]
+
+[nominal]
+"+3V3" = "3.3V"
+
+[options]
+set = "phase0"

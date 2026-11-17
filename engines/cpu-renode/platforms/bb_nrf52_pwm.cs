@@ -1276,10 +1276,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         public void Reset()
         {
-            error = 0;
-            count = 0;
-            acked = 0;
-            notified = false;
+            // The ring and its counts are the engine's: a machine reset
+            // (ADR-009 D7's brown-out) keeps them. Every field starts at 0.
         }
 
         public uint ReadDoubleWord(long offset)

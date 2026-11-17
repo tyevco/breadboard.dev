@@ -1726,6 +1726,9 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         let mut nodes: Vec<String> = Vec::new();
         let mut source_lines: Vec<String> = Vec::new();
         let out_node = format!("bb_pof_{frag}");
+        // ADR-009 D7 (milestone P5): the view's brownout detector output.
+        let bor_node = format!("bb_bor_{frag}");
+        let mut has_bor = false;
         for port in &view.ports {
             match port {
                 Port::OtherPin { pin } => {
@@ -1769,6 +1772,10 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
                         initial: Level::Low,
                     });
                     nodes.push(node);
+                }
+                Port::Observe { signal } if signal == bbpkg::package::POF_BOR_SIGNAL => {
+                    has_bor = true;
+                    nodes.push(bor_node.clone());
                 }
                 Port::Observe { .. } => nodes.push(out_node.clone()),
                 _ => {
@@ -1868,11 +1875,15 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             ("pofwarn", Json::str(format!("{tref}.#pofwarn"))),
             ("pofen", Json::str(format!("{tref}.#pofen"))),
         ]);
+        if has_bor {
+            pj.push(("bor", Json::str(format!("{tref}.#bor"))));
+        }
         pof_json = Some(Json::obj(pj));
         pof_glue = Some(board::PofGlue {
             node: out_node,
             kernel_net: format!("{tref}.#pofwarn"),
             pofen_net: format!("{tref}.#pofen"),
+            bor: has_bor.then(|| (bor_node, format!("{tref}.#bor"))),
         });
     }
     // ADR-009 D8: a per-instance corner for an instance that is not in the
@@ -3122,8 +3133,19 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     // --- Assertions (ADR-010 D5, D6): their nets as the kernel names them.
     // A digital net is a bound MCU or device pin (its kernel net, or
     // `<instance>.<pin>`); an analog net is a net of the deck.
-    let kernel_digital: BTreeSet<String> =
+    let mut kernel_digital: BTreeSet<String> =
         bound.values().chain(dev_bound.values()).cloned().collect();
+    // At pi the CPU target's internal pins are kernel nets too (their
+    // `pin_edge` records): the state outputs (ADR-009 D4), `#pofen`,
+    // `#pofwarn` (D6) and `#bor` (D7, milestone P5).
+    kernel_digital.extend(cpu_states.iter().map(|c| c.kernel_net.clone()));
+    if let Some(p) = &pof_glue {
+        kernel_digital.insert(p.kernel_net.clone());
+        kernel_digital.insert(p.pofen_net.clone());
+        if let Some((_, net)) = &p.bor {
+            kernel_digital.insert(net.clone());
+        }
+    }
     let all_asserts: Vec<bbcore::assert::Spec> = a
         .bench
         .asserts

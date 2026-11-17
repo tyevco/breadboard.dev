@@ -21,7 +21,7 @@ pub mod signal;
 pub mod time;
 
 pub use engine::{Engine, EngineError, SolverPoint};
-pub use event::{Event, EventSink, LogLevel, LogRecord};
+pub use event::{Event, EventSink, LogLevel, LogRecord, ResetPhase, ResetRecord};
 pub use pin::{AdcIn, AdcKey, DigitalIn, DigitalOut, PinModel, Power};
 pub use probe::{format_volts, CsvWriter, NetSampler, Probe, VcdKind, VcdWriter};
 pub use scheduler::{

@@ -200,7 +200,7 @@
       ]
     },
     "pof_port": {
-      "description": "bb-part/1 (ADR-009 D6, Phase 2 P4): a pof_comparator view's port: a supply pin, a threshold state port #pofthr0..3, or its output (observe pofwarn).",
+      "description": "bb-part/1 (ADR-009 D6, Phase 2 P4): a pof_comparator view's port: a supply pin, a threshold state port #pofthr0..3, or an output (observe pofwarn; since P5, ADR-009 D7, also observe bor, the brownout reset detector's).",
       "type": "object",
       "additionalProperties": false,
       "required": ["role"],
@@ -208,7 +208,7 @@
         "role": { "enum": ["pin", "state", "observe"] },
         "pin": { "type": "string" },
         "state": { "enum": ["pofthr0", "pofthr1", "pofthr2", "pofthr3"] },
-        "signal": { "const": "pofwarn" }
+        "signal": { "enum": ["pofwarn", "bor"] }
       },
       "oneOf": [
         { "properties": { "role": { "const": "pin" } }, "required": ["pin"], "not": { "anyOf": [{ "required": ["state"] }, { "required": ["signal"] }] } },

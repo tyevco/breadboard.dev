@@ -33,14 +33,20 @@
 *   rectifier's forward drop at the start-up currents; the UVLO hysteresis 50 mV (none is given);
 *   the EN switch centred at 0.85 V; the averaged current filtered with 2 us; the regulation fades
 *   the average over a 30 mV FB band below VREF (a proportional stand-in for the PFM loop); the
-*   soft-start steps smoothed over 4 cycles; the cycle counter V(tbnc) = cycles / 1000.
+*   soft-start steps smoothed over 4 cycles; the cycle counter V(tbnc) = cycles / 1000; a damping
+*   resistance rdamp = 1 kOhm from SW to VIN (Phase 2 P5): when the converter stops (EN low, or VIN
+*   below UVLO, as a brown-out's reset does), the board's inductor and the rectifier's capacitance at
+*   SW ring at several MHz, which the switching losses of the real part damp within a few cycles; an
+*   averaged view has no such losses, so undamped the ringing held ngspice at nanosecond steps (W2's
+*   reset: 72 s for 2 ms). Across the inductor it carries |V(SW) - V(VIN)| / rdamp, which is L di/dt
+*   / rdamp of the averaged current: below 1 mA, under 1 % of the averaged current at start-up.
 * NOT modelled: switching ripple, the regulation loop's dynamics and accuracy, IFB, thermal
 *   shutdown, RDS(on) loss (in eta), SW leakage, the board's output net (above).
 *
 * Ports: VIN SW FB EN GNDP (the package's pins; GND renamed GNDP, spec/package.md section 5).
 * =====================================================================================================
 .subckt TI_TPS61040_BOOST_AVG VIN SW FB EN GNDP params: lind=10u ilim=0.4 toffmin=400n tonmax=6u
-+ uvlo=1.5 uvlo_hys=0.05 iq=28u isd=0.1u eta=0.85 vdf=0.4 tfilt=2u vout=13 cout=1u rload=1Meg
++ uvlo=1.5 uvlo_hys=0.05 iq=28u isd=0.1u eta=0.85 vdf=0.4 tfilt=2u vout=13 cout=1u rload=1Meg rdamp=1k
 * enable (EN high) and UVLO with hysteresis: V(tben), V(tbuv) = 0..1
 B_EN    GNDP tben I = 0.5 + 0.5*tanh((V(EN,GNDP) - 0.85)/0.02)
 R_EN    tben GNDP 1
@@ -98,4 +104,6 @@ C_VO    tbvo GNDP {cout}
 R_VO    tbvo GNDP {rload}
 B_IQ    VIN GNDP I = ({iq}*V(tben,GNDP) + {isd}*(1 - V(tben,GNDP)))*min(1, max(0, V(VIN,GNDP)/1.5))
 R_FB    FB GNDP 1G
+* the SW node's damping (header)
+R_DAMP  SW VIN {rdamp}
 .ends TI_TPS61040_BOOST_AVG

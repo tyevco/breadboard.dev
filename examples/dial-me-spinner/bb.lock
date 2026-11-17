@@ -28,9 +28,9 @@ tree = "sha256:46eb1f932bcde305315ac95e50fd700df0493731cece37260822d18cf715ef36"
 
 [[package]]
 id = "nordic/nrf52840-qiaa"
-version = "0.4.0"
+version = "0.5.0"
 source = "path+../../packages/nordic/nrf52840-qiaa"
-tree = "sha256:2c1f35c149eaaf011660cd8152aadf9b63de8bedd331257a25cf34013d6ad656"
+tree = "sha256:7c425acffb376f90f2a6b0f4096a0bcfc5d992bf683edffaeeb98f8c81ee832d"
 
 [[package]]
 id = "raytac/mdbt50q-u1mv2"
@@ -58,9 +58,9 @@ tree = "sha256:2921cca3816200c4f1c919396b137cb5c1ef1af401aba8fca304c8e2161cfe71"
 
 [[package]]
 id = "ti/tps61040"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../packages/ti/tps61040"
-tree = "sha256:6e768e72f7646e8e014f781e50541103db5dc456a4dce1e0efc22c5885b25242"
+tree = "sha256:c352352d5db18dc5f0098caa831f827ec95b9bbff8e6b0a92440212e54cdcb95"
 
 [[package]]
 id = "worldsemi/ws2812c-2020"
@@ -70,6 +70,6 @@ tree = "sha256:c54782a81fe30e7fb530a9505bfd9307a3416a9fb438fc6fa04803f3cbc2a13d"
 
 [[platform]]
 id = "renode:nrf52840-bb@4"
-content = "sha256:0d185ffd681f2d4c84fe3b0afe4afb70ba1e8502c11e5c23069d265a99f53abe"
+content = "sha256:f12245652abe27c909aedefba77c3c074fcdcba957836feed73eb7f89600f30c"
 engine = "renode"
 engine_version = "1.17.0"

@@ -171,9 +171,13 @@ the supply it compares falls to the threshold its CPU engine reports and
 falls where it rises above the threshold plus the hysteresis. Its ports are
 the package's supply and ground pins (`{ role = "pin", pin }`, at least one
 supply), exactly the four state ports `#pofthr0..3` (`{ role = "state",
-state = "pofthr<k>" }`, the bits of the threshold code, nodes in 0..1) and
+state = "pofthr<k>" }`, the bits of the threshold code, nodes in 0..1),
 exactly one observe port, its output (`{ role = "observe", signal =
-"pofwarn" }`, ground-referenced). It has a `file` and a `subckt`. It enters
+"pofwarn" }`, ground-referenced), and (milestone P5, ADR-009 D7, Amendment
+9) at most one more observe port, the brownout reset detector's output
+(`{ role = "observe", signal = "bor" }`, ground-referenced, in the same
+form: 1 V where the supply falls to VBOR, 0 V at the release), which the
+CPU engine's watched input `#bor` reads. It has a `file` and a `subckt`. It enters
 the deck at `pi` beside the CPU target's views (`spec/pin-model.md` glue
 rule 13), so it is never valid at `fast` and never a rung's default. The
 output's levels are fixed by the glue's `digital_in` (`vih` 1 V, `vil`
@@ -181,7 +185,7 @@ output's levels are fixed by the glue's `digital_in` (`vih` 1 V, `vil`
 and the CPU engine's watched input `#pofwarn` reads it. Its corners (`typ`,
 `min`, `max`: the threshold's tolerance) are the CPU target instance's
 (`[corners]`, or the bench's `corner`). In a test vector a state port is
-keyed by its state name and the output by `pofwarn`.
+keyed by its state name and the outputs by `pofwarn` and `bor`.
 
 **The `switch` view kind** (`bb-part/1`, ADR-010 D2). A contact that a
 bench `[[action]] press` closes (`spec/project.md` section 3). `bb`
@@ -554,7 +558,7 @@ under `engines/cpu-renode/platforms/`):
 | --- | --- | --- | --- |
 | `stm32f103-offline@1` | `stm32f103-offline.repl` | `bb_lookahead.cs` | `stm32f103` |
 | `stm32f072-bb@1` | `stm32f072-bb.repl` | `bb_lookahead.cs`, `bb_stm32_timer.cs`, `bb_stm32f0_adc.cs` | `stm32f072` |
-| `nrf52840-bb@4` | `nrf52840-bb.repl` (ADR-008 D1, D7-D9; ADR-009 D4, D6) | `bb_lookahead.cs`, `bb_nrf52_saadc.cs`, `bb_nrf52_pwm.cs`, `bb_nrf52_state.cs`, `bb_nrf52_power.cs` | `nrf52840` |
+| `nrf52840-bb@4` | `nrf52840-bb.repl` (ADR-008 D1, D7-D9; ADR-009 D4, D6, D7) | `bb_lookahead.cs`, `bb_nrf52_saadc.cs`, `bb_nrf52_pwm.cs`, `bb_nrf52_state.cs`, `bb_nrf52_power.cs` | `nrf52840` |
 
 A behaviour change bumps the major and changes the hash. The lock records
 Renode's version (1.17.0) with each Renode platform. So a change to a

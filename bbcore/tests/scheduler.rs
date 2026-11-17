@@ -1141,3 +1141,75 @@ fn record_tie_order_does_not_depend_on_plan_order() {
     assert!(at5[2].contains("\"source\":\"b\""), "{at5:?}");
     assert!(at5[3].contains("\"driver\":\"b.P\""), "{at5:?}");
 }
+
+/// ADR-009 D7 (milestone P5): an engine's `reset` records reach the event
+/// stream at their times, sorted like the engine's `log` records (at one
+/// instant the logs first), with `cause` `bor` and `ram` `kept` on an exit.
+#[test]
+fn reset_records_sort_like_logs() {
+    struct Bor {
+        now: Time,
+        logs: Vec<LogRecord>,
+        resets: Vec<bbcore::ResetRecord>,
+    }
+    impl Engine for Bor {
+        fn name(&self) -> &str {
+            "U10"
+        }
+        fn next_safe_time(&mut self, _now: Time) -> Time {
+            Time::MAX
+        }
+        fn advance_to(&mut self, t: Time) -> Result<(), EngineError> {
+            for (at, phase) in [
+                (Time::from_us(20), bbcore::ResetPhase::Enter),
+                (Time::from_us(50), bbcore::ResetPhase::Exit),
+            ] {
+                if at > self.now && at <= t {
+                    self.logs.push(LogRecord {
+                        t: at,
+                        level: LogLevel::Info,
+                        msg: format!("log at {at}"),
+                    });
+                    self.resets.push(bbcore::ResetRecord { t: at, phase });
+                }
+            }
+            self.now = t;
+            Ok(())
+        }
+        fn read_outputs(&mut self) -> Result<PinSignals, EngineError> {
+            Ok(PinSignals::new())
+        }
+        fn apply_inputs(&mut self, _inputs: &PinSignals) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn drain_logs(&mut self) -> Vec<LogRecord> {
+            std::mem::take(&mut self.logs)
+        }
+        fn drain_resets(&mut self) -> Vec<bbcore::ResetRecord> {
+            std::mem::take(&mut self.resets)
+        }
+    }
+    let mut s = Scheduler::new(cfg(Time::from_us(10))).unwrap();
+    s.add_engine(Box::new(Bor {
+        now: Time::ZERO,
+        logs: Vec::new(),
+        resets: Vec::new(),
+    }))
+    .unwrap();
+    let mut sink = EventSink::new(Vec::new());
+    s.run(Time::from_us(100), &mut sink, &mut []).unwrap();
+    let text = String::from_utf8(sink.into_inner()).unwrap();
+    let own: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("\"type\":\"log\"") || l.contains("\"type\":\"reset\""))
+        .collect();
+    assert_eq!(
+        own,
+        vec![
+            r#"{"type":"log","t_fs":20000000000,"source":"U10","level":"info","msg":"log at 20us"}"#,
+            r#"{"type":"reset","t_fs":20000000000,"source":"U10","cause":"bor","phase":"enter"}"#,
+            r#"{"type":"log","t_fs":50000000000,"source":"U10","level":"info","msg":"log at 50us"}"#,
+            r#"{"type":"reset","t_fs":50000000000,"source":"U10","cause":"bor","phase":"exit","ram":"kept"}"#,
+        ]
+    );
+}

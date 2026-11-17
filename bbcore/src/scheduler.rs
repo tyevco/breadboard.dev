@@ -1118,23 +1118,48 @@ impl Scheduler {
             phase: Phase::Exchange,
             source,
         };
-        for (k, rec) in e.drain_logs().into_iter().enumerate() {
-            if rec.t > at {
-                return Err(engine_err(EngineError::Protocol(format!(
-                    "log record at {} is after boundary {at}",
-                    rec.t
-                ))));
-            }
-            let t = rec.t.max(prev);
-            records.push((
-                (t, i, 0, k),
+        // Log and reset records (ADR-009 D7: a `reset` sorts like a `log`
+        // of its engine), each list in the engine's order, merged by time
+        // (stable: at one instant the logs first).
+        let logs = e.drain_logs();
+        let resets = e.drain_resets();
+        let mut own: Vec<(Time, Event)> = Vec::with_capacity(logs.len() + resets.len());
+        for rec in logs {
+            own.push((
+                rec.t,
                 Event::Log {
-                    t_fs: t,
+                    t_fs: rec.t,
                     source: name.clone(),
                     level: rec.level,
                     msg: rec.msg,
                 },
             ));
+        }
+        for rec in resets {
+            own.push((
+                rec.t,
+                Event::Reset {
+                    t_fs: rec.t,
+                    source: name.clone(),
+                    cause: "bor".to_string(),
+                    ram: (rec.phase == crate::event::ResetPhase::Exit).then(|| "kept".to_string()),
+                    phase: rec.phase,
+                },
+            ));
+        }
+        own.sort_by_key(|(t, _)| *t);
+        for (k, (rt, mut ev)) in own.into_iter().enumerate() {
+            if rt > at {
+                return Err(engine_err(EngineError::Protocol(format!(
+                    "log record at {rt} is after boundary {at}"
+                ))));
+            }
+            let t = rt.max(prev);
+            match &mut ev {
+                Event::Log { t_fs, .. } | Event::Reset { t_fs, .. } => *t_fs = t,
+                _ => {}
+            }
+            records.push(((t, i, 0, k), ev));
         }
         let trace = if initial {
             None
