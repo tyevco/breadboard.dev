@@ -50,6 +50,7 @@ python3 ../../scripts/check_dms_rail.py out/rail                 # PASS: LED-DAT
 bb flash --target U10 firmware/prebuilt/led_rail_wrong_order.elf
 bb run --for 120ms --bench bench/cold.toml --probe net:VLED --probe net:LED_DIN --out out/rail-wrong
 python3 ../../scripts/check_dms_rail.py out/rail-wrong           # expected to FAIL: LSW-3
+bb test tests/w1.toml --out out/w1                               # W1 at --fidelity pi: PASS (6 cases; the two controls fail exactly cue-held, as expected)
 ```
 <!-- stranger-test:end -->
 
@@ -130,8 +131,32 @@ What the steps do:
 - The two runs' `nets.csv`, `nets.vcd` and non-grant records are
   byte-identical to the committed hashes in `tests/golden/dms-rail/`.
 
-From the repository root, **`make demo`** does all of the above in one
-command and also checks those hashes. It works on a copy of the project, so
+The last line is Phase 2's power-integrity check, W1, at the `pi` rung
+(`--fidelity pi`, ADR-009): POF blanking on a dead battery, from
+dial-me-spinner's `docs/firmware.md` R8, on the main and base boards
+together (`examples/dial-me-spinner/w1`). The firmware enables POFWARN at
+V28; when the LED ring's inrush dips +3V3, it must not take that dip for a
+dying battery and shed the LED charging cue. `bb test` runs its six cases
+(`tests/w1.toml`) and writes `out/w1/test.json` and `out/w1/junit.xml`:
+
+- **rule:** the firmware with its 10 ms blanking keeps the cue (`cue-held`),
+  +3V3 does dip through the 2.94 V trip level inside the blanking
+  (`pof-dip`), and no reset occurs.
+- **blank4** and **off:** the 4 ms blanking and no blanking, the negative
+  controls. Each fails exactly `cue-held`, which `bb test` expects.
+- **margin** and **margin-off:** the suite's 50 mA +3V3 budget, where no
+  POFWARN may fire at all.
+- **rule-order:** the rule case with the analog engine registered first,
+  byte-identical.
+
+W1 runs at a **labelled stress corner**: a 55 mA static +3V3 load against
+the suite's 50 mA budget, the RT9080 at its worst dropout and POFWARN at
+V28 + 5 % (2.94 V), the approver's decision D-W1 (ADR-009 Amendment 2).
+At 50 mA the dip stays 22.6 mV above the trip level, which the margin cases
+check. Every report and `run.json` names the corner.
+
+From the repository root, **`make demo`** does the E1 part of the above in
+one command and also checks those hashes. It works on a copy of the project, so
 the checkout is never written.
 
 `make stranger-test-container` and `make stranger-test-wsl` run the block

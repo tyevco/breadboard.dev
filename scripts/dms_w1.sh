@@ -22,10 +22,11 @@
 #   cosim         w1-cosim               w1_rule        reported (U10's supply_load only)
 #   cosim-budget  w1-cosim-budget        w1_rule        reported (plus the budget's remainder)
 #
-#   scripts/dms_w1.sh test <bb> <out>     make dms-w1-test (in make test): rule, blank4, off and
-#                                         margin-off at bb's defaults with their checks and the
-#                                         committed one-cell hashes (non-grant records), and rule
-#                                         with --engine-order analog-first byte-identical
+#   scripts/dms_w1.sh test <bb> <out>     make dms-w1-test (in make test): tests/w1.toml through bb
+#                                         test (rule, blank4, off, margin, margin-off at bb's defaults
+#                                         and rule with --engine-order analog-first byte-identical;
+#                                         test.json, junit.xml), then check_dms_w1.py and the committed
+#                                         one-cell hashes (non-grant records) on its outputs
 #   scripts/dms_w1.sh gate <bb> <out>     make dms-w1: every case with its checks; the gated cases
 #                                         and the two co-simulations at bb's defaults (10 ms grants,
 #                                         lookahead on), at --max-quantum 1ms and as their one-cell
@@ -168,18 +169,32 @@ prepare)
   prepare "$1"
   ;;
 test)
+  # Since the technical exit (plan section 5 item 1): tests/w1.toml through bb test (its assertions,
+  # the controls' expected cue-held failures, analog-first byte-identical; test.json and junit.xml,
+  # which CI publishes with the other out/dms-*-test/junit.xml), then on its outputs what is not an
+  # assertion kind: check_dms_w1.py and the committed one-cell hashes. BB_TEST_JOBS (default 5) runs
+  # at a time; bb test uses the pool in BB_RENODE_POOL when make provides one (POOL=0: every Renode
+  # fresh).
   BB=$1 OUT=$2
   rm -rf "$OUT"; mkdir -p "$OUT"
   t0=$(date +%s.%N)
-  prepare "$BB"
-  par "$BB" "$OUT" "" "" "${TESTED[@]}"
-  run_case "$BB" "$OUT/rule-order" rule --engine-order analog-first
-  for c in "${TESTED[@]}"; do
+  if "$BB" test "$DMS/tests/w1.toml" --out "$OUT" --jobs "${BB_TEST_JOBS:-5}" --pool env > "$OUT/bb-test.log" 2>&1; then
+    pass "bb test tests/w1.toml: every outcome as expected ($(grep -c '^bb test: PASS ' "$OUT/bb-test.log") cases: W1's assertions at the stress corner, blank4 and off fail exactly cue-held, the margin check, analog-first byte-identical)"
+  else
+    fail "bb test tests/w1.toml"
+  fi
+  grep '^bb test: \(PASS\|FAIL\)\|^bb test:   ' "$OUT/bb-test.log" | sed 's/^/    /'
+  if "$PY" "$ROOT/scripts/check_bb_test.py" "$OUT" > "$OUT/check_bb_test.txt"; then
+    pass "test.json and junit.xml against spec/test.md ($(grep -c '^check_bb_test: ok' "$OUT/check_bb_test.txt") checks)"
+  else
+    fail "check_bb_test.py"; grep -v '^check_bb_test: ok' "$OUT/check_bb_test.txt"
+  fi
+  for c in "${TESTED[@]}" margin; do
+    [[ -f $OUT/$c/events.jsonl ]] || { fail "$c: no outputs"; continue; }
+    grep -v '"type":"grant"' "$OUT/$c/events.jsonl" > "$OUT/$c/non-grant-records"
     checks "$OUT" "$c"
     hashes "$OUT/$c" "$c" nongrant
   done
-  same "$OUT/rule" "$OUT/rule-order" "rule: --engine-order analog-first byte-identical" \
-    nets.csv events.jsonl nets.vcd
   echo "dms-w1: test wall $(echo "$(date +%s.%N) - $t0" | bc) s"
   ;;
 ref)

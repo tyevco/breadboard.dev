@@ -1,0 +1,60 @@
+# examples/dial-me-spinner/tests/w1.toml: make dms-w1-test as a bb test file (Phase 2 technical exit,
+# plan section 5 item 1: W1 at `pi` through bb test; ADR-009 D6, Amendments 2 and 8; ADR-010 D8-D10).
+# W1, POF blanking on a dead battery, with the firmware in the loop on the dial-me-spinner system
+# (../w1), 20 ms each at bb's defaults (10 ms grants, lookahead on), at the LABELLED STRESS CORNER of
+# decision D-W1 (bench/w1-stress.toml: 55 mA static +3V3 load, the suite's budget being 50 mA, RT9080
+# worst_dropout, POFWARN at V28 +5 %, 2.94 V) and the gated margin check at the suite's 50 mA
+# (bench/w1-margin.toml). Each case's image is given by `targets` (bb run --image); bb run is
+# read-only on the project.
+#   - rule (w1_rule, the 10 ms blanking): every assertion of ../asserts/w1.toml passes (cue-held,
+#     pof-dip, flash-vcc, no-reset), rung `pi`.
+#   - blank4 (the window-midpoint control) and off (no blanking): the negative controls, which fail
+#     exactly cue-held (expect); no-reset (an `event` assertion) passes, so G9 holds.
+#   - margin (w1_rule) and margin-off (w1_blank_off, the comparator armed through the dip) at 50 mA:
+#     ../asserts/w1-margin.toml (margin, no-pofwarn, cue-held).
+#   - rule with --engine-order analog-first byte-identical to rule (ADR-003 D3).
+# scripts/dms_w1.sh test runs it (make dms-w1-test), then on the same outputs what is not a kind:
+# check_dms_w1.py (the 2.94 V window, the static-load tolerances against the suite, POFWARN in the
+# controls within one lattice cell, the 4 ms premise, the corner label) and each case's committed
+# one-cell hashes (tests/golden/dms-w1: nets.csv, nets.vcd and the non-grant records WITH the assert
+# records, as make dms-w1 records them; so they are checked by the script, not by a `golden` key,
+# which compares the records without the assert records).
+schema = "bb-test/0"
+project = "../w1"
+
+[defaults]
+for = "20ms"
+bench = "../w1/bench/w1-stress.toml"
+assert_files = ["../asserts/w1.toml"]
+
+[[case]]
+name = "rule"
+targets = { "main:U10" = "../firmware/prebuilt/w1_rule.elf" }
+
+[[case]]
+name = "blank4"
+targets = { "main:U10" = "../firmware/prebuilt/w1_blank4.elf" }
+expect = { "cue-held" = "fail" }
+
+[[case]]
+name = "off"
+targets = { "main:U10" = "../firmware/prebuilt/w1_blank_off.elf" }
+expect = { "cue-held" = "fail" }
+
+[[case]]
+name = "margin"
+bench = "../w1/bench/w1-margin.toml"
+assert_files = ["../asserts/w1-margin.toml"]
+targets = { "main:U10" = "../firmware/prebuilt/w1_rule.elf" }
+
+[[case]]
+name = "margin-off"
+bench = "../w1/bench/w1-margin.toml"
+assert_files = ["../asserts/w1-margin.toml"]
+targets = { "main:U10" = "../firmware/prebuilt/w1_blank_off.elf" }
+
+[[case]]
+name = "rule-order"
+targets = { "main:U10" = "../firmware/prebuilt/w1_rule.elf" }
+engine_order = "analog-first"
+same_as = "rule"

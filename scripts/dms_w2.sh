@@ -22,10 +22,11 @@
 # The equivalence set (old, rule, old-200, rule-200): bb's defaults and 1 ms grants equal the one-cell
 # references but for grant records, and the references equal tests/golden/dms-w2.
 #
-#   scripts/dms_w2.sh test <bb> <out>     make dms-w2-test (in make test): old and rule at bb's defaults
-#                                         with their checks and the committed one-cell hashes (non-grant
-#                                         records), and rule with --engine-order analog-first
-#                                         byte-identical
+#   scripts/dms_w2.sh test <bb> <out>     make dms-w2-test (in make test): tests/w2.toml through bb test
+#                                         (old and rule at bb's defaults, rule with --engine-order
+#                                         analog-first byte-identical; test.json, junit.xml), then
+#                                         check_dms_w2.py and the committed one-cell hashes (non-grant
+#                                         records) on its outputs
 #   scripts/dms_w2.sh gate <bb> <out>     make dms-w2: every case with its checks; the equivalence set at
 #                                         bb's defaults (10 ms grants, lookahead on), at --max-quantum 1ms
 #                                         and as one-cell references (--max-quantum 10us --lookahead off):
@@ -148,18 +149,31 @@ prepare)
   prepare "$1"
   ;;
 test)
+  # Since the technical exit (plan section 5 item 2, "the same way" as W1): tests/w2.toml through bb
+  # test (its assertions, analog-first byte-identical; test.json and junit.xml, which CI publishes with
+  # the other out/dms-*-test/junit.xml), then on its outputs check_dms_w2.py and the committed one-cell
+  # hashes. BB_TEST_JOBS (default 5) runs at a time; bb test uses the pool in BB_RENODE_POOL when make
+  # provides one (POOL=0: every Renode fresh).
   BB=$1 OUT=$2
   rm -rf "$OUT"; mkdir -p "$OUT"
   t0=$(date +%s.%N)
-  prepare "$BB"
-  par "$BB" "$OUT" "" "" "${TESTED[@]}"
-  run_case "$BB" "$OUT/rule-order" rule --engine-order analog-first
+  if "$BB" test "$DMS/tests/w2.toml" --out "$OUT" --jobs "${BB_TEST_JOBS:-5}" --pool env > "$OUT/bb-test.log" 2>&1; then
+    pass "bb test tests/w2.toml: every outcome as expected ($(grep -c '^bb test: PASS ' "$OUT/bb-test.log") cases: the old rule's brown-out and reboot, the rule's no reset, analog-first byte-identical)"
+  else
+    fail "bb test tests/w2.toml"
+  fi
+  grep '^bb test: \(PASS\|FAIL\)\|^bb test:   ' "$OUT/bb-test.log" | sed 's/^/    /'
+  if "$PY" "$ROOT/scripts/check_bb_test.py" "$OUT" > "$OUT/check_bb_test.txt"; then
+    pass "test.json and junit.xml against spec/test.md ($(grep -c '^check_bb_test: ok' "$OUT/check_bb_test.txt") checks)"
+  else
+    fail "check_bb_test.py"; grep -v '^check_bb_test: ok' "$OUT/check_bb_test.txt"
+  fi
   for c in "${TESTED[@]}"; do
+    [[ -f $OUT/$c/events.jsonl ]] || { fail "$c: no outputs"; continue; }
+    grep -v '"type":"grant"' "$OUT/$c/events.jsonl" > "$OUT/$c/non-grant-records"
     checks "$OUT" "$c"
     hashes "$OUT/$c" "$c" nongrant
   done
-  same "$OUT/rule" "$OUT/rule-order" "rule: --engine-order analog-first byte-identical" \
-    nets.csv events.jsonl nets.vcd
   echo "dms-w2: test wall $(echo "$(date +%s.%N) - $t0" | bc) s"
   ;;
 ref)

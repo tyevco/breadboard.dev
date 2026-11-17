@@ -14,7 +14,8 @@
 #     a run bb refuses (an error testcase); a negative control that holds passes.
 #  3. G9: a negative control without a count or event assertion expected to pass is refused before
 #     anything runs, naming G9.
-#  4. Determinism: each of the three dms-* test files run DET_RUNS (10) times, test.json byte-identical
+#  4. Determinism: each of the dms-* test files (E1-E3, and W1 and W2 since the technical exit) run
+#     DET_RUNS (10) times, test.json byte-identical
 #     across them; the last run with --pool off (every Renode fresh), the others on the pool
 #     (ADR-004: results never depend on leasing). check_bb_test.py on every run (test.json canonical
 #     and valid against spec/schema/test-result.schema.json, its hashes the files', junit.xml valid
@@ -125,7 +126,7 @@ else
 fi
 
 # --- 4. determinism -------------------------------------------------------------------------------
-for t in e1 e2 e3; do
+for t in e1 e2 e3 w1 w2; do
   f=$ROOT/examples/dial-me-spinner/tests/$t.toml
   ok=1
   for k in $(seq -w 1 "$DET_RUNS"); do
@@ -145,7 +146,8 @@ done
 
 # --- 5. the JUnit reporter ------------------------------------------------------------------------
 if bash "$ROOT/scripts/junit_reporter_check.sh" "$OUT/semantics/junit.xml" "$OUT/negative/junit.xml" \
-    "$OUT/e1-01/junit.xml" "$OUT/e2-01/junit.xml" "$OUT/e3-01/junit.xml" > "$OUT/junit-reporter.txt" 2>&1; then
+    "$OUT/e1-01/junit.xml" "$OUT/e2-01/junit.xml" "$OUT/e3-01/junit.xml" \
+    "$OUT/w1-01/junit.xml" "$OUT/w2-01/junit.xml" > "$OUT/junit-reporter.txt" 2>&1; then
   pass "$(grep '^junit-reporter: PASS' "$OUT/junit-reporter.txt" | sed 's/^junit-reporter: PASS: //')"
 else
   fail "the JUnit reporter"

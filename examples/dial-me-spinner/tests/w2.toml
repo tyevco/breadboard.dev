@@ -1,0 +1,38 @@
+# examples/dial-me-spinner/tests/w2.toml: make dms-w2-test as a bb test file (Phase 2 technical exit,
+# plan section 5 item 2: W2 "the same way" as W1, through bb test; ADR-009 D7, Amendment 9; ADR-010
+# D8-D10). W2, the S4 brown-out reboot loop on a dead battery, with the firmware in the loop on the
+# dial-me-spinner system (../w2) in static-load mode (the suite's 50 mA +3V3 budget), USB at ILIM
+# 100 mA, 20 ms each at bb's defaults. Each case's image is given by `targets` (bb run --image).
+#   - old (w2_old_rule): ../asserts/w2-old.toml (brownout: at least 2 `reset` records; boots;
+#     resetreas-zero; oled-en-in-reset), rung `pi`.
+#   - rule (w2_rule): ../asserts/w2-rule.toml (no-reset, vcc, oled-off).
+#   - rule with --engine-order analog-first byte-identical to rule (ADR-003 D3).
+# scripts/dms_w2.sh test runs it (make dms-w2-test), then on the same outputs what is not a kind:
+# check_dms_w2.py (the reset records at #bor's crossings, the VBOR crossing and the rule's minima
+# against the suite) and each case's committed one-cell hashes (tests/golden/dms-w2, the non-grant
+# records with the assert records, so checked by the script rather than by a `golden` key).
+schema = "bb-test/0"
+project = "../w2"
+
+[defaults]
+for = "20ms"
+
+[[case]]
+name = "old"
+bench = "../w2/bench/w2-old.toml"
+assert_files = ["../asserts/w2-old.toml"]
+targets = { "main:U10" = "../firmware/prebuilt/w2_old_rule.elf" }
+
+[[case]]
+name = "rule"
+bench = "../w2/bench/w2-rule.toml"
+assert_files = ["../asserts/w2-rule.toml"]
+targets = { "main:U10" = "../firmware/prebuilt/w2_rule.elf" }
+
+[[case]]
+name = "rule-order"
+bench = "../w2/bench/w2-rule.toml"
+assert_files = ["../asserts/w2-rule.toml"]
+targets = { "main:U10" = "../firmware/prebuilt/w2_rule.elf" }
+engine_order = "analog-first"
+same_as = "rule"
