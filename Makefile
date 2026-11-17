@@ -163,6 +163,7 @@ pooled-test:
 	+$(STEP) packages
 	+$(STEP) pi-static-test
 	+$(STEP) pi-glue-test
+	+$(STEP) pi-idd-test
 	+$(STEP) gdb-test
 	+$(STEP) vscode-templates
 	+$(STEP) dms-system
@@ -515,7 +516,7 @@ measured-jit-profile-stress: firmware bb
 # it uses the pool.
 POOL_EQUIV_OUT    ?= out/pool-equiv
 POOL_EQUIV_ROUNDS ?= 2
-pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare bench-prepare
+pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare bench-prepare pi-idd-prepare
 	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
 	    "bench-stimulus;$(BENCH_GOLD)/stimulus.sha256;nongrant;$(BENCH_STIM_ARGS)" \
 	    "bench-trigger;$(BENCH_GOLD)/trigger.sha256;nongrant;$(BENCH_TRIG_ARGS)" \
@@ -546,7 +547,11 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare be
 	    "dms-home-step;$(DMS_HOME_GOLD)/step/outputs.sha256;all;$(DMS_HOME_STEP_ARGS)" \
 	    "dms-home;$(DMS_HOME_GOLD)/typ/outputs.sha256;all;$(DMS_HOME_TYP_ARGS)" \
 	    "dms-home-project-step;$(DMS_HOME_GOLD)/project-step/outputs.sha256;all;$(DMS_HOME_PSTEP_ARGS)" \
-	    "dms-home-project;$(DMS_HOME_GOLD)/project-typ/outputs.sha256;all;$(DMS_HOME_PTYP_ARGS)"
+	    "dms-home-project;$(DMS_HOME_GOLD)/project-typ/outputs.sha256;all;$(DMS_HOME_PTYP_ARGS)" \
+	    "pi-idd-duty;$(PI_IDD_GOLD)/duty/outputs.sha256;nongrant;$(PI_IDD_DUTY_ARGS)" \
+	    "pi-idd-duty-ref;$(PI_IDD_GOLD)/duty/outputs.sha256;all;$(PI_IDD_DUTY_ARGS) --max-quantum 10us --lookahead off" \
+	    "pi-idd-radio;$(PI_IDD_GOLD)/radio/outputs.sha256;nongrant;$(PI_IDD_RADIO_ARGS)" \
+	    "pi-idd-feedback;$(PI_IDD_GOLD)/feedback/outputs.sha256;nongrant;$(PI_IDD_FEEDBACK_ARGS)"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -938,6 +943,41 @@ pi-glue-test: firmware bb
 	bash scripts/pi_glue.sh test $(BB) $(PI_GLUE_OUT)-test
 pi-glue-update: firmware bb
 	bash scripts/pi_glue.sh update $(BB) $(PI_GLUE_OUT)-update
+
+# Phase 2 plan P3 (ADR-009 D4, gate G6, Amendment 6): the nRF52840's supply_load view at pi, its CPU
+# state outputs #run, #hfxo, #nvmc, #saadc (bb_nrf52_state.cs) and a bench [[activity]], on
+# examples/nrf-idd (scripts/pi_idd.sh, pi_idd.py; project copies in $(PI_IDD_WORK)). pi-idd-test (in
+# make test): the gate firmware nrf_duty.elf's total VDD current against the hand calculation of the
+# duty-weighted average within 1 % (and with a bench-scheduled radio), its negative control at fast,
+# the lookahead check (examples/nrf-feedback's firmware with the state outputs at most 2x the board's
+# grants), the default runs against tests/golden/pi-idd. pi-idd adds the Renode-only test of the
+# state outputs (tests/nrf52840.rs nrf_state_outputs_exact: #run at the WFI instants of nrf_state.elf,
+# to the fs), partition independence (one-cell, 1 ms, default), analog-first and a second run.
+PI_IDD_OUT  ?= out/pi-idd
+PI_IDD_WORK ?= $(BB_SCRATCH)/bb-pi-idd
+export PI_IDD_WORK
+.PHONY: pi-idd pi-idd-test pi-idd-update pi-idd-prepare
+pi-idd: firmware bb
+	BB_REQUIRE_RENODE=1 $(CARGO) test --release -p bb-cpu-renode --test nrf52840 -- --nocapture nrf_state_
+	bash scripts/pi_idd.sh gate $(BB) $(PI_IDD_OUT)
+pi-idd-test: firmware bb
+	bash scripts/pi_idd.sh test $(BB) $(PI_IDD_OUT)-test
+pi-idd-update: firmware bb
+	bash scripts/pi_idd.sh update $(BB) $(PI_IDD_OUT)-update
+pi-idd-prepare: firmware bb
+	bash scripts/pi_idd.sh prepare $(BB)
+# The cost row of the state outputs (ADR-009 D4, risk R5; a measurement, under the lock): nrf_duty.elf
+# at pi with the supply_load and its state outputs (B) against static-load mode (A, the same deck with
+# the bench load in the view's place and no state output), N = PI_IDD_COST_N interleaved, medians.
+PI_IDD_COST_N ?= 5
+measured-pi-idd-cost: firmware bb pi-idd-prepare
+	PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) out/pi-idd-cost $(PI_IDD_COST_N) \
+	    "--bench $(PI_IDD_WORK)/proj-duty/bench/pi-static.toml" "--bench $(PI_IDD_WORK)/proj-duty/bench/pi.toml" - - - -- \
+	    --project $(PI_IDD_WORK)/proj-duty --for 50ms
+PI_IDD_GOLD := tests/golden/pi-idd
+PI_IDD_DUTY_ARGS = --project $(PI_IDD_WORK)/proj-duty --bench $(PI_IDD_WORK)/proj-duty/bench/pi.toml --for 50ms
+PI_IDD_RADIO_ARGS = --project $(PI_IDD_WORK)/proj-duty --bench $(PI_IDD_WORK)/proj-duty/bench/pi-radio.toml --for 50ms
+PI_IDD_FEEDBACK_ARGS = --project $(PI_IDD_WORK)/proj-feedback --bench $(PI_IDD_WORK)/proj-feedback/bench/pi.toml --for 500ms
 PI_OE_COST_N ?= 9
 measured-pi-oe-cost: firmware bb
 	bash scripts/pi_glue.sh prepare $(BB)
@@ -1005,7 +1045,8 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/dial-me-spinner/system tests/device-smoke/board.cir \
               examples/nrf-pwm/board.cir examples/dial-me-spinner/e3/board.cir examples/bench \
               examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step \
-              examples/dial-me-spinner/e2/none examples/dial-me-spinner/e2/c5 examples/dial-me-spinner/e2/c5-none
+              examples/dial-me-spinner/e2/none examples/dial-me-spinner/e2/c5 examples/dial-me-spinner/e2/c5-none \
+              examples/nrf-idd
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages \
              examples/bench/packages examples/dial-me-spinner/e3/packages
@@ -1526,7 +1567,7 @@ MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-tabl
                    adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
                    setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \
-                   ngspice-stall bench-perf bb-test-cost pi-oe-cost
+                   ngspice-stall bench-perf bb-test-cost pi-oe-cost pi-idd-cost
 .PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
 $(MEASURE_TARGETS):
 	@bash scripts/measure_lock.sh $@ $(MAKE) --no-print-directory measured-$@

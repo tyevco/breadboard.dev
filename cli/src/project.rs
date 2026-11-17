@@ -674,6 +674,24 @@ pub struct Load {
     /// `bb-bench/1`: a current profile (`t,amps`, ADR-010 D2), its file
     /// (relative to the bench) and interpolation.
     pub profile: Option<(String, Interp)>,
+    /// `bb-bench/1` static-load mode (ADR-009 D4, milestone P3): the
+    /// instance (`main:U10`) whose supply_load this load stands in for.
+    pub replace: Option<String>,
+}
+
+/// A `bb-bench/1` `[[activity]]` (ADR-009 D4, ADR-010 D2; milestone P3): a
+/// bench-scheduled internal state of an instance's supply_load (the radio,
+/// which no firmware reports), 1 for `for` from `at` and then every
+/// `every` (or once).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Activity {
+    pub path: String,
+    /// `<instance>#<state>` as written (`main:U10#radio_tx`).
+    pub state: String,
+    /// fs.
+    pub at_fs: i128,
+    pub every_fs: Option<i128>,
+    pub for_fs: i128,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -801,6 +819,8 @@ pub struct Bench {
     pub corners: BTreeMap<String, String>,
     /// `[[battery]]` (ADR-010 D2, milestone P1).
     pub batteries: Vec<Battery>,
+    /// `[[activity]]` (ADR-009 D4, milestone P3).
+    pub activities: Vec<Activity>,
 }
 
 /// A `[[battery]]` (ADR-010 D2, ADR-009; milestone P1): an open-circuit
@@ -911,10 +931,6 @@ fn q(text: &str, dim: bbpkg::value::Dim, at: &str) -> Result<i128, String> {
 /// The `bb-bench/1` keys of ADR-010 D2 that another milestone implements:
 /// refused, never ignored (a bench that names one would not run as written).
 const LATER_TOP: &[(&str, &str)] = &[
-    (
-        "activity",
-        "bench-scheduled internal states (ADR-009 D4, milestone P3)",
-    ),
     ("env", "environment signals (a later milestone)"),
     ("probes", "per-probe rates (a later milestone)"),
 ];
@@ -1019,6 +1035,44 @@ impl Bench {
             for (k, v) in o.str_map("corners")? {
                 corner_name(&v).map_err(|e| format!("corners.{k:?}: {e}"))?;
                 b.corners.insert(k, v);
+            }
+            // ADR-009 D4 (milestone P3): bench-scheduled states.
+            for mut t in o.tables("activity")? {
+                let at = t.path.clone();
+                let state = t.str_req("state")?;
+                if !state.contains('#') {
+                    return Err(format!(
+                        "{at}.state {state:?}: expected \"<instance>#<state>\" (main:U10#radio_tx)"
+                    ));
+                }
+                let time = |t: &mut Obj, k: &str| -> Result<Option<i128>, String> {
+                    match t.str_opt(k)? {
+                        Some(v) => Ok(Some(q(&v, Dim::Time, &format!("{at}.{k}"))?)),
+                        None => Ok(None),
+                    }
+                };
+                let at_fs = time(&mut t, "at")?.unwrap_or(0);
+                let for_fs = time(&mut t, "for")?.ok_or_else(|| format!("{at}.for: required"))?;
+                let every_fs = time(&mut t, "every")?;
+                if at_fs < 0 {
+                    return Err(format!("{at}.at: a negative time"));
+                }
+                if for_fs <= 0 {
+                    return Err(format!("{at}.for: must be > 0"));
+                }
+                if let Some(e) = every_fs {
+                    if e <= for_fs {
+                        return Err(format!("{at}.every: must be longer than for"));
+                    }
+                }
+                t.done()?;
+                b.activities.push(Activity {
+                    path: at,
+                    state,
+                    at_fs,
+                    every_fs,
+                    for_fs,
+                });
             }
             for mut t in o.tables("battery")? {
                 let at = t.path.clone();
@@ -1125,12 +1179,12 @@ impl Bench {
         for mut l in o.tables("load")? {
             let at = l.path.clone();
             let net = l.str_req("net")?;
-            if major >= 1 && l.has("replace") {
-                return Err(format!(
-                    "{at}.replace: static-load mode (ADR-009 D4, milestone P3), not implemented \
-                     in this build"
-                ));
-            }
+            // ADR-009 D4 (milestone P3): static-load mode.
+            let replace = if major >= 1 {
+                l.str_opt("replace")?
+            } else {
+                None
+            };
             let (amps_pa, profile) = if major >= 1 {
                 match (l.str_opt("amps")?, l.str_opt("profile")?) {
                     (Some(a), None) => {
@@ -1157,6 +1211,7 @@ impl Bench {
                 net,
                 amps_pa,
                 profile,
+                replace,
             });
         }
         if let Some(Value::Table(nt)) = o.get("nominal") {

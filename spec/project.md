@@ -389,9 +389,35 @@ at = "260ms"
   the whole run: ADR-010 D2 gives the cell no capacity. The battery drives
   its net as a `[[supply]]` does (two sources on one net, or a `power_out`
   pin on it, are refused).
+- **`[[activity]]`** (ADR-009 D4, ADR-010 D2; milestone P3): a
+  bench-scheduled internal state of an instance's `supply_load` view, for
+  states no firmware reports (the radio):
+
+  ```toml
+  [[activity]]
+  state = "main:U10#radio_tx"   # <instance>#<state>: a state port of its supply_load view
+  at = "500us"                  # optional (default 0): the first burst's start
+  every = "1ms"                 # optional: the period (> for); without it one burst
+  for = "300us"                 # required (> 0): each burst's length
+  ```
+
+  The state is 1 during each burst, to the run's end (`--for`), and 0
+  otherwise: a table of the analog engine (no bench engine), driving the
+  state node of glue rule 12 (`spec/pin-model.md`); `run.json` labels the
+  state bench-scheduled. Several `[[activity]]` on one state may not
+  overlap. A state the CPU engine reports (`#run`, `#hfxo`, `#saadc` on the
+  nRF52840 target) is refused. At `pi` an `[[activity]]` whose instance has
+  no `supply_load` with that state in the deck is refused; at `fast` (no
+  `supply_load` in the deck) it is ignored with a warning.
+- **`[[load]]` `replace`** (static-load mode, ADR-009 D4; milestone P3):
+  `replace = "<instance>"` removes that instance's `supply_load` view from
+  the deck; the load (`amps` or `profile`) stands in for it, on its own
+  `net`. At `pi` an instance without a `supply_load` in the deck is
+  refused; at `fast` the load is added as written, with a warning.
+  `run.json`'s `supply_load` records the instance `replaced_by` the load.
 - **Refused, not ignored:** the `bb-bench/1` keys of ADR-010 D2 that later
-  milestones implement (`[[activity]]`, `[[env]]`, `[probes]`, a
-  `[[load]]` `replace`), and an `after` on a `log` record.
+  milestones implement (`[[env]]`, `[probes]`), and an `after` on a `log`
+  record.
 
 ### 3.3 The bench CSV (ADR-010 D3)
 
@@ -635,7 +661,14 @@ names, sorted; ADR-014 D4); `pi_glue`, only at `pi` (ADR-009 D5,
 milestone P2): per MCU `digital_out` on a circuit net, in binding order,
 `pin` (its kernel net), `rail` (the package pin) and `rail_net`, `rhiz`
 (Ω, a decimal string), `vss_net` (when the ground pins are on a net) and
-`oe` (`"pin_cnf_dir"` or `"fixed"`); `assert_files`, only when `bb run --assert`
+`oe` (`"pin_cnf_dir"` or `"fixed"`); `supply_load`, only at `pi` (ADR-009 D4,
+milestone P3): per instance whose `supply_load` view is in the deck (glue
+rule 12), `ref`, `package`, `version`, `view`, provenance `source` and
+`confidence`, `qualified_for_run`, `idd` (each state's `typ` as written)
+and `states` (each state port's driver: `"cpu"`, `"bench [[activity]]
+(bench-scheduled)"` or `"0"`); an instance whose view a `[[load]] replace`
+removed is listed with `ref`, `package`, `view` and `replaced_by` only;
+`assert_files`, only when `bb run --assert`
 names any (each file's name and text, in order; ADR-010 Amendment 3);
 `packages` (each one's id, version, `source`: `path` for a local package,
 else its `registry+<url>` source, ADR-011; and tree) and `platforms` (the

@@ -286,9 +286,12 @@ pub fn load_vectors(pkg: &Package, dir: &Path, reg: &Registry) -> Result<Vec<Vec
             .iter()
             .find(|x| x.name == v.view)
             .ok_or_else(|| format!("{name}: view {:?} is not in part.toml", v.view))?;
-        if !matches!(view.kind.as_str(), "circuit" | "pin_load" | "switch") {
+        if !matches!(
+            view.kind.as_str(),
+            "circuit" | "pin_load" | "switch" | "supply_load"
+        ) {
             return Err(format!(
-                "{name}: view {} is a {} view; vectors test circuit, pin_load and switch views",
+                "{name}: view {} is a {} view; vectors test circuit, pin_load, switch and supply_load views",
                 view.name, view.kind
             ));
         }
@@ -363,7 +366,15 @@ pub fn deck_at(
         std::fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?
     };
     let defs = spice::assemble(&[(format!("view {}", view.name), text)])?;
-    let mut params: BTreeMap<String, String> = view.params.iter().cloned().collect();
+    // A supply_load view's currents come from [power] (ADR-009 D4), then
+    // its own params.
+    let mut params: BTreeMap<String, String> = if view.kind == "supply_load" {
+        crate::package::supply_load_params(pkg, view)?
+            .into_iter()
+            .collect()
+    } else {
+        view.params.iter().cloned().collect()
+    };
     for (k, val) in &v.params {
         params.insert(k.clone(), val.clone());
     }

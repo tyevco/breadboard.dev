@@ -727,6 +727,17 @@ struct LoadGlue {
     view: String,
 }
 
+/// A CPU state output's drive into its supply_load state node (ADR-009
+/// D4, glue rule 12): 0 V / 1 V, 1 ns edges, no output resistance (the
+/// view's B source reads the node).
+const STATE_DRIVE: bbcore::DigitalOut = bbcore::DigitalOut {
+    voh: 1.0,
+    vol: 0.0,
+    rise: Time::from_ns(1),
+    fall: Time::from_ns(1),
+    zout: 0.0,
+};
+
 /// The `#smp` toggle's drive into its glue net (ADR-008 D7): 0 V / 1 V,
 /// 1 ns edges, no output resistance (the view's edge detector is the only
 /// load).
@@ -1323,6 +1334,12 @@ fn run(a: RunArgs) -> Result<(), String> {
         rcfg.pins
             .push(PinSpec::nrf_oe(&o.cpu_pin).map_err(|e| e.to_string())?);
     }
+    // ADR-009 D4 (milestone P3): the CPU state outputs into the target's
+    // supply_load (at pi; none otherwise).
+    for c in &board.cpu_states {
+        rcfg.pins
+            .push(PinSpec::nrf_state(&c.cpu_pin).map_err(|e| e.to_string())?);
+    }
     rcfg.adc_trace = mcu_pins
         .iter()
         .filter(|p| matches!(p.kind, PinKind::Adc { trace: true, .. }))
@@ -1352,6 +1369,22 @@ fn run(a: RunArgs) -> Result<(), String> {
         stim,
         &board.digital_only,
     );
+    // The supply_load's CPU state sources (ADR-009 D4): `#<state>` of the
+    // CPU engine into the analog engine, like the oe sources below.
+    for c in &board.cpu_states {
+        binds.push(devices::Bind {
+            engine: devices::CPU,
+            pin: c.cpu_pin.clone(),
+            net: c.kernel_net.clone(),
+            dir: Direction::Output,
+        });
+        binds.push(devices::Bind {
+            engine: devices::ANALOG,
+            pin: c.kernel_net.clone(),
+            net: c.kernel_net.clone(),
+            dir: Direction::Input,
+        });
+    }
     // The pi glue's oe sources (ADR-009 D5): `<pin>#oe` of the CPU engine
     // into the analog engine, like a loading adc_in's `#smp`.
     for o in &pi_oes {
@@ -1464,6 +1497,18 @@ fn run(a: RunArgs) -> Result<(), String> {
     }
     // The pi glue's level and oe inputs (ADR-009 D5).
     ncfg.inputs.extend(pi_inputs);
+    // The supply_load's state inputs (ADR-009 D4): 0 V / 1 V, 1 ns edges.
+    for c in &board.cpu_states {
+        ncfg.inputs.push(InputBinding {
+            pin: c.kernel_net.clone(),
+            source: c.source.clone(),
+            drive: Drive::Digital {
+                model: STATE_DRIVE,
+                initial: c.initial,
+            },
+            glue_node: None,
+        });
+    }
     for p in &mcu_pins {
         match &p.kind {
             // An output on a digital-only net (ADR-014 D4): no glue.
@@ -2325,6 +2370,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         cli_probes: &a.probes,
         extra_asserts: &extra,
         pi_oe_fixed: a.pi_oe_fixed,
+        run_end: Some(a.duration),
     })?;
     for w in &plan.warnings {
         eprintln!("bb run: warning: {w}");

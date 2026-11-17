@@ -1,0 +1,29 @@
+# nordic/nrf52840-qiaa idd (supply_load, ADR-009 D4, Phase 2 P3): below vdd_min (1.7 V) the current
+# falls linearly to 0 at 0 V (a DC conductance at every operating point, ADR-009 D2 rule 2). VDD from
+# 1.0 V through 10 Ohm with #run high: V = 1 V - 10 Ohm * (2.35 uA + 3.1 mA) * V / 1.7 V, so
+# V = 1 / (1 + 10 * 3.10235e-3 / 1.7) V = 0.98207794 V by hand.
+schema = "bb-pkgtest/0"
+view = "idd"
+circuit = "idd_low.cir"
+stop = "40us"
+
+[ports]
+VDD = "vdd"
+VSS = "0"
+run = "run"
+hfxo = "hfxo"
+saadc = "saadc"
+radio_tx = "radio_tx"
+radio_rx = "radio_rx"
+
+[[edge]]
+net = "run"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "low"
+at = [["5us", "high"]]
+
+[[expect]]
+meas = { node = "vdd", at = "30us" }
+value = "0.982078V"
+tol = "1uV"
+source = "hand calculation: V = 1 / (1 + 10 * (2.35e-6 + 3.1e-3) / 1.7) V"

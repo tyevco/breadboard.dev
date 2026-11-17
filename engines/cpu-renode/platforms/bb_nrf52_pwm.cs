@@ -1000,13 +1000,20 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             {
                 timer.Enabled = false;
                 busy = false;
+                BusyChange?.Invoke(clock.CurrentValue.TotalNanoseconds, false);
             };
+            clock = (BaseClockSource)machine.ClockSource;
             Reset();
         }
 
         public long Size => 0x1000;
 
         public uint Erases { get; private set; }
+
+        // ADR-009 D4 (milestone P3): each change of busy (READY low) at its
+        // exact clock time, for the #nvmc state output (bb_nrf52_state.cs).
+        // Unset unless a run binds #nvmc.
+        public Action<ulong, bool> BusyChange { get; set; }
 
         public void Reset()
         {
@@ -1156,11 +1163,16 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             {
                 cpu.SyncTime();
             }
+            var was = busy;
             busy = true;
             timer.Enabled = false;
             timer.Value = 0;
             timer.Limit = Math.Max(1, ns);
             timer.Enabled = true;
+            if(!was)
+            {
+                BusyChange?.Invoke(clock.CurrentValue.TotalNanoseconds, true);
+            }
         }
 
         private void WarnOnce(string what, long offset)
@@ -1180,6 +1192,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private const uint ConfigEen = 2;
         private readonly IBusController sysbus;
         private readonly LimitTimer timer;
+        private readonly BaseClockSource clock;
         private readonly ulong flashSize, erasePageNs, eraseAllNs;
         private readonly HashSet<string> warned = new HashSet<string>();
         private readonly SortedDictionary<uint, ulong> partialNs = new SortedDictionary<uint, ulong>();

@@ -225,6 +225,12 @@ pub const BB_NRF52_SAADC_CS: &str = include_str!("../platforms/bb_nrf52_saadc.cs
 /// and their host port (ADR-008 D9, Amendment 9).
 pub const BB_NRF52_PWM_CS: &str = include_str!("../platforms/bb_nrf52_pwm.cs");
 
+/// Source of `Miscellaneous.BbNrf52State`: the nRF52840 CPU state outputs
+/// `#run`, `#hfxo`, `#nvmc` and `#saadc` (ADR-009 D4, milestone P3). Not in
+/// the platform's `.repl`: the engine maps it (`bbState`) only on a run that
+/// binds a state output.
+pub const BB_NRF52_STATE_CS: &str = include_str!("../platforms/bb_nrf52_state.cs");
+
 /// Breadboard's STM32F072 overlay (ADR-005 D6), written next to the
 /// generated script for [`Platform::Stm32f072Bb`].
 pub const STM32F072_BB_REPL: &str = include_str!("../platforms/stm32f072-bb.repl");
@@ -306,6 +312,31 @@ const SAADC_EVENT_DESC: i32 = 0x7FFF_0002;
 const PWM_EVENT_DESC: i32 = 0x7FFF_0003;
 /// A UART line longer than this is logged in pieces.
 const UART_LINE_MAX: usize = 1024;
+/// The event descriptor of the state block's line (`bbState`, ADR-009 D4),
+/// which toggles at the first ring entry after the engine's last
+/// acknowledgement and at an error.
+const STATE_EVENT_DESC: i32 = 0x7FFF_0004;
+
+/// Bus address of `bbState`, the CPU state-output block of
+/// [`Platform::Nrf52840Bb`] (`bb_nrf52_state.cs`, ADR-009 D4), mapped by the
+/// engine on a run that binds a state output.
+pub const BB_STATE_ADDRESS: u64 = 0x5FFE_0000;
+/// Its ID word, `"BBST"`, error word, acknowledgement and ring (four
+/// words per entry: the time in fs, low and high; the state and level).
+const STATE_ID: u32 = 0x5453_4242;
+const STATE_ACK: u64 = 0x00C;
+/// The SYNC register: a read records a WFI entry Renode has not hooked yet
+/// (`bb_nrf52_state.cs`), then returns the entries recorded; the error word
+/// follows it.
+const STATE_SYNC: u64 = 0x020;
+const STATE_RING: u64 = 0x1000;
+const STATE_RING_LEN: u64 = 2048;
+const STATE_ERR_OVERFLOW: u32 = 1 << 0;
+const STATE_ERR_SETUP: u32 = 1 << 1;
+const STATE_ERR_FIRMWARE: u32 = 1 << 3;
+/// The CPU states of ADR-009 D4 that the platform reports, in the block's
+/// state numbering (`#run` 0, `#hfxo` 1, `#nvmc` 2, `#saadc` 3).
+pub const NRF_STATES: &[&str] = &["run", "hfxo", "nvmc", "saadc"];
 
 /// Bus address of `bbNrfPort`, the host port of Breadboard's nRF52840 PWM,
 /// TEMP and NVMC models on [`Platform::Nrf52840Bb`] (`nrf52840-bb@3`,
@@ -337,6 +368,7 @@ pub const PLUGIN_SOURCES: &[(&str, &str)] = &[
     ("bb_stm32f0_adc.cs", BB_STM32F0_ADC_CS),
     ("bb_nrf52_saadc.cs", BB_NRF52_SAADC_CS),
     ("bb_nrf52_pwm.cs", BB_NRF52_PWM_CS),
+    ("bb_nrf52_state.cs", BB_NRF52_STATE_CS),
 ];
 
 /// The plugin sources every Breadboard platform declares (ADR-015 D6): the
@@ -359,7 +391,7 @@ pub const PLATFORM_PLUGINS: &[(&str, &[&str])] = &[
     ),
     (
         "nrf52840-bb.repl",
-        &["bb_nrf52_saadc.cs", "bb_nrf52_pwm.cs"],
+        &["bb_nrf52_saadc.cs", "bb_nrf52_pwm.cs", "bb_nrf52_state.cs"],
     ),
 ];
 
@@ -562,6 +594,13 @@ pub enum PinDirection {
     /// reset (`PIN_CNF` = 0x2, an input). [`PinSpec::gpio`] and
     /// [`PinSpec::index`] name the GPIO pin.
     OutputEnable,
+    /// A CPU state output of the nRF52840 (ADR-009 D4, milestone P3):
+    /// `#run`, `#hfxo`, `#nvmc` or `#saadc`, an output of the engine (not a
+    /// GPIO) from the state block's ring, each change at its exact virtual
+    /// time by the lattice rule of GPIO events. [`PinSpec::index`] is the
+    /// state's number in [`NRF_STATES`]. `#run` is high after reset, the
+    /// others low.
+    State,
 }
 
 /// One MCU pin exposed to the kernel.
@@ -638,6 +677,30 @@ impl PinSpec {
             index: input,
             direction: PinDirection::AdcSample,
         }
+    }
+
+    /// A CPU state output of the nRF52840 (`#run`, `#hfxo`, `#nvmc`,
+    /// `#saadc`; ADR-009 D4).
+    pub fn nrf_state(name: &str) -> Result<PinSpec, EngineError> {
+        let index = name
+            .strip_prefix('#')
+            .and_then(|s| NRF_STATES.iter().position(|x| *x == s))
+            .ok_or_else(|| {
+                EngineError::Other(format!(
+                    "{name:?}: not a CPU state output of the nRF52840 (expected one of {})",
+                    NRF_STATES
+                        .iter()
+                        .map(|s| format!("#{s}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?;
+        Ok(PinSpec {
+            name: name.to_string(),
+            gpio: "bbState".into(),
+            index: index as i32,
+            direction: PinDirection::State,
+        })
     }
 
     /// The `#oe` output of nRF52840 GPIO `name` (`P0.06#oe`: the pin's
@@ -1533,6 +1596,15 @@ struct PwmPoll {
     unbound: u64,
 }
 
+/// What the engine reads from the CPU state block's ring after each advance
+/// (ADR-009 D4, milestone P3).
+struct StatePoll {
+    /// Ring entries consumed (and acknowledged), the low 32 bits.
+    seen: u32,
+    /// Changes stamped after the last grant end, `(t, pin, level)`.
+    carried: Vec<(Time, usize, Level)>,
+}
+
 /// One decoded pin-ring entry of `bbNrfPort` (`bb_nrf52_pwm.cs`): the time
 /// in half-nanoseconds, the level, the kind (0 level change, 1 connect, 2
 /// release), the channel, the PWM instance and the PSEL pin.
@@ -1706,6 +1778,8 @@ pub struct RenodeEngine {
     uart: Option<UartPoll>,
     /// ADR-008 Amendment 9: the PWM pin ring.
     pwm: Option<PwmPoll>,
+    /// ADR-009 D4 (milestone P3): the CPU state block's ring.
+    state: Option<StatePoll>,
     /// ADR-008 D10: the GDB proxy (`bb run --gdb`).
     gdb: Option<gdb::GdbProxy>,
     /// The debug mark (a `warn` log record) has been emitted.
@@ -1908,16 +1982,22 @@ impl RenodeEngine {
             || cfg.pins.iter().any(|p| {
                 matches!(
                     p.direction,
-                    PinDirection::AdcSample | PinDirection::OutputEnable
+                    PinDirection::AdcSample | PinDirection::OutputEnable | PinDirection::State
                 )
             });
         if nrf_only && cfg.platform != Platform::Nrf52840Bb {
             return Err(EngineError::Other(
-                "a loading adc_in (#smp), trace_samples, UART log lines, PWM pins and #oe outputs \
-                 are for the nRF52840 platform only"
+                "a loading adc_in (#smp), trace_samples, UART log lines, PWM pins, #oe outputs \
+                 and CPU state outputs are for the nRF52840 platform only"
                     .into(),
             ));
         }
+        // ADR-009 D4: the state block's mask, one bit per bound state.
+        let state_mask: u32 = cfg
+            .pins
+            .iter()
+            .filter(|p| p.direction == PinDirection::State)
+            .fold(0, |m, p| m | 1 << p.index);
         for name in &cfg.adc_trace {
             if !cfg
                 .pins
@@ -2038,6 +2118,16 @@ impl RenodeEngine {
                 )
             })
             .collect();
+        // ADR-009 D4 (milestone P3): the CPU state block, mapped and armed
+        // only on a run that binds a state output (so no other run changes).
+        let state_map = if state_mask != 0 {
+            format!(
+                "machine LoadPlatformDescriptionFromString \"bbState: Miscellaneous.BbNrf52State \
+                 @ sysbus {BB_STATE_ADDRESS:#x}\"\nsysbus.bbState Arm {state_mask}\n"
+            )
+        } else {
+            String::new()
+        };
         let script = format!(
             "{plugin_load}\
              mach create \"{machine}\"\n\
@@ -2045,6 +2135,7 @@ impl RenodeEngine {
              {lookahead_map}\
              sysbus LoadELF @{elf}\n\
              {pin_cnf_hooks}\
+             {state_map}\
              emulation SetSeed {seed}\n\
              emulation SetGlobalQuantum \"{quantum}\"\n\
              emulation SetGlobalSerialExecution true\n\
@@ -2156,17 +2247,24 @@ impl RenodeEngine {
             for (i, spec) in cfg.pins.iter().enumerate() {
                 if matches!(
                     spec.direction,
-                    PinDirection::AdcSample | PinDirection::OutputEnable
+                    PinDirection::AdcSample | PinDirection::OutputEnable | PinDirection::State
                 ) {
                     // Not a GPIO event: its edges come from the SAADC's
-                    // acquisition ring (ADR-008 D7), or from the PIN_CNF
-                    // write hook (`#oe`, ADR-009 D5: DIR is 0 after reset).
+                    // acquisition ring (ADR-008 D7), from the PIN_CNF
+                    // write hook (`#oe`, ADR-009 D5: DIR is 0 after reset),
+                    // or from the state block (ADR-009 D4: `#run` is high
+                    // after reset, the others low).
+                    let level = if spec.direction == PinDirection::State && spec.index == 0 {
+                        Level::High
+                    } else {
+                        Level::Low
+                    };
                     pins.push(PinState {
                         spec: spec.clone(),
                         gpio: -1,
-                        level: Level::Low,
+                        level,
                         edge_time: Time::ZERO,
-                        gpio_level: Level::Low,
+                        gpio_level: level,
                         pwm_owned: false,
                         scheduled: None,
                         scheduled_uv: None,
@@ -2233,6 +2331,22 @@ impl RenodeEngine {
                 }
                 let port = client.get_gpio(md, "bbNrfPort")?;
                 client.gpio_register_event(port, 0, PWM_EVENT_DESC)?;
+            }
+            // ADR-009 D4 (milestone P3): the state block's notification
+            // line, and its setup check. Host-port registration only.
+            if state_mask != 0 {
+                let sb = client.get_sysbus(md, "sysbus")?;
+                let w = client.sysbus_read_u32s(sb, BB_STATE_ADDRESS, 5)?;
+                if w[0] != STATE_ID || w[1] & STATE_ERR_SETUP != 0 || w[4] != state_mask {
+                    return Err(ProtocolError::Server(format!(
+                        "bbState at {BB_STATE_ADDRESS:#x}: ID {:#x}, error {:#x}, mask {:#x} \
+                         (expected {STATE_ID:#x}, no setup error, {state_mask:#x}; see the Renode \
+                         log)",
+                        w[0], w[1], w[4]
+                    )));
+                }
+                let port = client.get_gpio(md, "bbState")?;
+                client.gpio_register_event(port, 0, STATE_EVENT_DESC)?;
             }
             let t0 = client.get_time()?;
             // ADR-008 D7: tell the SAADC the lattice (for the TACQ >= 2 L
@@ -2398,6 +2512,10 @@ impl RenodeEngine {
                     .collect(),
                 carried: Vec::new(),
                 unbound: 0,
+            }),
+            state: (state_mask != 0).then(|| StatePoll {
+                seen: 0,
+                carried: Vec::new(),
             }),
             gdb,
             gdb_marked: false,
@@ -2612,6 +2730,97 @@ impl RenodeEngine {
         let r = self.poll_pwm_inner(&mut pp);
         self.pwm = Some(pp);
         r
+    }
+
+    /// ADR-009 D4 (milestone P3), after an advance whose events include the
+    /// state block's line, and after every advance with `#run` bound (Renode
+    /// hooks a WFI entry only when the CPU next runs, so the SYNC read
+    /// records one of this advance): fail on the error word, read the ring's
+    /// new entries and acknowledge them. Returns the bound states' changes `(t,
+    /// pin, level)` in ring (emulation) order, each at its exact instant by
+    /// the lattice rule of GPIO events.
+    fn poll_state(&mut self) -> Result<Vec<(Time, usize, Level)>, EngineError> {
+        let Some(mut sp) = self.state.take() else {
+            return Ok(Vec::new());
+        };
+        let r = self.poll_state_inner(&mut sp);
+        self.state = Some(sp);
+        r
+    }
+
+    fn poll_state_inner(
+        &mut self,
+        sp: &mut StatePoll,
+    ) -> Result<Vec<(Time, usize, Level)>, EngineError> {
+        let st = self.sysbus_read_u32s(BB_STATE_ADDRESS + STATE_SYNC, 2)?;
+        let (count, err) = (st[0], st[1]);
+        if err & STATE_ERR_OVERFLOW != 0 {
+            return Err(EngineError::Protocol(format!(
+                "{}: more than {STATE_RING_LEN} CPU state changes in one advance overflow the \
+                 state block's ring (lower --max-quantum; ADR-009 D4)",
+                self.name
+            )));
+        }
+        if err != 0 {
+            return Err(EngineError::Protocol(format!(
+                "{}: the CPU state block reports error {err:#x}{}",
+                self.name,
+                if err & STATE_ERR_FIRMWARE != 0 {
+                    " (the firmware accessed bbState, which is for the engine only)"
+                } else {
+                    ""
+                }
+            )));
+        }
+        let new = count.wrapping_sub(sp.seen);
+        if u64::from(new) > STATE_RING_LEN {
+            return Err(EngineError::Protocol(format!(
+                "{}: {new} CPU state changes in one advance overflow the state block's ring of \
+                 {STATE_RING_LEN} (lower --max-quantum)",
+                self.name
+            )));
+        }
+        let mut out = Vec::with_capacity(new as usize);
+        if new == 0 {
+            return Ok(out);
+        }
+        // One read of the ring part that holds the new entries (two when it
+        // wraps); four words per entry.
+        let first = u64::from(sp.seen) % STATE_RING_LEN;
+        let head = (STATE_RING_LEN - first).min(u64::from(new));
+        let mut words =
+            self.sysbus_read_u32s(BB_STATE_ADDRESS + STATE_RING + 16 * first, 4 * head as u32)?;
+        if u64::from(new) > head {
+            let rest = u64::from(new) - head;
+            words.extend(self.sysbus_read_u32s(BB_STATE_ADDRESS + STATE_RING, 4 * rest as u32)?);
+        }
+        self.sysbus_write_u32(BB_STATE_ADDRESS + STATE_ACK, count)?;
+        sp.seen = count;
+        for w in words.chunks(4) {
+            let t_fs = u64::from(w[0]) | (u64::from(w[1]) << 32);
+            let state = (w[2] & 0xFF) as i32;
+            let level = Level::from_bool(w[2] >> 8 & 1 != 0);
+            let Some(i) = self
+                .pins
+                .iter()
+                .position(|p| p.spec.direction == PinDirection::State && p.spec.index == state)
+            else {
+                // Armed only for bound states.
+                return Err(EngineError::Protocol(format!(
+                    "{}: a change of CPU state {state}, which no output names",
+                    self.name
+                )));
+            };
+            // The lattice rule of GPIO events (ADR-003 D2): an instant on a
+            // lattice point is reported 1 fs after it.
+            let t = if t_fs.is_multiple_of(self.quantum_ns * FS_PER_NS) {
+                Time::from_fs(t_fs + 1)
+            } else {
+                Time::from_fs(t_fs)
+            };
+            out.push((t, i, level));
+        }
+        Ok(out)
     }
 
     fn poll_pwm_inner(
@@ -2910,6 +3119,7 @@ impl RenodeEngine {
             || self.saadc.as_ref().is_some_and(|s| !s.carried.is_empty())
             || self.pwm.as_ref().is_some_and(|p| !p.carried.is_empty())
             || !self.hook_oe.is_empty()
+            || self.state.as_ref().is_some_and(|p| !p.carried.is_empty())
         {
             return Ok(now);
         }
@@ -2956,12 +3166,20 @@ impl RenodeEngine {
         if (!self.carried.is_empty() || !self.hook_oe.is_empty()) && carried_at < until {
             return Err(broken(carried_at));
         }
-        // A PWM pin change recorded past the grant end (ADR-008 Amendment 9).
-        if let Some(at) = self
+        // A PWM pin change recorded past the grant end (ADR-008 Amendment 9),
+        // or a CPU state change (ADR-009 D4).
+        let past = self
             .pwm
             .as_ref()
             .and_then(|p| p.carried.iter().map(|c| c.0).min())
-        {
+            .into_iter()
+            .chain(
+                self.state
+                    .as_ref()
+                    .and_then(|p| p.carried.iter().map(|c| c.0).min()),
+            )
+            .min();
+        if let Some(at) = past {
             if at < until {
                 return Err(broken(at));
             }
@@ -3226,7 +3444,10 @@ impl Engine for RenodeEngine {
             .filter(|p| {
                 matches!(
                     p.spec.direction,
-                    PinDirection::Output | PinDirection::AdcSample | PinDirection::OutputEnable
+                    PinDirection::Output
+                        | PinDirection::AdcSample
+                        | PinDirection::OutputEnable
+                        | PinDirection::State
                 )
             })
             .map(|p| {
@@ -3525,7 +3746,7 @@ impl RenodeEngine {
         for p in &mut self.pins {
             p.gpio = match p.spec.direction {
                 PinDirection::Adc => client.get_adc(md, &p.spec.gpio).map_err(proto)?,
-                PinDirection::AdcSample | PinDirection::OutputEnable => -1,
+                PinDirection::AdcSample | PinDirection::OutputEnable | PinDirection::State => -1,
                 _ => client.get_gpio(md, &p.spec.gpio).map_err(proto)?,
             };
         }
@@ -3589,10 +3810,13 @@ impl RenodeEngine {
         let saadc_due = events.iter().any(|e| e.descriptor == SAADC_EVENT_DESC);
         // ADR-008 Amendment 9: the PWM pin ring has entries (or an error).
         let pwm_due = events.iter().any(|e| e.descriptor == PWM_EVENT_DESC);
+        // ADR-009 D4: the CPU state ring has entries (or an error).
+        let state_due = events.iter().any(|e| e.descriptor == STATE_EVENT_DESC);
         events.retain(|e| {
             e.descriptor != UART_EVENT_DESC
                 && e.descriptor != SAADC_EVENT_DESC
                 && e.descriptor != PWM_EVENT_DESC
+                && e.descriptor != STATE_EVENT_DESC
         });
         if let Some(Fault::DropGpioEvent { at_ns }) = self.fault {
             if let Some(k) = events.iter().position(|e| e.time_ns >= at_ns) {
@@ -3786,6 +4010,49 @@ impl RenodeEngine {
             }
             self.saadc.as_mut().expect("some").carried = carried;
             // Emulation order is time order; GPIO edges and toggles merge.
+            self.trace.sort_by_key(|tr| tr.t);
+        }
+        // ADR-009 D4 (milestone P3): the CPU state outputs of this advance
+        // (and those carried from the last grant end), each at its exact
+        // instant; one past the grant end belongs to the next grant.
+        if self.state.is_some() {
+            let mut list = std::mem::take(&mut self.state.as_mut().expect("some").carried);
+            // `#run` (index 0): every advance (the SYNC read).
+            let run = self
+                .pins
+                .iter()
+                .any(|p| p.spec.direction == PinDirection::State && p.spec.index == 0);
+            if state_due || run {
+                list.extend(self.poll_state()?);
+            }
+            let mut carried = Vec::new();
+            for (edge_time, i, level) in list {
+                if edge_time > t {
+                    carried.push((edge_time, i, level));
+                    continue;
+                }
+                let pin = &mut self.pins[i];
+                if level == pin.level {
+                    continue; // not a change
+                }
+                if last_change[i].is_some_and(|x| edge_time <= x) {
+                    return Err(EngineError::Protocol(format!(
+                        "{}: two state changes at {edge_time} or out of order",
+                        pin.spec.name
+                    )));
+                }
+                last_change[i] = Some(edge_time);
+                pin.level = level;
+                pin.gpio_level = level;
+                pin.edge_time = edge_time;
+                self.trace.push(Transition {
+                    t: edge_time,
+                    pin: pin.spec.name.clone(),
+                    signal: PinSignal::digital(level, edge_time),
+                });
+            }
+            self.state.as_mut().expect("some").carried = carried;
+            // Emulation order is time order; GPIO edges and states merge.
             self.trace.sort_by_key(|tr| tr.t);
         }
         if uart_due {

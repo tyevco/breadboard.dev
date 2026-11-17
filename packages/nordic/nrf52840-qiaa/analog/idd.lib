@@ -1,0 +1,21 @@
+* nordic/nrf52840-qiaa idd: the SoC's supply current as a function of its CPU state outputs
+* (ADR-009 D4, Phase 2 milestone P3), a supply_load view. It enters the deck at pi beside the
+* instance's other views; bb drives each state port from the CPU engine's output of that name
+* (#run, #hfxo, #saadc) or from a bench [[activity]] (#radio_tx, #radio_rx), 0 V / 1 V.
+* Ports:
+*   vdd       the VDD pins' net (the supply the current is drawn from)
+*   vss       the VSS pins' net (where it returns)
+*   run hfxo saadc radio_tx radio_rx   the state nodes s_k, 0..1
+* I(vdd -> vss) = (ibase + sum_k s_k * i_k) * min(1, V(vdd,vss) / vdd_min) * scale, where
+*   i_k     [power] idd.<k>.typ of part.toml (bb passes them as i_<k>, and vdd_min);
+*   ibase   the sleep floor: System ON, full RAM retention, wake on any event (PS v1.1 5.2.1.1
+*           ION_RAMON_EVENT, 2.35 uA), always drawn;
+*   the collapse: below the operating minimum vdd_min the current falls linearly to 0 at 0 V, so
+*           the view keeps a DC conductance at every operating point (ADR-009 D2 rule 2);
+*   scale   1 by default (constant current at every VDD, the PS's figures at 3 V); pscale = 1
+*           scales it as constant power, vnom / max(V(vdd,vss), vdd_min) (ADR-009 D4: a view
+*           parameter, off until verified).
+* One I-type B source, no branch-current unknown (ADR-009 D2 rule 1).
+.subckt NORDIC_NRF52840_QIAA_IDD vdd vss run hfxo saadc radio_tx radio_rx params: ibase=2.35e-6 i_run=3.1e-3 i_hfxo=2e-4 i_saadc=1.24e-3 i_radio_tx=6.4e-3 i_radio_rx=6.26e-3 vdd_min=1.7 pscale=0 vnom=3
+Bidd vdd vss I=({ibase}+V(run)*{i_run}+V(hfxo)*{i_hfxo}+V(saadc)*{i_saadc}+V(radio_tx)*{i_radio_tx}+V(radio_rx)*{i_radio_rx})*min(1,max(V(vdd,vss),0)/{vdd_min})*(1-{pscale}+{pscale}*{vnom}/max(V(vdd,vss),{vdd_min}))
+.ends NORDIC_NRF52840_QIAA_IDD

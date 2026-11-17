@@ -160,12 +160,14 @@ volts = "3.3V"
 press = "SW1"
 at = "1ms"
 EOF
-  # A key a later milestone implements ([[battery]] is P1's since ADR-009 Amendment 4).
-  refuse later-key "activity: a bb-bench/1 key for bench-scheduled internal states" <<EOF
+  # A key a later milestone implements ([[battery]] is P1's since ADR-009 Amendment 4,
+  # [[activity]] P3's since Amendment 6).
+  refuse later-key "env: a bb-bench/1 key for environment signals" <<EOF
 schema = "bb-bench/1"
 $SUPPLIES
-[[activity]]
-state = "U1#radio_tx"
+[[env]]
+signal = "temperature"
+file = "data/temp_c.csv"
 EOF
   refuse playback-on-supply "another bench source drives it" <<EOF
 schema = "bb-bench/1"

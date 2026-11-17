@@ -1,0 +1,21 @@
+# examples/nrf-idd at pi (ADR-009 D1): U1's supply_load view `idd` draws (2.35 uA + the sum of
+# its states' [power] idd currents) from VDD, its state nodes driven by the CPU engine's #run,
+# #hfxo and #saadc (the radio states held at 0); the outputs drive from VDD (ADR-009 D5).
+# VSUP: 3.0 V (the PS's figures are at 3 V) behind 10 mOhm.
+schema = "bb-bench/1"
+fidelity = "pi"
+
+[[supply]]
+net = "VSUP"
+volts = "3.0V"
+rs = "10m"
+
+# VDD is behind R1 (10 Ohm): its nominal level, for voh = "VDD" at fast (ADR-006 D4).
+[nominal]
+VDD = "3.0V"
+
+[analog]
+nets = ["GND", "VSUP", "VDD", "DRV", "SENSE", "COPY", "LED_B"]
+
+[options]
+set = "phase0"

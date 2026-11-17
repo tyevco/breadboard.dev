@@ -484,6 +484,9 @@ pub struct PlanArgs<'a> {
     /// `bb run --pi-oe fixed` (ADR-009 D5): every pi digital_out drives with
     /// `oe = 1` (the fallback) even where the platform reports `PIN_CNF.DIR`.
     pub pi_oe_fixed: bool,
+    /// The run's end (`--for`), to which a periodic bench `[[activity]]`
+    /// is tabulated (ADR-009 D4); `None` (an elaboration only): none.
+    pub run_end: Option<Time>,
 }
 
 /// The `oe` sources of a `pi` digital_out (ADR-009 D5), as run.json names
@@ -1526,6 +1529,277 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             ("kind", Json::str("pin_load")),
         ]));
     }
+    // --- ADR-009 D4 (milestone P3): at pi, the supply_load view of every
+    // in-scope instance whose package has one valid at the rung, beside its
+    // other views (the ladder never chooses it). Its pin ports are the nets
+    // of the package's supply and ground pins; each state port `#<state>` is
+    // a 0 V / 1 V node driven by the CPU engine's state output of that name
+    // (the nRF52840 target: #run, #hfxo, #saadc; #nvmc has no idd), by a
+    // bench [[activity]] (stand-in states such as the radio), or held at 0.
+    // A bench [[load]] `replace` (static-load mode) removes an instance's
+    // supply_load: the load stands in for it.
+    let mut replaced: BTreeMap<(String, String), String> = BTreeMap::new();
+    for (k, l) in a.bench.loads.iter().enumerate() {
+        if let Some(name) = &l.replace {
+            let key = insts
+                .resolve(name)
+                .map_err(|e| format!("bench [[load]] {}.replace: {e}", k + 1))?;
+            replaced.insert(key, format!("[[load]] on {}", l.net));
+        }
+    }
+    // [[activity]] by (board, ref, state).
+    let mut activity: BTreeMap<(String, String, String), Vec<&crate::project::Activity>> =
+        BTreeMap::new();
+    for act in &a.bench.activities {
+        let (inst, state) = act.state.split_once('#').ok_or_else(|| {
+            format!(
+                "bench {}.state {:?}: expected \"<instance>#<state>\"",
+                act.path, act.state
+            )
+        })?;
+        let (b, r) = insts
+            .resolve(inst)
+            .map_err(|e| format!("bench {}.state: {e}", act.path))?;
+        activity
+            .entry((b, r, state.to_string()))
+            .or_default()
+            .push(act);
+    }
+    let mut activity_used: BTreeSet<(String, String, String)> = BTreeSet::new();
+    // (source, (board, ref, state)) of every activity-driven state node.
+    let mut activity_sources: Vec<(String, (String, String, String))> = Vec::new();
+    let mut cpu_states: Vec<board::CpuState> = Vec::new();
+    let mut supply_json: Vec<Json> = Vec::new();
+    let mut replaced_used: BTreeSet<(String, String)> = BTreeSet::new();
+    for i in board.instances.iter().filter(|i| i.board == sim) {
+        if i.is_virtual
+            || dev_refs.contains(&(i.board.clone(), i.reference.clone()))
+            || i.status != "ok"
+            || excluded.contains(&(i.board.clone(), i.reference.clone()))
+        {
+            continue;
+        }
+        let key = (i.board.clone(), i.reference.clone());
+        let is_target = i.board == tb && i.reference == tref;
+        // A module target draws its chip's supply_load through its pinmap.
+        let pkg = if is_target {
+            chip
+        } else {
+            let pr = i.package.as_ref().expect("ok has a package");
+            &a.imp.packages[&pr.id]
+        };
+        let Some(view) = pkg
+            .part
+            .analog
+            .iter()
+            .find(|v| v.kind == "supply_load" && v.fidelity.iter().any(|f| f == a.fidelity))
+        else {
+            continue;
+        };
+        let q = format!("{}:{}", i.board, i.reference);
+        if let Some(by) = replaced.get(&key) {
+            replaced_used.insert(key.clone());
+            supply_json.push(Json::obj([
+                ("ref", Json::str(&q)),
+                ("package", Json::str(&pkg.part.id)),
+                ("view", Json::str(&view.name)),
+                ("replaced_by", Json::str(by)),
+            ]));
+            continue;
+        }
+        // The nets of a package pin on this instance.
+        let pin_nets = |pin: &str| -> BTreeSet<String> {
+            if is_target {
+                return chip_pin_nets(pin);
+            }
+            let numbers: BTreeSet<&str> = pkg
+                .pins
+                .pins
+                .iter()
+                .filter(|pp| pp.name == pin)
+                .map(|pp| pp.number.as_str())
+                .collect();
+            i.pins
+                .iter()
+                .filter(|x| numbers.contains(x.number.as_str()))
+                .filter_map(|x| x.net.clone())
+                .filter(|n| !board.net(n).expect("net").unconnected)
+                .collect()
+        };
+        let frag = element_fragment(&if board.boards.len() > 1 {
+            format!("{}_{}", i.board, i.reference)
+        } else {
+            i.reference.clone()
+        });
+        let mut nodes: Vec<String> = Vec::new();
+        let mut states_json: Vec<(String, Json)> = Vec::new();
+        let mut idd_json: Vec<(String, Json)> = Vec::new();
+        let mut source_lines: Vec<String> = Vec::new();
+        for port in &view.ports {
+            match port {
+                Port::OtherPin { pin } => {
+                    let nets = pin_nets(pin);
+                    let n = match nets.len() {
+                        1 => nets.into_iter().next().expect("one"),
+                        0 => {
+                            return Err(format!(
+                                "{q}: supply_load {}: pin {pin} is on no net (ADR-009 D4)",
+                                view.name
+                            ))
+                        }
+                        _ => {
+                            return Err(format!(
+                                "{q}: supply_load {}: pin {pin} is on several nets: {}",
+                                view.name,
+                                nets.into_iter().collect::<Vec<_>>().join(", ")
+                            ))
+                        }
+                    };
+                    if !scoped(&n) {
+                        return Err(format!(
+                            "{q}: supply_load {}: pin {pin} is on {n}, outside the analog scope: \
+                             at pi the part draws its current from it (ADR-009 D4); put {n} in \
+                             [analog] nets, or exclude {q}",
+                            view.name
+                        ));
+                    }
+                    let node = board.net(&n).expect("net").spice.clone();
+                    nodes_used.insert(node.clone());
+                    nodes.push(node);
+                }
+                Port::State { state } => {
+                    let node = format!("bb_st_{frag}_{state}");
+                    let src = format!("V_{node}");
+                    let akey = (i.board.clone(), i.reference.clone(), state.clone());
+                    let cpu = is_target
+                        && pdef.board_name == "nrf52840"
+                        && bb_cpu_renode::NRF_STATES.contains(&state.as_str());
+                    if cpu {
+                        if activity.contains_key(&akey) {
+                            return Err(format!(
+                                "bench [[activity]] {q}#{state}: #{state} is the CPU engine's \
+                                 output (ADR-009 D4); [[activity]] schedules the states firmware \
+                                 does not report (the radio)"
+                            ));
+                        }
+                        source_lines.push(format!("{src} {node} 0 dc 0 external"));
+                        cpu_states.push(board::CpuState {
+                            cpu_pin: format!("#{state}"),
+                            kernel_net: format!("{tref}.#{state}"),
+                            source: src,
+                            initial: if state == "run" {
+                                Level::High
+                            } else {
+                                Level::Low
+                            },
+                        });
+                        states_json.push((state.clone(), Json::str("cpu")));
+                    } else if activity.contains_key(&akey) {
+                        activity_used.insert(akey.clone());
+                        source_lines.push(format!("{src} {node} 0 dc 0 external"));
+                        activity_sources.push((src, akey));
+                        states_json.push((
+                            state.clone(),
+                            Json::str("bench [[activity]] (bench-scheduled)"),
+                        ));
+                    } else {
+                        source_lines.push(format!("{src} {node} 0 DC 0"));
+                        states_json.push((state.clone(), Json::str("0")));
+                    }
+                    if let Some(d) = pkg
+                        .part
+                        .power
+                        .as_ref()
+                        .and_then(|w| w.idd.iter().find(|x| &x.state == state))
+                    {
+                        idd_json.push((state.clone(), Json::str(&d.typ)));
+                    }
+                    nodes.push(node);
+                }
+                _ => {
+                    return Err(format!(
+                        "{q}: supply_load {}: a port that is neither a pin nor a state",
+                        view.name
+                    ))
+                }
+            }
+        }
+        let mut params: Vec<(String, String)> = Vec::new();
+        for (k, v) in
+            &bbpkg::package::supply_load_params(pkg, view).map_err(|e| format!("{q}: {e}"))?
+        {
+            let d = parse_number(v).map_err(|e| format!("{q}: supply_load param {k}: {e}"))?;
+            params.push((k.clone(), spice_number(d)));
+        }
+        let label = format!("{}:{}", pkg.part.id, view.name);
+        let text = std::fs::read_to_string(pkg.dir.join(&view.file))
+            .map_err(|e| format!("{q}: read view {}: {e}", view.file))?;
+        if seen_views.insert(label.clone()) {
+            deck_views.push((label.clone(), text));
+        }
+        lines.extend(source_lines);
+        let mut line = format!("X_bb_idd_{frag}");
+        for n in &nodes {
+            line.push(' ');
+            line.push_str(n);
+        }
+        line.push(' ');
+        line.push_str(&view.subckt);
+        for (k, v) in &params {
+            line.push_str(&format!(" {k}={v}"));
+        }
+        lines.push(line);
+        let prov = view.provenance.as_ref().or(pkg.part.provenance.as_ref());
+        let qualified = view
+            .qualified
+            .iter()
+            .any(|qq| lat_text(&qq.lattice) == Some(a.lattice) && qq.options == a.bench.options);
+        if !qualified
+            && !a
+                .allow_unqualified
+                .iter()
+                .any(|x| *x == label || *x == view.name)
+            && !unqualified.contains(&label)
+        {
+            unqualified.push(label.clone());
+        }
+        supply_json.push(Json::obj([
+            ("ref", Json::str(&q)),
+            ("package", Json::str(&pkg.part.id)),
+            ("version", Json::str(&pkg.part.version)),
+            ("view", Json::str(&view.name)),
+            ("provenance", prov_json(prov)),
+            ("qualified_for_run", Json::Bool(qualified)),
+            ("idd", Json::Obj(idd_json)),
+            ("states", Json::Obj(states_json)),
+        ]));
+    }
+    for (key, by) in &replaced {
+        if !replaced_used.contains(key) {
+            let msg = format!(
+                "bench {by} replace = \"{}:{}\": the instance has no supply_load in the deck at {} \
+                 (ADR-009 D4: a supply_load enters the deck at pi)",
+                key.0, key.1, a.fidelity
+            );
+            if a.fidelity == "pi" {
+                return Err(msg);
+            }
+            warnings.push(format!("{msg}; the load is added as written"));
+        }
+    }
+    for (key, acts) in &activity {
+        if !activity_used.contains(key) {
+            let msg = format!(
+                "bench {} state = \"{}:{}#{}\": the instance has no supply_load with that state \
+                 in the deck at {} (ADR-009 D4)",
+                acts[0].path, key.0, key.1, key.2, a.fidelity
+            );
+            if a.fidelity == "pi" {
+                return Err(msg);
+            }
+            warnings.push(format!("{msg}; ignored"));
+        }
+    }
     if !unqualified.is_empty() {
         return Err(format!(
             "views not lattice-qualified for (lattice {}, option set {}) (ADR-006 D6): {}; \
@@ -1979,6 +2253,42 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         });
         nodes_used.insert(na.clone());
         nodes_used.insert(nb.clone());
+    }
+    // ADR-009 D4 (milestone P3): each [[activity]] state node is a table of
+    // the analog engine, 1 for `for` from `at`, every `every` (or once),
+    // to the run's end; known before the run, so no bench engine.
+    for (src, key) in &activity_sources {
+        let mut ivals: Vec<(i128, i128)> = Vec::new();
+        for act in &activity[key] {
+            let end = a.run_end.map_or(0, |t| t.as_fs() as i128);
+            let mut s = act.at_fs;
+            loop {
+                ivals.push((s, s + act.for_fs));
+                match act.every_fs {
+                    Some(e) if s + e < end => s += e,
+                    _ => break,
+                }
+            }
+        }
+        ivals.sort();
+        for w in ivals.windows(2) {
+            if w[1].0 < w[0].1 {
+                return Err(format!(
+                    "bench [[activity]] on {}:{}#{}: bursts overlap at {} fs",
+                    key.0, key.1, key.2, w[1].0
+                ));
+            }
+        }
+        let mut changes: Vec<(Time, f64)> = Vec::new();
+        for (on, off) in ivals {
+            changes.push((fs_time(on), 1.0));
+            changes.push((fs_time(off), 0.0));
+        }
+        stim.tables.push(bb_analog_ngspice::TableSource {
+            source: src.clone(),
+            points: table_points(0.0, &changes),
+            interp: bb_analog_ngspice::Interp::Hold,
+        });
     }
     // The switches' control sources: driven when an action presses it,
     // else open (0).
@@ -2555,6 +2865,10 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     if !pi_json.is_empty() {
         run_json.push(("pi_glue".to_string(), Json::Arr(pi_json)));
     }
+    // ADR-009 D4 (milestone P3): the supply loads, only at pi.
+    if !supply_json.is_empty() {
+        run_json.push(("supply_load".to_string(), Json::Arr(supply_json)));
+    }
     let mut parts = vec![part];
     let mut packages = vec![chip.clone()];
     for d in &devs {
@@ -2576,6 +2890,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             audit: Some(audit),
             digital_only,
             pi_glue,
+            cpu_states,
         },
         target: tref,
         firmware,

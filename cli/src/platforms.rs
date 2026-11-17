@@ -262,7 +262,12 @@ mod tests {
         );
         assert_eq!(
             find("nrf52840-bb@3").unwrap().plugins(),
-            ["bb_lookahead.cs", "bb_nrf52_saadc.cs", "bb_nrf52_pwm.cs"]
+            [
+                "bb_lookahead.cs",
+                "bb_nrf52_saadc.cs",
+                "bb_nrf52_pwm.cs",
+                "bb_nrf52_state.cs"
+            ]
         );
     }
 

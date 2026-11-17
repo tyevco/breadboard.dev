@@ -149,16 +149,20 @@ Phase 1 implements three layers.
   | `[[analog.qualified]]` | `{ lattice, options }` pairs the view is qualified for, written by `bb pkg test --record` (section 8) |
   | `provenance` | section 2 |
 
-**The `supply_load` view kind** (`bb-part/1`, ADR-009 D4; it enters the
-deck from milestone P3). The current a part draws from its supply pins as
-a function of CPU state outputs: `I = Σ s_k · I_k`, each `s_k` the node of
-the state port `#<state>` (0..1), `I_k` from `[power] idd`. Its ports are
-the package's supply and ground pins (`{ role = "pin", pin }`, at least
-one) and its state ports (`{ role = "state", state = "<name>" }`, the
-node `#<name>`; each needs a `[power] idd.<name>` entry). It has a `file`
-and a `subckt` like a `circuit` view. It enters the deck at `pi` beside the
-instance's chosen view, so it is never valid at `fast` and never a rung's
-default (`default_for` is empty). In a test vector a state port is keyed
+**The `supply_load` view kind** (`bb-part/1`, ADR-009 D4; in the deck
+since milestone P3, Amendment 6). The current a part draws from its supply
+pins as a function of CPU state outputs: `I = Σ s_k · I_k`, each `s_k` the
+node of the state port `#<state>` (0..1), `I_k` from `[power] idd`. Its
+ports are the package's supply and ground pins (`{ role = "pin", pin }`,
+at least one) and its state ports (`{ role = "state", state = "<name>" }`,
+the node `#<name>`; each needs a `[power] idd.<name>` entry). It has a
+`file` and a `subckt` like a `circuit` view. It enters the deck at `pi`
+beside the instance's chosen view (`spec/pin-model.md` glue rule 12), so it
+is never valid at `fast` and never a rung's default (`default_for` is
+empty). Its instance parameters are `i_<state>` = `[power] idd.<state>.typ`
+for each state port and `vdd_min` = `[power] vdd_min`, then the view's own
+`params` (which may restate or override them by name), then a test
+vector's; the subckt declares them. In a test vector a state port is keyed
 by its state name.
 
 **The `switch` view kind** (`bb-part/1`, ADR-010 D2). A contact that a

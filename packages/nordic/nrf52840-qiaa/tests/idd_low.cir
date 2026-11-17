@@ -1,0 +1,8 @@
+* idd_collapse: VDD from 1.0 V (below vdd_min = 1.7 V) through 10 Ohm.
+VSRC src 0 1.0
+RS src vdd 10
+* the other states held at 0 (only #run toggles)
+VHF hfxo 0 0
+VSA saadc 0 0
+VTX radio_tx 0 0
+VRX radio_rx 0 0

@@ -1,0 +1,41 @@
+# examples/nrf-idd/bb.toml: the board of Phase 2 milestone P3 (plan section 4 row P3; ADR-009 D4,
+# Amendment 6), as a Breadboard project (ADR-007 D5): the nRF52840's supply_load view and its CPU
+# state outputs (#run, #hfxo, #saadc), and a bench [[activity]] for the radio.
+#
+# nrf-idd.net is written by make_netlist.py (the circuit is described there): U1 is supplied from
+# the bench's VSUP through R1 (10 Ohm), so its current is (V(VSUP) - V(VDD)) / R1, and it closes
+# examples/nrf-feedback's loop (P0.13 -> RC -> P0.11, P0.15 copies it). The firmware target is not
+# committed: scripts/pi_idd.sh records it with `bb flash` in copies of this directory (bb run never
+# writes into a project), one per gate firmware:
+#   nrf_duty.elf      a known WFI duty (8 of every 32 RTC ticks awake) with HFXO on: the hand
+#                     calculation of the duty-weighted average current (ADR-009 gate G6);
+#   nrf_feedback.elf  examples/nrf-feedback's firmware: the lookahead gate (grants with the state
+#                     outputs against the board without them).
+# The benches in bench/ run it at fast and at pi (bench/pi*.toml).
+schema = "bb-project/1"
+
+[project]
+name = "examples/nrf-idd: the nRF52840 supply_load (milestone P3)"
+
+[[board]]
+id = "main"
+netlist = "nrf-idd.net"
+ground = "GND"
+
+[[bind]]
+pin = "U1.P0.13"
+model = "digital_out"
+net = "DRV"
+
+[[bind]]
+pin = "U1.P0.11"
+model = "digital_in"
+net = "SENSE"
+
+[[bind]]
+pin = "U1.P0.15"
+model = "digital_out"
+net = "COPY"
+
+[probes]
+nets = ["VSUP", "VDD", "DRV", "SENSE", "COPY", "U1.P0.13", "U1.P0.11", "U1.P0.15"]
