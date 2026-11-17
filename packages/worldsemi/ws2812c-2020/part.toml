@@ -10,7 +10,7 @@ schema = "bb-part/1"
 
 [part]
 id = "worldsemi/ws2812c-2020"
-version = "0.2.0"
+version = "0.3.0"
 kind = "discrete"
 manufacturer = "Worldsemi"
 mpn = ["WS2812C-2020-V6"]
@@ -36,6 +36,11 @@ file = "analog/load_switches__ws2812c.lib"
 subckt = "WORLDSEMI_WS2812C_2020_LSW"
 ports = ["DIN", "VDD", "VSS"]
 params = { duty = "0", is = "1e-14", n = "1", rs = "10" }
+
+[[analog.corners]]
+name = "suite_compat"
+params = { duty = "0.0277778" }
+ref = "the dial-me-spinner suite's averaged LED charging cue (hardware/sim at 6854d25: FW_LED_CUE 20 mA over N_LEDS_FULL_A = 48 x 3 x 5 mA, duty 0.0277778), which static-load mode puts on the ring as the pixels' duty (ADR-009 D4; Phase 2 P1's static-load decks, scripts/pi_static.py; P4's W1 benches select it, ADR-009 Amendment 8)"
 
 [analog.provenance]
 source = "datasheet"

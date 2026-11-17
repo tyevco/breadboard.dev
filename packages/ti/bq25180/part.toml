@@ -12,7 +12,7 @@ schema = "bb-part/1"
 
 [part]
 id = "ti/bq25180"
-version = "0.1.0"
+version = "0.2.0"
 kind = "power"
 manufacturer = "Texas Instruments"
 mpn = ["BQ25180YBGR", "BQ25180YBGT"]
@@ -44,6 +44,11 @@ ref = "SLUSE99C section 8.3.3: the battery supplements SYS only while VBAT > VBU
 name = "suite_compat"
 params = { sup_gate = "0" }
 ref = "dial-me-spinner@6854d25 hardware/sim/models/load_switches__bq25180.lib (an XSPICE ilimit block without the BUVLO gate; the suite models a cell below BUVLO as a 0 V cell): the supplement is not gated by BUVLO, so static-load mode compares like with like (ADR-009 D2)"
+
+[[analog.corners]]
+name = "worst_ilim100_min"
+params = { ilim = "0.08", vsysreg = "4.312", sup_gate = "0" }
+ref = "the dial-me-spinner suite's W1 case test_u21_turn_on_dead_battery_usb_100ma_with_fw_rule[ILIM80min-SYSREG4.4-2pct] (hardware/sim/tests at 6854d25): the ILIM 100 mA code at its minimum (SLUSE99C section 7.5: 80 / 90 / 98 mA at VIN 5 V) and SYS_REG 4.4 V (Table 8-3) at -2 % (4.312 V), with suite_compat's ungated supplement. ILIM and SYS_REG are the firmware's I2C settings; no bus device exists in Phase 2, so a bench sets them through this corner (ADR-009 default 4, a recorded deviation of W1; ADR-009 Amendment 8)"
 
 [analog.provenance]
 source = "datasheet"

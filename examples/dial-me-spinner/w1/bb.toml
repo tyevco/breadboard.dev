@@ -1,0 +1,70 @@
+# examples/dial-me-spinner/w1/bb.toml: W1, POF blanking on a dead battery, with the firmware in the
+# loop on the dial-me-spinner system (Phase 2 P4; plan section 2 W1; ADR-009 D6, Amendment 2, 8).
+#
+# Both boards in one deck, as ../e1-system (a single-MCU system run, ADR-013 D2): the main board (U10
+# runs the W1 firmware, ../firmware/prebuilt/w1_*.elf, the build per case by `bb run --image`) and
+# the base board, mated by the link harness. Here the power path is the boards' own `pi` views end
+# to end: USB VBUS into the BQ25180 (base U1, `ti/bq25180:pp`), the dead cell (a bench [[battery]]),
+# the base board's VSYS capacitors, the harness, the main board's RT9080 (main U1,
+# `richtek/rt9080:ldo`) onto +3V3 with the board's +3V3 capacitors, U2 (the TPS22917) and the LED
+# ring. U10's POWER model (BbNrf52Power, platform nrf52840-bb@4) raises POFWARN from the comparator
+# view `nordic/nrf52840-qiaa:pof` on +3V3 (VDD).
+#
+# The benches (bench/) are W1's corners. Every W1 bench is LABELLED with its corner (decision D-W1,
+# ADR-009 Amendment 2): w1-stress.toml is the stress corner (55 mA static +3V3 load, the suite's
+# budget being 50 mA), w1-margin.toml the suite's 50 mA margin check.
+#
+# Each board keeps its own ground: main:GND is node 0 (the target's board), base:GND is the node
+# base_GND, joined to it by the harness's three GND wires.
+schema = "bb-project/1"
+
+[project]
+name = "dial-me-spinner rev A: W1 (POF blanking on a dead battery) on the system (main + base)"
+simulate = ["main", "base"]
+
+[[board]]
+id = "main"
+netlist = "../kicad/main/dial-me-spinner-main.net"
+ground = "GND"
+
+[[board]]
+id = "base"
+netlist = "../kicad/base/dial-me-spinner-base.net"
+ground = "GND"
+
+# The link harness (../system/packages): not on either schematic.
+[packages]
+paths = ["../system/packages"]
+
+# As in ../bb.toml: the NFC coil pads need a decision (ADR-007 D4).
+[instances."main:J11"]
+package = "none"
+reason = "NFC coil pads: no RF model in Phase 1"
+
+# Main J1 and base J3, straight through (as ../system/bb.toml).
+[[connection]]
+a = "main:J1"
+b = "base:J3"
+model = "dial-me-spinner/link-harness:wires"
+
+# W1's rule firmware (10 ms blanking, firmware.md R8); the controls and reports by `bb run --image`
+# (the image hashes of ADR-008 D5, firmware/prebuilt/SHA256SUMS).
+[targets."main:U10"]
+images = [{ file = "../firmware/prebuilt/w1_rule.elf", kind = "elf", hash = "sha256:3a4bec47d2c825a48964cead1881cb4ec4384e4814c1d7a2df45b6074cc97f02" }]
+
+# The pins the W1 firmware drives (firmware.md section 1.3): LED_PWR_EN (P1.04, S0S1) and
+# LED_DIN_MCU (P0.06, H0H1_max), as E1's (../bb.toml).
+[[bind]]
+pin = "main:U10.P1.04"
+model = "digital_out"
+set = "S0S1"
+net = "main:LED_PWR_EN"
+
+[[bind]]
+pin = "main:U10.P0.06"
+model = "digital_out"
+set = "H0H1_max"
+net = "main:LED_DIN_MCU"
+
+[probes]
+nets = ["+3V3", "main:VSYS", "base:VSYS", "VLED", "LED_PWR_EN", "LED_DIN_MCU", "base:VBUS"]

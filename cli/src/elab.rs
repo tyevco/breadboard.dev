@@ -499,6 +499,11 @@ fn sha(bytes: &[u8]) -> String {
     format!("sha256:{}", bbpkg::sha256::hex_digest(bytes))
 }
 
+/// The knee below which a static-load mode `[[load]]` (`replace`, at `pi`)
+/// falls linearly to 0 A (ADR-009 D4 and D2 rule 2; Amendment 8): P1's
+/// static-load decks' 0.5 V (`scripts/pi_static.py`).
+const STATIC_LOAD_KNEE: &str = "0.5";
+
 fn prov_json(p: Option<&bbpkg::package::Provenance>) -> Json {
     match p {
         None => Json::Null,
@@ -1691,6 +1696,185 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             ("qualified_for_run", Json::Bool(qualified)),
         ]));
     }
+    // --- ADR-009 D6 (milestone P4): at pi, the CPU target's power-fail
+    // comparator, the `pof_comparator` view of its chip package (a module:
+    // through its pinmap), glue rule 13. Its pin ports are the nets of the
+    // chip's supply pins; its threshold ports `#pofthr0..3` are 0 V / 1 V
+    // nodes driven by the CPU engine's outputs of those names (the POWER
+    // model's POFCON.THRESHOLD bits); its output node is thresholded by the
+    // analog engine (vih 1 V, vil 0 V) into the CPU engine's watched
+    // digital_in `#pofwarn`. The CPU engine's `#pofen` is an output into no
+    // circuit node. The instance's corner (`[corners]`, else the bench's
+    // global corner where the view declares it) sets VPOFTOL.
+    let mut pof_states: Vec<board::CpuState> = Vec::new();
+    let mut pof_glue: Option<board::PofGlue> = None;
+    let mut pof_json: Option<Json> = None;
+    let pof_view = chip
+        .part
+        .analog
+        .iter()
+        .find(|v| v.kind == "pof_comparator" && v.fidelity.iter().any(|f| f == a.fidelity));
+    if let (Some(view), true) = (pof_view, pdef.board_name == "nrf52840") {
+        use bbpkg::package::Port;
+        let key = (tb.clone(), tref.clone());
+        let q = format!("{tb}:{tref}");
+        let frag = element_fragment(&if board.boards.len() > 1 {
+            format!("{tb}_{tref}")
+        } else {
+            tref.clone()
+        });
+        let mut nodes: Vec<String> = Vec::new();
+        let mut source_lines: Vec<String> = Vec::new();
+        let out_node = format!("bb_pof_{frag}");
+        for port in &view.ports {
+            match port {
+                Port::OtherPin { pin } => {
+                    let nets = chip_pin_nets(pin);
+                    let n = match nets.len() {
+                        1 => nets.into_iter().next().expect("one"),
+                        0 => {
+                            return Err(format!(
+                                "{q}: pof_comparator {}: pin {pin} is on no net (ADR-009 D6)",
+                                view.name
+                            ))
+                        }
+                        _ => {
+                            return Err(format!(
+                                "{q}: pof_comparator {}: pin {pin} is on several nets: {}",
+                                view.name,
+                                nets.into_iter().collect::<Vec<_>>().join(", ")
+                            ))
+                        }
+                    };
+                    if !scoped(&n) {
+                        return Err(format!(
+                            "{q}: pof_comparator {}: pin {pin} is on {n}, outside the analog \
+                             scope: at pi the power-fail comparator reads it (ADR-009 D6); put \
+                             {n} in [analog] nets",
+                            view.name
+                        ));
+                    }
+                    let node = board.net(&n).expect("net").spice.clone();
+                    nodes_used.insert(node.clone());
+                    nodes.push(node);
+                }
+                Port::State { state } => {
+                    let node = format!("bb_st_{frag}_{state}");
+                    let src = format!("V_{node}");
+                    source_lines.push(format!("{src} {node} 0 dc 0 external"));
+                    pof_states.push(board::CpuState {
+                        cpu_pin: format!("#{state}"),
+                        kernel_net: format!("{tref}.#{state}"),
+                        source: src,
+                        initial: Level::Low,
+                    });
+                    nodes.push(node);
+                }
+                Port::Observe { .. } => nodes.push(out_node.clone()),
+                _ => {
+                    return Err(format!(
+                        "{q}: pof_comparator {}: a port that is not a pin, state or observe port",
+                        view.name
+                    ))
+                }
+            }
+        }
+        // The corner (ADR-009 D8), as for the instance's own views.
+        let corner = match inst_corner.get(&key) {
+            Some(c) => {
+                corners_used.insert(key.clone());
+                Some(view.corners.iter().find(|x| x.name == *c).ok_or_else(|| {
+                    format!(
+                        "bench [corners] {q}: view {} of {} has no corner {c:?} (it has: {})",
+                        view.name,
+                        chip.part.id,
+                        view.corners
+                            .iter()
+                            .map(|x| x.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?)
+            }
+            None => a
+                .bench
+                .corner
+                .as_ref()
+                .and_then(|c| view.corners.iter().find(|x| x.name == *c)),
+        };
+        if corner.is_some() && !inst_corner.contains_key(&key) {
+            global_corner_used = true;
+        }
+        let mut params: BTreeMap<String, String> = view.params.iter().cloned().collect();
+        if let Some(c) = corner {
+            for (k, v) in &c.params {
+                params.insert(k.clone(), v.clone());
+            }
+        }
+        let mut line = format!("X_bb_pof_{frag}");
+        for n in &nodes {
+            line.push(' ');
+            line.push_str(n);
+        }
+        line.push(' ');
+        line.push_str(&view.subckt);
+        for (k, v) in &params {
+            let d = parse_number(v).map_err(|e| format!("{q}: pof_comparator param {k}: {e}"))?;
+            line.push_str(&format!(" {k}={}", spice_number(d)));
+        }
+        let label = format!("{}:{}", chip.part.id, view.name);
+        let text = std::fs::read_to_string(chip.dir.join(&view.file))
+            .map_err(|e| format!("{q}: read view {}: {e}", view.file))?;
+        if seen_views.insert(label.clone()) {
+            deck_views.push((label.clone(), text));
+        }
+        lines.extend(source_lines);
+        lines.push(line);
+        let prov = view.provenance.as_ref().or(chip.part.provenance.as_ref());
+        let qualified = view
+            .qualified
+            .iter()
+            .any(|qq| lat_text(&qq.lattice) == Some(a.lattice) && qq.options == a.bench.options);
+        if !qualified
+            && !a
+                .allow_unqualified
+                .iter()
+                .any(|x| *x == label || *x == view.name)
+            && !unqualified.contains(&label)
+        {
+            unqualified.push(label.clone());
+        }
+        let mut pj = vec![
+            ("ref", Json::str(&q)),
+            ("package", Json::str(&chip.part.id)),
+            ("version", Json::str(&chip.part.version)),
+            ("view", Json::str(&view.name)),
+        ];
+        if let Some(c) = corner {
+            pj.push(("corner", Json::str(&c.name)));
+        }
+        pj.extend([
+            ("provenance", prov_json(prov)),
+            ("qualified_for_run", Json::Bool(qualified)),
+            (
+                "threshold",
+                Json::Arr(
+                    pof_states
+                        .iter()
+                        .map(|s| Json::str(&s.kernel_net))
+                        .collect(),
+                ),
+            ),
+            ("pofwarn", Json::str(format!("{tref}.#pofwarn"))),
+            ("pofen", Json::str(format!("{tref}.#pofen"))),
+        ]);
+        pof_json = Some(Json::obj(pj));
+        pof_glue = Some(board::PofGlue {
+            node: out_node,
+            kernel_net: format!("{tref}.#pofwarn"),
+            pofen_net: format!("{tref}.#pofen"),
+        });
+    }
     // ADR-009 D8: a per-instance corner for an instance that is not in the
     // deck, or a global corner no view in the deck declares, does nothing:
     // said, not silent.
@@ -1823,6 +2007,8 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     // (source, (board, ref, state)) of every activity-driven state node.
     let mut activity_sources: Vec<(String, (String, String, String))> = Vec::new();
     let mut cpu_states: Vec<board::CpuState> = Vec::new();
+    // The power-fail comparator's threshold ports (ADR-009 D6, above).
+    cpu_states.append(&mut pof_states);
     let mut supply_json: Vec<Json> = Vec::new();
     let mut replaced_used: BTreeSet<(String, String)> = BTreeSet::new();
     for i in board.instances.iter().filter(|i| i.board == sim) {
@@ -2692,6 +2878,21 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         let g = ground_of(&d);
         let name = format!("I_bench_load{k}_{}", element_fragment(&n));
         match &l.profile {
+            // Static-load mode at pi (ADR-009 D4, D2 rule 2; Amendment 8):
+            // a DC load that stands in for a supply_load view keeps a DC
+            // path at every operating point, as the view it replaces does,
+            // collapsing linearly to 0 below STATIC_LOAD_KNEE: the form of
+            // P1's static-load decks. As a pure DC sink the W1 decks' operating
+            // point failed with the RT9080 regulating (gmin stepping failed,
+            // then "singular matrix" at base_vbus in source stepping;
+            // ADR-013 Amendment 3's open finding). Every other load is a
+            // pure DC sink, at every rung.
+            None if l.replace.is_some() && a.fidelity == "pi" => bench_lines.push(format!(
+                "B_bench_load{k}_{} {n} {g} I = {}*min(1, max(0, V({n},{g})/{}))",
+                element_fragment(&n),
+                spice_number(to_decimal(l.amps_pa, Dim::Current)),
+                STATIC_LOAD_KNEE
+            )),
             None => bench_lines.push(format!(
                 "{name} {n} {g} DC {}",
                 spice_number(to_decimal(l.amps_pa, Dim::Current))
@@ -3159,6 +3360,10 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     if !supply_json.is_empty() {
         run_json.push(("supply_load".to_string(), Json::Arr(supply_json)));
     }
+    // ADR-009 D6 (milestone P4): the power-fail comparator, only at pi.
+    if let Some(pj) = pof_json {
+        run_json.push(("pof".to_string(), pj));
+    }
     let mut parts = vec![part];
     let mut packages = vec![chip.clone()];
     for d in &devs {
@@ -3181,6 +3386,7 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             digital_only,
             pi_glue,
             cpu_states,
+            pof: pof_glue,
         },
         target: tref,
         firmware,

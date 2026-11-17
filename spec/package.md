@@ -136,13 +136,13 @@ Phase 1 implements three layers.
   | Key | Meaning |
   | --- | --- |
   | `name` | unique in the package |
-  | `kind` | `circuit` (default), `pin_load`, or (`bb-part/1`) `switch` or `supply_load` |
+  | `kind` | `circuit` (default), `pin_load`, or (`bb-part/1`) `switch`, `supply_load` or `pof_comparator` |
   | `purpose` | text |
   | `fidelity` | the rungs it is valid for (`fast`, `pi`, `si`, `em`; at least one) |
   | `default_for` | the rungs it is the default for; a subset of `fidelity`; at most one view per package may name a rung |
   | `file` | the view file (SPICE), relative to the package (none for `switch`) |
   | `subckt` | the subcircuit the file defines (none for `switch`) |
-  | `ports` | `circuit`: the subckt's ports in order, as pin names; `pin_load`: typed ports (section 4); `switch`: its two contacts, `{ role = "pin", pin = "<name>" }`; `supply_load`: `{ role = "pin", pin }` and `{ role = "state", state }` |
+  | `ports` | `circuit`: the subckt's ports in order, as pin names; `pin_load`: typed ports (section 4); `switch`: its two contacts, `{ role = "pin", pin = "<name>" }`; `supply_load`: `{ role = "pin", pin }` and `{ role = "state", state }`; `pof_comparator`: `{ role = "pin", pin }`, `{ role = "state", state = "pofthr0" }` .. `pofthr3` and `{ role = "observe", signal = "pofwarn" }` |
   | `params` | `{ name = "<value>" }` defaults, in the value grammar (section 6) |
   | `rails` | `bb-part/1` (ADR-009): the view's supply ports, informative, for lint: each a port of the view on a `power_in`/`power_out` pin |
   | `[[analog.corners]]` | `bb-part/1` (ADR-009 D8; a bench selects one from milestone P1): `name` (`typ`, `min`, `max`, `suite_compat` or `worst_<x>`, unique in the view), `params` (overrides of the view's own `params`, in the value grammar) and `ref` (required: where the corner's values come from) |
@@ -164,6 +164,24 @@ for each state port and `vdd_min` = `[power] vdd_min`, then the view's own
 `params` (which may restate or override them by name), then a test
 vector's; the subckt declares them. In a test vector a state port is keyed
 by its state name.
+
+**The `pof_comparator` view kind** (`bb-part/1`, ADR-009 D6; milestone
+P4, Amendment 8). A CPU's power-fail comparator: its output rises where
+the supply it compares falls to the threshold its CPU engine reports and
+falls where it rises above the threshold plus the hysteresis. Its ports are
+the package's supply and ground pins (`{ role = "pin", pin }`, at least one
+supply), exactly the four state ports `#pofthr0..3` (`{ role = "state",
+state = "pofthr<k>" }`, the bits of the threshold code, nodes in 0..1) and
+exactly one observe port, its output (`{ role = "observe", signal =
+"pofwarn" }`, ground-referenced). It has a `file` and a `subckt`. It enters
+the deck at `pi` beside the CPU target's views (`spec/pin-model.md` glue
+rule 13), so it is never valid at `fast` and never a rung's default. The
+output's levels are fixed by the glue's `digital_in` (`vih` 1 V, `vil`
+0 V): the view's output reaches 1 V at the trip and 0 V at the release,
+and the CPU engine's watched input `#pofwarn` reads it. Its corners (`typ`,
+`min`, `max`: the threshold's tolerance) are the CPU target instance's
+(`[corners]`, or the bench's `corner`). In a test vector a state port is
+keyed by its state name and the output by `pofwarn`.
 
 **The `switch` view kind** (`bb-part/1`, ADR-010 D2). A contact that a
 bench `[[action]] press` closes (`spec/project.md` section 3). `bb`
@@ -536,7 +554,7 @@ under `engines/cpu-renode/platforms/`):
 | --- | --- | --- | --- |
 | `stm32f103-offline@1` | `stm32f103-offline.repl` | `bb_lookahead.cs` | `stm32f103` |
 | `stm32f072-bb@1` | `stm32f072-bb.repl` | `bb_lookahead.cs`, `bb_stm32_timer.cs`, `bb_stm32f0_adc.cs` | `stm32f072` |
-| `nrf52840-bb@3` | `nrf52840-bb.repl` (ADR-008 D1, D7-D9) | `bb_lookahead.cs`, `bb_nrf52_saadc.cs`, `bb_nrf52_pwm.cs` | `nrf52840` |
+| `nrf52840-bb@4` | `nrf52840-bb.repl` (ADR-008 D1, D7-D9; ADR-009 D4, D6) | `bb_lookahead.cs`, `bb_nrf52_saadc.cs`, `bb_nrf52_pwm.cs`, `bb_nrf52_state.cs`, `bb_nrf52_power.cs` | `nrf52840` |
 
 A behaviour change bumps the major and changes the hash. The lock records
 Renode's version (1.17.0) with each Renode platform. So a change to a

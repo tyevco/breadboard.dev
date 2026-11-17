@@ -60,7 +60,7 @@ pub const PLATFORMS: &[PlatformDef] = &[
     // D1, D7, D8): Breadboard's SAADC, its host port and the UARTE tap; @3
     // (Phase 1 M10, D9): PWM0-3, the TEMP and NVMC stand-ins, their port.
     PlatformDef {
-        id: "nrf52840-bb@3",
+        id: "nrf52840-bb@4",
         board_name: "nrf52840",
         repl: ("nrf52840-bb.repl", NRF52840_BB_REPL),
     },
@@ -228,7 +228,7 @@ mod tests {
         assert_ne!(c[0], c[1]);
         assert!(c.iter().all(|h| h.starts_with("sha256:") && h.len() == 71));
         assert_eq!(find("stm32f072-bb@1").unwrap().board_name, "stm32f072");
-        assert_eq!(find("nrf52840-bb@3").unwrap().board_name, "nrf52840");
+        assert_eq!(find("nrf52840-bb@4").unwrap().board_name, "nrf52840");
         assert!(c[2] != c[0] && c[2] != c[1]);
         // The scoped hash is not the legacy one (no platform declares every
         // source), so a relocked entry is told apart from a legacy one.
@@ -261,12 +261,13 @@ mod tests {
             ["bb_lookahead.cs", "bb_stm32_timer.cs", "bb_stm32f0_adc.cs"]
         );
         assert_eq!(
-            find("nrf52840-bb@3").unwrap().plugins(),
+            find("nrf52840-bb@4").unwrap().plugins(),
             [
                 "bb_lookahead.cs",
                 "bb_nrf52_saadc.cs",
                 "bb_nrf52_pwm.cs",
-                "bb_nrf52_state.cs"
+                "bb_nrf52_state.cs",
+                "bb_nrf52_power.cs"
             ]
         );
     }
@@ -314,7 +315,7 @@ mod tests {
             let p = find(id).unwrap();
             assert_eq!(p.content_from(&sources), p.content(), "{id}");
         }
-        let nrf = find("nrf52840-bb@3").unwrap();
+        let nrf = find("nrf52840-bb@4").unwrap();
         assert_ne!(nrf.content_from(&sources), nrf.content());
     }
 
@@ -375,7 +376,7 @@ mod tests {
         // matching legacy entry with the scoped hash, keeps a stale one (so
         // drift still reports it) and keeps device entries.
         let a = find("stm32f103-offline@1").unwrap();
-        let b = find("nrf52840-bb@3").unwrap();
+        let b = find("nrf52840-bb@4").unwrap();
         let dev = device_locked(bbdev::find("dms/mechanism@2").unwrap());
         let stale = LockedPlatform {
             content: format!("sha256:{}", "1".repeat(64)),

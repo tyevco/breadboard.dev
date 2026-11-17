@@ -1,0 +1,36 @@
+# examples/dial-me-spinner/asserts/w1-margin.toml: W1's MARGIN CHECK at the suite's 50 mA static +3V3
+# budget (decision D-W1, ADR-009 Amendment 2; P4, Amendment 8), with the firmware in the loop
+# (bench/w1-margin.toml, RT9080 worst_dropout, POFWARN at V28 and VPOFTOL +5 %): no POFWARN. Both
+# the rule firmware and the blanking-off build pass; the blanking-off build is the one whose pass
+# is a statement (its comparator is armed through the dip). Each requires pi.
+schema = "bb-bench/1"
+
+# +3V3 never below the +5 % corner's trip level after LED_PWR_EN rises (P0: min 2.9640 V).
+[[assert]]
+name = "margin"
+kind = "range"
+net = "main:+3V3"
+min = "2.94V"
+after = { edge = "U10.P1.04", level = 1 }
+requires = "pi"
+msg = "W1 margin check (the suite's 50 mA budget): +3V3 never below POFWARN's V28 +5 % trip level (2.94 V)"
+
+# No EVENTS_POFWARN (the POWER model's log record of each raise, ADR-009 D6).
+[[assert]]
+name = "no-pofwarn"
+kind = "log"
+match = "^power: EVENTS_POFWARN"
+max = 0
+requires = "pi"
+msg = "W1 margin check: no POFWARN"
+
+# The cue is held.
+[[assert]]
+name = "cue-held"
+kind = "count"
+net = "U10.P1.04"
+level = 0
+after = { edge = "U10.P1.04", level = 1 }
+max = 0
+requires = "pi"
+msg = "W1 margin check: the LED charging cue is not shed"

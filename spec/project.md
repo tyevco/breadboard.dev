@@ -428,7 +428,12 @@ at = "260ms"
   `replace = "<instance>"` removes that instance's `supply_load` view from
   the deck; the load (`amps` or `profile`) stands in for it, on its own
   `net`. At `pi` an instance without a `supply_load` in the deck is
-  refused; at `fast` the load is added as written, with a warning.
+  refused; at `fast` the load is added as written, with a warning. At `pi`
+  an `amps` load with `replace` keeps a DC path at every operating point,
+  as the view it stands in for does (ADR-009 D2 rule 2; milestone P4,
+  Amendment 8): `B_bench_load<k>_<net> <net> <ground> I = <amps>*min(1,
+  max(0, V(<net>,<ground>)/0.5))`, P1's static-load form, the full current
+  above 0.5 V. Every other `amps` load is a DC sink at every rung.
   `run.json`'s `supply_load` records the instance `replaced_by` the load.
 - **Refused, not ignored:** the `bb-bench/1` keys of ADR-010 D2 that later
   milestones implement (`[[env]]`, `[probes]`), and an `after` on a `log`

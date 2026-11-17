@@ -1,0 +1,77 @@
+# examples/dial-me-spinner/w1/bench/w1-stress.toml: W1 STRESS CORNER: 55 mA static +3V3 load (suite
+# budget 50 mA), RT9080 worst_dropout, POFWARN at V28 and VPOFTOL +5 % (2.94 V). Decision D-W1
+# (ADR-009 Amendment 2): W1 is gated at this labelled stress corner, the smallest whole mA that gives
+# at least 0.5 ms below 2.94 V; the suite's 50 mA is the margin check (w1-margin.toml).
+#
+# The dial-me-spinner suite's W1 case, test_u21_turn_on_dead_battery_usb_100ma_with_fw_rule
+# [ILIM80min-SYSREG4.4-2pct] (hardware/sim/tests at 6854d25), in STATIC-LOAD MODE (ADR-009 D4) on the
+# system's `pi` views, with the firmware in the loop:
+#
+#   * USB: VBUS 5.0 V (the suite's _dead corner), a Norton source behind 10 mOhm at base:VBUS (no
+#     branch-current unknown on base_GND, which the harness's milliohm GND wires tie to node 0:
+#     ADR-013 Amendment 3).
+#   * The dead cell, below BUVLO, as the suite models it: 0 V behind RPACK 0.25 Ohm (25 C), a bench
+#     [[battery]] at base:VBAT (cell-dead.csv).
+#   * base:U1 (ti/bq25180:pp) at its corner worst_ilim100_min: the ILIM 100 mA code at its minimum
+#     (80 mA) and SYS_REG 4.4 V at -2 % (4.312 V), with the suite's ungated supplement (suite_compat's
+#     sup_gate = 0). DEVIATION (plan section 2 W1, ADR-009 default 4): the firmware cannot set ILIM and
+#     SYS_REG over I2C (Phase 2 has no TWIM bus device); the bench sets them, through the view's corner.
+#   * main:U1 (richtek/rt9080:ldo) at worst_dropout (dropout 0.53 V at 600 mA, 1 % load regulation:
+#     D-W1's "RT9080 worst"), on the board's +3V3 capacitors.
+#   * The suite's static +3V3 budget raised to the stress load, 55 mA, IN PLACE OF U10's supply_load
+#     ([[load]] replace, static-load mode); the firmware still runs.
+#   * The suite's averaged LED charging cue (FW_LED_CUE 20 mA over 48 x 3 x 5 mA) as the pixels' duty:
+#     the WS2812C view's corner suite_compat, by the global corner below (which also names base:U1's
+#     and U10's comparator's corners in [corners]).
+#   * U10's POWER comparator (nordic/nrf52840-qiaa:pof) at its corner max: VPOFTOL +5 %, the corner at
+#     which the comparator trips earliest (ADR-009 D6: the corner a firmware rule must survive).
+schema = "bb-bench/1"
+temp_c = "25"
+fidelity = "pi"
+corner = "suite_compat"
+
+[corners]
+"main:U1" = "worst_dropout"
+"base:U1" = "worst_ilim100_min"
+"main:U10" = "max"
+
+[[battery]]
+net = "base:VBAT"
+ocv = "cell-dead.csv"
+soc = "0.5"
+r0 = "0.25"
+temp_c = "25"
+
+[[supply]]
+net = "base:VBUS"
+volts = "5.0V"
+rs = "10m"
+
+# W1 STRESS CORNER: 55 mA static +3V3 load (suite budget 50 mA).
+[[load]]
+net = "+3V3"
+amps = "55mA"
+replace = "main:U10"
+
+[analog]
+nets = [
+  "main:GND", "main:VSYS", "+3V3", "VSYS_SENSE", "VLED", "LED_PWR_EN", "LSW_CT", "LSW_QOD",
+  "LED_DIN_MCU", "LED_DIN_R", "LED_DIN",
+  "LED_D1", "LED_D2", "LED_D3", "LED_D4", "LED_D5", "LED_D6", "LED_D7", "LED_D8",
+  "LED_D9", "LED_D10", "LED_D11", "LED_D12", "LED_D13", "LED_D14", "LED_D15", "LED_D16",
+  "LED_D17", "LED_D18", "LED_D19", "LED_D20", "LED_D21", "LED_D22", "LED_D23", "LED_D24",
+  "LED_D25", "LED_D26", "LED_D27", "LED_D28", "LED_D29", "LED_D30", "LED_D31", "LED_D32",
+  "LED_D33", "LED_D34", "LED_D35", "LED_D36", "LED_D37", "LED_D38", "LED_D39", "LED_D40",
+  "LED_D41", "LED_D42", "LED_D43", "LED_D44", "LED_D45", "LED_D46", "LED_D47", "LED_D48",
+  "main:VBUS", "main:I2C_SCL", "main:I2C_SDA", "main:CHG_INT_N",
+  "base:GND", "base:VSYS", "base:VBAT", "base:VBUS", "base:/Base board/I2C_SCL",
+  "base:/Base board/I2C_SDA", "base:/Base board/CHG_INT_N", "CHG_TSMR",
+]
+
+# The pins voh = VDD names resolve to +3V3 (unused at pi, where an output drives from its rail;
+# ADR-009 D5).
+[nominal]
+"+3V3" = "3.3V"
+
+[options]
+set = "phase0"

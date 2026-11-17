@@ -32,7 +32,8 @@
 //           wake (the clock limit or the input sync point that woke it),
 //           exact, which becomes the new reference. 1 after reset.
 //   - hfxo  (state 1): CLOCK TASKS_HFCLKSTART (1) and TASKS_HFCLKSTOP (0)
-//           writes (a write hook on the stock NRF_CLOCK), at the write's
+//           writes (a write hook on the POWER/CLOCK peripheral: the stock
+//           NRF_CLOCK, or since nrf52840-bb@4 BbNrf52Power, which wraps it), at the write's
 //           virtual time as Renode's peripherals see it: the clock after
 //           cpu.SyncTime(), as the SAADC and NVMC models time a write (the
 //           executing block's start, on Renode's clock grid). The crystal's
@@ -42,6 +43,13 @@
 //           model's own BusyChange, at the model's clock times.
 //   - saadc (state 3): BbNrf52Saadc active (a buffer started, or a scan in
 //           progress), from the model's own ActiveChange, at its clock times.
+//   - pofen (state 4), pofthr0..3 (states 5-8): BbNrf52Power's POFCON.POF
+//           and THRESHOLD bits (ADR-009 D6, Phase 2 P4), from its PofChange
+//           at the POFCON write's time (after cpu.SyncTime()); armed by any
+//           of bits 4-8, which also records the model's events (PofEvent) as
+//           entries with state 0x10 + kind (0 an EVENTS_POFWARN raise, 1 a
+//           refused POFCON write, 2 an NVMC erase blocked by POF) and the
+//           value in the entry's fourth word.
 //
 // Registers (host only; a firmware access is ignored and sets error bit 3):
 //   0x000 ID 0x54534242 ("BBST")       0x004 error word (bit 0 ring overflow,
@@ -52,7 +60,7 @@
 //   0x020 SYNC: a read records a WFI entry not recorded yet (above), then
 //         returns the entries recorded (total); 0x024 the error word again
 //   0x1000 + 16 j  ring entry j = k mod 2048 of entry k: t (fs) low, t (fs)
-//                  high, state | level << 8, 0
+//                  high, state | level << 8, value (an event's; else 0)
 // GPIO output 0 toggles at the first entry after the last acknowledgement
 // and at an error, so the engine (an External Control GPIO event) reads the
 // ring at most once per advance and only when it has news; with #run bound
@@ -95,7 +103,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 return;
             }
             armed = true;
-            this.mask = mask & 0xF;
+            this.mask = mask & 0x1FF;
             clock = (BaseClockSource)machine.ClockSource;
             cpu = machine.SystemBus.GetCPUs().OfType<TranslationCPU>().FirstOrDefault();
             if(cpu == null)
@@ -119,10 +127,14 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             }
             if((this.mask & (1u << StateHfxo)) != 0)
             {
-                var clk = machine.GetPeripheralsOfType<NRF_CLOCK>().FirstOrDefault();
+                IBusPeripheral clk = machine.GetPeripheralsOfType<BbNrf52Power>().FirstOrDefault();
                 if(clk == null)
                 {
-                    Fail("no NRF_CLOCK for the #hfxo output");
+                    clk = machine.GetPeripheralsOfType<NRF_CLOCK>().FirstOrDefault();
+                }
+                if(clk == null)
+                {
+                    Fail("no POWER/CLOCK peripheral for the #hfxo output");
                 }
                 else
                 {
@@ -153,6 +165,19 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                     saadc.ActiveChange = (t, level) => Record(t * 1000000ul, StateSaadc, level);
                 }
             }
+            if((this.mask & PofMask) != 0)
+            {
+                var power = machine.GetPeripheralsOfType<BbNrf52Power>().FirstOrDefault();
+                if(power == null)
+                {
+                    Fail("no BbNrf52Power for the #pofen/#pofthr outputs");
+                }
+                else
+                {
+                    power.PofChange = (t, k, level) => Record(t, StatePofen + k, level);
+                    power.PofEvent = (t, kind, value) => Record(t, StateEvent + kind, true, value);
+                }
+            }
             this.Log(LogLevel.Info, "bb_nrf52_state: armed, mask 0x{0:X}", this.mask);
         }
 
@@ -173,6 +198,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                     case 0: return (uint)ringT[j];
                     case 4: return (uint)(ringT[j] >> 32);
                     case 8: return ringS[j];
+                    case 12: return ringV[j];
                     default: return 0;
                     }
                 }
@@ -282,12 +308,13 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             return value;
         }
 
-        private void Record(ulong tFs, int state, bool level)
+        private void Record(ulong tFs, int state, bool level, uint value = 0)
         {
             lock(sync)
             {
                 ringT[count % RingSize] = tFs;
                 ringS[count % RingSize] = (uint)state | (level ? 1u << 8 : 0u);
+                ringV[count % RingSize] = value;
                 count++;
                 if(count - acked > RingSize && (error & ErrOverflow) == 0)
                 {
@@ -341,7 +368,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         }
 
         public const int RingSize = 2048;
-        public const int StateRun = 0, StateHfxo = 1, StateNvmc = 2, StateSaadc = 3;
+        public const int StateRun = 0, StateHfxo = 1, StateNvmc = 2, StateSaadc = 3, StatePofen = 4;
+        public const int StateEvent = 0x10;
+        public const uint PofMask = 0x1F0;
         public const uint ErrOverflow = 1u << 0, ErrSetup = 1u << 1, ErrFirmware = 1u << 3;
 
         private readonly IMachine machine;
@@ -349,6 +378,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly object sync = new object();
         private readonly ulong[] ringT = new ulong[RingSize];
         private readonly uint[] ringS = new uint[RingSize];
+        private readonly uint[] ringV = new uint[RingSize];
         private BaseClockSource clock;
         private TranslationCPU cpu;
         private ulong fsPerInstruction;

@@ -70,8 +70,23 @@ pub const RESERVED_TOP: &[&str] = &["layers", "thermal", "rtl"];
 pub const RESERVED_FOR: &str = "a later milestone (a reserved key of bb-part/1, ADR-006 D11)";
 
 /// The view kinds: `circuit`, `pin_load`, and in bb-part/1 `switch`
-/// (ADR-010 D2) and `supply_load` (ADR-009 D4).
-pub const VIEW_KINDS: &[&str] = &["circuit", "pin_load", "switch", "supply_load"];
+/// (ADR-010 D2), `supply_load` (ADR-009 D4) and `pof_comparator` (ADR-009
+/// D6, Phase 2 P4).
+pub const VIEW_KINDS: &[&str] = &[
+    "circuit",
+    "pin_load",
+    "switch",
+    "supply_load",
+    "pof_comparator",
+];
+
+/// A `pof_comparator` view's state ports (ADR-009 D6): the POFCON.THRESHOLD
+/// code's bits, the CPU engine's outputs `#pofthr0..3`.
+pub const POF_THRESHOLD_STATES: &[&str] = &["pofthr0", "pofthr1", "pofthr2", "pofthr3"];
+
+/// A `pof_comparator` view's observe port (ADR-009 D6): its output, the
+/// CPU engine's watched `digital_in` `#pofwarn`.
+pub const POF_OUTPUT_SIGNAL: &str = "pofwarn";
 
 /// A named corner's name (ADR-009 D8): `typ`, `min`, `max`, `suite_compat`
 /// or `worst_<x>`.
@@ -746,6 +761,11 @@ fn view(mut o: Obj, major: u32) -> Result<View, String> {
         "supply_load" => {
             new_in_part_1(major, &format!("{path}.kind \"supply_load\""), "ADR-009 D4")?
         }
+        "pof_comparator" => new_in_part_1(
+            major,
+            &format!("{path}.kind \"pof_comparator\""),
+            "ADR-009 D6",
+        )?,
         _ => {}
     }
     one_of(&format!("{path}.kind"), &kind, VIEW_KINDS)?;
@@ -810,6 +830,37 @@ fn view(mut o: Obj, major: u32) -> Result<View, String> {
                     ("supply_load", _) => {
                         return Err(format!(
                             "{at}: a supply_load view's ports are typed tables (ADR-009 D4)"
+                        ))
+                    }
+                    // ADR-009 D6 (Phase 2 P4): the power-fail comparator's
+                    // ports are the package's supply pins, the threshold
+                    // code's state ports and its output.
+                    ("pof_comparator", toml::Value::Table(t)) => {
+                        let mut po = Obj::new(at.clone(), t);
+                        let role = po.str_req("role")?;
+                        let port = match role.as_str() {
+                            "pin" => Port::OtherPin {
+                                pin: po.str_req("pin")?,
+                            },
+                            "state" => Port::State {
+                                state: po.str_req("state")?,
+                            },
+                            "observe" => Port::Observe {
+                                signal: po.str_req("signal")?,
+                            },
+                            r => {
+                                return Err(format!(
+                                    "{at}.role {r:?}: a pof_comparator view's ports are role \
+                                     \"pin\", \"state\" or \"observe\" (ADR-009 D6)"
+                                ))
+                            }
+                        };
+                        po.done()?;
+                        ports.push(port);
+                    }
+                    ("pof_comparator", _) => {
+                        return Err(format!(
+                            "{at}: a pof_comparator view's ports are typed tables (ADR-009 D6)"
                         ))
                     }
                     ("pin_load", toml::Value::Table(t)) => {

@@ -1,0 +1,58 @@
+# examples/dial-me-spinner/asserts/w1.toml: W1's firmware checks (Phase 2 plan section 2 W1; P4,
+# ADR-009 D6, G4, Amendment 8) as assertions, for the runs at the W1 STRESS CORNER (decision D-W1:
+# 55 mA static +3V3 load, suite budget 50 mA, RT9080 worst_dropout; bench/w1-stress*.toml). Every
+# case of make dms-w1 at the stress corner reads them: `bb run --project ... --bench
+# bench/w1-stress.toml --assert ../asserts/w1.toml`. The rule firmware (10 ms blanking) passes all
+# four; both negative controls (the 4 ms blanking that ends inside the window, and the blanking
+# off) fail exactly cue-held. Each requires pi: below it, not_evaluable.
+#
+# The anti-vacuity check. The plan's "pofwarn fired at least once" cannot hold for the rule
+# firmware as built: it blanks by disabling POFCON (nrfx writes POF = 0 at V27, W-fw, ADR-009
+# Amendment 7), so no EVENTS_POFWARN can be raised during the blanking, and the dip ends 6 ms before
+# it does. pof-dip is the closest correct check (ADR-009 Amendment 8): the +3V3 dip crosses the trip
+# level of the comparator as the firmware configures it outside the blanking (V28 at VPOFTOL +5 %,
+# 2.94 V) inside the blanking, so the rule had something to mask; scripts/check_dms_w1.py adds the
+# paired evidence that the same deck with the blanking off raises EVENTS_POFWARN there.
+schema = "bb-bench/1"
+
+# The cue is held: LED_PWR_EN (U10.P1.04) never falls once the firmware has raised it.
+[[assert]]
+name = "cue-held"
+kind = "count"
+net = "U10.P1.04"
+level = 0
+after = { edge = "U10.P1.04", level = 1 }
+max = 0
+requires = "pi"
+msg = "W1 stress corner (55 mA static +3V3 load, suite budget 50 mA, RT9080 worst): the LED charging cue is not shed (firmware.md R8)"
+
+# The dip that POFWARN would report: +3V3 falls through V28 x 1.05 = 2.94 V inside the 10 ms
+# blanking after LED_PWR_EN rises (the D-W1 window: 3.255-4.089 ms in P0's deck).
+[[assert]]
+name = "pof-dip"
+kind = "edge_timing"
+start = { edge = "U10.P1.04", level = 1 }
+end = { cross = "main:+3V3", below = "2.94V" }
+max = "10ms"
+requires = "pi"
+msg = "W1 stress corner: +3V3 crosses POFWARN's V28 +5 % trip level (2.94 V) inside the 10 ms blanking"
+
+# +3V3 at least the flash's VCC minimum (2.7 V) from the end of the blanking (10 ms after
+# LED_PWR_EN) to the run's end.
+[[assert]]
+name = "flash-vcc"
+kind = "range"
+net = "main:+3V3"
+min = "2.7V"
+after = { edge = "U10.P1.04", level = 1, delay = "10ms" }
+requires = "pi"
+msg = "W1 stress corner: +3V3 >= 2.7 V (flash VCC min) after the 10 ms blanking"
+
+# No brown-out reset (ADR-009 D7's `reset` record).
+[[assert]]
+name = "no-reset"
+kind = "event"
+event = "reset"
+max = 0
+requires = "pi"
+msg = "W1 stress corner: no reset record"

@@ -288,10 +288,11 @@ pub fn load_vectors(pkg: &Package, dir: &Path, reg: &Registry) -> Result<Vec<Vec
             .ok_or_else(|| format!("{name}: view {:?} is not in part.toml", v.view))?;
         if !matches!(
             view.kind.as_str(),
-            "circuit" | "pin_load" | "switch" | "supply_load"
+            "circuit" | "pin_load" | "switch" | "supply_load" | "pof_comparator"
         ) {
             return Err(format!(
-                "{name}: view {} is a {} view; vectors test circuit, pin_load, switch and supply_load views",
+                "{name}: view {} is a {} view; vectors test circuit, pin_load, switch, \
+                 supply_load and pof_comparator views",
                 view.name, view.kind
             ));
         }

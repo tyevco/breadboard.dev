@@ -2,7 +2,7 @@
 """Renode-only tests of Breadboard's nRF52840 PWM, TEMP and NVMC models (ADR-008 D9, Amendment 9).
 
 Drives Renode 1.17.0 with Breadboard's nRF52840 (engines/cpu-renode/platforms/
-nrf52840-bb.repl, nrf52840-bb@3: BbNrf52Pwm PWM0-PWM3, BbNrf52Temp,
+nrf52840-bb.repl, nrf52840-bb@4: BbNrf52Pwm PWM0-PWM3, BbNrf52Temp,
 BbNrf52Nvmc and their host port BbNrf52HostPort at 0x5FFC0000) through the
 External Control API, paused, as the Renode engine does, with the session
 helpers of examples/nrf-saadc/bb_saadc_test.py. The shape is ADR-005's test

@@ -231,7 +231,7 @@ The Renode platforms `bb` provides (`cli/src/platforms.rs`):
 | --- | --- | --- |
 | `stm32f103-offline@1` | `engines/cpu-renode/platforms/stm32f103-offline.repl` | `stm32f103` |
 | `stm32f072-bb@1` | `engines/cpu-renode/platforms/stm32f072-bb.repl` | `stm32f072` |
-| `nrf52840-bb@3` | `engines/cpu-renode/platforms/nrf52840-bb.repl` | `nrf52840` |
+| `nrf52840-bb@4` | `engines/cpu-renode/platforms/nrf52840-bb.repl` | `nrf52840` |
 
 A behaviour change bumps the major and changes the content hash. The lock
 records Renode's version (1.17.0) with each Renode platform.

@@ -6,10 +6,13 @@ w1_blank5, w1_blank_off, w2_rule, w2_old_rule) on Breadboard's nRF52840 (engines
 platforms/nrf52840-bb.repl) through the External Control API, paused at every lattice point the
 test acts on, as the Renode engine drives it (10 us lattice, serial execution). The pins are
 observed as the engine observes them (External Control GPIO events), the UARTE0 console through
-the tap BbUartLog (ADR-008 D8), and the POWER registers through power_double.py: a test double
-of POFCON, EVENTS_POFWARN, the POFWARN interrupt enable and RESETREAS on hooks of Renode's
-NRF_CLOCK, which has none of them (ADR-009 Context). P4's BbNrf52Power (ADR-009 D6) replaces the
-double; this test then runs on the model (plan section 4, W-fw and P4 rows; ADR-009 Amendment 7).
+the tap BbUartLog (ADR-008 D8), and the POWER registers of Breadboard's POWER model BbNrf52Power
+(ADR-009 D6, nrf52840-bb@4, Phase 2 P4) through power_journal.py, an observer that journals
+every POWER access and changes none. Until P4 the test ran on a test double of those registers
+(power_double.py, ADR-009 Amendment 7); P4 removed it, and the comparator input is now the
+model's #pofwarn input (its GPIO input 0, set over External Control at lattice points as the
+engine applies a digital_in), RESETREAS's preset its host register 0xF04 (plan section 4, W-fw
+and P4 rows; ADR-009 Amendment 8).
 
 Cases (every time relative to t_e, the LED_PWR_EN rise the test observes):
 
@@ -66,9 +69,11 @@ MACHINE = "u1"
 L = 10_000                      # the lattice (Renode global quantum), ns
 US, MS = 1_000, 1_000_000
 SYSBUS_WRITE = 1
+GPIO_SET_STATE = 1
 UARTLOG = 0x5FFF8000
 POWER = 0x40000000
-CTRL_COMP, CTRL_RESETREAS = POWER + 0xF00, POWER + 0xF04
+CTRL_RESETREAS = POWER + 0xF04  # BbNrf52Power's host register: the RESETREAS preset
+POF_RAISES = POWER + 0xF08      # its count of EVENTS_POFWARN raises
 POFCON_V28 = 0x1F               # POF | THRESHOLD 15 (V28) << 1 (nrf52840_bitfields.h)
 INT_POFWARN = 0x4
 WINDOW = (3255 * US, 4089 * US)  # the stress corner's 2.94 V window after LED_PWR_EN (Amendment 2)
@@ -87,7 +92,7 @@ def ceil_l(t):
 
 
 class Session:
-    """A paused Renode with Breadboard's nRF52840, the image, the POWER double and the pins."""
+    """A paused Renode with Breadboard's nRF52840, the image, the POWER journal and the pins."""
 
     def __init__(self, renode, elf, dll, keep=False):
         self.dir = Path(tempfile.mkdtemp(prefix="bb-wfw-"))
@@ -98,13 +103,13 @@ class Session:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
         (self.dir / "platform.repl").write_text(OVERLAY.read_text())
-        (self.dir / "double.py").write_text(
-            f"exec(open(r'{HERE / 'power_double.py'}').read())\ninstall(r'{self.journal}')\n")
-        get = "__import__('System').AppDomain.CurrentDomain.GetData('bb_power_double')"
+        (self.dir / "journal.py").write_text(
+            f"exec(open(r'{HERE / 'power_journal.py'}').read())\ninstall(r'{self.journal}')\n")
+        get = "__import__('System').AppDomain.CurrentDomain.GetData('bb_power_journal')"
         lines = [f"include @{plugin_loader(self.dir, dll)}", f'mach create "{MACHINE}"',
                  f"machine LoadPlatformDescription @{self.dir / 'platform.repl'}",
                  f"sysbus LoadELF @{elf}",
-                 f"include @{self.dir / 'double.py'}",
+                 f"include @{self.dir / 'journal.py'}",
                  f'sysbus SetHookBeforePeripheralWrite sysbus.clock "{get}.write(machine, offset, value)"',
                  f'sysbus SetHookAfterPeripheralRead sysbus.clock "value = {get}.read(machine, offset, value)"',
                  "emulation SetSeed 0", f'emulation SetGlobalQuantum "{L / 1e9:.8f}"',
@@ -143,7 +148,12 @@ class Session:
             d = len(self.desc) + 1
             self.desc[d] = name
             self.c.gpio_register_event(gpio, pin, d)
+        self.power_port = self.c.instance(CMD_GPIO, md, "clock")
         self.now = 0
+
+    def pofwarn(self, level):
+        """The comparator input (BbNrf52Power's #pofwarn, its GPIO input 0), set while paused."""
+        self.c.request(CMD_GPIO, struct.pack("<ibi", self.power_port, GPIO_SET_STATE, 0) + bytes([level]))
 
     def r(self, addr, n=1):
         v = self.c.read_u32s(self.bus, addr, n)
@@ -172,7 +182,7 @@ class Session:
         return next(t for t, n, lvl in self.edges() if n == name and lvl)
 
     def power(self):
-        """The double's journal: [(t_ns, kind, offset, value)]."""
+        """The POWER journal: [(t_ns, kind, offset, value)]."""
         out = []
         for line in self.journal.read_text().splitlines():
             t, k, off, v = line.split()
@@ -237,11 +247,12 @@ def run_case(renode, dll, fw, image, case, keep):
             if case == "window":
                 t_on, t_off = ceil_l(t_e + WINDOW[0]), ceil_l(t_e + WINDOW[1])
                 s.run_to(t_on)
-                s.w(CTRL_COMP, 1)
+                s.pofwarn(1)
                 s.run_to(t_off)
-                s.w(CTRL_COMP, 0)
+                s.pofwarn(0)
         s.run_to(RUN_NS)
         edges, power, uart, cnf = s.edges(), s.power(), s.uart(), s.pin_cnf()
+        raises = s.r(POF_RAISES)
     finally:
         s.close()
 
@@ -253,14 +264,19 @@ def run_case(renode, dll, fw, image, case, keep):
     out += [f"uart {t} {line!r}" for t, line in zip(uart_line_times(uart), lines)]
     out += [f"pin_cnf P{p}.{n:02d} {v:#x}" for (p, n), v in sorted(cnf.items())]
 
+    out.append(f"pofwarn raises {raises}")
     rises = {n: [t for t, m, lvl in edges if m == n and lvl] for n in PINS.values()}
     falls = {n: [t for t, m, lvl in edges if m == n and not lvl] for n in PINS.values()}
     writes = [(t, off, v) for t, k, off, v in power if k == "W"]
     # nrfx writes POFCON twice per call (nrf_power_pofcon_set, then nrf_power_pofcon_vddh_set's
     # read-modify-write of THRESHOLDVDDH, which stays at its reset value): one entry per call.
+    # BbNrf52Power times a POFCON write after cpu.SyncTime() (ADR-009 D6), so the journal's clock
+    # (the machine's local time) moves between the two writes of one call, by the instructions
+    # between them (on the test double both had the slice's time): the second is the same value
+    # less than one lattice cell after the first.
     pofcon = []
     for t, off, v in writes:
-        if off == 0x510 and not (pofcon and pofcon[-1] == (t, v)):
+        if off == 0x510 and not (pofcon and pofcon[-1][1] == v and t - pofcon[-1][0] < L):
             pofcon.append((t, v))
 
     # GPIO configuration: the three enables and the console's TX, every other pin at reset.
@@ -311,6 +327,7 @@ def run_case(renode, dll, fw, image, case, keep):
             check(falls["LED_PWR_EN"] == [], f"cue shed: LED_PWR_EN falls {falls['LED_PWR_EN']}")
             check(not reads and not any("pofwarn" in x for x in lines),
                   f"POFWARN handled (EVENTS_POFWARN reads {reads}, console {lines})")
+            check(raises == 0, f"the model raised EVENTS_POFWARN {raises} times, want 0")
         else:
             t_on = ceil_l(t_e + WINDOW[0])
             ref = t_r if W1[image] else t_on
@@ -321,6 +338,7 @@ def run_case(renode, dll, fw, image, case, keep):
             check(f[0] < ceil_l(t_e + WINDOW[1]) if f else False, "shed after the window's end")
             check(rises["LED_DIN_MCU"] == [], f"P0.06 rose after a shed: {rises['LED_DIN_MCU']}")
             check(lines[1:] == ["w1: pofwarn n=1 cue=shed"], f"console {lines}")
+            check(raises == 1, f"the model raised EVENTS_POFWARN {raises} times, want 1")
             out.append(f"shed {f[0] - t_e if f else None} ns after LED_PWR_EN")
     else:
         old = W2[image]
@@ -331,6 +349,7 @@ def run_case(renode, dll, fw, image, case, keep):
         check(wr == [reas], f"RESETREAS writes {wr}, want [{reas:#x}] (clear the bits read)")
         check(lines == [f"w2: boot resetreas={reas:#010x} rule={'old' if old else 'new'}"], f"console {lines}")
         check(pofcon == [], f"POFCON written: {pofcon}")
+        check(raises == 0, f"the model raised EVENTS_POFWARN {raises} times, want 0")
         boot = rr[0][0] if rr else 0
         if old:
             o = rises["OLED_VCC_EN"]

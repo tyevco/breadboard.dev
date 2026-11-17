@@ -1340,6 +1340,13 @@ fn run(a: RunArgs) -> Result<(), String> {
         rcfg.pins
             .push(PinSpec::nrf_state(&c.cpu_pin).map_err(|e| e.to_string())?);
     }
+    // ADR-009 D6 (milestone P4): the POWER model's #pofen output and its
+    // #pofwarn input (the comparator's output, glue rule 13).
+    if board.pof.is_some() {
+        rcfg.pins
+            .push(PinSpec::nrf_state("#pofen").map_err(|e| e.to_string())?);
+        rcfg.pins.push(PinSpec::nrf_pofwarn());
+    }
     rcfg.adc_trace = mcu_pins
         .iter()
         .filter(|p| matches!(p.kind, PinKind::Adc { trace: true, .. }))
@@ -1382,6 +1389,29 @@ fn run(a: RunArgs) -> Result<(), String> {
             engine: devices::ANALOG,
             pin: c.kernel_net.clone(),
             net: c.kernel_net.clone(),
+            dir: Direction::Input,
+        });
+    }
+    // The power-fail comparator (ADR-009 D6): `#pofen` of the CPU engine
+    // into no engine, and the comparator's output, thresholded by the analog
+    // engine, into the CPU engine's `#pofwarn`.
+    if let Some(p) = &board.pof {
+        binds.push(devices::Bind {
+            engine: devices::CPU,
+            pin: "#pofen".into(),
+            net: p.pofen_net.clone(),
+            dir: Direction::Output,
+        });
+        binds.push(devices::Bind {
+            engine: devices::ANALOG,
+            pin: p.kernel_net.clone(),
+            net: p.kernel_net.clone(),
+            dir: Direction::Output,
+        });
+        binds.push(devices::Bind {
+            engine: devices::CPU,
+            pin: "#pofwarn".into(),
+            net: p.kernel_net.clone(),
             dir: Direction::Input,
         });
     }
@@ -1507,6 +1537,14 @@ fn run(a: RunArgs) -> Result<(), String> {
                 initial: c.initial,
             },
             glue_node: None,
+        });
+    }
+    // The power-fail comparator's output (ADR-009 D6, glue rule 13).
+    if let Some(p) = &board.pof {
+        ncfg.digital_outputs.push(DigitalOutputBinding {
+            pin: p.kernel_net.clone(),
+            node: p.node.clone(),
+            model: board::POFWARN_IN,
         });
     }
     for p in &mcu_pins {

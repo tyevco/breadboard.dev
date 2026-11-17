@@ -13,6 +13,8 @@ SAADC, the raw-microvolt push key, the loading `adc_in` (`load`, the `#smp`
 toggle) and glue rule 9: ADR-008 D7 (Phase 1 M8, Amendment 4). The `pi`
 form of `digital_out` and glue rule 11: ADR-009 D5 (Phase 2 P2, Amendment
 5). CPU state outputs and glue rule 12: ADR-009 D4 (Phase 2 P3, Amendment 6).
+The power-fail comparator, `#pofen`, `#pofthr0..3`, `#pofwarn` and glue rule
+13: ADR-009 D6 (Phase 2 P4, Amendment 8).
 
 Every component pin has **exactly one** pin model, supplied by its package
 from the package's `pins.toml` (ADR-006 D4, `spec/package.md`); `board.cir`
@@ -336,3 +338,21 @@ boundary; the analog engine handles it entirely.
     is bound. A sleeping CPU's `quiet_until` covers its state outputs: they
     change only at a wake, at a CPU write or at a model's own clock limit,
     which the promise already bounds.
+13. At `pi` the CPU target whose package has a `pof_comparator` view
+    (`spec/package.md` section 3; on the nRF52840 `nordic/nrf52840-qiaa:pof`)
+    gets that view, instantiated `X_bb_pof_<ref>` (`<board>_<ref>` on a
+    system board), its pin ports on the nets of the chip's pins of those
+    names (a module target: through its pinmap), with the target instance's
+    corner (ADR-009 D8). Each threshold port `#pofthr<k>` is a node
+    `bb_st_<ref>_pofthr<k>` driven by one source `V_bb_st_<ref>_pofthr<k>`
+    from the CPU engine's output `#pofthr<k>` (kernel net `<ref>.#pofthr<k>`),
+    as rule 12 drives a state node: bit `k` of POFCON.THRESHOLD, stamped at
+    the POFCON write's virtual time (`BbNrf52Power`, ADR-009 D6), low after
+    reset. Its output port is the node `bb_pof_<ref>`, which the analog engine
+    thresholds as a `digital_in` with `vih` 1 V, `vil` 0 V and no `cin`
+    (rule 2 without its capacitor) into the CPU engine's watched input
+    `#pofwarn` (kernel net `<ref>.#pofwarn`): an interrupt source like a GPIO
+    input, never a sampled input. The CPU engine's `#pofen` (POFCON.POF;
+    kernel net `<ref>.#pofen`) drives no circuit node: the comparator is not
+    gated by POF, the POWER model applies it. At `fast` there is no
+    comparator and none of these pins is bound.

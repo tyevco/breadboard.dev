@@ -25,7 +25,15 @@
   blanking builds and the W2 old-rule and rule apps, prebuilt and
   reproduced by `make fw-rebuild`; their Renode-only configuration test
   (`make dms-wfw-test`) runs on a POWER test double until P4's model
-  exists, and P4 re-runs it on the model.
+  exists, and P4 re-runs it on the model. 8 (2026-11-17), P4 as
+  implemented: `BbNrf52Power` wrapping the sealed `NRF_CLOCK` on
+  `nrf52840-bb@4`, the `pof_comparator` view (the hysteresis in
+  `#pofwarn`'s thresholds, glue rule 13), the register tests (`make
+  nrf-power-model`), W-fw's test on the model, W1 at the stress corner with
+  its controls and the margin check (`make dms-w1`); the rule's
+  anti-vacuity check is `pof-dip` (the firmware disables POFCON to blank);
+  static-load mode's load collapses at `pi` (ADR-013 Amendment 3's open
+  finding).
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
