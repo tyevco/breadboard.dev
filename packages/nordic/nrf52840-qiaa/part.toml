@@ -1,18 +1,20 @@
 # nordic/nrf52840-qiaa: the Nordic nRF52840 SoC, aQFN73 (Phase 1 plan M5, ADR-006 D9, ADR-008 D1-D2).
 #
-# The behavioural layer is Breadboard's Renode platform nrf52840-bb@3 (ADR-008 D1: Renode 1.17.0's
+# The behavioural layer is Breadboard's Renode platform nrf52840-bb@4 (ADR-008 D1: Renode 1.17.0's
 # nRF52840 without the SVD download, 64 MIPS). The pins carry the GPIO pin models resolved against the
 # PS (pins.toml says how). The suite's GPIO "views" (ADR-006 D9's gpio_led, gpio_lsw, ...) are pad
 # DRIVERS: in a co-simulation the pad's driver is the pin model, so a circuit view of it would put a
 # second driver on the net (the pin-boundary contract allows one). They become pins.toml's named
 # parameter sets instead, and the package has no circuit view (ADR-006 Amendment 3). Its one analog
 # view is the SAADC's pin_load view saadc_se (plan M8, ADR-008 D7), the load a bound adc_in puts on
-# its pad; the behavioural platform nrf52840-bb@3 has the SAADC model it feeds.
+# its pad; the behavioural platform nrf52840-bb@4 has the SAADC model it feeds. Since Phase 2 P4 (ADR-009
+# D6) the platform also has Breadboard's POWER model (BbNrf52Power), and the package the power-fail
+# comparator `pof` it reads at pi.
 schema = "bb-part/1"
 
 [part]
 id = "nordic/nrf52840-qiaa"
-version = "0.3.0"
+version = "0.4.0"
 kind = "soc"
 manufacturer = "Nordic Semiconductor"
 mpn = ["NRF52840-QIAA", "NRF52840-QIAA-R", "NRF52840-QIAA-R7"]
@@ -28,7 +30,7 @@ file = "pins.toml"
 
 [behavioral]
 engine = "renode"
-platform = "nrf52840-bb@3"
+platform = "nrf52840-bb@4"
 
 # ADR-009 D5 (milestone P2): at pi a digital_out drives from VDD, the GPIO supply (PS v1.1 section
 # 6.9.3.1: VOH and IOH are given against VDD).
@@ -125,6 +127,51 @@ deviations = [
 ]
 not_modelled = ["flash write and erase current (the PS gives none; #nvmc has no idd entry)", "peripherals other than the CPU, HFXO, the SAADC and the radio (TIMERs, RTC, UARTE, GPIOTE, TEMP, PWM)", "the LDO regulator mode (figures are DC/DC)", "start-up currents (HFXO ISTART, the radio ramp-up)", "temperature dependence"]
 generated_by = "Claude (Phase 2 milestone P3)"
+confidence = "datasheet_checked"
+
+[[analog.qualified]]   # bb pkg test --record
+lattice = "10us"
+options = "phase0"
+
+[[analog]]
+name = "pof"
+kind = "pof_comparator"
+purpose = "the power-fail comparator at pi (ADR-009 D6): #pofwarn = V(VDD) below VPOF = POFCON.THRESHOLD's voltage x (1 + VPOFTOL), released at VPOF + VPOFHYST"
+fidelity = ["pi"]
+file = "analog/pof.lib"
+subckt = "NORDIC_NRF52840_QIAA_POF"
+ports = [{ role = "pin", pin = "VDD" }, { role = "pin", pin = "VSS" }, { role = "state", state = "pofthr0" }, { role = "state", state = "pofthr1" }, { role = "state", state = "pofthr2" }, { role = "state", state = "pofthr3" }, { role = "observe", signal = "pofwarn" }]
+params = { tol = "0", hyst = "50mV" }
+rails = ["VDD"]
+
+[[analog.corners]]
+name = "typ"
+params = { tol = "0" }
+ref = "nRF52840 PS v1.1 section 5.3.8.4: VPOF at its nominal value (VPOFTOL 0)"
+
+[[analog.corners]]
+name = "min"
+params = { tol = "-0.05" }
+ref = "nRF52840 PS v1.1 section 5.3.8.4: VPOFTOL -5 % (V28: 2.66 V), the comparator that trips latest"
+
+[[analog.corners]]
+name = "max"
+params = { tol = "0.05" }
+ref = "nRF52840 PS v1.1 section 5.3.8.4: VPOFTOL +5 % (V28: 2.94 V), the comparator that trips earliest: the corner a firmware rule must survive (ADR-009 D6; W1 gates there, decision D-W1)"
+
+[analog.provenance]
+source = "datasheet"
+refs = [
+  "nRF52840 PS v1.1 section 5.3.8.4 (power-fail comparator): VPOF V17..V28 in normal-voltage mode, VPOFTOL +-5 %, VPOFHYST 40/50/60 mV",
+  "nRF52840 MDK nrf52840_bitfields.h: POWER_POFCON_THRESHOLD_V17..V28 = codes 4..15 (codes 0-3 \"should not be used\")",
+]
+deviations = [
+  "the response is immediate (the PS gives no response time for the comparator)",
+  "the hysteresis is the digital_in thresholds' (1 V / 0 V on the view's output, which spans VPOFHYST linearly)",
+  "the output is not gated by POFCON.POF: the POWER model applies POF (ADR-009 D6)",
+]
+not_modelled = ["the high-voltage mode's VDDH comparator (THRESHOLDVDDH; the POWER model refuses a non-reset value)", "the comparator's own supply current (in the SoC's idd figures)", "temperature dependence of VPOF"]
+generated_by = "Claude (Phase 2 milestone P4)"
 confidence = "datasheet_checked"
 
 [[analog.qualified]]   # bb pkg test --record

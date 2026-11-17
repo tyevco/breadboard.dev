@@ -92,7 +92,7 @@ endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
                   nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test \
                   bench-test bench-gate dms-home-project assert-test assert-gate bb-test-gate \
-                  dms-e1-system dms-e1-system-test cargo-test
+                  dms-e1-system dms-e1-system-test cargo-test dms-w1 dms-w1-test
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -137,10 +137,10 @@ pooled-cargo-test:
 # its own job runs); make test and make check locally run every step. A step that fails ends the
 # run, as before.
 TEST_STEPS := measure-lock-test cargo-test spike determinism golden feedback feedback-order \
-              nrf-feedback adc adc-order adc-model nrf-saadc-model nrf-pwm-model device-smoke \
-              multi-producer adc-kicad dms-rail-test dms-vsense-test dms-home-test bench-test \
-              assert-test ec-reconnect packages pi-static-test pi-glue-test pi-idd-test gdb-test \
-              vscode-templates dms-system dms-e1-system-test registry-test
+              nrf-feedback adc adc-order adc-model nrf-saadc-model nrf-power-model nrf-pwm-model \
+              device-smoke multi-producer adc-kicad dms-rail-test dms-vsense-test dms-home-test \
+              bench-test assert-test ec-reconnect packages pi-static-test pi-glue-test pi-idd-test \
+              gdb-test vscode-templates dms-system dms-e1-system-test dms-w1-test registry-test
 TEST_SKIP ?=
 pooled-test:
 	@mkdir -p $(dir $(TEST_TIMING)) && : > $(TEST_TIMING)
@@ -476,7 +476,7 @@ measured-jit-profile-stress: firmware bb
 POOL_EQUIV_OUT    ?= out/pool-equiv
 POOL_EQUIV_ROUNDS ?= 2
 pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare bench-prepare \
-            dms-e1-system-prepare pi-idd-prepare
+            dms-e1-system-prepare pi-idd-prepare dms-w1-prepare
 	$(BB) pool run --slots 1 -- bash scripts/pool_equiv.sh $(BB) $(POOL_EQUIV_OUT) $(POOL_EQUIV_ROUNDS) -- \
 	    "bench-stimulus;$(BENCH_GOLD)/stimulus.sha256;nongrant;$(BENCH_STIM_ARGS)" \
 	    "bench-trigger;$(BENCH_GOLD)/trigger.sha256;nongrant;$(BENCH_TRIG_ARGS)" \
@@ -511,7 +511,11 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare be
 	    "pi-idd-duty;$(PI_IDD_GOLD)/duty/outputs.sha256;nongrant;$(PI_IDD_DUTY_ARGS)" \
 	    "pi-idd-duty-ref;$(PI_IDD_GOLD)/duty/outputs.sha256;all;$(PI_IDD_DUTY_ARGS) --max-quantum 10us --lookahead off" \
 	    "pi-idd-radio;$(PI_IDD_GOLD)/radio/outputs.sha256;nongrant;$(PI_IDD_RADIO_ARGS)" \
-	    "pi-idd-feedback;$(PI_IDD_GOLD)/feedback/outputs.sha256;nongrant;$(PI_IDD_FEEDBACK_ARGS)"
+	    "pi-idd-feedback;$(PI_IDD_GOLD)/feedback/outputs.sha256;nongrant;$(PI_IDD_FEEDBACK_ARGS)" \
+	    "dms-w1;$(DMS_W1_GOLD)/rule/outputs.sha256;nongrant;$(DMS_W1_ARGS)" \
+	    "dms-w1-ref;$(DMS_W1_GOLD)/rule/outputs.sha256;all;$(DMS_W1_ARGS) --max-quantum 10us --lookahead off" \
+	    "dms-w1-blank4;$(DMS_W1_GOLD)/blank4/outputs.sha256;nongrant;$(DMS_W1_BLANK4_ARGS)" \
+	    "dms-w1-off;$(DMS_W1_GOLD)/off/outputs.sha256;nongrant;$(DMS_W1_OFF_ARGS)"
 
 # G2 pool startup (scripts/pool_perf.sh): on a 1-slot pool after its
 # pre-warm, the first lease starts in <= 0.5 s, then POOL_PERF_N interleaved
@@ -1037,7 +1041,7 @@ PKG_BOARDS := examples/spike/board.cir examples/feedback/board.cir \
               examples/dial-me-spinner/e3/home examples/dial-me-spinner/e3/step \
               examples/dial-me-spinner/e2/none examples/dial-me-spinner/e2/c5 examples/dial-me-spinner/e2/c5-none \
               examples/dial-me-spinner/e1-system tests/multi-producer/board.cir \
-              examples/nrf-idd
+              examples/nrf-idd examples/dial-me-spinner/w1
 # Project-local packages (ADR-006 D1), linted and tested with the first-party ones.
 PKG_LOCAL := examples/adc/kicad/packages examples/dial-me-spinner/system/packages \
              examples/bench/packages examples/dial-me-spinner/e3/packages
@@ -1234,11 +1238,56 @@ dms-firmware: bb
 # 30 s on 4 jobs, WFW_JOBS): the PIN_CNF of the enables, POFCON at V28, the blanking's start and
 # end against the LED_PWR_EN edge in each W1 build, the cue held or shed with the stress corner's
 # 2.94 V window as the comparator input, and W2's RESETREAS read and its OLED rule; every case run
-# twice, byte-identical. The POWER registers are power_double.py's until P4's BbNrf52Power
-# replaces Renode's NRF_CLOCK. Needs only Renode and the prebuilt images (CI job fw-rebuild).
+# twice, byte-identical. Since P4 the POWER registers are Breadboard's BbNrf52Power (ADR-009 D6,
+# nrf52840-bb@4), journalled by power_journal.py, and the comparator input is its #pofwarn input
+# (W-fw ran it on a test double, power_double.py, until then; ADR-009 Amendment 8). Needs only
+# Renode and the prebuilt images (CI job fw-rebuild).
 .PHONY: dms-wfw-test
 dms-wfw-test:
 	$(PYTHON) examples/dial-me-spinner/firmware/bb_wfw_test.py --out out/dms-wfw-test
+
+# --- Phase 2 P4: POFWARN, BbNrf52Power and W1 (ADR-009 D6, G4, G5, G7; Amendment 8) -------------
+# nrf-power-model (in make test, about 15 s): the Renode-only register and timing tests of
+# Breadboard's nRF52840 POWER model (examples/nrf-power/bb_power_test.py, ADR-005's test-plan
+# shape): reset values, every THRESHOLD code and its #pofen/#pofthr outputs, the refused codes
+# (0-3 with POF, THRESHOLDVDDH), EVENTS_POFWARN on a rising #pofwarn and its interrupt, the
+# "already below at enable" rule, RESETREAS, GPREGRET, the wrapped CLOCK, NVMC erases blocked by
+# POF; every group twice, byte-identical. The comparator's thresholds and hysteresis are the
+# package view nordic/nrf52840-qiaa:pof, whose vectors make packages runs (bb pkg test).
+# dms-w1-test (in make test): W1 at the STRESS CORNER (decision D-W1: 55 mA static +3V3 load, suite
+# budget 50 mA, RT9080 worst_dropout) with the firmware in the loop on examples/dial-me-spinner/w1:
+# the rule firmware, both negative controls and the margin check's blanking-off build, at bb's
+# defaults with scripts/check_dms_w1.py and the committed one-cell hashes, and the rule
+# analog-first byte-identical (scripts/dms_w1.sh test). dms-w1: every case of scripts/dms_w1.sh
+# (the 5 ms report, the nominal and -5 % comparator corners, the margin check, the two
+# co-simulations), partition independence at 10 us, 1 ms and 10 ms grants, the references against
+# tests/golden/dms-w1, analog-first, 10-run determinism, dms-wfw-test and nrf-power-model.
+# dms-w1-update rewrites tests/golden/dms-w1 from fresh one-cell references (review the diff).
+.PHONY: nrf-power-model dms-w1 dms-w1-test pooled-dms-w1 pooled-dms-w1-test dms-w1-ref dms-w1-update \
+        dms-w1-prepare
+DMS_W1_OUT  ?= out/dms-w1
+DMS_W1_WORK ?= $(BB_SCRATCH)/bb-dms-w1
+export DMS_W1_WORK
+DMS_W1_GOLD := tests/golden/dms-w1
+# The pool-equiv configurations (ADR-004 G4): the W1 cases of make dms-w1 (scripts/dms_w1.sh).
+dms_w1_args = --project $(DMS_W1_WORK)/dms/w1-$(1) --bench $(DMS_W1_WORK)/dms/w1-$(1)/bench/w1-stress.toml \
+              --for 20ms --assert $(DMS_W1_WORK)/dms/asserts/w1.toml
+DMS_W1_ARGS        = $(call dms_w1_args,rule)
+DMS_W1_BLANK4_ARGS = $(call dms_w1_args,blank4)
+DMS_W1_OFF_ARGS    = $(call dms_w1_args,off)
+nrf-power-model: firmware
+	$(PYTHON) examples/nrf-power/bb_power_test.py --out out/nrf-power-model --jobs $(or $(POWER_JOBS),7)
+pooled-dms-w1-test: bb
+	bash scripts/dms_w1.sh test $(BB) $(DMS_W1_OUT)-test
+pooled-dms-w1: bb
+	bash scripts/dms_w1.sh gate $(BB) $(DMS_W1_OUT)
+	$(MAKE) --no-print-directory dms-wfw-test nrf-power-model
+dms-w1-ref: bb
+	bash scripts/dms_w1.sh ref $(BB) $(DMS_W1_OUT)-ref
+dms-w1-update: dms-w1-ref
+	bash scripts/dms_w1.sh update $(DMS_W1_OUT)-ref
+dms-w1-prepare: bb
+	bash scripts/dms_w1.sh prepare $(BB)
 
 # --- Phase 1 M8 (second half): E2, battery reading and LED shed on dial-me-spinner ---------
 # examples/dial-me-spinner with firmware/prebuilt/vsense.elf (a reading every 1 s) and

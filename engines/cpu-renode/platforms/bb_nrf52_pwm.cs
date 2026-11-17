@@ -990,6 +990,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public BbNrf52Nvmc(IMachine machine, ulong flashSize = 0x100000, ulong erasePageNs = 85000000,
             ulong eraseAllNs = 169000000)
         {
+            this.machine = machine;
             sysbus = machine.GetSystemBus(this);
             this.flashSize = flashSize;
             this.erasePageNs = erasePageNs;
@@ -1140,7 +1141,38 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 WarnOnceText("busy" + what, $"{what} while busy; ignored");
                 return false;
             }
+            // ADR-009 D6 (Phase 2 P4): POF blocks NVMC erases while POFCON.POF
+            // is set and the power-fail comparator's output (#pofwarn) is high.
+            // Word writes go to the flash directly (no write path here) and are
+            // not blocked.
+            if(power == null)
+            {
+                foreach(var pw in machine.GetPeripheralsOfType<BbNrf52Power>())
+                {
+                    power = pw;
+                    break;
+                }
+            }
+            if(power != null && power.BlocksNvmc)
+            {
+                this.Log(LogLevel.Warning, "{0} blocked by POF (VDD below the power-fail threshold)", what);
+                power.ReportNvmcBlocked(OffsetOf(what));
+                return false;
+            }
             return true;
+        }
+
+        private static long OffsetOf(string what)
+        {
+            switch(what)
+            {
+            case "ERASEPAGE": return 0x508;
+            case "ERASEALL": return 0x50C;
+            case "ERASEPCR0": return 0x510;
+            case "ERASEUICR": return 0x514;
+            case "ERASEPAGEPARTIAL": return 0x518;
+            default: return 0;
+            }
         }
 
         private void Fill(ulong addr, ulong size)
@@ -1190,6 +1222,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         private const uint PageSize = 4096;
         private const uint ConfigEen = 2;
+        private readonly IMachine machine;
+        private BbNrf52Power power;
         private readonly IBusController sysbus;
         private readonly LimitTimer timer;
         private readonly BaseClockSource clock;

@@ -580,3 +580,19 @@ elaboration).
     item 10; default (71 grants) = one-cell reference (12 000) except
     grants; analog-first and 10-run determinism identical. The new hashes
     are the one-cell references (`make dms-e1-system-update`).
+12. **Phase 2 P4 (ADR-009 Amendment 8): the open finding, and
+    `ok-nominal` re-recorded.** The open finding of item 4 (the RT9080 in a
+    `bb run`) is resolved for W1's decks by static-load mode's load at `pi`
+    (a `[[load]] replace` collapses below 0.5 V, P1's form): with it the W1
+    system deck's operating point converges with the RT9080 regulating;
+    the deck stays fragile in the static load (40-47 mA fail), a finding
+    recorded there. The e1-system benches keep the ideal LDO. At `pi` the
+    decks now hold U10's power-fail comparator (glue rule 13): the
+    one-cell references of main before P4 against P4's, 12 001 samples,
+    are byte-identical at the cold corner, and at the nominal corner
+    identical in every non-grant record and every sample but one
+    (base:VBAT at 1.97 ms, 1 µV, the last printed digit; the comparator's
+    four threshold sources change the sparse matrix's ordering).
+    `tests/golden/dms-e1-system/ok-nominal` is re-recorded from the
+    one-cell reference; `make dms-e1-system` passes with the values of item
+    11 (cross-check 3.163 / 3.217 mV, negative control 49.201 mV).

@@ -33,7 +33,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PART = ROOT / "packages/nordic/nrf52840-qiaa/part.toml"
 R1 = 10.0
 SPIN, PERIOD = 7812, 32
-FS_PER_INSTR = 15_625_000           # 64 MIPS (nrf52840-bb@3)
+FS_PER_INSTR = 15_625_000           # 64 MIPS (nrf52840-bb@4)
 PERIOD_FS = PERIOD * 10**15 / 32768
 TOL = 0.01
 

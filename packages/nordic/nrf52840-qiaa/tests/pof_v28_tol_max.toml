@@ -1,0 +1,58 @@
+# nordic/nrf52840-qiaa pof (pof_comparator, ADR-009 D6, Phase 2 P4): V28 at VPOFTOL +5 % (the max corner, 2.94 V: W1's gate).
+# VPOF = (1.7 V + 0.1 V * (15 - 4)) * (1 + 0.05) = 2.940 V: VDD falls through it at
+# (3.0 - 2.940) ms = 0.060 ms (the output rises through 1 V, #pofwarn's vih), and rises through
+# VPOF + VPOFHYST = 2.990 V at 1.5 ms + (2.990 - 1.5) ms = 2.990 ms (the output falls
+# through 0 V, #pofwarn's vil), by hand. The output is linear in VDD there, so the crossings are exact.
+schema = "bb-pkgtest/0"
+view = "pof"
+circuit = "pof_ramp.cir"
+stop = "3ms"
+sample = "1us"
+
+[params]
+tol = "0.05"
+
+[ports]
+VDD = "vdd"
+VSS = "0"
+pofthr0 = "t0"
+pofthr1 = "t1"
+pofthr2 = "t2"
+pofthr3 = "t3"
+pofwarn = "warn"
+
+[[edge]]
+net = "t0"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "high"
+at = []
+
+[[edge]]
+net = "t1"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "high"
+at = []
+
+[[edge]]
+net = "t2"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "high"
+at = []
+
+[[edge]]
+net = "t3"
+model = { voh = "1V", vol = "0V", rise = "1ns", fall = "1ns", zout = "0" }
+initial = "high"
+at = []
+
+[[expect]]
+meas = { node = "warn", when = "1V", rise = "1" }
+value = "0.060ms"
+tol = "10ns"
+source = "nRF52840 PS v1.1 POFCON.THRESHOLD code 15 (V28) with VPOFTOL +0.05: VPOF 2.940 V, crossed falling at 1 V/ms from 3.0 V"
+
+[[expect]]
+meas = { node = "warn", when = "0V", fall = "1" }
+value = "2.990ms"
+tol = "10ns"
+source = "nRF52840 PS v1.1 VPOFHYST 50 mV typ: released at VPOF + 50 mV = 2.990 V, rising at 1 V/ms from 1.5 V"

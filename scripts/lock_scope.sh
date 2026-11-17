@@ -17,7 +17,7 @@
 #    committed entries are what the D6 rule writes.
 # 3. The edited bb on the committed copies: every STM32 board and project is
 #    current (`bb open --check`), and every nRF52840 one fails with exactly
-#    one drift, its renode:nrf52840-bb@3 platform (so the edit took effect).
+#    one drift, its renode:nrf52840-bb@4 platform (so the edit took effect).
 # 4. Control: the stock bb finds every committed copy current.
 #
 # Both bbs resolve packages from this tree's packages/
@@ -107,11 +107,11 @@ for b in "$@"; do
         *nrf52840*)
             [ "$rc" = 1 ] || fail "$b ($plats): the edited bb accepts the nRF lock"
             drifts=$(grep -c '^bb open: \(platform\|package\) ' "$SCR/edited-$tag.log" || true)
-            grep -q '^bb open: platform renode:nrf52840-bb@3: locked content' "$SCR/edited-$tag.log" \
+            grep -q '^bb open: platform renode:nrf52840-bb@4: locked content' "$SCR/edited-$tag.log" \
                 && [ "$drifts" = 1 ] \
                 || { cat "$SCR/edited-$tag.log"; fail "$b: expected exactly the nRF platform's drift"; }
             n_nrf=$((n_nrf + 1))
-            echo "lock-scope: $b ($plats): nRF lock changes (1 drift: renode:nrf52840-bb@3)"
+            echo "lock-scope: $b ($plats): nRF lock changes (1 drift: renode:nrf52840-bb@4)"
             ;;
         *stm32*)
             [ "$rc" = 0 ] || { cat "$SCR/edited-$tag.log"; fail "$b ($plats): the edit to $SAADC changed an STM32 lock"; }

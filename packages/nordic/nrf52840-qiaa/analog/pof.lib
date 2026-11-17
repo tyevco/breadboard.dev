@@ -1,0 +1,35 @@
+* nordic/nrf52840-qiaa pof: the power-fail comparator (nRF52840 PS v1.1 section 5.3.8.4, POFCON;
+* ADR-009 D6, Phase 2 milestone P4), a pof_comparator view. It enters the deck at pi beside the CPU
+* target's views; bb drives its threshold ports from the CPU engine's outputs #pofthr0..3 (the bits of
+* POFCON.THRESHOLD that BbNrf52Power reports, 0 V / 1 V) and returns its output as the CPU engine's
+* watched digital_in #pofwarn, thresholded by the analog engine at vih = 1 V and vil = 0 V (glue
+* rule 13 of spec/pin-model.md).
+* Ports:
+*   vdd                    the VDD pins' net (the supply compared)
+*   vss                    the VSS pins' net
+*   pofthr0 .. pofthr3     the threshold code's bits, nodes in 0..1 (ground-referenced)
+*   pofwarn                the output (ground-referenced), V(pofwarn) = (VPOF + hyst - V(vdd,vss)) / hyst
+*                          clamped to [-1, 2]: it reaches 1 V where V(vdd,vss) falls to VPOF (the trip:
+*                          #pofwarn rises) and 0 V where V(vdd,vss) rises to VPOF + hyst (the release:
+*                          #pofwarn falls). The comparator's hysteresis is the digital_in's: the output
+*                          is linear in V(vdd,vss) between the two levels, so the analog engine's
+*                          crossing interpolation (rounded up to fs, ADR-003 D3) puts each at the VDD
+*                          level itself, independent of the solver's step there, and the view adds no
+*                          state and no timestep constraint to the deck.
+* VPOF = (1.7 V + 0.1 V * (code - 4)) * (1 + tol), code = sum_k 2^k V(pofthr<k>): V17..V28 for the
+* codes 4..15 (MDK nrf52840_bitfields.h POWER_POFCON_THRESHOLD_V17..V28); the codes 0..3 do not
+* exist in normal-voltage mode and the POWER model refuses them with POF enabled, so their value
+* here (1.3..1.6 V) is never compared.
+*   tol    VPOFTOL, the threshold's tolerance: 0 typ; the corners min (-5 %) and max (+5 %), the
+*          corner at which the comparator trips earliest (ADR-009 D6: the corner a firmware rule
+*          must survive);
+*   hyst   VPOFHYST, 50 mV typ (the PS gives 40/50/60 mV).
+* The output is not gated by POFCON.POF: the comparator compares whenever its threshold is set, and
+* the POWER model raises EVENTS_POFWARN only while POF = 1 (a rising #pofwarn, or POF enabled with
+* #pofwarn already high: ADR-009 D6). The response is immediate (the PS gives no response time).
+* One I-type B source into 1 Ohm, no branch-current unknown (D2 rule 1), a DC path on its one node
+* (rule 2); the comparator draws no current from VDD (its supply current is in the SoC's idd figures).
+.subckt NORDIC_NRF52840_QIAA_POF vdd vss pofthr0 pofthr1 pofthr2 pofthr3 pofwarn params: tol=0 hyst=0.05
+Bpof 0 pofwarn I=min(max(((1.7+0.1*(V(pofthr0)+2*V(pofthr1)+4*V(pofthr2)+8*V(pofthr3)-4))*(1+{tol})+{hyst}-V(vdd,vss))/{hyst},-1),2)
+Rpof pofwarn 0 1
+.ends NORDIC_NRF52840_QIAA_POF

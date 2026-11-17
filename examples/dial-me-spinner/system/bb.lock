@@ -34,15 +34,15 @@ tree = "sha256:46eb1f932bcde305315ac95e50fd700df0493731cece37260822d18cf715ef36"
 
 [[package]]
 id = "nordic/nrf52840-qiaa"
-version = "0.3.0"
+version = "0.4.0"
 source = "path+../../../packages/nordic/nrf52840-qiaa"
-tree = "sha256:d7217ff04a6504f36d66e4c97e3c9293ba1ab7d64e8e5cbcd58e2c19e3368344"
+tree = "sha256:2c1f35c149eaaf011660cd8152aadf9b63de8bedd331257a25cf34013d6ad656"
 
 [[package]]
 id = "raytac/mdbt50q-u1mv2"
 version = "0.1.0"
 source = "path+../../../packages/raytac/mdbt50q-u1mv2"
-tree = "sha256:a3539339c5e519797bb3df1b0975cc4052d5b286dc4e954f441848a7c4793208"
+tree = "sha256:6573375bbc7294c42057c7e80ab986d5264b17db8d08cfd03a5e80f4e3bc88ca"
 
 [[package]]
 id = "richtek/rt9080"
@@ -52,9 +52,9 @@ tree = "sha256:d951485dc0b5f77e65e3e0626d1f41a30333047ef0fd2468cba2d31b31974ac4"
 
 [[package]]
 id = "ti/bq25180"
-version = "0.1.0"
+version = "0.2.0"
 source = "path+../../../packages/ti/bq25180"
-tree = "sha256:cc2574b79b8edd52842565706226d512d218692cb0d788417a7a3add70abd715"
+tree = "sha256:35bfb304be379848e0ce410e8b20b6d7be1c000799645ba9b984089d0d5b8a47"
 
 [[package]]
 id = "ti/drv8837"
@@ -76,12 +76,12 @@ tree = "sha256:6e768e72f7646e8e014f781e50541103db5dc456a4dce1e0efc22c5885b25242"
 
 [[package]]
 id = "worldsemi/ws2812c-2020"
-version = "0.2.0"
+version = "0.3.0"
 source = "path+../../../packages/worldsemi/ws2812c-2020"
-tree = "sha256:d4eeb2e18d60c3ef5c8fdbb407ba6c5b8e1b5d661d92a0af5ef5dfbf1599ec62"
+tree = "sha256:c54782a81fe30e7fb530a9505bfd9307a3416a9fb438fc6fa04803f3cbc2a13d"
 
 [[platform]]
-id = "renode:nrf52840-bb@3"
-content = "sha256:d2056617081861b52f81a36ce485d7dd0e5d843d82716592e84c77d6fcb8d1af"
+id = "renode:nrf52840-bb@4"
+content = "sha256:0d185ffd681f2d4c84fe3b0afe4afb70ba1e8502c11e5c23069d265a99f53abe"
 engine = "renode"
 engine_version = "1.17.0"

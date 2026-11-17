@@ -1,5 +1,5 @@
-// Breadboard's nRF52840, platform nrf52840-bb@3 (ADR-008 D1, D7, D8, D9):
-// Renode 1.17.0's stock platforms/cpus/nrf52840.repl with
+// Breadboard's nRF52840, platform nrf52840-bb@4 (ADR-008 D1, D7, D8, D9; ADR-009 D6):
+// Renode 1.17.0's stock platforms/cpus/nrf52840.repl, inlined since @4 (below), with
 //   - the network-dependent init removed. The stock file's sysbus init block
 //     starts with
 //         ApplySVD @https://dl.antmicro.com/projects/renode/svd/NRF52840.svd.gz
@@ -22,8 +22,131 @@
 //     (Miscellaneous.BbNrf52Pwm, platforms/bb_nrf52_pwm.cs) at their PS
 //     addresses with IRQs 28, 33, 34 and 45, the TEMP and NVMC stand-ins
 //     (BbNrf52Temp with IRQ 12, BbNrf52Nvmc), and their host port
-//     (BbNrf52HostPort: the PWM pin ring and TEMP's value) at 0x5FFC0000.
-using "platforms/cpus/nrf52840.repl"
+//     (BbNrf52HostPort: the PWM pin ring and TEMP's value) at 0x5FFC0000;
+//   - Phase 2 P4 (@4, ADR-009 D6): Breadboard's POWER (Miscellaneous.
+//     BbNrf52Power, platforms/bb_nrf52_power.cs) in place of the stock
+//     NRF_CLOCK at the shared POWER/CLOCK base 0x40000000, under the same
+//     name `clock`: POFCON, EVENTS_POFWARN and its interrupt, RESETREAS and
+//     GPREGRET/GPREGRET2, wrapping a private NRF_CLOCK for every CLOCK
+//     register; the POWER_CLOCK interrupt (IRQ 0) is the OR of both. A .repl
+//     cannot give an entry of a `using`d file another type (Renode 1.17.0
+//     stops loading at the redeclaration), so from @4 this file holds the
+//     stock file's entries itself, in the stock order and unchanged but for
+//     `clock` and the sysbus init above, and no longer `using`s it.
+// --- the stock entries (Renode 1.17.0 platforms/cpus/nrf52840.repl) ---
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu@0
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+
+uart0: UART.NRF52840_UART @ sysbus 0x40002000
+    easyDMA: true
+    -> nvic@2
+
+uart1: UART.NRF52840_UART @ sysbus 0x40028000
+    easyDMA: true
+    -> nvic@40
+
+rtc0: Timers.NRF52840_RTC @ sysbus 0x4000B000
+    numberOfEvents: 3
+    -> nvic@11
+
+rtc1: Timers.NRF52840_RTC @ sysbus 0x40011000
+    numberOfEvents: 3
+    -> nvic@17
+
+rtc2: Timers.NRF52840_RTC @ sysbus 0x40024000
+    numberOfEvents: 4
+    -> nvic@36
+
+wdt: Timers.NRF52840_Watchdog @ sysbus 0x40010000
+    -> nvic@16
+
+ppi: Miscellaneous.NRF52840_PPI @ sysbus 0x4001F000
+
+flash: Memory.MappedMemory @ sysbus 0x0
+    size: 0x100000
+
+ram: Memory.MappedMemory @ { sysbus 0x800000; sysbus 0x20000000 }
+    size: 0x40000
+
+clock: Miscellaneous.BbNrf52Power @ sysbus 0x40000000
+    IRQ -> nvic@0
+
+twi0: I2C.NRF52840_I2C @ sysbus 0x40003000
+    -> nvic@0x3
+
+spi2: SPI.NRF52840_SPI @ sysbus 0x40023000
+    -> nvic@0x23
+
+gpio0: GPIOPort.NRF52840_GPIO @ sysbus 0x50000500
+
+gpio1: GPIOPort.NRF52840_GPIO @ sysbus 0x50000800
+
+gpiote: GPIOPort.NRF52840_GPIOTasksEvents @ sysbus 0x40006000
+    port0: gpio0
+    port1: gpio1
+    -> nvic@6
+
+twi1: I2C.NRF52840_I2C @ sysbus 0x40004000
+    -> nvic@4
+
+timer0: Timers.NRF52840_Timer @ sysbus 0x40008000
+    numberOfEvents: 4
+    -> nvic@8
+
+timer1: Timers.NRF52840_Timer @ sysbus 0x40009000
+    numberOfEvents: 4
+    -> nvic@9
+
+timer2: Timers.NRF52840_Timer @ sysbus 0x4000A000
+    numberOfEvents: 4
+    -> nvic@10
+
+timer3: Timers.NRF52840_Timer @ sysbus 0x4001A000
+    numberOfEvents: 6
+    -> nvic@26
+
+timer4: Timers.NRF52840_Timer @ sysbus 0x4001B000
+    numberOfEvents: 6
+    -> nvic@27
+
+i2s: Sound.NRF52840_I2S @ sysbus 0x40025000
+    -> nvic@37
+
+pdm: Sound.NRF52840_PDM @ sysbus 0x4001D000
+    -> nvic@29
+
+radio: Wireless.NRF52840_Radio @ sysbus 0x40001000
+    -> nvic@1
+
+rng: Miscellaneous.NRF52840_RNG @ sysbus 0x4000D000
+    -> nvic@13
+
+ecb: Miscellaneous.NRF52840_ECB @ sysbus 0x4000E000
+    -> nvic@14
+
+egu0 : Miscellaneous.NRF52840_EGU @ sysbus 0x40014000
+    -> nvic@20
+
+egu1 : Miscellaneous.NRF52840_EGU @ sysbus 0x40015000
+    -> nvic@21
+
+egu2 : Miscellaneous.NRF52840_EGU @ sysbus 0x40016000
+    -> nvic@22
+
+egu3 : Miscellaneous.NRF52840_EGU @ sysbus 0x40017000
+    -> nvic@23
+
+egu4 : Miscellaneous.NRF52840_EGU @ sysbus 0x40018000
+    -> nvic@24
+
+egu5 : Miscellaneous.NRF52840_EGU @ sysbus 0x40019000
+    -> nvic@25
+
+// --- Breadboard's additions ---
 
 cpu:
     PerformanceInMips: 64

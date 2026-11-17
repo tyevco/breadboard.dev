@@ -1,0 +1,4 @@
+* pof vectors: VDD from 3.0 V down to 1.5 V at 1 V/ms (0 to 1.5 ms), back to 3.0 V at 1 V/ms
+* (1.5 to 3 ms), behind 1 mOhm (the comparator draws nothing from VDD).
+VSRC src 0 PWL(0 3.0 1.5m 1.5 3m 3.0)
+RS src vdd 1m

@@ -1,0 +1,55 @@
+# examples/dial-me-spinner/w1/bench/w1-stress-typ.toml: W1 STRESS CORNER: 55 mA static +3V3 load
+# (suite budget 50 mA), RT9080 worst_dropout, POFWARN at V28 and VPOFTOL 0 % (nominal) (2.80 V): REPORTED,
+# not gated (plan section 2 W1: the nominal and -5 % corners, rule firmware, POFWARN count expected
+# 0). Decision D-W1 (ADR-009 Amendment 2). Everything else is bench/w1-stress.toml's: see its
+# header for each element.
+schema = "bb-bench/1"
+temp_c = "25"
+fidelity = "pi"
+corner = "suite_compat"
+
+[corners]
+"main:U1" = "worst_dropout"
+"base:U1" = "worst_ilim100_min"
+"main:U10" = "typ"
+
+[[battery]]
+net = "base:VBAT"
+ocv = "cell-dead.csv"
+soc = "0.5"
+r0 = "0.25"
+temp_c = "25"
+
+[[supply]]
+net = "base:VBUS"
+volts = "5.0V"
+rs = "10m"
+
+# W1 STRESS CORNER: 55 mA static +3V3 load (suite budget 50 mA).
+[[load]]
+net = "+3V3"
+amps = "55mA"
+replace = "main:U10"
+
+[analog]
+nets = [
+  "main:GND", "main:VSYS", "+3V3", "VSYS_SENSE", "VLED", "LED_PWR_EN", "LSW_CT", "LSW_QOD",
+  "LED_DIN_MCU", "LED_DIN_R", "LED_DIN",
+  "LED_D1", "LED_D2", "LED_D3", "LED_D4", "LED_D5", "LED_D6", "LED_D7", "LED_D8",
+  "LED_D9", "LED_D10", "LED_D11", "LED_D12", "LED_D13", "LED_D14", "LED_D15", "LED_D16",
+  "LED_D17", "LED_D18", "LED_D19", "LED_D20", "LED_D21", "LED_D22", "LED_D23", "LED_D24",
+  "LED_D25", "LED_D26", "LED_D27", "LED_D28", "LED_D29", "LED_D30", "LED_D31", "LED_D32",
+  "LED_D33", "LED_D34", "LED_D35", "LED_D36", "LED_D37", "LED_D38", "LED_D39", "LED_D40",
+  "LED_D41", "LED_D42", "LED_D43", "LED_D44", "LED_D45", "LED_D46", "LED_D47", "LED_D48",
+  "main:VBUS", "main:I2C_SCL", "main:I2C_SDA", "main:CHG_INT_N",
+  "base:GND", "base:VSYS", "base:VBAT", "base:VBUS", "base:/Base board/I2C_SCL",
+  "base:/Base board/I2C_SDA", "base:/Base board/CHG_INT_N", "CHG_TSMR",
+]
+
+# The pins voh = VDD names resolve to +3V3 (unused at pi, where an output drives from its rail;
+# ADR-009 D5).
+[nominal]
+"+3V3" = "3.3V"
+
+[options]
+set = "phase0"

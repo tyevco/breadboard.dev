@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/part.schema.json",
   "title": "bb-part/0 and bb-part/1: a component package's part.toml (spec/package.md, ADR-006 D2-D4, ADR-009, ADR-010 D2, ADR-012)",
-  "description": "The JSON form of part.toml (TOML converted to JSON as is). Unknown keys are an error; the keys still reserved (layers, thermal, rtl; pins.ibis; behavioral.cpu) are not accepted; behavioral.svd is a bb-part/1 key since milestone E1 (ADR-011 Amendment 2). bb-part/1 (the Phase 2 schema epoch, milestone S) keeps every bb-part/0 key and its meaning and adds [power] (ADR-009 D4, D5), a view's rails and [[analog.corners]] (ADR-009, D8), the switch (ADR-010 D2) and supply_load (ADR-009 D4) view kinds, [[document]], [claims] and a provenance's upstream_license (ADR-012 D3, D4; ADR-011 D7). The new keys are accepted and inert until their milestones use them; a bb-part/0 file has none of them.",
+  "description": "The JSON form of part.toml (TOML converted to JSON as is). Unknown keys are an error; the keys still reserved (layers, thermal, rtl; pins.ibis; behavioral.cpu) are not accepted; behavioral.svd is a bb-part/1 key since milestone E1 (ADR-011 Amendment 2). bb-part/1 (the Phase 2 schema epoch, milestone S) keeps every bb-part/0 key and its meaning and adds [power] (ADR-009 D4, D5), a view's rails and [[analog.corners]] (ADR-009, D8), the switch (ADR-010 D2), supply_load (ADR-009 D4) and pof_comparator (ADR-009 D6, Phase 2 P4) view kinds, [[document]], [claims] and a provenance's upstream_license (ADR-012 D3, D4; ADR-011 D7). The new keys are accepted and inert until their milestones use them; a bb-part/0 file has none of them.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "part", "pins"],
@@ -199,6 +199,23 @@
         { "properties": { "role": { "const": "state" } }, "required": ["state"], "not": { "required": ["pin"] } }
       ]
     },
+    "pof_port": {
+      "description": "bb-part/1 (ADR-009 D6, Phase 2 P4): a pof_comparator view's port: a supply pin, a threshold state port #pofthr0..3, or its output (observe pofwarn).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role"],
+      "properties": {
+        "role": { "enum": ["pin", "state", "observe"] },
+        "pin": { "type": "string" },
+        "state": { "enum": ["pofthr0", "pofthr1", "pofthr2", "pofthr3"] },
+        "signal": { "const": "pofwarn" }
+      },
+      "oneOf": [
+        { "properties": { "role": { "const": "pin" } }, "required": ["pin"], "not": { "anyOf": [{ "required": ["state"] }, { "required": ["signal"] }] } },
+        { "properties": { "role": { "const": "state" } }, "required": ["state"], "not": { "anyOf": [{ "required": ["pin"] }, { "required": ["signal"] }] } },
+        { "properties": { "role": { "const": "observe" } }, "required": ["signal"], "not": { "anyOf": [{ "required": ["pin"] }, { "required": ["state"] }] } }
+      ]
+    },
     "typed_port": {
       "type": "object",
       "additionalProperties": false,
@@ -220,7 +237,7 @@
       "required": ["name", "fidelity", "ports"],
       "properties": {
         "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
-        "kind": { "enum": ["circuit", "pin_load", "switch", "supply_load"] },
+        "kind": { "enum": ["circuit", "pin_load", "switch", "supply_load", "pof_comparator"] },
         "purpose": { "type": "string" },
         "fidelity": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rung" } },
         "default_for": { "type": "array", "items": { "$ref": "#/$defs/rung" } },
@@ -265,6 +282,11 @@
           "then": { "required": ["file", "subckt"], "properties": { "ports": { "items": { "$ref": "#/$defs/state_port" } } } }
         },
         {
+          "description": "ADR-009 D6 (Phase 2 P4): a pof_comparator view has a file and a subckt, and typed pin, threshold state and output ports.",
+          "if": { "properties": { "kind": { "const": "pof_comparator" } }, "required": ["kind"] },
+          "then": { "required": ["file", "subckt"], "properties": { "ports": { "items": { "$ref": "#/$defs/pof_port" } } } }
+        },
+        {
           "description": "ADR-010 D2: a switch view's element is generated (no file or subckt); two contacts as typed pin ports; params ron, roff, bounce_max.",
           "if": { "properties": { "kind": { "const": "switch" } }, "required": ["kind"] },
           "then": {
@@ -285,7 +307,7 @@
           }
         },
         {
-          "if": { "not": { "properties": { "kind": { "enum": ["pin_load", "switch", "supply_load"] } }, "required": ["kind"] } },
+          "if": { "not": { "properties": { "kind": { "enum": ["pin_load", "switch", "supply_load", "pof_comparator"] } }, "required": ["kind"] } },
           "then": { "required": ["file", "subckt"], "properties": { "ports": { "items": { "type": "string" } } } }
         }
       ]

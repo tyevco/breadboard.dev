@@ -25,7 +25,15 @@
   blanking builds and the W2 old-rule and rule apps, prebuilt and
   reproduced by `make fw-rebuild`; their Renode-only configuration test
   (`make dms-wfw-test`) runs on a POWER test double until P4's model
-  exists, and P4 re-runs it on the model.
+  exists, and P4 re-runs it on the model. 8 (2026-11-17), P4 as
+  implemented: `BbNrf52Power` wrapping the sealed `NRF_CLOCK` on
+  `nrf52840-bb@4`, the `pof_comparator` view (the hysteresis in
+  `#pofwarn`'s thresholds, glue rule 13), the register tests (`make
+  nrf-power-model`), W-fw's test on the model, W1 at the stress corner with
+  its controls and the margin check (`make dms-w1`); the rule's
+  anti-vacuity check is `pof-dip` (the firmware disables POFCON to blank);
+  static-load mode's load collapses at `pi` (ADR-013 Amendment 3's open
+  finding).
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
@@ -1501,3 +1509,295 @@ or within one lattice cell after it") is to be read against that instant.
   `make dms-wfw-test` 30.5 s (CI `fw-rebuild`); `make fw-rebuild` 7 min
   (419 s: a fresh west workspace and thirteen images, every hash equal to
   `SHA256SUMS` and to the committed ELF; beside a `make check`).
+
+## Amendment 8 (2026-11-17): P4 as implemented (BbNrf52Power, the comparator view, `#pofwarn`; W1 at the stress corner; G4, G5, G7)
+
+Milestone P4 (plan section 4). `make dms-w1` is its gate (all pass);
+`make dms-w1-test` and `make nrf-power-model` (both in `make test`) are its
+fast part, and `make dms-wfw-test` re-runs W-fw's Renode-only test on the
+model. D6's `spec/` changes, which "Exact `spec/` changes" lists only in
+part, are made here: `spec/package.md` (the `pof_comparator` view kind,
+section 3; `nrf52840-bb@4` in the platform table, which now also names
+P3's `bb_nrf52_state.cs`), `spec/schema/part.schema.json` (the kind and its
+ports), `spec/pin-model.md` (glue rule 13) and `spec/project.md` (item 6
+below).
+
+**1. The model** (`engines/cpu-renode/platforms/bb_nrf52_power.cs`,
+`Miscellaneous.BbNrf52Power`; platform **`nrf52840-bb@4`**, risk R4
+prototyped first).
+
+- **It wraps the stock clock.** Renode 1.17.0's `NRF_CLOCK` is `sealed`
+  (checked by reflection), so the model owns a private `NRF_CLOCK`, not on
+  the bus, and passes it every access it does not decode: every CLOCK
+  register behaves as on the stock platform. IRQ 0 (POWER_CLOCK) is the OR
+  of the wrapped clock's line and POFWARN's. Decoded: POFCON,
+  EVENTS_POFWARN, INTENSET/INTENCLR bit 2 (the write is also passed on for
+  CLOCK's bits), RESETREAS (write 1 to clear), GPREGRET/GPREGRET2 (8 bits),
+  TASKS_CONSTLAT/LOWPWR (no-ops). Host registers at 0x40000F00 (an ID, the
+  RESETREAS preset, the raise count, the error word, the input level, the
+  first refused word and its time; a firmware access is ignored with a
+  warning).
+- **The overlay inlines the stock file.** A `.repl` cannot give an entry of
+  a `using`d file another type: Renode 1.17.0 stops loading at the
+  redeclaration (measured: `clock:` redeclared, even as the stock type,
+  hangs the load). `nrf52840-bb.repl` therefore holds the stock file's
+  entries itself, in the stock order and unchanged but for `clock` (the
+  model, `IRQ -> nvic@0`) and the sysbus init it already replaced, and no
+  longer `using`s it. Every committed `fast` hash is unchanged (G1: `make
+  check`, items 10-11).
+- **`#pofen` and `#pofthr0..3`** are reported from the state block's ring
+  (`bb_nrf52_state.cs`, states 4-8 of `NRF_STATES`, armed by mask bits 4-8),
+  at the POFCON write's time after `cpu.SyncTime()` (as `#hfxo`), low after
+  reset. The ring also carries the model's events (state `0x10` + kind, the
+  value in the entry's fourth word): each EVENTS_POFWARN raise and each NVMC
+  erase POF blocked become `log` records of the CPU engine (`power:
+  EVENTS_POFWARN (POFCON 0x1f: POF 1, THRESHOLD 15)`), a refused write fails
+  the run (below). `#hfxo`'s write hook now finds `BbNrf52Power`.
+- **`#pofwarn`** is the model's GPIO input 0 on `clock`: an External Control
+  `SET_STATE` reaches `IGPIOReceiver.OnGPIO`, `GET_STATE` reads
+  `Connections[0]` (both checked by reflection of 1.17.0's `GPIOPort`). The
+  engine applies it like any `digital_in` (at `ceil_L` of the crossing,
+  while paused); it is not a sampled input, so a board with the comparator
+  has a feedback loop and loads the lookahead plugin.
+- **D6's rules.** A rising `#pofwarn` with POF = 1 raises EVENTS_POFWARN at
+  that lattice point. A POFCON write that sets POF, or changes THRESHOLD
+  while POF = 1, with `#pofwarn` already high raises it at `ceil_L` of the
+  write's time through a one-shot `LimitTimer` on the machine's clock
+  source (the global quantum is the lattice), so the instant is a clock
+  limit the lookahead promise sees; a write that clears POF first cancels
+  it; nrfx's second, identical write (`nrf_power_pofcon_vddh_set`,
+  Amendment 7) changes nothing.
+- **Refusals.** A THRESHOLD code 0-3 with POF = 1, or a THRESHOLDVDDH other
+  than its reset value 0 (the high-voltage mode is not modelled), is not
+  applied, logged at error level and reported: the engine fails the run
+  naming the word and its time, at once from the ring when the comparator's
+  outputs are bound (at `pi`), else at the run's end, from the host
+  registers after the last grant (so no result changes). Codes 0-3 with
+  POF = 0 are stored (nrfx's disable writes a code too).
+- **NVMC.** `BbNrf52Nvmc` refuses an erase while POF = 1 and `#pofwarn` is
+  high (a warn in Renode's log, an event in the ring). Word writes go to
+  the flash directly (the stand-in has no write path) and are not blocked:
+  a deviation.
+- **A POFCON write's `SyncTime()`** also moves the time Renode stamps the
+  slice's later GPIO events with: W1's LED_PWR_EN rise is reported at
+  1.242625 ms (the write's slice synced) where the blanking-off build, which
+  writes no POFCON there, shows the lattice point (1.240000000001 ms). The
+  stamps are more exact, and only firmware that writes POFCON sees them; no
+  committed image does but W1's.
+
+**2. The comparator** (`nordic/nrf52840-qiaa` 0.4.0, view `pof`, kind
+`pof_comparator`, `pi` only, `datasheet_checked`). One I-type B source into
+1 Ω: `V(pofwarn) = clamp((VPOF + hyst − V(VDD,VSS)) / hyst, −1, 2)`, with
+`VPOF = (1.7 V + 0.1 V · (code − 4)) · (1 + tol)` and `code = Σ 2^k
+V(pofthr<k>)`. The output is 1 V where VDD falls to VPOF and 0 V where it
+rises to VPOF + VPOFHYST, so the **hysteresis is the `digital_in`'s**: glue
+rule 13 thresholds the node at `vih` 1 V and `vil` 0 V into `#pofwarn`.
+
+- Why not a latch inside the view: a first draft (a tanh with positive
+  feedback through a 10 ns RC) tripped 0.5-3.5 µs away from its levels in
+  the vectors, because the snap was not resolved by the solver's steps at
+  TMAX = L. The linear output makes the analog engine's interpolated
+  crossing (rounded up to fs) land on the VDD level itself, independent of
+  the solver's step, and adds no state and no timestep constraint to the
+  deck. In every committed deck the code is 0 (POFCON's reset value), the
+  output sits at its −1 V clamp and its derivative is 0.
+- Corners `typ`, `min`, `max`: VPOFTOL 0, −5 %, +5 % (V28: 2.80, 2.66,
+  2.94 V); `hyst` 50 mV (PS VPOFHYST typ). The instance's corner is the CPU
+  target's (`[corners] "main:U10" = "max"`, or the bench's global corner);
+  `run.json` records it under `pof`.
+- **Vectors** (14, by hand, each within 10 ns): every code 4..15 at `typ`
+  and V28 at ±5 %, VDD ramped 3.0 → 1.5 → 3.0 V at 1 V/ms, the trip (the
+  output through 1 V) and the release (through 0 V, VPOF + 50 mV).
+  Qualified at (10 µs, `phase0`); 42 corner operating points.
+- **Not gated by POF**, and `#pofen` drives no circuit node (a CPU output
+  whose `pin_edge` records the checks read): D6 compares "V(VDD) against the
+  code's voltage, using `#pofthr*`", and the model applies POF.
+- **The blanking's threshold.** nrfx's `nrfx_power_pof_disable()` writes
+  POF = 0 **at V27** (POFCON 0x1C, W-fw's journal), so during W1's blanking
+  the comparator compares at V27 × 1.05 = 2.835 V, which the stress dip
+  does not reach. The re-enable writes 0x1F: the code changes, the analog
+  engine re-evaluates, `#pofwarn` rises 0.96 ns after the write, and the
+  model raises POFWARN at that lattice point. That is D6's "already below
+  at reconfiguration" through the round trip (the model's own rule covers a
+  re-enable that keeps the code, `make nrf-power-model`'s `enable` group).
+
+**3. Glue rule 13** (`spec/pin-model.md`). At `pi` the CPU target whose
+chip package has a `pof_comparator` view gets `X_bb_pof_<ref>`
+(`cli/src/elab.rs`), its pin ports through the module's pinmap (U10:
+`main_3V3` and node 0), the four threshold nodes `bb_st_<ref>_pofthr<k>`
+driven like rule 12's state nodes, its output `bb_pof_<ref>` thresholded
+into `<ref>.#pofwarn`; `#pofen` is bound to `<ref>.#pofen` alone. At `fast`
+nothing changes (no view, no pin; G1). `run.json` gains `pof` (ref,
+package, version, view, corner, provenance, qualification, the kernel nets).
+
+**4. W1 with the firmware in the loop** (`examples/dial-me-spinner/w1`,
+`simulate = ["main", "base"]`; `scripts/dms_w1.sh`,
+`scripts/check_dms_w1.py`, `asserts/w1.toml`, `asserts/w1-margin.toml`).
+The bench `bench/w1-stress.toml` is the labelled stress corner of D-W1 and
+static-load mode of the suite's W1 case on the system's `pi` views: USB
+5.0 V behind 10 mΩ (a Norton source), the dead cell (0 V behind 0.25 Ω),
+base U1 at `worst_ilim100_min` (ILIM 80 mA, SYS_REG 4.312 V, the suite's
+ungated supplement; new corner, `ti/bq25180` 0.2.0), main U1 at
+`worst_dropout`, the WS2812C ring at the suite's averaged cue
+(`suite_compat`, duty 0.0277778; new corner, `worldsemi/ws2812c-2020`
+0.3.0), the 55 mA `[[load]] replace = "main:U10"`, U10's comparator at
+`max`. Its file name and its `[[load]]` label the corner in `run.json`;
+every line of `check_dms_w1.py` names it.
+
+| Case (bench, image) | Result |
+| --- | --- |
+| rule (stress, `w1_rule`): GATED | cue-held, pof-dip, flash-vcc, no-reset pass, rung `pi`; no EVENTS_POFWARN; P0.06 rises once, 15.042 ms after LED_PWR_EN; +3V3 below 2.94 V from t_e + 3.2529 to 4.1421 ms (0.889 ms, recovered 5.86 ms before the blanking ends); after the blanking +3V3 ≥ 3.111314 V |
+| static-load against the suite at 55 mA (Amendment 2's tolerances) | +3V3 min 2.917427 V (+109.6 mV, 200 mV), VSYS min 2.957415 V (+101.0 mV, 200 mV), window start 3.252854 ms (+18.8 µs, 50 µs), end 4.142135 ms (−2.8 ms, 5 ms): pass. P1's static deck: 2.9189 V, 2.9589 V, 3.256-4.087 ms |
+| blank4 (stress, `w1_blank4`): GATED | fails exactly cue-held; the re-enable (`#pofen`) at t_e + 4.001 ms, EVENTS_POFWARN at its `ceil_L` (5.250000 ms), 0.141 ms before the rule run's window ends; LED_PWR_EN falls at 5.250000000001 ms; no P0.06 frame |
+| off (stress, `w1_blank_off`): GATED | fails exactly cue-held; the 2.94 V crossing at t_e + 3.2530 ms, `#pofwarn` at 4.492957 ms, EVENTS_POFWARN at 4.500000 ms (7.04 µs after the crossing, one cell at most); the shed at the same lattice point |
+| blank5: reported | the cue held (re-enable at t_e + 5.001 ms, after the window): the suite's prediction |
+| rule at the nominal and −5 % corners (`w1-stress-typ`, `-min`): reported | the cue held, POFWARN 0 and 0 (expected 0) |
+| margin (`w1-margin`, 50 mA, `w1_rule` and `w1_blank_off`): GATED | margin, no-pofwarn, cue-held pass with both builds; +3V3 min 2.962615 / 2.962616 V, margin +22.6 mV (P0: 2.9640 V, +24.0 mV); POFWARN 0 with the comparator armed through the dip (the blanking-off build) |
+| co-simulation (`w1-cosim`: U10's `supply_load` only): reported | +3V3 min 3.299826 V, VSYS min 3.566549 V, no crossing, POFWARN 0 |
+| co-simulation with the budget's remainder (`w1-cosim-budget`, 46.7 mA ramped in at 0.1-0.2 ms): reported | +3V3 min 2.992838 V, VSYS min 3.023837 V, no crossing, POFWARN 0 |
+
+- **The 4 ms control's premise** (Amendment 2: "if that window ends before
+  4 ms, or within one lattice cell after it, the control stops testing the
+  re-enable rule"): the co-simulated window's midpoint is t_e + 3.6975 ms,
+  so the whole ms nearest is 4 ms, the W-fw build; it re-enables at t_e +
+  4.001 ms (the 10 ms build shows the same 1 µs offset), 141.1 µs before
+  the window ends. `check_dms_w1.py` gates this on the rule run.
+- **The anti-vacuity check (deviation).** The plan's "`pofwarn` fired at
+  least once" for the rule firmware cannot hold as built: W-fw's firmware
+  blanks by disabling POFCON (Amendment 7), so no EVENTS_POFWARN can be
+  raised during the blanking, and the dip ends 5.9 ms before the blanking
+  does; with nrfx's V27 the comparator does not even see it (item 2). The
+  closest correct check, gated instead: `pof-dip`, +3V3 falls through the
+  trip level of the comparator as the firmware configures it outside the
+  blanking (V28 × 1.05 = 2.94 V) inside the 10 ms blanking (3.253 ms after
+  LED_PWR_EN), so the rule had a dip to mask; and the paired control on the
+  identical deck (the blanking-off build) raises EVENTS_POFWARN within one
+  lattice cell of that crossing and sheds. A firmware that blanks by
+  ignoring POFWARN in its handler (firmware.md R8's words) would make the
+  plan's check literal; that is a W-fw change, not made here. The exit
+  criterion (plan section 5 item 1, "`pofwarn` fired") carries the same
+  deviation.
+- **Partition independence and determinism (G5, `make dms-w1`):** every gated case and both co-simulations (rule, blank4, off, margin,
+  margin-off, cosim, cosim-budget): bb's defaults (10 ms grants, lookahead
+  on: 54-59 grants per 20 ms; the comparator's `#pofwarn` input makes the
+  board a feedback loop) and 1 ms grants equal the one-cell references
+  (`--max-quantum 10us --lookahead off`, 2 000 grants) in `nets.csv`,
+  `nets.vcd` and every non-grant record; the references equal
+  `tests/golden/dms-w1` (new), grant records included; analog-first
+  byte-identical (rule, blank4, off); 10 runs byte-identical each (rule,
+  cosim, cosim-budget); no promise broken in any run.
+- **`make pool-equiv`:** 11 min 0 s (38 configurations, the four W1 ones among them: every pooled run leased and byte-identical to its fresh run and to the committed hashes, 76 leases by one Renode process)
+
+**5. W-fw's test on the model** (`make dms-wfw-test`, Amendment 7). The
+test double `power_double.py` is removed; `power_journal.py` journals the
+POWER accesses and changes nothing, the comparator input is the model's
+`#pofwarn` (External Control `SET_STATE` on `clock`), RESETREAS's preset
+the host register 0xF04, and the model's raise count is checked (0 or 1).
+The expectations are kept. One test-logic change: nrfx's two POFCON writes
+of one call were one journal entry because the double's journal time was
+the slice's; the model's `SyncTime()` moves the machine's time between
+them (by the instructions between the writes), so the test now joins two
+equal writes less than one lattice cell apart. Results (24 runs, every case
+twice byte-identical, 22.5 s on 4 jobs): the blanking starts 2.625 µs before the
+observed LED_PWR_EN edge and ends at exactly B after it (the edge is now
+the synced instant, item 1); the 4 ms build's re-enable inside the window
+sheds the cue 4.0074 ms after the edge (the double: 4.0046 ms, an immediate
+raise), within one cell of the re-enable; blanking off sheds at the
+window's start.
+
+**6. Static-load mode's load at `pi`** (`spec/project.md`; ADR-013
+Amendment 3's open finding). W1's deck, with the RT9080 regulating and the
+55 mA `[[load]]` a pure DC sink, failed its operating point in a `bb run`
+(gmin stepping failed, then "singular matrix: check node base_vbus" in
+source stepping; the transient op never reached t = 0). P1's static-load
+decks write the load as `I = 55 mA · min(1, max(0, V/0.5 V))`; with that
+form the operating point converges by gmin stepping. So at `pi` an `amps`
+load with `replace` now has that form, as the `supply_load` view it stands
+in for collapses below `vdd_min` (D2 rule 2). Every other load is
+unchanged at every rung, so no committed deck changes: the only `pi`
+bench with a `replace` load, `examples/nrf-idd/bench/pi-static.toml`, keeps
+its gate's value (the load to 0.0000 %; VDD 3.0 V, far above the knee).
+
+- **A remaining finding (not a gate):** the W1 deck's operating point is
+  fragile in the static load: measured standalone, it converges at 30, 50
+  and 55 mA and fails at 40, 45 and 46.7 mA (gmin and source stepping).
+  The co-simulation with the budget's remainder (46.7 mA) therefore ramps
+  it in from 0.1 to 0.2 ms, after the operating point and 1 ms before the
+  cue (`bench/remainder.csv`). A bench operating-point guide (a
+  `.nodeset`, as P1's decks have) or an RT9080 view restated for its
+  operating point would remove it; neither is needed by a gate, and the
+  first is a `spec/project.md` key (an ADR).
+
+**7. The register and timing tests (G7, `make nrf-power-model`;
+`examples/nrf-power/bb_power_test.py`, ADR-005's shape: a paused Renode on
+`nrf52840-bb@4` with an idle gate firmware, the state block armed with the
+POWER bits, every group twice byte-identical; 14 runs, 11.1 s on 7 jobs):**
+
+| Group | Result |
+| --- | --- |
+| reset | POFCON, EVENTS_POFWARN, INTEN.POFWARN, RESETREAS, GPREGRET(2), the error word 0; the host ID |
+| codes | every THRESHOLD code 4..15 with POF: read back, `#pofen` and exactly the changed `#pofthr` bits on the ring at the write's time, no event with `#pofwarn` low; nrfx's identical second write changes nothing |
+| refused | codes 0-3 with POF and THRESHOLDVDDH 1: not applied, error bit 0, a refused-write event naming the word; codes 0-3 without POF stored |
+| rise | a rising `#pofwarn` with POF raises at that lattice point (one event, IRQ 0 pending through INTEN); falling, and rising with POF = 0, nothing; writing 0 clears |
+| enable | POF set with `#pofwarn` high: a raise at the write's lattice point; a THRESHOLD change while enabled: a raise; a rewrite and a disable: none |
+| regs | RESETREAS preset 0x5, write 0x4 → 0x1; GPREGRET/GPREGRET2 8 bits; the wrapped CLOCK: TASKS_HFCLKSTART → EVENTS_HFCLKSTARTED, its INTENSET bit 0 pends IRQ 0 |
+| nvmc | ERASEPAGE with POF and `#pofwarn` high: refused (the word kept), a blocked-erase event at 0x508; with `#pofwarn` low it erases (0xFFFFFFFF after tERASEPAGE) |
+
+The thresholds and the hysteresis themselves are the view's vectors (item
+2, `make packages`). The "next lattice point" of a CPU write mid-cell is
+W-fw's test (the 4 ms build) and the blank4 case.
+
+**8. Re-recorded references.** `tests/golden/dms-e1-system/ok-nominal` only (`make
+dms-e1-system-update`; ok-cold, `pi-glue`, `pi-idd` and `pi-static` keep
+their hashes). At `pi` the e1-system decks now hold U10's comparator
+(its four threshold sources, voltage sources with branch-current unknowns,
+and its output node), so the sparse matrix's ordering changes. Measured,
+the one-cell references of 19dbea1 (main before P4) against this tree,
+12 001 samples each: cold byte-identical; nominal identical in every
+non-grant record and every sample but one, base:VBAT at 1.97 ms, 1 µV
+(the last printed digit). `make dms-e1-system` on this tree passes as
+ADR-013 Amendment 3 recorded it: the cross-check 3.163 mV (cold) and
+3.217 mV (nominal), the negative control 49.201 mV, the defaults equal
+the references except grants, analog-first and 10-run determinism. The
+comparator's code stays 0 there (E1's firmware writes no POFCON), its
+output sits at its −1 V clamp, `#pofwarn` never changes.
+
+**9. Packages and locks.** `nordic/nrf52840-qiaa` 0.4.0 (the `pof` view,
+`nrf52840-bb@4`), `ti/bq25180` 0.2.0 (`worst_ilim100_min`),
+`worldsemi/ws2812c-2020` 0.3.0 (`suite_compat`); `make locks` relocked every
+example (the platform's new hash, `examples/dial-me-spinner/w1` added to
+`PKG_BOARDS`).
+
+**10. G1 and the rest of `make check`.** Every committed `fast` hash and every other `pi` hash holds:
+`make check` green pooled (8 min 13 s) and with `POOL=0` (10 min 5 s) on
+the final tree (main's H6 merged, the stale locks below removed), host load
+1.7-6; before the merge 9 min 38 s and 10 min 10 s. `make plugin-scope` passes (the nRF platform's
+declared sources, now with `bb_nrf52_power.cs`, compile alone). `make
+lock-scope` found the `renode:nrf52840-bb@3` entries `make locks` had left
+beside the new `@4` ones (`bb open --update-lock` adds a platform, it does
+not drop one): they are removed from the thirteen nRF locks, and `make
+lock-scope` passes (8 STM32 boards and projects unchanged, 14 nRF52840 ones changed; every committed lock is what the D6 relock writes).
+
+**11. Budget** (+40 s): `nrf-power-model` 11.3 s and `dms-w1-test` 1.9 s in a pooled
+`make check` (13.2 s), 11.3 s and 6.6 s with `POOL=0` (17.9 s); the `pof`
+vectors in `packages` about 0.5 s. `make dms-w1` 61 s pooled (with
+`dms-wfw-test` 22.5 s and `nrf-power-model` 11.1 s).
+
+**Deviations, recorded.**
+
+- The anti-vacuity check of the rule firmware is `pof-dip` with the paired
+  control's evidence, not "`pofwarn` fired" (item 4).
+- The comparator is not gated by POF and `#pofen` drives no node (item 2).
+- The hysteresis lives in the `digital_in` thresholds of glue rule 13, the
+  view's output spanning it linearly (item 2).
+- The `.repl` inlines the stock entries instead of `using` them (item 1).
+- NVMC word writes are not blocked by POF (no write path, item 1).
+- A refusal fails the run at its end at `fast` (no ring there; item 1).
+- Static-load mode's load collapses below 0.5 V at `pi` (item 6); the
+  operating point's fragility is a finding, and the co-simulation's
+  remainder is ramped in after it.
+- ILIM and SYS_REG are the bench's, through base U1's corner (default 4,
+  plan section 2's recorded deviation).
+- The halved-capacitance margin figure stays P1's static-deck report
+  (Amendment 4: 2.9190 V, −21.0 mV); the firmware-in-the-loop margin check
+  runs at the nominal capacitance.

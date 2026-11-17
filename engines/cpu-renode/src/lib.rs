@@ -232,11 +232,17 @@ pub const BB_NRF52_PWM_CS: &str = include_str!("../platforms/bb_nrf52_pwm.cs");
 /// binds a state output.
 pub const BB_NRF52_STATE_CS: &str = include_str!("../platforms/bb_nrf52_state.cs");
 
+/// Breadboard's nRF52840 POWER (`Miscellaneous.BbNrf52Power`, ADR-009 D6,
+/// Phase 2 P4): POFCON, EVENTS_POFWARN and its interrupt, RESETREAS and
+/// GPREGRET around Renode's sealed `NRF_CLOCK`, which it wraps at the shared
+/// POWER/CLOCK base; `nrf52840-bb@4`.
+pub const BB_NRF52_POWER_CS: &str = include_str!("../platforms/bb_nrf52_power.cs");
+
 /// Breadboard's STM32F072 overlay (ADR-005 D6), written next to the
 /// generated script for [`Platform::Stm32f072Bb`].
 pub const STM32F072_BB_REPL: &str = include_str!("../platforms/stm32f072-bb.repl");
 
-/// Breadboard's nRF52840, platform `nrf52840-bb@3` (ADR-008 D1, D7, D8, D9):
+/// Breadboard's nRF52840, platform `nrf52840-bb@4` (ADR-008 D1, D7, D8, D9):
 /// Renode's stock nRF52840 without the SVD download, at 64 MIPS, with
 /// Breadboard's SAADC, its host port and the UARTE tap, and (@3) the PWM
 /// model, the TEMP and NVMC stand-ins and their host port. Written next to the
@@ -336,11 +342,29 @@ const STATE_ERR_OVERFLOW: u32 = 1 << 0;
 const STATE_ERR_SETUP: u32 = 1 << 1;
 const STATE_ERR_FIRMWARE: u32 = 1 << 3;
 /// The CPU states of ADR-009 D4 that the platform reports, in the block's
-/// state numbering (`#run` 0, `#hfxo` 1, `#nvmc` 2, `#saadc` 3).
-pub const NRF_STATES: &[&str] = &["run", "hfxo", "nvmc", "saadc"];
+/// state numbering (`#run` 0, `#hfxo` 1, `#nvmc` 2, `#saadc` 3), and since
+/// Phase 2 P4 the POWER model's outputs of ADR-009 D6 (`#pofen` 4, the
+/// POFCON.THRESHOLD bits `#pofthr0..3` 5-8; `bb_nrf52_power.cs`), which the
+/// state block reports from the same ring.
+pub const NRF_STATES: &[&str] = &[
+    "run", "hfxo", "nvmc", "saadc", "pofen", "pofthr0", "pofthr1", "pofthr2", "pofthr3",
+];
+/// A ring entry whose state number is at least this is an event of the
+/// POWER model (ADR-009 D6), not a level change: `0x10` an EVENTS_POFWARN
+/// raise, `0x11` a refused POFCON write, `0x12` an NVMC erase blocked by
+/// POF; the entry's fourth word is the value (POFCON, the word written, the
+/// NVMC offset).
+const STATE_EVENT: u32 = 0x10;
+/// The name of the POWER model's `#pofwarn` input (ADR-009 D6): its GPIO
+/// input 0 on the platform's `clock` peripheral (`BbNrf52Power`).
+pub const NRF_POFWARN: &str = "#pofwarn";
+/// The POWER model's host registers (`bb_nrf52_power.cs`): the error word
+/// at +0x0C, the first refused POFCON word at +0x18 and its time in ns at
+/// +0x1C/+0x20.
+const NRF_POWER_HOST: u64 = 0x4000_0F00;
 
 /// Bus address of `bbNrfPort`, the host port of Breadboard's nRF52840 PWM,
-/// TEMP and NVMC models on [`Platform::Nrf52840Bb`] (`nrf52840-bb@3`,
+/// TEMP and NVMC models on [`Platform::Nrf52840Bb`] (`nrf52840-bb@4`,
 /// ADR-008 Amendment 9).
 pub const BB_NRF_PORT_ADDRESS: u64 = 0x5FFC_0000;
 /// Its ID word, `"BBNP"`.
@@ -370,6 +394,7 @@ pub const PLUGIN_SOURCES: &[(&str, &str)] = &[
     ("bb_nrf52_saadc.cs", BB_NRF52_SAADC_CS),
     ("bb_nrf52_pwm.cs", BB_NRF52_PWM_CS),
     ("bb_nrf52_state.cs", BB_NRF52_STATE_CS),
+    ("bb_nrf52_power.cs", BB_NRF52_POWER_CS),
 ];
 
 /// The plugin sources every Breadboard platform declares (ADR-015 D6): the
@@ -392,7 +417,12 @@ pub const PLATFORM_PLUGINS: &[(&str, &[&str])] = &[
     ),
     (
         "nrf52840-bb.repl",
-        &["bb_nrf52_saadc.cs", "bb_nrf52_pwm.cs", "bb_nrf52_state.cs"],
+        &[
+            "bb_nrf52_saadc.cs",
+            "bb_nrf52_pwm.cs",
+            "bb_nrf52_state.cs",
+            "bb_nrf52_power.cs",
+        ],
     ),
 ];
 
@@ -550,7 +580,7 @@ pub enum Platform {
     Stm32f072Bb,
     /// [`NRF52840_BB_REPL`]: Renode's stock nRF52840 without the SVD
     /// download, at 64 MIPS, with Breadboard's SAADC, UARTE tap, PWM, TEMP
-    /// and NVMC (`nrf52840-bb@3`, ADR-008 D1, D7-D9). Loads the plugin assembly
+    /// and NVMC (`nrf52840-bb@4`, ADR-008 D1, D7-D9). Loads the plugin assembly
     /// before the platform.
     Nrf52840Bb,
     /// A path understood by Renode's `LoadPlatformDescription`, e.g. the stock
@@ -702,6 +732,19 @@ impl PinSpec {
             index: index as i32,
             direction: PinDirection::State,
         })
+    }
+
+    /// The `#pofwarn` input of the nRF52840's POWER model (ADR-009 D6,
+    /// Phase 2 P4): the power-fail comparator's output, a watched digital
+    /// input (an interrupt source like EXTI, not a sampled input) on the
+    /// `clock` peripheral (`BbNrf52Power`), GPIO input 0.
+    pub fn nrf_pofwarn() -> PinSpec {
+        PinSpec {
+            name: NRF_POFWARN.into(),
+            gpio: "clock".into(),
+            index: 0,
+            direction: PinDirection::Input,
+        }
     }
 
     /// The `#oe` output of nRF52840 GPIO `name` (`P0.06#oe`: the pin's
@@ -1084,7 +1127,7 @@ impl RenodeConfig {
         }
     }
 
-    /// Breadboard's nRF52840 (`nrf52840-bb@3`, ADR-008 D1) with P0.13 as an
+    /// Breadboard's nRF52840 (`nrf52840-bb@4`, ADR-008 D1) with P0.13 as an
     /// output and a 10 us quantum.
     pub fn nrf52840(renode: PathBuf, firmware: PathBuf) -> RenodeConfig {
         RenodeConfig {
@@ -1776,6 +1819,10 @@ pub struct RenodeEngine {
     saadc: Option<SaadcPoll>,
     /// ADR-008 D8: the UARTE tap.
     uart: Option<UartPoll>,
+    /// Breadboard's nRF52840 (ADR-009 D6): the POWER model's first refused
+    /// POFCON write fails the run at its end when no state block reported it
+    /// during the run (a run without the comparator's outputs, at `fast`).
+    power_check: bool,
     /// ADR-008 Amendment 9: the PWM pin ring.
     pwm: Option<PwmPoll>,
     /// ADR-009 D4 (milestone P3): the CPU state block's ring.
@@ -2340,7 +2387,7 @@ impl RenodeEngine {
                 if id != NRF_PORT_ID {
                     return Err(ProtocolError::Server(format!(
                         "bbNrfPort at {BB_NRF_PORT_ADDRESS:#x}: ID {id:#x}, expected \
-                         {NRF_PORT_ID:#x} (the platform is not nrf52840-bb@3)"
+                         {NRF_PORT_ID:#x} (the platform is not nrf52840-bb@4)"
                     )));
                 }
                 let port = client.get_gpio(md, "bbNrfPort")?;
@@ -2511,6 +2558,7 @@ impl RenodeEngine {
                 smp_seen: 0,
                 carried: Vec::new(),
             }),
+            power_check: cfg.platform == Platform::Nrf52840Bb,
             uart: cfg.uart_log.then(|| UartPoll {
                 seen: 0,
                 lines: [Vec::new(), Vec::new()],
@@ -2812,6 +2860,10 @@ impl RenodeEngine {
         sp.seen = count;
         for w in words.chunks(4) {
             let t_fs = u64::from(w[0]) | (u64::from(w[1]) << 32);
+            if w[2] & 0xFF >= STATE_EVENT {
+                self.power_event(t_fs, w[2] & 0xFF, w[3])?;
+                continue;
+            }
             let state = (w[2] & 0xFF) as i32;
             let level = Level::from_bool(w[2] >> 8 & 1 != 0);
             let Some(i) = self
@@ -2835,6 +2887,58 @@ impl RenodeEngine {
             out.push((t, i, level));
         }
         Ok(out)
+    }
+
+    /// An event of the POWER model from the state block's ring (ADR-009
+    /// D6): a `log` record of the engine at the event's time (each
+    /// EVENTS_POFWARN raise, so a check can count them; an NVMC erase that
+    /// POF blocked), or, for a POFCON write the model refused, the run's
+    /// failure naming the write.
+    fn power_event(&mut self, t_fs: u64, kind: u32, value: u32) -> Result<(), EngineError> {
+        let t = Time::from_fs(t_fs);
+        let (level, msg) = match kind - STATE_EVENT {
+            0 => (
+                bbcore::LogLevel::Info,
+                format!(
+                    "power: EVENTS_POFWARN (POFCON {value:#x}: POF {}, THRESHOLD {})",
+                    value & 1,
+                    (value >> 1) & 0xF
+                ),
+            ),
+            1 => {
+                return Err(EngineError::Protocol(format!(
+                    "{}: the firmware wrote POFCON = {value:#010x} at {} ns, which the POWER model \
+                     refuses: {} (ADR-009 D6)",
+                    self.name,
+                    t_fs / FS_PER_NS,
+                    if (value >> 8) & 0xF != 0 {
+                        format!(
+                            "THRESHOLDVDDH {} (the high-voltage mode's threshold is not modelled; \
+                             only its reset value 0 is accepted)",
+                            (value >> 8) & 0xF
+                        )
+                    } else {
+                        format!(
+                            "THRESHOLD code {} with POF = 1 does not exist in normal-voltage mode \
+                             (V17..V28 are codes 4..15)",
+                            (value >> 1) & 0xF
+                        )
+                    }
+                )))
+            }
+            2 => (
+                bbcore::LogLevel::Warn,
+                format!("power: NVMC erase (offset {value:#x}) blocked by POF (#pofwarn high)"),
+            ),
+            k => {
+                return Err(EngineError::Protocol(format!(
+                    "{}: an unknown POWER model event {k} in the state block's ring",
+                    self.name
+                )))
+            }
+        };
+        self.logs.push(bbcore::LogRecord { t, level, msg });
+        Ok(())
     }
 
     fn poll_pwm_inner(
@@ -3513,6 +3617,20 @@ impl Engine for RenodeEngine {
                 .pin_cnf_findings
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) = Some(found);
+        }
+        // ADR-009 D6: a POFCON write the POWER model refused fails the run
+        // (read after the last grant, so it changes no result).
+        if self.power_check {
+            let w = self
+                .sysbus_read_u32s(NRF_POWER_HOST + 0x0C, 1)
+                .map_err(|e| self.failure(e))?;
+            if w[0] & 1 != 0 {
+                let r = self
+                    .sysbus_read_u32s(NRF_POWER_HOST + 0x18, 3)
+                    .map_err(|e| self.failure(e))?;
+                let t_ns = u64::from(r[1]) | (u64::from(r[2]) << 32);
+                return self.power_event(t_ns * FS_PER_NS, STATE_EVENT + 1, r[0]);
+            }
         }
         if self.verify == Verify::Every {
             return Ok(());

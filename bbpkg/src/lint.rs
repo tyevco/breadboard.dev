@@ -640,6 +640,77 @@ fn lint_pins(pkg: &Package, o: &mut Out) {
     }
 }
 
+/// ADR-009 D6 (Phase 2 P4): a `pof_comparator` view enters the deck at
+/// `pi` beside the CPU target's views, like a `supply_load` (never at
+/// `fast`, never a rung's default). Its ports are exactly: supply and
+/// ground pins (at least one supply), the state ports `pofthr0..3` (the
+/// threshold code's bits) and one observe port `pofwarn` (its output).
+fn lint_pof_comparator(pkg: &Package, v: &crate::package::View, at: &str, o: &mut Out) {
+    use crate::package::{POF_OUTPUT_SIGNAL, POF_THRESHOLD_STATES};
+    if v.fidelity.iter().any(|r| r == "fast") {
+        o.e(format!(
+            "{at}: a pof_comparator view is not valid at fast (it enters the deck at pi, \
+             ADR-009 D6)"
+        ));
+    }
+    if !v.default_for.is_empty() {
+        o.e(format!(
+            "{at}: a pof_comparator view is no rung's default (it enters the deck beside the \
+             CPU target's view, ADR-009 D6)"
+        ));
+    }
+    let mut states: Vec<&str> = Vec::new();
+    let mut outputs = 0;
+    let mut supply = false;
+    for port in &v.ports {
+        match port {
+            Port::OtherPin { pin } => match pkg.pins.by_name(pin).map(|x| x.role.as_str()) {
+                Some("power_in" | "power_out") => supply = true,
+                Some("ground") => {}
+                _ => o.e(format!(
+                    "{at}: port {pin} is not a supply or ground pin (a pof_comparator view's \
+                     pin ports are the package's supply pins, ADR-009 D6)"
+                )),
+            },
+            Port::State { state } => {
+                if !POF_THRESHOLD_STATES.contains(&state.as_str()) {
+                    o.e(format!(
+                        "{at}: state port #{state}: a pof_comparator view's state ports are \
+                         {} (ADR-009 D6)",
+                        POF_THRESHOLD_STATES.join(", ")
+                    ));
+                }
+                states.push(state);
+            }
+            Port::Observe { signal } if signal == POF_OUTPUT_SIGNAL => outputs += 1,
+            Port::Observe { signal } => o.e(format!(
+                "{at}: observe port {signal}: a pof_comparator view's output is \
+                 {POF_OUTPUT_SIGNAL} (ADR-009 D6)"
+            )),
+            _ => o.e(format!(
+                "{at}: a pof_comparator view's ports are pin, state and observe ports (ADR-009 D6)"
+            )),
+        }
+    }
+    if !supply {
+        o.e(format!(
+            "{at}: a pof_comparator view has at least one supply pin port (the VDD it compares)"
+        ));
+    }
+    for s in POF_THRESHOLD_STATES {
+        if states.iter().filter(|x| **x == *s).count() != 1 {
+            o.e(format!(
+                "{at}: needs exactly one state port #{s} (ADR-009 D6)"
+            ));
+        }
+    }
+    if outputs != 1 {
+        o.e(format!(
+            "{at}: needs exactly one observe port {POF_OUTPUT_SIGNAL} (ADR-009 D6)"
+        ));
+    }
+}
+
 fn lint_views(pkg: &Package, ctx: &Context, o: &mut Out) {
     let p = &pkg.part;
     let mut names = BTreeSet::new();
@@ -695,8 +766,12 @@ fn lint_views(pkg: &Package, ctx: &Context, o: &mut Out) {
                     _ => {}
                 }
             }
+        } else if v.kind == "pof_comparator" {
+            lint_pof_comparator(pkg, v, &at, o);
         } else if v.ports.iter().any(|x| matches!(x, Port::State { .. })) {
-            o.e(format!("{at}: only a supply_load view has state ports"));
+            o.e(format!(
+                "{at}: only a supply_load or pof_comparator view has state ports"
+            ));
         }
         // bb-part/1 (ADR-009): rails name the view's supply ports.
         for r in &v.rails {

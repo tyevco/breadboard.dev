@@ -61,7 +61,7 @@ use bbpkg::value::{to_f64, Dim};
 use crate::platforms;
 
 /// The platforms `bb run` supports. `nrf52840` (Phase 1 M2, ADR-008 D1/D2)
-/// is Breadboard's nRF52840 (`nrf52840-bb@3`: Renode's stock nRF52840
+/// is Breadboard's nRF52840 (`nrf52840-bb@4`: Renode's stock nRF52840
 /// without the SVD download, at 64 MIPS, with Breadboard's SAADC). Its pins
 /// are written `<ref>.P<port>.<nn>` (`U1.P0.13`; the reference ends at the
 /// first `.`); P0.00-P0.31 and P1.00-P1.15. An `adc_in` reads an AIN pin or
@@ -247,9 +247,37 @@ pub struct Board {
     /// D5, milestone P2), by kernel net (`U10.P0.06`); empty at `fast`.
     pub pi_glue: BTreeMap<String, PiGlue>,
     /// The CPU state outputs that drive the target's supply_load view at
-    /// `pi` (ADR-009 D4, milestone P3); empty at `fast`.
+    /// `pi` (ADR-009 D4, milestone P3), and its power-fail comparator's
+    /// threshold ports (`#pofthr0..3`, ADR-009 D6, milestone P4); empty at
+    /// `fast`.
     pub cpu_states: Vec<CpuState>,
+    /// The target's power-fail comparator at `pi` (ADR-009 D6, milestone
+    /// P4; glue rule 13); `None` at `fast` or without one.
+    pub pof: Option<PofGlue>,
 }
+
+/// The power-fail comparator of the CPU target at `pi` (ADR-009 D6): its
+/// output node, thresholded by the analog engine into the CPU engine's
+/// watched `digital_in` `#pofwarn` (kernel net `<ref>.#pofwarn`), and the
+/// CPU engine's `#pofen` output (kernel net `<ref>.#pofen`), which drives
+/// no circuit node (the comparator is not gated by POF; the POWER model
+/// applies it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PofGlue {
+    pub node: String,
+    pub kernel_net: String,
+    pub pofen_net: String,
+}
+
+/// The `digital_in` thresholds of `#pofwarn` (glue rule 13): the
+/// comparator view's output reaches 1 V where V(VDD) falls to VPOF and 0 V
+/// where it rises to VPOF + VPOFHYST, so the trip and the release are these
+/// two levels, and no input capacitance is added.
+pub const POFWARN_IN: bbcore::DigitalIn = bbcore::DigitalIn {
+    vih: 1.0,
+    vil: 0.0,
+    cin: 0.0,
+};
 
 /// One CPU state output into a supply_load's state node (ADR-009 D4): the
 /// CPU engine's output (`#run`), its kernel net (`U10.#run`), the deck's
@@ -797,6 +825,7 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         digital_only,
         pi_glue: BTreeMap::new(),
         cpu_states: Vec::new(),
+        pof: None,
     })
 }
 

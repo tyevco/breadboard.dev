@@ -1,0 +1,6 @@
+# W1 co-simulation: the 50 mA +3V3 budget less U10's own idd (3.3 mA), ramped in from 0.1 to
+# 0.2 ms, after the operating point and before the cue (bench/w1-cosim-budget.toml).
+t,I
+0,0
+0.0001,0
+0.0002,0.0467
