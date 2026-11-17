@@ -69,12 +69,6 @@ source = "path+../../packages/worldsemi/ws2812c-2020"
 tree = "sha256:c54782a81fe30e7fb530a9505bfd9307a3416a9fb438fc6fa04803f3cbc2a13d"
 
 [[platform]]
-id = "renode:nrf52840-bb@3"
-content = "sha256:d2056617081861b52f81a36ce485d7dd0e5d843d82716592e84c77d6fcb8d1af"
-engine = "renode"
-engine_version = "1.17.0"
-
-[[platform]]
 id = "renode:nrf52840-bb@4"
 content = "sha256:0d185ffd681f2d4c84fe3b0afe4afb70ba1e8502c11e5c23069d265a99f53abe"
 engine = "renode"
