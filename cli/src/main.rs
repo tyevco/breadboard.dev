@@ -92,7 +92,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--probe net:<name|alias|pin> ...] --out <dir> [--allow-unqualified <pkg:view>]
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
-              [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
+              [--lookahead on|off] [--adc-push change|every]
               [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
               [--ngspice-watchdog 200000,10000] [--ngspice-lattice-snap on|off]
               [--assert <file.toml> ...] [--image <instance>=<file.elf> ...]
@@ -205,13 +205,6 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  every lattice point, with the value in whole microvolts
                  (the reference of the equivalence gate). The MCU sees the
                  same conversions either way (a test knob)
-  --adc-model    the STM32F072's ADC (ADR-005): bb (default), Breadboard's
-                 model (hardware triggers, conversion timing, the analog
-                 watchdog; pushes are timed inputs, a sampled input), or
-                 stock, Renode's STM32F0_ADC on the stock platform (ADR-003
-                 D6: SetValue at each push, the code-change watch; keep it
-                 for comparisons). Changes results: each has its own
-                 references
   --renode-pool  env (default): lease a pre-warmed Renode from the pool in
                  $BB_RENODE_POOL when one is idle (`bb pool run`, ADR-004),
                  else start Renode fresh; off: always fresh. Never changes
@@ -277,8 +270,6 @@ struct RunArgs {
     lookahead: Option<bool>,
     plugin: PluginMode,
     adc_push: AdcPush,
-    /// `--adc-model`: Breadboard's ADC model (true) or the stock one.
-    adc_bb: bool,
     /// `--renode-pool env` (true, the default) or `off`.
     renode_pool: bool,
     /// `--uart-log on` (true, the default) or `off` (ADR-008 D8).
@@ -457,7 +448,6 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut lookahead = None;
     let mut plugin = PluginMode::Auto;
     let mut adc_push = AdcPush::OnChange;
-    let mut adc_bb = ADC_MODEL_DEFAULT_BB;
     let mut uart_log = true;
     let mut renode_pool = true;
     let mut gdb = None;
@@ -551,13 +541,6 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             }
             "--adc-push" => {
                 adc_push = parse_adc_push(&val(a)?).map_err(|e| format!("--adc-push: {e}"))?
-            }
-            "--adc-model" => {
-                adc_bb = match val(a)?.as_str() {
-                    "bb" => true,
-                    "stock" => false,
-                    v => return Err(format!("--adc-model: {v:?}: expected bb or stock")),
-                }
             }
             "--uart-log" => {
                 uart_log = match val(a)?.as_str() {
@@ -677,7 +660,6 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         lookahead,
         plugin,
         adc_push,
-        adc_bb,
         renode_pool,
         uart_log,
         gdb,
@@ -690,9 +672,6 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         operating_point,
     })
 }
-
-/// The default of `--adc-model`.
-const ADC_MODEL_DEFAULT_BB: bool = true;
 
 /// Output writers buffer 1 MiB: every write(2) to a slow file system
 /// (WSL's /mnt/c: up to ~10 ms each under host load) is paid during the
@@ -1202,29 +1181,20 @@ fn run(a: RunArgs) -> Result<(), String> {
     });
     // The STM32F072's ADC: Breadboard's model on its overlay (ADR-005 D6:
     // bbAdc, BbStm32Timer TRGO; pushes keyed by code12 and delivered as
-    // timed inputs), or Renode 1.17.0's stock platform (ADC =
-    // Analog.STM32F0_ADC, instance `adc`; pushes keyed by whole millivolts,
-    // ADR-003 Amendments 5 and 10).
-    let (adc_name, adc_key) = if a.adc_bb {
-        (bb_cpu_renode::BB_ADC_NAME, AdcKey::Code12)
-    } else {
-        ("adc", AdcKey::Millivolts)
-    };
+    // timed inputs). Renode's stock platform (`--adc-model stock`) was
+    // removed in Phase 2 H6 (ADR-015 D9).
+    let (adc_name, adc_key) = (bb_cpu_renode::BB_ADC_NAME, AdcKey::Code12);
     if part.platform == "stm32f072" {
-        rcfg.platform = if a.adc_bb {
-            Platform::Stm32f072Bb
-        } else {
-            Platform::Repl("platforms/cpus/stm32f072.repl".into())
-        };
+        rcfg.platform = Platform::Stm32f072Bb;
     }
     for p in &mcu_pins {
         if let PinKind::Adc { model, .. } = &p.kind {
             // Breadboard's model converts 12 bits against its 3.3 V
             // reference (the overlay's referenceVoltage, ADR-005 D5.2).
-            if part.platform == "stm32f072" && a.adc_bb && (model.vref != 3.3 || model.bits != 12) {
+            if part.platform == "stm32f072" && (model.vref != 3.3 || model.bits != 12) {
                 return Err(format!(
                     "{}.{}: adc_in vref={} bits={}: Breadboard's STM32F072 ADC model needs \
-                     vref=3.3 bits=12 (or --adc-model stock)",
+                     vref=3.3 bits=12",
                     p.part, p.pin, model.vref, model.bits
                 ));
             }
@@ -1951,10 +1921,6 @@ fn run(a: RunArgs) -> Result<(), String> {
                     AdcPush::OnChange => "change",
                     AdcPush::EveryLattice => "every",
                 }),
-            ),
-            (
-                "adc_model",
-                bbcore::cjson::Json::str(if a.adc_bb { "bb" } else { "stock" }),
             ),
             (
                 "verify",

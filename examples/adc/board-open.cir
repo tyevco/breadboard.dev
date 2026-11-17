@@ -3,13 +3,11 @@
 * source with the ADR-003 firmware's PA4 timing (high from 49.95 ms for
 * 49.95 ms, period 99.9 ms; on Breadboard's model the firmware toggles PA4
 * 4.75 us later, at the end of the 50th conversion, but the loop is open, so
-* the drive only has to resemble it, and the stock board keeps its ADR-003
-* references), and every MCU output left unconnected. The binding graph is ngspice -> U1 (PA1)
+* the drive only has to resemble it), and every MCU output left unconnected. The binding graph is ngspice -> U1 (PA1)
 * only, so grants are long (--max-quantum); the pushes of each grant reach
 * the ADC model as timed inputs before Renode runs it (ADR-005 D5).
 *
-* Same firmware: examples/adc/firmware/build/adc_board.elf (with
-* --adc-model stock: build/adc_board_isr.elf).
+* Same firmware: examples/adc/firmware/build/adc_board.elf.
 *
 * U1 and its pin models come from the package st/stm32f072rb (ADR-006),
 * pinned in bb.lock; see board.cir.

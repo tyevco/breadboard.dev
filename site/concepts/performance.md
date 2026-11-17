@@ -45,7 +45,7 @@ the same `nets.csv`, `nets.vcd` and non-grant `events.jsonl` records as A.
 | `examples/feedback-open`, defaults | 500 ms | 50 | **0.56 s** (44×) | 2.05 s | **0.10 s** | 2.66 s | 0.50 s |
 | `examples/adc --lookahead off` | 300 ms | 30 000 | 11.50 s | 1.46 s | 0.09 s | 13.00 s | 11.26 s |
 | `examples/adc`, defaults (Breadboard's ADC model) | 300 ms | 1 209 | **1.11 s** (10.4×) | 1.43 s | **0.09 s** | 2.61 s | 0.97 s |
-| `examples/adc --adc-model stock` (Renode's ADC, lookahead on) | 300 ms | 6 344 | 5.08 s | 1.38 s | | 6.53 s | |
+| `examples/adc --adc-model stock` (Renode's ADC, lookahead on; removed in Phase 2 H6, the last measurement) | 300 ms | 6 344 | 5.08 s | 1.38 s | | 6.53 s | |
 | `examples/nrf-feedback --lookahead off` | 500 ms | 50 000 | 13.93 s | 1.41 s | 0.05 s | 15.36 s | 14.23 s |
 | `examples/nrf-feedback`, defaults | 500 ms | 120 | **0.52 s** (27×) | 1.39 s | **0.05 s** | 1.95 s | 0.42 s |
 | `examples/adc/kicad --lookahead off` (as a `bb.toml` project) | 300 ms | 30 000 | 12.66 s | 1.49 s | | 14.17 s | |

@@ -1,0 +1,71 @@
+# Phase 2 H6 (ADR-015 D11, Amendment 5): the nightly gate tier. The gates too slow for a pull
+# request run here once a day on main, one job each, the same targets as `make nightly`:
+#   fresh          make test POOL=0 (every Renode fresh; moved from ci.yml, its slowest job)
+#   ec-long        the 1 500 ms one-cell reference across External Control reconnects (from ci.yml's adc job)
+#   ngspice-stall  H1/H2's watchdog and lattice-snap gate (a timing gate: nightly since H1)
+#   dms-home       E3's full gate (make test keeps dms-home-test)
+#   dms-vsense     E2's full gate (make test keeps dms-vsense-test)
+# A nightly failure is a release blocker for the next milestone merge (D11), not a badge.
+name: nightly
+
+on:
+  schedule:
+    # 03:17 UTC every day (off the hour, when scheduled runs queue less).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    name: ${{ matrix.gate }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gate: fresh
+            target: nightly-fresh
+          - gate: ec-long
+            target: ec-long
+          - gate: ngspice-stall
+            target: ngspice-stall
+          - gate: dms-home
+            target: dms-home
+          - gate: dms-vsense
+            target: dms-vsense
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/bb-target
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .cache/bb-target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+
+      - name: Setup toolchain (make setup)
+        uses: ./.github/actions/bb-setup
+
+      - name: make ${{ matrix.target }}
+        run: make ${{ matrix.target }}
+
+      # The logs and summaries only (nets.csv and nets.vcd of the long runs are hundreds of MB).
+      - name: Keep the gate's logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.gate }}-logs
+          path: |
+            out/**/*.log
+            out/**/*.txt
+            out/**/*.tsv
+          retention-days: 7
+          if-no-files-found: ignore

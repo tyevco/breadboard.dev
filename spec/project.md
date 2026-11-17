@@ -727,7 +727,9 @@ names any (each file's name and text, in order; ADR-010 Amendment 3);
 `packages` (each one's id, version, `source`: `path` for a local package,
 else its `registry+<url>` source, ADR-011; and tree) and `platforms` (the
 locked hashes); `deck_sha256`;
-`options` (every run option that can change results, the probes, and
+`options` (every run option that can change results, the probes (since
+Phase 2 H6 without `adc_model`: `--adc-model` was removed with Renode's
+stock ADC, ADR-015 D9), and
 `ngspice_watchdog`: `max_points_per_cell` and
 `max_points_without_progress`, the progress watchdog's limits, which decide
 whether a run completes or fails with `NoProgress`, ADR-015 D1;

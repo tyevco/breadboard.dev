@@ -101,10 +101,12 @@ pub enum AdcKey {
     /// are delivered raw: Breadboard's ADC model (ADR-005), the default.
     #[default]
     Code12,
-    /// Whole millivolts, delivered as exactly that many millivolts:
-    /// Renode 1.17.0's stock `STM32_ADC_Common`, which converts
-    /// `floor(uV / 1000)` (ADR-003 Amendments 5 and 10; `bb run
-    /// --adc-model stock`).
+    /// Whole millivolts, delivered as exactly that many millivolts: the key
+    /// of Renode 1.17.0's stock `STM32_ADC_Common`, which converts
+    /// `floor(uV / 1000)` (ADR-003 Amendments 5 and 10). `bb run` no longer
+    /// selects it (`--adc-model stock` was removed in Phase 2 H6, ADR-015
+    /// D9); it stays the push model's coarse-key case, whose delivered value
+    /// differs from the raw one (`engines/analog-ngspice/tests/adc.rs`).
     Millivolts,
     /// Raw whole microvolts, on every change: Breadboard's nRF52840 SAADC
     /// (ADR-008 D7), whose gain, reference and resolution are run-time
@@ -120,7 +122,7 @@ pub enum AdcKey {
 /// [`AdcIn::key_microvolts`]. With [`AdcKey::Code12`] the key is the 12-bit
 /// code and the raw microvolts are delivered, so every resolution and
 /// alignment converts what the every-lattice-point reference converts; with
-/// [`AdcKey::Millivolts`] (the stock model) the key is whole millivolts.
+/// [`AdcKey::Millivolts`] (the stock model's key) it is whole millivolts.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdcIn {
     /// Reference voltage (V), the full-scale input.

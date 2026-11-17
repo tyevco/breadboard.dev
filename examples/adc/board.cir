@@ -31,8 +31,8 @@
 * input (ADR-005 D3): with lookahead (the default) a quiet grant runs to the
 * next TIM3 update whatever ADC_IN does, and an out-of-window value is
 * reported at the end of the next conversion, as on silicon.
-* `bb run --adc-model stock` with build/adc_board_isr.elf runs the ADR-003
-* board on Renode's stock ADC instead.
+* (Renode's stock ADC, `bb run --adc-model stock` with adc_board_isr.elf, was
+* removed in Phase 2 H6, ADR-015 D9.)
 *
 * Directive grammar: see examples/spike/board.cir and cli/src/board.rs. U1
 * and its pin models come from the package st/stm32f072rb (ADR-006; its

@@ -81,13 +81,14 @@
 //! so this is not a free-run. A transition delivered at a boundary
 //! (`edge_time <= now`) takes effect at once, at `now`.
 //!
-//! ADC inputs ([`PinDirection::Adc`], ADR-003 D6) on Renode's stock ADC
-//! model work the same way: the producer pushes `Analog` values at lattice
-//! points, and the engine sets each one with the External Control `ADC`
-//! command (`SetValue`, whole microvolts, on the channel's default sample)
-//! while Renode is paused on that lattice point.
+//! ADC inputs ([`PinDirection::Adc`], ADR-003 D6): the producer pushes
+//! `Analog` values at lattice points, and
 //! [`bbcore::Engine::apply_input_trace`] takes each entry's time from the
-//! trace, because an `Analog` value carries none.
+//! trace, because an `Analog` value carries none. Only Breadboard's ADC
+//! models take them; Renode's stock ADC path (`SetValue` while paused on
+//! the lattice point, `bb run --adc-model stock`) was removed in Phase 2 H6
+//! (ADR-015 D9), and [`RenodeEngine::start`] refuses an ADC input on any
+//! other platform.
 //!
 //! On Breadboard's STM32F072 ([`Platform::Stm32f072Bb`], ADR-005) the ADC
 //! model reads its inputs only at its own sample instants, which are clock
@@ -574,10 +575,10 @@ pub enum PinDirection {
     /// The kernel drives the pin into the MCU (`SET_STATE`).
     Input,
     /// An ADC input (ADR-003 D6): the kernel pushes `Analog` values, which
-    /// the engine applies with the External Control `ADC` command
-    /// (`SetValue`, whole microvolts) at their lattice points. For such a
-    /// pin [`PinSpec::gpio`] names the ADC peripheral (e.g. `adc`) and
-    /// [`PinSpec::index`] is the channel.
+    /// the engine writes to Breadboard's ADC model as timed inputs (whole
+    /// microvolts from their lattice points; ADR-005 D5, ADR-008 D7). For
+    /// such a pin [`PinSpec::gpio`] names the ADC peripheral (e.g. `bbAdc`)
+    /// and [`PinSpec::index`] is the channel.
     Adc,
     /// The `#smp` toggle of a loading `adc_in` (ADR-008 D7): an output of
     /// the engine (not a GPIO) that changes level at every acquisition start
@@ -1527,7 +1528,6 @@ struct PinState {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum InputValue {
     Level(Level),
-    Microvolts(u32),
 }
 
 /// An input transition waiting for its lattice point `ceil_L(t)`.
@@ -1890,6 +1890,19 @@ impl RenodeEngine {
                 "quantum {} must be a positive whole number of ns",
                 cfg.quantum
             )));
+        }
+        // ADC inputs are pushed only to Breadboard's ADC models (timed inputs
+        // through their host ports). Renode's stock ADC path (`SetValue` at
+        // each push, `bb run --adc-model stock`) was removed in Phase 2 H6
+        // (ADR-015 D9).
+        if !matches!(cfg.platform, Platform::Stm32f072Bb | Platform::Nrf52840Bb) {
+            if let Some(p) = cfg.pins.iter().find(|p| p.direction == PinDirection::Adc) {
+                return Err(EngineError::Other(format!(
+                    "{}: an ADC input needs Breadboard's ADC model (the stm32f072-bb or \
+                     nrf52840-bb platform); Renode's stock ADC is not supported (ADR-015 D9)",
+                    p.name
+                )));
+            }
         }
         // Renode's LoadELF opens the firmware about a dozen times. On a slow
         // file system (WSL's /mnt/c: 10-130 ms an open or stat under host
@@ -2292,7 +2305,8 @@ impl RenodeEngine {
                         scheduled: None,
                         scheduled_uv: None,
                         applied_uv: None,
-                        timed: matches!(cfg.platform, Platform::Stm32f072Bb | Platform::Nrf52840Bb),
+                        // Every ADC input is a timed input (checked in start).
+                        timed: true,
                     });
                     continue;
                 }
@@ -3566,22 +3580,6 @@ impl RenodeEngine {
                 }
                 continue;
             }
-            if p.spec.direction == PinDirection::Adc {
-                // ADC GetValue must read back the last value set.
-                if let Some(want) = p.applied_uv {
-                    let got = self
-                        .client
-                        .adc_get_value(p.gpio, p.spec.index)
-                        .map_err(proto)?;
-                    if got != want {
-                        return Err(EngineError::Protocol(format!(
-                            "verify: {}: ADC channel {} reads {got} uV at {} ns, set {want} uV",
-                            p.spec.name, p.spec.index, self.renode_ns
-                        )));
-                    }
-                }
-                continue;
-            }
             if p.spec.direction != PinDirection::Output {
                 continue;
             }
@@ -3770,18 +3768,12 @@ impl RenodeEngine {
     }
 
     fn set_input(&mut self, i: usize, value: InputValue) -> Result<(), EngineError> {
-        let p = &mut self.pins[i];
+        let p = &self.pins[i];
         match value {
             InputValue::Level(level) => self
                 .client
                 .gpio_set_state(p.gpio, p.spec.index, level == Level::High)
                 .map_err(proto)?,
-            InputValue::Microvolts(uv) => {
-                self.client
-                    .adc_set_value(p.gpio, p.spec.index, uv)
-                    .map_err(proto)?;
-                p.applied_uv = Some(uv);
-            }
         }
         self.input_applied = true;
         // The input may wake the CPU (EXTI -> NVIC): a cached lookahead
@@ -4112,7 +4104,7 @@ impl RenodeEngine {
             }
             (PinDirection::Adc, PinSignal::Analog { volts }) => {
                 // The producer delivers whole microvolts in [0, vref]
-                // (ADR-003 D6); SetValue takes them as a u32.
+                // (ADR-003 D6); the host port takes them as a u32.
                 if !volts.is_finite() || *volts < 0.0 || *volts > f64::from(u32::MAX) / 1e6 {
                     return Err(EngineError::Protocol(format!(
                         "{}.{name}: ADC value {volts} V is out of range",
@@ -4124,16 +4116,14 @@ impl RenodeEngine {
                     return Ok(());
                 }
                 self.pins[i].scheduled_uv = Some(uv);
-                if self.pins[i].timed {
-                    // A timed input from `t` on (a lattice point, or `now`
-                    // for a snapshot): samples strictly after it read it.
-                    let at = t.max(self.now);
-                    let t_ns = at.as_fs().div_ceil(FS_PER_NS);
-                    self.adc_batch.push((t_ns, i, uv));
-                    self.input_applied = true;
-                    return Ok(());
-                }
-                InputValue::Microvolts(uv)
+                // A timed input from `t` on (a lattice point, or `now` for a
+                // snapshot): samples strictly after it read it. Every ADC
+                // input is timed (ADR-015 D9 removed the stock path).
+                let at = t.max(self.now);
+                let t_ns = at.as_fs().div_ceil(FS_PER_NS);
+                self.adc_batch.push((t_ns, i, uv));
+                self.input_applied = true;
+                return Ok(());
             }
             (PinDirection::Input, PinSignal::Analog { .. }) => {
                 return Err(EngineError::Protocol(format!(

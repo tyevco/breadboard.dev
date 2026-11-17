@@ -16,7 +16,7 @@ CARGO ?= cargo
         golden-update feedback-run feedback feedback-order feedback-determinism \
         feedback-open feedback-open-ref lookahead-inert lookahead-startup \
         feedback-ref lookahead-equiv lookahead-perf adc-run adc adc-ref adc-open-ref \
-        adc-equiv adc-renode adc-model adc-startup adc-stock adc-order adc-determinism pooled-adc-determinism adc-stock-ref adc-open-stock-ref adc-speed \
+        adc-equiv adc-model adc-order adc-determinism pooled-adc-determinism \
         cost-table cost-table-runs startup-perf ec-reconnect ec-long ec-exposure \
         pool-equiv pool-perf dms-source dms-suite dms-suite-check dms-suite-update \
         packages locks plugin-scope lock-scope dms-values setup-container \
@@ -62,8 +62,6 @@ FEEDBACK_OPEN_QUANTA ?= 10us,100us,1ms,10ms,50ms,500ms
 
 # --- ADR-003 step 9: adc_in and the ADC boards (STM32F072) -----------------
 ADC_ELF     := examples/adc/firmware/build/adc_board.elf
-# ADR-003's board on Renode's stock ADC model (bb run --adc-model stock).
-ADC_STOCK_ELF := examples/adc/firmware/build/adc_board_isr.elf
 ADC_FOR     ?= 300ms
 ADC_OUT     ?= out/adc-board
 ADC_PROBES   = --probe net:ADC_IN --probe net:U1.PA4 --probe net:U1.PA5 \
@@ -75,12 +73,6 @@ ADC_OPEN_ARGS = --netlist examples/adc/board-open.cir --firmware $(ADC_ELF) --ta
 ADC_GOLDEN  := tests/golden/adc
 ADC_HASHES  := $(ADC_GOLDEN)/outputs.sha256
 ADC_OPEN_HASHES := tests/golden/adc-open/outputs.sha256
-# The stock-model board (ADR-003 step 9): its own one-cell references.
-ADC_STOCK_FLAGS = --adc-model stock --firmware $(ADC_STOCK_ELF)
-ADC_STOCK_ARGS  = $(ADC_ARGS) $(ADC_STOCK_FLAGS)
-ADC_OPEN_STOCK_ARGS = $(ADC_OPEN_ARGS) $(ADC_STOCK_FLAGS)
-ADC_STOCK_HASHES := tests/golden/adc-stock/outputs.sha256
-ADC_OPEN_STOCK_HASHES := tests/golden/adc-open-stock/outputs.sha256
 
 # --- ADR-004 Part B: make test and the gates on a warm Renode pool ---------
 # Each target below runs its recipe (pooled-<target>) under `bb pool run`
@@ -88,7 +80,8 @@ ADC_OPEN_STOCK_HASHES := tests/golden/adc-open-stock/outputs.sha256
 # pre-warmed Renode processes; a nested make joins the pool already in
 # BB_RENODE_POOL. A run that finds no idle process starts Renode fresh, and
 # the outputs are the same either way (make pool-equiv). POOL=0 runs
-# everything fresh (CI job `fresh`); POOL_SLOTS sets the pool size.
+# everything fresh (the nightly job `fresh`, make nightly-fresh, since Phase 2 H6); POOL_SLOTS
+# sets the pool size.
 POOL       ?= 1
 POOL_SLOTS ?= 5
 ifeq ($(POOL),0)
@@ -99,7 +92,7 @@ endif
 POOLED_TARGETS := test partition lattice-check feedback-open lookahead-inert lookahead-equiv adc-equiv spike-verify-every determinism feedback-determinism adc-determinism \
                   nrf-gates nrf-feedback dms-rail dms-rail-test dms-vsense dms-vsense-test dms-home dms-home-test \
                   bench-test bench-gate dms-home-project assert-test assert-gate bb-test-gate \
-                  dms-e1-system dms-e1-system-test
+                  dms-e1-system dms-e1-system-test cargo-test
 $(POOLED_TARGETS): firmware bb
 	$(WITH_POOL) $(MAKE) --no-print-directory pooled-$@
 
@@ -132,45 +125,30 @@ build:
 
 # BB_REQUIRE_RENODE=1: the Renode engine tests fail instead of skipping when
 # Renode or the firmware toolchain is missing, so the gate really runs them.
-cargo-test:
+# Phase 2 H6: on a warm pool (a POOLED_TARGETS member, so `make cargo-test` alone builds the
+# firmware and bb and leases like make test; ADR-004), and its own CI job (ci.yml `cargo-test`,
+# beside `test`, which runs make test with TEST_SKIP=cargo-test; ADR-015 Amendment 5).
+pooled-cargo-test:
 	BB_REQUIRE_RENODE=1 $(CARGO) test --workspace
 
 # The exit gate: unit/engine tests, then the end-to-end spike, 10-run
 # determinism and the golden-waveform diff (golden reuses the spike output).
+# Phase 2 H6: TEST_SKIP names steps to leave out (CI's `test` job: TEST_SKIP=cargo-test, which
+# its own job runs); make test and make check locally run every step. A step that fails ends the
+# run, as before.
+TEST_STEPS := measure-lock-test cargo-test spike determinism golden feedback feedback-order \
+              nrf-feedback adc adc-order adc-model nrf-saadc-model nrf-pwm-model device-smoke \
+              multi-producer adc-kicad dms-rail-test dms-vsense-test dms-home-test bench-test \
+              assert-test ec-reconnect packages pi-static-test pi-glue-test pi-idd-test gdb-test \
+              vscode-templates dms-system dms-e1-system-test registry-test
+TEST_SKIP ?=
 pooled-test:
 	@mkdir -p $(dir $(TEST_TIMING)) && : > $(TEST_TIMING)
-	+$(STEP) measure-lock-test
-	+$(STEP) cargo-test
-	+$(STEP) spike
-	+$(STEP) determinism
-	+$(STEP) golden
-	+$(STEP) feedback
-	+$(STEP) feedback-order
-	+$(STEP) nrf-feedback
-	+$(STEP) adc
-	+$(STEP) adc-order
-	+$(STEP) adc-stock
-	+$(STEP) adc-model
-	+$(STEP) nrf-saadc-model
-	+$(STEP) nrf-pwm-model
-	+$(STEP) device-smoke
-	+$(STEP) multi-producer
-	+$(STEP) adc-kicad
-	+$(STEP) dms-rail-test
-	+$(STEP) dms-vsense-test
-	+$(STEP) dms-home-test
-	+$(STEP) bench-test
-	+$(STEP) assert-test
-	+$(STEP) ec-reconnect
-	+$(STEP) packages
-	+$(STEP) pi-static-test
-	+$(STEP) pi-glue-test
-	+$(STEP) pi-idd-test
-	+$(STEP) gdb-test
-	+$(STEP) vscode-templates
-	+$(STEP) dms-system
-	+$(STEP) dms-e1-system-test
-	+$(STEP) registry-test
+	$(if $(filter-out $(TEST_STEPS),$(TEST_SKIP)),$(error TEST_SKIP: not a make test step: $(filter-out $(TEST_STEPS),$(TEST_SKIP))))
+	+@set -e; for s in $(filter-out $(TEST_SKIP),$(TEST_STEPS)); do \
+	    echo "$(STEP) $$s"; $(STEP) $$s; \
+	done
+	$(if $(TEST_SKIP),@echo "test: skipped (TEST_SKIP): $(TEST_SKIP)")
 
 bb:
 	$(CARGO) build --release -p bb-cli
@@ -248,7 +226,7 @@ golden:
 # partition hashes (from its one-cell reference); and the hashes of the ADC
 # boards' every-lattice-point references.
 golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-open-ref \
-               adc-stock-ref adc-open-stock-ref adc-kicad-ref nrf-feedback-ref
+               adc-kicad-ref nrf-feedback-ref
 	mkdir -p $(dir $(GOLDEN))
 	$(PYTHON) scripts/golden.py write $(SPIKE_OUT)/nets.csv $(GOLDEN)
 	cd $(SPIKE_OUT) && sha256sum nets.csv events.jsonl nets.vcd > $(CURDIR)/$(SPIKE_HASHES)
@@ -269,11 +247,6 @@ golden-update: spike feedback-run feedback-ref feedback-open-ref adc-ref adc-ope
 	cd $(ADC_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_HASHES) \
 	    && rm non-grant-records
-	mkdir -p $(dir $(ADC_STOCK_HASHES)) $(dir $(ADC_OPEN_STOCK_HASHES))
-	cd $(ADC_OUT)-stock-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
-	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_STOCK_HASHES)
-	cd $(ADC_OUT)-open-stock-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
-	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_OPEN_STOCK_HASHES)
 	mkdir -p $(dir $(ADC_KICAD_HASHES))
 	cd $(ADC_KICAD_OUT)-ref && grep -v '"type":"grant"' events.jsonl > non-grant-records \
 	    && sha256sum nets.csv events.jsonl nets.vcd non-grant-records > $(CURDIR)/$(ADC_KICAD_HASHES)
@@ -406,8 +379,6 @@ cost-table-runs:
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/feedback-open $(PERF_N) "--max-quantum 10us" "" - - - \
 	    -- $(FEEDBACK_OPEN_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
-	PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc-stock $(PERF_N) "$(ADC_STOCK_FLAGS)" "" \
-	    - - - -- $(ADC_ARGS)
 	$(MAKE) --no-print-directory adc-kicad-prepare
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/adc-kicad $(PERF_N) "--lookahead off" "" - - - -- $(ADC_KICAD_ARGS)
 	bash scripts/perf_ab.sh $(BB) $(COST_RUN_OUT)/nrf-feedback $(PERF_N) "--lookahead off" "" - - - \
@@ -451,28 +422,10 @@ measured-cost-table-adc-kicad: firmware bb adc-kicad-prepare
 	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/adc $(PERF_N) "--lookahead off" "" - - - -- $(ADC_ARGS)
 	env -u BB_RENODE_POOL bash scripts/perf_ab.sh $(BB) $(COST_OUT)/fresh/adc-kicad $(PERF_N) "--lookahead off" "" - - - -- $(ADC_KICAD_ARGS)
 
-# ADR-005 step 6 speed gates (scripts/perf_ab.sh, interleaved, N = PERF_N,
-# medians): examples/adc on Breadboard's ADC model (bb defaults) against the
-# ADR-003 default (--adc-model stock, its firmware), in the same protocol
-# run: at most 2000 grants per 300 ms and at least 3x less simulation time.
-# The two models give different (each self-consistent) outputs, so the A/B
-# equivalence is not checked here (it is make adc / make adc-stock). Run it
-# on an otherwise idle host.
-# ADR-005 D6 startup gate (scripts/plugin_startup.sh, fresh Renode,
-# interleaved, N = ADC_STARTUP_N, medians of the engine startup, 20 ms runs):
-# the ADC board on Breadboard's STM32F072 with a warm plugin cache within
-# 0.3 s of the stock STM32F072 with the lookahead plugin, and a cold start
-# (the plugin assembly compiled) within 3 s of a warm one. Run it on an
-# otherwise idle host.
-ADC_STARTUP_N ?= 5
-measured-adc-startup: firmware bb
-	STOCK_FLAGS="$(ADC_STOCK_FLAGS)" bash scripts/plugin_startup.sh $(BB) out/adc-startup $(ADC_STARTUP_N) \
-	    0.3 3 -- $(ADC_ARGS) --for 20ms
-
-ADC_SPEED_OUT ?= out/adc-speed
-measured-adc-speed: firmware bb
-	env -u BB_RENODE_POOL PERF_AB_EQUIV=0 bash scripts/perf_ab.sh $(BB) $(ADC_SPEED_OUT) $(PERF_N) \
-	    "$(ADC_STOCK_FLAGS)" "" 2000 3 - -- $(ADC_ARGS)
+# ADR-005's speed gate (make adc-speed) and startup gate (make adc-startup) compared Breadboard's
+# ADC model with Renode's stock one (--adc-model stock). Both were retired with the stock path in
+# Phase 2 H6 (ADR-015 D9, Amendment 5); their last results are in the README and in ADR-005
+# Amendment 4 (4.75x less simulation, 1 209 grants; startup +0.08 s warm, +1.17 s cold).
 
 # ADR-003 step 5 startup-cost gate: with the cached plugin, Renode engine
 # startup is within 0.3 s of a start without it (interleaved, N =
@@ -541,8 +494,6 @@ pool-equiv: firmware bb adc-kicad-prepare dms-rail-prepare dms-vsense-prepare be
 	    "adc;$(ADC_HASHES);nongrant;$(ADC_ARGS)" \
 	    "adc-off;$(ADC_HASHES);nongrant;$(ADC_ARGS) --lookahead off" \
 	    "adc-open;$(ADC_OPEN_HASHES);nongrant;$(ADC_OPEN_ARGS)" \
-	    "adc-stock;$(ADC_STOCK_HASHES);nongrant;$(ADC_STOCK_ARGS)" \
-	    "adc-open-stock;$(ADC_OPEN_STOCK_HASHES);nongrant;$(ADC_OPEN_STOCK_ARGS)" \
 	    "adc-kicad;$(ADC_KICAD_HASHES);nongrant;$(ADC_KICAD_ARGS)" \
 	    "nrf-feedback;$(NRF_FEEDBACK_HASHES);nongrant;$(NRF_FEEDBACK_ARGS)" \
 	    "nrf-feedback-off;$(NRF_FEEDBACK_HASHES);all;$(NRF_FEEDBACK_ARGS) --lookahead off" \
@@ -682,22 +633,6 @@ adc-order: adc
 # 10 runs of the ADC board (DET_RUNS, DET_JOBS): byte-identical outputs.
 pooled-adc-determinism: firmware bb
 	bash scripts/determinism.sh $(BB) out/adc-determinism $(DET_RUNS) $(DET_JOBS) -- $(ADC_ARGS)
-
-# ADR-003's board on Renode's stock ADC (`--adc-model stock`, approver
-# decision 4 of ADR-005: kept for comparisons): the defaults must give its
-# committed one-cell references ($(ADC_STOCK_HASHES), the ADR-003 hashes).
-adc-stock: firmware bb
-	$(BB) run $(ADC_STOCK_ARGS) --out $(ADC_OUT)-stock
-	$(PYTHON) scripts/check_adc.py $(ADC_OUT)-stock --model stock
-	cd $(ADC_OUT)-stock && grep -v '"type":"grant"' events.jsonl > non-grant-records \
-	    && grep -v ' events.jsonl$$' $(CURDIR)/$(ADC_STOCK_HASHES) | sha256sum -c
-	@echo "adc-stock: PASS (identical to the stock model's one-cell reference except grant records)"
-adc-stock-ref: firmware bb
-	$(BB) run $(ADC_STOCK_ARGS) --lookahead off --adc-push every --out $(ADC_OUT)-stock-ref
-	$(PYTHON) scripts/check_adc.py $(ADC_OUT)-stock-ref --model stock
-adc-open-stock-ref: firmware bb
-	$(BB) run $(ADC_OPEN_STOCK_ARGS) --max-quantum 10us --adc-push every --out $(ADC_OUT)-open-stock-ref
-	$(PYTHON) scripts/check_adc.py $(ADC_OUT)-open-stock-ref --model stock
 
 # ADR-005 step 5 gates (scripts/adc_equiv.sh): Part A (one cell) and Part B
 # (lookahead, 1 ms and 10 ms) on the cyclic board, and the open board in
@@ -863,11 +798,6 @@ multi-producer: firmware bb
 # registers, firmware; about 80 s). In `make test`.
 adc-model: firmware
 	$(MAKE) -C examples/adc model-test
-
-# The Renode-only ADC platform test of ADR-003 Amendment 5 (the stock
-# model; about 15 s).
-adc-renode:
-	$(MAKE) -C examples/adc test
 
 # --- Phase 1 M0: dial-me-spinner reference inputs and its SPICE suite -----
 # The reference board is dial-me-spinner 6854d25 (plan, approver decision C).
@@ -1654,10 +1584,10 @@ worktree-test:
 MEASURE_TARGETS := perf lookahead-perf cost-table cost-table-nrf-saadc cost-table-dms-rail \
                    cost-table-adc-kicad cost-table-dms-vsense cost-table-dms-home cost-table-dms-home-project \
                    cost-table-dms-e1-system \
-                   adc-startup adc-speed \
                    lookahead-startup startup-perf jit-profile-stress pool-perf nrf-costs dms-s1-cost \
                    setup-container stranger-test-container stranger-test-wsl baseline measure-lock-probe \
-                   ngspice-stall bench-perf bb-test-cost pi-oe-cost dms-home-g0 pi-idd-cost
+                   ngspice-stall bench-perf bb-test-cost pi-oe-cost dms-home-g0 pi-idd-cost \
+                   setup-cache-cost ci-jobs-local
 .PHONY: $(MEASURE_TARGETS) $(addprefix measured-,$(MEASURE_TARGETS))
 $(MEASURE_TARGETS):
 	@bash scripts/measure_lock.sh $@ $(MAKE) --no-print-directory measured-$@
@@ -1677,6 +1607,48 @@ BASELINE_WARMUP ?= 1
 BASELINE_ARGS   ?= check
 measured-baseline:
 	bash scripts/baseline.sh $(BASELINE_OUT) $(BASELINE_N) $(BASELINE_WARMUP) -- $(BASELINE_ARGS)
+
+# Phase 2 H6 (ADR-015 D11, Amendment 5): the CI side of the tiers, measured locally (CI runs only
+# on a push). make ci-jobs-local: every job of ci.yml (CI_JOBS_WORKFLOW) with its `run:` steps,
+# timed (scripts/ci_jobs_local.sh; fw-rebuild skipped, CI_JOBS_SKIP). make setup-cache-cost: what
+# the bb-setup action's cache of the installed toolchain saves (scripts/setup_cache_cost.sh,
+# SETUP_CACHE_N rounds, medians). Both under the measurement lock; run them on an idle host.
+CI_JOBS_OUT      ?= out/ci-jobs-local
+CI_JOBS_WORKFLOW ?= .github/workflows/ci.yml
+measured-ci-jobs-local: firmware bb
+	bash scripts/ci_jobs_local.sh $(CI_JOBS_OUT) $(CI_JOBS_WORKFLOW) $(CI_JOBS)
+SETUP_CACHE_OUT ?= out/setup-cache-cost
+SETUP_CACHE_N   ?= 3
+measured-setup-cache-cost:
+	bash scripts/setup_cache_cost.sh $(SETUP_CACHE_OUT) $(SETUP_CACHE_N)
+# make workflows-check: the local structural check of .github/workflows and the bb-setup action
+# (scripts/check_workflows.py: YAML, jobs and steps, the matrix/steps/inputs names in expressions,
+# and every `make <target>` a Makefile target), the stand-in for actionlint, which is not
+# installed here. A few seconds; not in make test.
+.PHONY: workflows-check
+workflows-check:
+	$(PYTHON) scripts/check_workflows.py
+
+# Phase 2 H6 (ADR-015 D11, Amendment 5): the nightly tier, by name. The `fresh` job (make test
+# POOL=0, the slowest CI PR job before H6), make ec-long, make ngspice-stall (H1's timing gate),
+# the full make dms-home (E3) and the full make dms-vsense (E2); .github/workflows/nightly.yml runs
+# the same targets, one job each. Every step runs even when an earlier one failed; their wall times
+# go to $(NIGHTLY_TIMING) and make nightly fails if any step did. A nightly failure blocks the
+# next milestone merge (D11). make test's dms-*-test targets stay in the PR tier.
+NIGHTLY_TIMING ?= out/nightly-timing.tsv
+NIGHTLY_STEPS  ?= nightly-fresh ec-long ngspice-stall dms-home dms-vsense
+.PHONY: nightly nightly-fresh
+nightly:
+	@mkdir -p $(dir $(NIGHTLY_TIMING)) && : > $(NIGHTLY_TIMING)
+	@rc=0; for s in $(NIGHTLY_STEPS); do \
+	    bash scripts/step_time.sh $(NIGHTLY_TIMING) $(MAKE) $$s || rc=1; \
+	done; \
+	echo "nightly: step, seconds, exit status ($(NIGHTLY_TIMING)):"; cat $(NIGHTLY_TIMING); \
+	if [ $$rc = 0 ]; then echo "nightly: PASS"; else echo "nightly: FAIL"; fi; exit $$rc
+# The `fresh` job: make test with every Renode started fresh (its per-step times in
+# out/nightly-fresh-timing.tsv, so a nightly run keeps make test's own out/test-timing.tsv).
+nightly-fresh:
+	$(MAKE) --no-print-directory test POOL=0 TEST_TIMING=out/nightly-fresh-timing.tsv
 
 # make print-VAR: a variable's value (scripts use it, e.g. print-CARGO_TARGET_DIR).
 print-%:

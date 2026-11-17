@@ -7,11 +7,6 @@
 #   build/adc_hwtrig.elf  the same with EXTSEL = TIM3_TRGO, EXTEN = rising and
 #                         TIM3 at 2 ms (the hardware trigger path; Renode's
 #                         model ignores EXTSEL, see adc.c)
-#   build/adc_board_isr.elf
-#                         adc.elf plus the board drive (PA4 toggles every 50
-#                         TIM3 updates) and code bits 4 and 8 on PA6/PA7, for
-#                         examples/adc/board.cir on the stock model (ADR-003
-#                         plan step 9; bb run --adc-model stock)
 #   build/adc_board.elf   the board firmware on Breadboard's ADC model
 #                         (ADR-005 D7): TIM3_TRGO hardware trigger, no TIM3
 #                         interrupt; the ADC ISR drives PA4 every 50
@@ -36,7 +31,7 @@ LDFLAGS := -nostdlib -nostartfiles -T $(LDSCRIPT) -Wl,--gc-sections \
 .PHONY: all clean
 .SECONDARY:
 
-all: $(BUILD)/adc.elf $(BUILD)/adc_hwtrig.elf $(BUILD)/adc_board_isr.elf \
+all: $(BUILD)/adc.elf $(BUILD)/adc_hwtrig.elf \
      $(BUILD)/adc_board.elf $(BUILD)/adc_idle.elf $(BUILD)/tim3_pwm.elf
 
 $(BUILD)/startup.o: startup.c | $(BUILD)
@@ -47,9 +42,6 @@ $(BUILD)/adc.o: adc.c | $(BUILD)
 
 $(BUILD)/adc_hwtrig.o: adc.c | $(BUILD)
 	$(CC) $(CFLAGS) -DADC_HW_TRIGGER -c $< -o $@
-
-$(BUILD)/adc_board_isr.o: adc.c | $(BUILD)
-	$(CC) $(CFLAGS) -DADC_BOARD -c $< -o $@
 
 $(BUILD)/adc_board.o: adc.c | $(BUILD)
 	$(CC) $(CFLAGS) -DADC_BOARD -DADC_BB_MODEL -c $< -o $@

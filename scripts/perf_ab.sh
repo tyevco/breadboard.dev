@@ -16,8 +16,9 @@
 #
 # Every B run must also match the first A run in nets.csv, nets.vcd and every
 # non-grant event record (B may change only the grant partition), unless
-# PERF_AB_EQUIV=0 (A and B are different models, e.g. the ADC board on
-# Breadboard's ADC model against the stock one; ADR-005 step 6). Wall-clock
+# PERF_AB_EQUIV=0 (A and B are different models, e.g. ADR-005 step 6's ADC
+# board on Breadboard's ADC model against the stock one, retired in Phase 2
+# H6). Wall-clock
 # numbers never reach the simulation outputs.
 set -euo pipefail
 

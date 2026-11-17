@@ -257,8 +257,8 @@ For each engine *i* in plan order:
    and **never earlier**. Several transitions of one pin inside one lattice
    cell are all applied, in order, at `ceil_L` (ADR-003 approver decision 2).
    An ADC push (an `Analog` entry of an `adc_in` pin) is at a lattice point
-   `t` and is applied at `t` (Renode's stock ADC: `ADC SetValue` while paused
-   there), never earlier. A push to a sampled input may be delivered ahead
+   `t` and is applied at `t`, never earlier (Renode's stock ADC applied it
+   with `ADC SetValue` while paused there, until ADR-015 D9 removed it). A push to a sampled input may be delivered ahead
    of its time, and the engine uses it only for sample instants strictly
    after `t`, never earlier (Breadboard's ADC model: a timed input written to
    the model before Renode runs; a sample at `s` reads the latest push with

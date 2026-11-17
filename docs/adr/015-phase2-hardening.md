@@ -1154,3 +1154,194 @@ H2's `make test` budget is none ("—"). It adds one engine test,
 gate's runtime measurably. `make ngspice-stall` is nightly. With H2's runs
 it took 1 min 46 s on an idle host (load 0.3); its H1 repro took 23.9 s,
 against 77.9-120.6 s under load in H1.
+
+## Amendment 5: H6 as built, the gate tiers (D9, D11, G7, G8, 2026-11-17)
+
+H6 builds the two tiers of D11, removes `--adc-model stock` (D9), splits
+`cargo-test` and caches `make setup` (plan section 4, row H6). Every
+saving below is measured against H0's baseline (AGENTS.md "Gate
+budgets": `make check` 470 s on an idle ext4 worktree, N = 3; CI job
+times from three runs on `main`). CI runs only on a push, and this build
+pushes nothing, so each CI job is measured by its local equivalent and the
+first push must confirm it (below).
+
+### What moved
+
+- **The PR tier** (`.github/workflows/ci.yml`) keeps `test`,
+  `verify-every`, `partition`, `feedback`, `adc`, `dms-rail` and
+  `fw-rebuild`, and gains `cargo-test`. The `fresh` job is gone from it.
+- **The nightly tier** is `.github/workflows/nightly.yml` and `make
+  nightly`, the same targets: `nightly-fresh` (`make test POOL=0`, the
+  former `fresh` job), `make ec-long` (from the `adc` job), `make
+  ngspice-stall` (nightly since H1, Amendment 1), the full `make dms-home`
+  and the full `make dms-vsense`. The workflow runs daily at 03:17 UTC on
+  the default branch and by hand (`workflow_dispatch`), one matrix job per
+  gate, `fail-fast: false`, 180 minutes each, the logs kept for 7 days on
+  a failure. `make nightly` runs every step even after a failure, writes
+  each step's wall time to `out/nightly-timing.tsv` and fails if any step
+  did. `make test` keeps `dms-home-test` and `dms-vsense-test`.
+- **`cargo-test` is split.** It is a pooled target (`POOLED_TARGETS`), so
+  `make cargo-test` alone builds the firmware and `bb` and leases from a
+  warm pool as `make test` does. `make test`'s steps are one list,
+  `TEST_STEPS`, and `TEST_SKIP` leaves named steps out (an unknown name is
+  an error). CI's `test` job runs `make test TEST_SKIP=cargo-test`; the
+  new `cargo-test` job runs `make cargo-test` on its own runner. Locally
+  `make test` and `make check` run every step, as before.
+- **`make setup` is cached.** The bb-setup action caches what setup.sh
+  installs under the runner's home: the pinned Rust toolchain (rustup's
+  toolchain directory and its update hash), the Renode portable tree and
+  uv. The key is exact (`scripts/setup.sh` and `rust-toolchain.toml`
+  hashed, no restore keys), so a version change installs afresh. On a hit
+  setup.sh finds each one present and only checks it. apt still installs
+  from H0's cached `.deb`s, because its packages live outside the home.
+- **`--adc-model stock` is removed (D9, G7).** Deleted: the stock path of
+  `RenodeEngine::apply_input_trace` (`SetValue` at each push, its verify
+  readback, `InputValue::Microvolts`), the flag, `run.json`'s `adc_model`,
+  `adc_board_isr.elf`, `make adc-stock` (in `make test`), `adc-stock-ref`,
+  `adc-open-stock-ref`, `make adc-renode` (the CI `adc` job), the retired
+  `make adc-speed` and `make adc-startup` (their last results stay in
+  ADR-005 Amendment 4 and the README), `tests/golden/adc-stock` and
+  `adc-open-stock`, the two pool-equiv configurations and the pool's
+  warm-up of the stock STM32F072. `RenodeEngine::start` now refuses an
+  ADC input on a platform without one of Breadboard's ADC models. Kept:
+  `AdcKey::Millivolts` (the push model's coarse-key case, still tested in
+  `engines/analog-ngspice/tests/adc.rs`), `renode_adc_test.py` (run by
+  hand; it is the External Control client `bb_adc_test.py` and
+  `bb_saadc_test.py` import), `check_adc.py --model stock` (reads runs
+  recorded before H6) and `scripts/plugin_startup.sh` (reproduces ADR-005
+  Amendment 4 with an older `bb`).
+
+### `spec/` changes
+
+As described in "Exact `spec/` changes": `spec/pin-model.md`'s `adc_in`
+drops the stock model's push key and its `SetValue` delivery (a sentence
+records the removal), and `spec/project.md` §6 drops `adc_model` from
+`run.json`'s options. One more sentence than described:
+`spec/time-grant.md`'s rule for applying an ADC push named the stock
+model as its example ("`ADC SetValue` while paused there"); the rule is
+unchanged, and the example now says the path was removed by D9.
+
+### Savings, measured against H0's baseline
+
+| Move | Where it saves | H0 | H6 | Saving |
+| --- | --- | --- | --- | --- |
+| `fresh` to nightly | the PR tier's slowest job | CI 11:30 median (13:58, 10:31, 11:30); locally `make test POOL=0` 554 s | not in the PR tier (nightly: 681 s and 577 s locally) | the whole job: the PR tier's wall time becomes its slowest remaining job |
+| `adc-stock` removed | `make test` / `make check` | 5.5 s (`adc-stock` step median) | no step | 5.5 s per `make test`; also `adc-renode` (about 15 s) off CI's `adc` job, and 2 of pool-equiv's configurations (8 runs) |
+| `cargo-test` split | CI's `test` job | `cargo-test` 152.4 s inside it | its own job (`make cargo-test` 155.8 s locally, load 3.2) | 146.9 s (H6's `cargo-test` median) off the `test` job's critical path |
+| `ec-long` to nightly | CI's `adc` job (H0: 3:58) | `make ec-long` 130 s (H3) | nightly (99.4 s and 97.1 s) | about 100-130 s; the `adc` job's commands take 41.3 s locally |
+| `make setup` cached | every CI job's setup step (H0: 0:49-0:56, 1:12 with the SDK) | 8.89 s locally for the three parts | 1.35 s (`make setup-cache-cost`, N = 3 interleaved, medians: Rust 7.35 to 1.06 s, Renode 0.97 to 0.24 s, uv 0.57 to 0.05 s) | 7.54 s per job locally; on CI the downloads are slower, so the first push measures it |
+
+D11's "any later gate over its budget" moves nothing else: no
+milestone's measured `make test` addition is over its budget (AGENTS.md's
+milestone table), the model-test suites (`adc-model` 31.3 s,
+`nrf-pwm-model` 40.3 s, `nrf-saadc-model` 12.8 s at H6's baseline) are
+within a few seconds of their H0 times, and `make check` meets its
+target with 235 s to spare.
+
+The full `make dms-home`, the full `make dms-vsense` and `make
+ngspice-stall` were in neither `make check` nor a CI job at H0 (only
+their `-test` forms are in `make test`), so moving them saves nothing
+against the baseline: the nightly tier gives them their first CI run.
+
+The cache archives are 210 MB (Rust), 62 MB (Renode) and 16 MB (uv),
+zstd: about 290 MB per setup mode, against GitHub's 10 GB per repository.
+
+### The PR-tier targets (section 5 item 5)
+
+- **`make check` on an idle ext4 worktree: 475 s (7:55)**, N = 3 after
+  one uncounted warm-up (475.0, 475.4, 474.6 s; warm-up 481.5 s; 1-minute
+  load before each run 1.7-1.9, the previous run's tail), `make baseline`
+  in `~/src/bb-h` (ext4) on 24 CPUs and 14.5 GiB, on `7bb202f` with H6.
+  The target is 470 + 240 = **710 s**: met with 235 s to spare. W-fw,
+  merged after it, adds nothing to `make check`. Against H0's 470 s:
+  Phase 2's new steps add 48.1 s (`pi-static-test` 13.8, `multi-producer`
+  10.9, `assert-test` 5.1, `bench-test` 4.4, `pi-idd-test` 4.4,
+  `registry-test` 3.3, `dms-e1-system-test` 3.2, `pi-glue-test` 3.0),
+  `dms-vsense-test` and `dms-rail-test` take 22.9 s less than at H0
+  (36.1 to 18.5 s and 9.2 to 3.9 s, since B3 made them `bb test` files),
+  and H6 took off `adc-stock`'s 5.5 s; the other steps moved by a few
+  seconds either way.
+- **The slowest CI PR job: under 15 minutes, by its local equivalent.**
+  `make ci-jobs-local` runs each job's `run:` steps as the job does
+  (setup aside), with a release `bb` of the checkout first on `PATH` as
+  `make setup` installs it. On `19dbea1` with H6, all seven green, in
+  one run beside another track's `make test` (1-minute load before each
+  job in brackets): `dms-rail` 528.1 s (14.0; 379.9 s in an earlier run
+  at load 10.4), `test` 409.8 s (5.9; `make test TEST_SKIP=cargo-test`
+  with doctor, fmt, clippy and packages), `cargo-test` 179.0 s (8.9),
+  `feedback` 134.5 s (4.4), `adc` 54.9 s (7.8), `partition` 27.2 s (6.4)
+  and `verify-every` 7.3 s (2.7). `fw-rebuild` is not run here: it
+  fetches Zephyr from the network, and H6 changes only its setup step
+  (H0: 2:53). The slowest at H0 was `fresh` (13:58 at its worst), now
+  nightly; the slowest left is `dms-rail` (H0: 7:39 on CI) or `test`
+  (H0: 8:51 with `cargo-test`). Adding H0's 0:50-1:12 of setup and a
+  slower runner than this host, both are expected at about 8-11
+  minutes on CI, under 15; the first push confirms it.
+
+### The nightly tier, green twice (G8)
+
+`make nightly` on `7bb202f` with H6 (`main` before W-fw, which changes
+no nightly gate), twice in a row (1-minute load 2.4 and 5.0 at their
+starts):
+
+| Step | Run 1 | Run 2 |
+| --- | --- | --- |
+| `nightly-fresh` (`make test POOL=0`) | 680.6 s | 577.2 s |
+| `make ec-long` | 99.4 s | 97.1 s |
+| `make ngspice-stall` | 50.6 s | 48.5 s |
+| `make dms-home` | 308.6 s | 292.6 s |
+| `make dms-vsense` | 635.7 s | 611.6 s |
+| in all | 1 775 s, PASS | 1 627 s, PASS |
+
+On GitHub each step is its own job; the longest, `dms-vsense` and
+`fresh`, should take about 12-15 minutes there. The scheduled workflow is
+green on GitHub only after the first push (below).
+
+### Gates, measured
+
+- **`make check`, after merging `main` (`19dbea1`, W-fw): green pooled
+  (756 s) and `POOL=0` (729 s)**, both beside another track's `make
+  test` (1-minute load 6-25): `cargo test` 331 passed, 0 failed, 3
+  ignored in each; every one of `TEST_STEPS`' 31 steps ran, none of them
+  `adc-stock`; the pooled run's 130 leases all kept, none discarded.
+  Before the merge, on `7bb202f`, `make check` was green in each of
+  `make baseline`'s four runs and with `POOL=0` (725 s, load 15-22).
+- **`make pool-equiv`: PASS** (902 s): 34 configurations, two rounds in
+  alternating order, every pooled run leased and byte-identical to its
+  fresh run and to the committed hashes; no `adc-stock` configuration
+  (G7).
+- **`make workflows-check`: PASS** (`ci.yml` 8 jobs, `docs.yml` 2,
+  `nightly.yml` 1, the bb-setup action 4 steps), with four negative
+  controls on scratch copies, each caught: a misspelt `make` target in
+  `ci.yml`, a matrix target that is no Makefile target in
+  `nightly.yml`, a `steps.<id>` that names no step in the action, and an
+  unknown `matrix.<key>`. actionlint is not installed here;
+  `scripts/check_workflows.py` checks structure and names, not every
+  action's inputs or expression types.
+- **G7: `make test` and `make pool-equiv` green without the stock
+  targets** (above).
+
+### What the first push must confirm
+
+- Every `ci.yml` job green, and the slowest at most 15 minutes (expected:
+  `dms-rail` or `test`, about 8-11 minutes).
+- The bb-setup action's new cache: a miss on the first run (it saves
+  about 290 MB per mode), a hit on the second, and the setup step's time
+  on a hit against H0's 0:49-0:56.
+- `nightly.yml` by `workflow_dispatch`, then two scheduled runs green
+  (scheduled workflows run only from the default branch). Until then G8
+  rests on the two local runs above.
+
+### Residuals
+
+- The pool's warm-up still calls External Control `ADC SetValue` and
+  `GetValue` once on Breadboard's F072 (`warm_external_control`), which no
+  engine calls any more; it is harmless and left so the measured
+  pool-equiv run stays this change's evidence.
+
+### Budget
+
+H6's `make test` budget is none ("—"; it removes). Measured: `make test`
+loses `adc-stock` (5.5 s at the baseline). H6 adds no step;
+`make workflows-check`, `make ci-jobs-local`, `make setup-cache-cost` and
+`make nightly` are outside `make test`.
