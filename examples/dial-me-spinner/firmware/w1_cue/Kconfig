@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+config W1_BLANK_MS
+	int "POFWARN blanking after LED_PWR_EN rises (ms); 0: no blanking"
+	default 10
+	range 0 100
+	help
+	  The one switch between the four W1 images (Phase 2 milestone W-fw):
+	  10 (w1_rule.elf: dial-me-spinner docs/firmware.md section 12.4's
+	  rule, "ignores POFWARN for 10 ms after it raises LED_PWR_EN"),
+	  4 (w1_blank4.elf: the window-midpoint negative control, the whole ms
+	  nearest the midpoint of the stress corner's 2.94 V window, 3.255-4.089
+	  ms after LED_PWR_EN; ADR-009 Amendment 2), 5 (w1_blank5.elf: the 5 ms
+	  blanking the plan reports) and 0 (w1_blank_off.elf: POFCON stays
+	  enabled through the edge, the second negative control).
+
+config W1_CUE_DELAY_MS
+	int "Delay from main() to the charging cue (LED_PWR_EN high) (ms)"
+	default 1
+	help
+	  The boot steps before the cue that Phase 2 cannot run (the charger's
+	  I2C setup), as one sleep.
+
+config W1_DIN_DELAY_MS
+	int "Delay from LED_PWR_EN high to P0.06 high, the cue's first frame (ms)"
+	default 15
+	help
+	  At least 10 ms with P0.06 low after VLED is switched on
+	  (firmware.md section 6.4, LED-DATA-V4), and clear of the 10 ms
+	  blanking's end.
+
+source "Kconfig.zephyr"

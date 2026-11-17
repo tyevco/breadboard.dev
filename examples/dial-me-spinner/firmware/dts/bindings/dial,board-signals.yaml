@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-# dial-me-spinner docs/firmware.md section 3.1: the board-signals node. Only the property the
-# E1 firmware uses is declared here (ADR-008 D5).
-description: dial-me-spinner board signals (the E1 subset)
+# dial-me-spinner docs/firmware.md section 3.1: the board-signals node. Only the properties the
+# Breadboard firmware uses are declared here (ADR-008 D5): led-din-gpios (E1 and on), and the two
+# load-switch enables of W1 and W2 (Phase 2 milestone W-fw), set by those applications' overlays.
+description: dial-me-spinner board signals (the subset the Breadboard firmware uses)
 
 compatible: "dial,board-signals"
 
@@ -11,3 +12,15 @@ properties:
     required: true
     description: |
       P0.06 (LED_DIN_MCU), forced low while VLED is off (firmware.md section 6.4).
+
+  led-pwr-en-gpios:
+    type: phandle-array
+    description: |
+      P1.04 (LED_PWR_EN), the ON pin of U2 (TPS22917, the VLED load switch; R3 100 kOhm
+      pull-down), as a plain GPIO (W1, W2). E1 drives it through the vled regulator node.
+
+  oled-vcc-en-gpios:
+    type: phandle-array
+    description: |
+      P1.02 (OLED_VCC_EN), the ON pin of U21 (TPS22917, OLED_VIN to the TPS61040 boost; R25
+      100 kOhm pull-down), as a plain GPIO (W1, W2).

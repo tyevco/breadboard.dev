@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Phase 1 M6, M8 and M10 (ADR-008 D5): the E1, E2 and E3 Zephyr firmware of examples/dial-me-spinner,
-# built from a pinned west workspace with a pinned Zephyr SDK.
+# and Phase 2 W-fw: the W1 and W2 firmware; built from a pinned west workspace with a pinned Zephyr SDK.
 #
 #   scripts/dms_zephyr.sh sdk                 install the pinned SDK (minimal + arm-zephyr-eabi)
 #   scripts/dms_zephyr.sh ws [<dir>]          create (or update) a workspace from firmware/west.yml
-#   scripts/dms_zephyr.sh build <ws> <out>    build the E1, E2 and E3 images into <out> (stripped ELFs)
+#   scripts/dms_zephyr.sh build <ws> <out>    build the E1-E3, W1 and W2 images into <out> (stripped ELFs)
 #   scripts/dms_zephyr.sh update [<ws>]       rebuild into firmware/prebuilt (SHA256SUMS, PROVENANCE)
 #   scripts/dms_zephyr.sh check               fw-rebuild: a FRESH workspace (a second `west init`
 #                                             into a new directory), rebuild, and require the image
@@ -35,12 +35,17 @@ BOARD=dial_me_spinner/nrf52840
 # The images: E1 (led_rail, and led_rail_wrong_order with its one Kconfig switch) and E2 (vsense,
 # and vsense_50ms with its one Kconfig switch, the reading period) and E3 (homing, and homing_step
 # with its one Kconfig switch, the one-step test; homing_fast, make dms-home's negative control: the
-# 446 PPS phases at 3125 PPS, ADR-008 Amendment 12). image -> application and extra
-# Kconfig fragment in app_of / conf_of (ADR-008 D5).
-IMAGES=(led_rail led_rail_wrong_order vsense vsense_50ms homing homing_step homing_fast)
-app_of() { case $1 in led_rail*) echo led_rail ;; vsense*) echo vsense ;; homing*) echo homing ;; esac; }
+# 446 PPS phases at 3125 PPS, ADR-008 Amendment 12), and Phase 2 W-fw: W1 (w1_cue: w1_rule, the
+# 10 ms POFWARN blanking, and w1_blank4, w1_blank5 and w1_blank_off with their one Kconfig switch,
+# the blanking) and W2 (w2_oled: w2_rule, and w2_old_rule with its one Kconfig switch).
+# image -> application and extra Kconfig fragment in app_of / conf_of (ADR-008 D5).
+IMAGES=(led_rail led_rail_wrong_order vsense vsense_50ms homing homing_step homing_fast
+  w1_rule w1_blank4 w1_blank5 w1_blank_off w2_rule w2_old_rule)
+app_of() { case $1 in led_rail*) echo led_rail ;; vsense*) echo vsense ;; homing*) echo homing ;;
+  w1_*) echo w1_cue ;; w2_*) echo w2_oled ;; esac; }
 conf_of() { case $1 in led_rail_wrong_order) echo wrong_order.conf ;; vsense_50ms) echo fast.conf ;; homing_step) echo step.conf ;;
-  homing_fast) echo fast.conf ;; esac; }
+  homing_fast) echo fast.conf ;; w1_blank4) echo blank4.conf ;; w1_blank5) echo blank5.conf ;;
+  w1_blank_off) echo blank_off.conf ;; w2_old_rule) echo old_rule.conf ;; esac; }
 
 log() { printf '==> %s\n' "$*" >&2; }
 
@@ -134,7 +139,7 @@ provenance() {
   echo "cmsis_6 $(git -C "$ws/modules/hal/cmsis_6" rev-parse HEAD)"
   echo "sdk zephyr-sdk $(cat "$sdk/sdk_version") ($("$sdk/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc" --version | head -1))"
   echo "west $WEST_VERSION"
-  echo "sources $(cd "$fw" && find boards dts led_rail vsense homing west.yml requirements.lock -type f | LC_ALL=C sort \
+  echo "sources $(cd "$fw" && find boards dts led_rail vsense homing w1_cue w2_oled west.yml requirements.lock -type f | LC_ALL=C sort \
     | xargs sha256sum | sha256sum | cut -d' ' -f1)"
 }
 
