@@ -34,7 +34,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--probe net:<name|alias|pin> ...] --out <dir> [--allow-unqualified <pkg:view>]
               [--max-quantum 10ms] [--renode-quantum 10us] [--sample-rate 100kHz] [--seed 0]
               [--renode <path>] [--verify edges] [--no-verify] [--engine-order mcu-first]
-              [--lookahead on|off] [--adc-push change|every] [--adc-model bb|stock]
+              [--lookahead on|off] [--adc-push change|every]
               [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
 ```
 
@@ -75,7 +75,6 @@ There are two front ends:
 | `--lookahead on\|off` | CPU lookahead for boards with a feedback loop. On by default whenever the lookahead plugin is loaded. Changes only the grant records; `off` is the one-cell reference. |
 | `--lookahead-plugin auto\|always\|never` | Load Renode's lookahead plugin (default `auto`: boards with a feedback loop). The plugin is inert; a test knob. |
 | `--adc-push change\|every` | When an `adc_in` pin's value reaches the MCU's ADC: at the lattice points where it changes (default), or at every lattice point (the reference of the equivalence gate). A test knob. |
-| `--adc-model bb\|stock` | The STM32F072's ADC: Breadboard's model (default) or Renode's stock `STM32F0_ADC`. Changes results: each has its own references. |
 | `--renode-pool env\|off` | `env` (default): lease a pre-warmed Renode from the pool in `$BB_RENODE_POOL` when one is idle, else start fresh. `off`: always fresh. Never changes the outputs. |
 | `--uart-log on\|off` | `on` (default): on the nRF52840, every line the firmware writes to UARTE0/1 becomes an `info` log record at the time of its last byte. |
 | `--gdb <port>` | Debug the firmware with GDB: a GDB remote server on `127.0.0.1:<port>` (`0`: a free port, printed). Forces lookahead off and starts Renode fresh. A breakpoint, a step, a write or a peripheral read can change the results, and the first one marks the run; attaching, halting, reading and detaching do not. See [Debugging with GDB](../guide/debugging). |

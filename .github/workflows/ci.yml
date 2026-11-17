@@ -1,5 +1,7 @@
 # Mirrors `make setup` + `make check` (fmt-check, clippy, test).
 # Written for parity with local runs; runs on every push and pull request.
+# This is the PR tier of ADR-015 D11 (slowest job at most 15 minutes). The nightly tier
+# (make test POOL=0, ec-long, ngspice-stall, dms-home, dms-vsense) is nightly.yml (Phase 2 H6).
 name: ci
 
 on:
@@ -49,8 +51,10 @@ jobs:
       - name: Package schemas, lint and tests
         run: make packages
 
-      - name: Test
-        run: make test
+      # Phase 2 H6 (ADR-015 Amendment 5): cargo-test runs in its own job (below), so this job's
+      # make test leaves it out; locally make test and make check still run it.
+      - name: Test (make test without cargo-test)
+        run: make test TEST_SKIP=cargo-test
 
       # Milestone B3 (ADR-010 D9, Amendment 5): make test's dms-*-test targets are bb test files;
       # each writes out/dms-*-test/junit.xml (spec/schema/junit-subset.xsd). The java-junit parser
@@ -66,9 +70,11 @@ jobs:
           reporter: java-junit
           fail-on-empty: true
 
-  # ADR-004: `make test` runs on a warm Renode pool by default; this job
-  # keeps the fresh path (one Renode per run) covered.
-  fresh:
+  # Phase 2 H6 (ADR-015 Amendment 5): make test's cargo-test step (cargo test --workspace on a
+  # warm Renode pool, BB_REQUIRE_RENODE=1), split from the `test` job onto its own runner: the
+  # Renode engine tests are the largest step of make test, and CPU-bound, so they gain from a
+  # runner of their own, not from running beside the other steps on one.
+  cargo-test:
     runs-on: ubuntu-24.04
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/bb-target
@@ -85,13 +91,11 @@ jobs:
             .cache/bb-target
           key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
 
-      # Phase 2 H0: make setup with the Renode tarball and the apt packages cached
-      # (.github/actions/bb-setup).
       - name: Setup toolchain (make setup)
         uses: ./.github/actions/bb-setup
 
-      - name: Test, every Renode fresh (POOL=0)
-        run: make test POOL=0
+      - name: cargo test --workspace (make cargo-test)
+        run: make cargo-test
 
   # ADR-003 D1.2: the default cross-check is `--verify edges`; this job runs
   # the spike with the check after every grant and requires identical outputs.
@@ -192,7 +196,8 @@ jobs:
   # ADR-003 step 9: adc_in on examples/adc (STM32F072). Part A (one cell),
   # Part B (lookahead, 1 ms and 10 ms) and the open board in long grants must
   # give the every-lattice-point references byte for byte (non-grant
-  # records), and Renode's ADC model must behave as Amendment 5 pins it.
+  # records). Phase 2 H6: ec-long moved to nightly.yml, and the stock ADC
+  # model's test (adc-renode) went with --adc-model stock (ADR-015 D9).
   adc:
     runs-on: ubuntu-24.04
     env:
@@ -217,12 +222,6 @@ jobs:
 
       - name: ADC equivalence (Part A, Part B, open board)
         run: make adc-equiv
-
-      - name: Long one-cell reference across External Control reconnects
-        run: make ec-long
-
-      - name: Renode ADC platform test
-        run: make adc-renode
 
       # Phase 2 H4 (ADR-015 G5): each platform's declared plugin subset compiles alone
       # and the plugin assembly has no module initialiser (about 6 s; not in make test).

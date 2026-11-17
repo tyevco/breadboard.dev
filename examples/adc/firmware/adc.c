@@ -27,7 +27,8 @@
  * - Everything the host checks is in `status` at 0x20000000 (linker
  *   script), plus the PA5 edges.
  * - -DADC_BOARD (adc_board_isr.elf, ADR-003 plan step 9, the stock-model
- *   board, `bb run --adc-model stock`): the default build plus a drive and
+ *   board; no longer built since `bb run --adc-model stock` was removed in
+ *   Phase 2 H6, ADR-015 D9): the default build plus a drive and
  *   two code pins. The TIM3 ISR toggles PA4 (DRIVE, into the board's
  *   RC-filtered divider that feeds PA1) every DRIVE_UPDATES updates, before
  *   it starts the conversion; the ADC ISR copies bit 4 of every code to PA6
