@@ -14,6 +14,14 @@
   one-brown-out loop left to the approver (ADR-009 Amendment 9), as is one
   P0 spike gate broken by D-TPS (ADR-009 Amendment 10). The adoption exit
   is not attempted in this build (section 10).
+- **Approver decisions D-close (2026-11-17):** every "needs approval"
+  item of the exit review answered (section 10, "Round 4"; ADR-009
+  Amendment 12, ADR-010 Amendment 7, ADR-011 Amendment 5): W2 counts
+  brown-outs over 200 ms; W1's `pof-dip` anti-vacuity accepted; the
+  nRF52840's idd on the LDO the firmware runs on; `make pi-spike` pinned to
+  P0's view (37/37); W1's ramped load sweep; D-TPS confirmed; four scope
+  items moved to Phase 3. Phase 2's technical exit stands with no open
+  approval item ("Review notes: D-close", at the end).
 - **Exit review (2026-11-17):** twenty-one findings on the technical exit,
   each re-verified ("Review notes: exit review", at the end): ADR-009 D3
   built (package limits as assertions), the W1 corner read back from
@@ -196,8 +204,8 @@ statement of firmware.md.
   | P0 feasibility at the **stress corner** (D-W1): static-load mode on the `pi` views at the +5 % corner, 55 mA static +3V3 load, RT9080 worst | the stress load is the smallest whole mA with +3V3 below 2.94 V for at least 0.5 ms; +3V3 below 2.94 V for at least 0.5 ms, recovered at least 2 ms before the 10 ms blanking ends (P0: 0.83 ms, 3.255-4.089 ms) | measured window |
   | **Margin check** at the suite's 50 mA (D-W1): static-load mode, RT9080 worst, +5 % corner | no POFWARN: +3V3 never below 2.94 V (P0: min 2.9640 V, margin +24.0 mV); +3V3 min and its margin reported at the nominal and the halved (DC-bias stand-in) +3V3 capacitance (P0: halved −21.2 mV, a 0.38 ms dip inside the blanking). With the firmware in the loop (P4), reported: the blanking-off build's `pofwarn` count (expected 0; the rule build masks the blanking) | ADR-009 Amendment 2 |
   | Static-load mode at the stress corner: +3V3 min, VSYS min, the 2.94 V window's start and end | within the stress corner's own tolerances, fixed from P0's measured difference at 55 mA: 200 mV, 200 mV, 50 µs, 5 ms. The replica is near its cliff there, so the window's end is bounded, not discriminated | suite at 55 mA |
-  | Static-load load sweep: 30, 50, 55 and 60 mA | no crossing; no crossing (the margin check: the suite crosses and recovers here, the one verdict that differs, recorded); cross and recover; collapse | table above |
-  | Rule firmware (10 ms), static-load at the stress corner, +5 % corner | the cue stays on; **`pofwarn` fired at least once** (so the pass is not vacuous); no `reset` record; +3V3 ≥ 2.7 V (flash VCC min) after 10 ms | firmware.md R8 |
+  | Static-load load sweep: 30, 50, 55 and 60 mA; with the firmware in the loop and the static load ramped in before LED_PWR_EN (decision D-close 5), every load 30-65 mA, among them 40-48 and 59-62 mA | no crossing; no crossing (the margin check: the suite crosses and recovers here, the one verdict that differs, recorded); cross and recover; collapse. In the loop: every load runs, the classes monotone, none at 30-50 mA (40-48 among them), cross and recover at 55 mA, collapse at 60-65 mA (the cue shed when the blanking ends; 60 mA reported as its own case) | table above |
+  | Rule firmware (10 ms), static-load at the stress corner, +5 % corner | the cue stays on; **the dip happened** (so the pass is not vacuous): `pof-dip`, +3V3 crosses the comparator's trip level (2.94 V) inside the 10 ms blanking, with the paired blanking-off control on the same deck raising POFWARN within one lattice cell of that crossing (decision D-close 2: the firmware blanks by disabling POFCON, so no POFWARN can fire inside the blanking); no `reset` record; +3V3 ≥ 2.7 V (flash VCC min) after 10 ms | firmware.md R8 |
   | Negative control: blanking that ends inside the window (the whole ms nearest its midpoint: 4 ms for the suite's window, and 4 ms for P0's stress-corner window, 89 µs before its end) | fails exactly `cue-held`, the shed caused by the re-enable rule | measured window |
   | Negative control: blanking off | fails exactly `cue-held`; POFWARN within one lattice cell of the window's start | — |
   | 5 ms blanking | reported (the suite predicts a pass) | — |
@@ -245,9 +253,15 @@ resets, the boot sequence enables the OLED again, and the loop repeats.
   - the W2 firmware (old rule and rule; W-fw).
 - **Checks:**
   - static-load mode against both suite cases, with P0's tolerances;
-  - old-rule firmware: at least 2 `reset` records in 200 ms, RESETREAS
-    read as 0 after each one (a brown-out leaves no reset reason), and the
-    enables fall through their pull-downs during reset;
+  - old-rule firmware: **at least one brown-out** in 200 ms, counted as
+    `reset` records with phase `enter` (one brown-out writes its hold,
+    `enter`, and its release, `exit`), RESETREAS read as 0 after each one
+    (a brown-out leaves no reset reason), and the enables fall through
+    their pull-downs during reset (decision D-close 1). The old rule causes
+    a brown-out but, on these models, not a repeating loop: the first OLED
+    attempt charges the TPS61040's output before the reset cuts its input,
+    so the attempt after the release completes (ADR-009 Amendment 9 item
+    5). Whether the loop repeats is reported;
   - rule firmware: no `reset` record, and +3V3 ≥ 2.7 V.
 - **Conditional.** W2 counts in the technical exit only after P5's
   prototype shows both a co-simulated crossing of VBOR with the P1 views
@@ -292,10 +306,10 @@ to configure the BQ25180, RF behaviour, and the two-MCU system.
 | Area | What | ADR |
 | --- | --- | --- |
 | `pi` fidelity | The fidelity dial at `pi`. Regulator and power-path views (`richtek/rt9080` restated from DS9080-09, `ti/bq25180`, `ti/tps61040` averaged, `ti/tps63802` averaged). `pi` declarations on the existing views that are adequate there. A battery bench element. The `supply_load` view kind and `[power] idd`. CPU state outputs. Rail-tracking and tristate `digital_out` at `pi`, with a high-Z leakage. The `power` pin model and package limits as assertions. POFWARN and BOR from the rail on the nRF52840 (`BbNrf52Power`). The `reset` record. Named corners | 009 |
-| Benches and tests | `bb-bench/1`: timed actions, CSV playback through an `EXTERNAL` source, current profiles, environment signals, faults, per-probe rates, the `switch` view kind. The bench engine. A closed set of assertions, evaluated deterministically. `assert` v2. `bb-test/0` and `bb test`. JUnit. `bb capture import` (sigrok `.sr`, Saleae binary to CSV) | 010 |
+| Benches and tests | `bb-bench/1`: timed actions, CSV playback through an `EXTERNAL` source, current profiles, faults, the `switch` view kind (environment signals and per-probe rates: Phase 3, decision D-close 7). The bench engine (its lock entry `engine:bench@1`: Phase 3). A closed set of assertions, evaluated deterministically. `assert` v2. `bb-test/0` and `bb test`. JUnit. `bb capture import` (sigrok `.sr`, Saleae binary to CSV) | 010 |
 | Run modes | Devices in `bb.toml` (Phase 1 route B, so E3 runs on the project). Single-MCU system runs (both dial-me-spinner boards in one deck). Runs without a CPU target (caliper) | 013 |
 | Schema epoch | Every Phase 2 schema major (`bb-part/1`, `bb-pins/1`, `bb-lock/1`, `bb-project/1`, `bb-board/1`, `bb-bench/1`, event stream v2) specified and landed together, with one relock (milestone S) | 009-013 |
-| Registry | A static, git-hosted public index. Deterministic archives keyed by tree hash. Minisign-signed snapshots. GitHub attestations. `bb-lock/1` with `source`, `vendor_file` and engine-neutral platform keys. Yanking. Namespace routing for private registries. `bb pkg publish`, `yank`, and `init --from-svd/--from-ibis` | 011 |
+| Registry | A static, git-hosted public index. Deterministic archives keyed by tree hash. Minisign-signed snapshots. GitHub attestations. `bb-lock/1` with `source`, `vendor_file` and engine-neutral platform keys. Yanking. Namespace routing for private registries. `bb pkg publish` and `yank` (`init --from-svd/--from-ibis`: Phase 3, decision D-close 7) | 011 |
 | Pipeline | Documents with hashes, claims with page and quote, figure and fit claims, a mechanical claim checker run by the maintainer, a staging channel, a pipeline bot identity, `reviewed_by` from PR approvals, and tiers T0/T1. The first 200 packages, ranked by MPN usage | 012 |
 | Kernel | Quiet grants with several producers (E3 from one-cell grants to long grants), behind a measured prototype; digital-only nets | 014 |
 | Hardening | An ngspice progress watchdog. Engine-owned `.save`. B-expression lint. Operating-point fail-fast. External Control through a reverse connection. Platform hashes scoped to what a platform loads. The package-path trap. The Renode pin policy. Removal of `--adc-model stock`. The debug-run sentence in `spec/time-grant.md`. A nightly gate tier | 015 |
@@ -305,7 +319,8 @@ to configure the BQ25180, RF behaviour, and the two-MCU system.
 
 | Item | Where / why |
 | --- | --- |
-| `si` and `em` rungs, IBIS buffer I/V, extraction, gerbers, PCB geometry | Phase 3 (design doc). The IBIS **scaffolding** (`bb pkg init --from-ibis` emitting pin facts) is in |
+| `si` and `em` rungs, IBIS buffer I/V, extraction, gerbers, PCB geometry | Phase 3 (design doc). The IBIS **scaffolding** (`bb pkg init --from-ibis` emitting pin facts) is Phase 3 too (decision D-close 7) |
+| `bb pkg init --from-svd/--from-ibis`; bench `[[env]]` and `[probes]`; the bench engine's lock entry `engine:bench@1` | Phase 3 (approver decision D-close 7, 2026-11-17; ADR-010 Amendment 7, ADR-011 Amendment 5). `bb pkg init` and the two bench keys are refused, naming Phase 3; `run.json` records the bench engine's identity |
 | Switching-converter views at `pi` | Measured: about 1.5 h per simulated second for a 2 MHz converter. `pi` views are averaged; switching belongs to `si` or to short windows |
 | Multi-MCU simulation, QEMU (ESP32-S3, application processors), Verilator | Phase 3. caliper's CPU is out; its analog-only run is in. New public formats use engine-neutral names so a QEMU backend needs no new lock major (ADR-011 D5) |
 | Bus devices (TWIM/EasyDMA, SPIM3), the BQ25180 I2C model, the Python device API, WASM devices | Phase 3 candidates. The Python round trip measured 85.5 µs, 20-25 % of a one-cell grant. WASM needs a sandbox ADR. Registry packages stay **data-only** in Phase 2 (ADR-011 D9) |
@@ -462,14 +477,19 @@ re-runs `make check` on the merged tree.
      corner), and +3V3 min and its margin are reported at the nominal and
      the halved +3V3 capacitance;
    - every W1 report and `run.json` labels the stress corner;
-   - the rule firmware keeps the cue, and `pofwarn` fired;
+   - the rule firmware keeps the cue, and the dip it masks happened:
+     `pof-dip` (+3V3 through 2.94 V inside the blanking) with the paired
+     blanking-off control raising POFWARN within one lattice cell of that
+     crossing (decision D-close 2);
    - both negative controls fail exactly `cue-held`;
    - the co-simulation is reported;
    - JUnit is published by CI;
    - the run equals its one-cell reference except grant records, and is
      byte-identical across 10 runs.
-2. **W2, if P5's prototype passes:** the same way, with at least 2 `reset`
-   records. **Otherwise** the fallback: the old-rule firmware's first
+2. **W2, if P5's prototype passes:** the same way, with at least one
+   brown-out (`reset` records with phase `enter`) in a 200 ms run; the old
+   rule causes a brown-out but, on these models, not a repeating loop
+   (decision D-close 1). **Otherwise** the fallback: the old-rule firmware's first
    brown-out ends the run with a `reset` record (`phase = "stop"`) within
    one lattice cell of the static-load VBOR crossing, the rule firmware
    has none, and the deviation is recorded.
@@ -783,8 +803,8 @@ E1's `fast` results stay within their recorded tolerances (1 mV / 1
 sample), so the `fast` goldens it moves are re-recorded with that reason
 (`tests/golden/dms-rail`, E2's `sag` and `rec`, the `e1-rail` plots;
 ADR-009 Amendment 4). The approver's own wording was not written down at
-the time; ADR-009's "Approver decisions" gives the sources. **needs
-approval:** the approver confirms these terms.
+the time; ADR-009's "Approver decisions" gives the sources. **Confirmed**
+by the approver as recorded (decision D-close 6, 2026-11-17).
 
 **Round 3 (2026-11-16), on H2's report: D-SNAP.** H2's spike found the
 SAADC stall's cause in `NgspiceEngine`'s lattice clamp (a sub-femtosecond
@@ -802,6 +822,39 @@ committed references. The approver approved the **lattice snap** as H2:
   0.285 ns edge recorded.
 
 This is ADR-015 Amendment 4, and it is in section 4 (the H2 row).
+
+**Round 4 (2026-11-17), on the exit review: D-close.** The approver
+answered every "needs approval" item of the exit review ("Review notes:
+exit review"):
+
+1. **W2 counts brown-outs**, not `reset` records: at least one in a 200 ms
+   run (`tests/w2.toml` runs 200 ms). Section 2 W2 and section 5 item 2
+   say why the loop does not repeat on these models. W2's negative and
+   rule-run checks are kept.
+2. **W1's anti-vacuity**: the `pof-dip` crossing assertion with the
+   paired blanking-off control is accepted (section 2 W1, section 5 item 1).
+3. **The nRF52840's idd on the LDO**: the PS's LDO currents added to
+   `nordic/nrf52840-qiaa`'s `[power] idd`, selected by a mode that must
+   match the firmware's regulator (the committed Zephyr firmware runs on
+   the LDO); the dial-me-spinner projects default to the LDO; the idd view
+   re-qualified with hand-calculated vectors for both modes; every affected
+   `pi` reference re-recorded with the reason and per-probe differences;
+   W1 and W2's verdicts re-run.
+4. **`make pi-spike`** pinned to the pre-D-TPS TPS22917 view P0 was
+   measured with (a historical record; local-only rules respected), so it
+   is 37/37 again, with the restated view's convergence figure reported.
+5. **W1's operating point**: the static load ramped in before LED_PWR_EN
+   (a bench `[[load]]` profile, no spec change) so the deck solves at every
+   load from 30 to 65 mA; the 60 mA collapse shown with the firmware in the
+   loop (reported); the load sweep covers 40-48 and 59-62 mA.
+6. **D-TPS**: the terms as recorded are confirmed.
+7. **Phase 3**: bench `[[env]]` and `[probes]`, the bench engine's lock
+   entry `engine:bench@1`, and `bb pkg init --from-svd/--from-ibis` move
+   to Phase 3 (refusals name it; section 3). P5's "a pool process is never
+   reused after a failed reset" is demonstrated with an injected failure
+   if a fault knob is cheap, else moved to Phase 3 (it was cheap: built).
+
+This is ADR-009 Amendment 12, ADR-010 Amendment 7 and ADR-011 Amendment 5.
 
 **This build's scope.** Hardening and the technical exit:
 
@@ -972,3 +1025,34 @@ and the docs build) and with `POOL=0` (1619 s, alone); in it
 checks, 0 failures (the 37 before plus the corner control). `make
 pi-spike` 36/37 as before (finding A). The docs site builds (`npm run
 docs:build`). Nothing was pushed or published.
+
+## Review notes: D-close (2026-11-17)
+
+The approver's decisions D-close (section 10, "Round 4") closed every
+"needs approval" item of the exit review. Built on the track worktree
+`~/src/bb-p` (branch `p2/p`) from `main` b2e3839, merged as "Merge D-close
+(p2/p)"; ADR-009 Amendment 12 has the details and the measurements.
+
+| Exit review item | Decision | As built |
+| --- | --- | --- |
+| `make pi-spike` red since P1 | D-close 4: pin P0's spike to its view | **37/37** with `pi-spike/tps22917_lsw_fit_p0.lib` (the view at 0883d7b); the restated view's convergence reported: w2old 14.7612 / 10.7256 mV against TMAX 1 µs |
+| W2's `brownout` counts records; 20 ms | D-close 1: count brown-outs over 200 ms | `phase = "enter"`, `min = 1`; `tests/w2.toml` 200 ms; `check_dms_w2.py` gates >= 1 brown-out: 1 brown-out, 2 reset records, the loop reported as not repeating |
+| W1's anti-vacuity is `pof-dip` | D-close 2: accepted | section 2 W1 and section 5 item 1 amended |
+| W1's operating point fails at 40-48 and 59-62 mA | D-close 5: ramp the static load | `bench/w1-collapse.toml` (60 mA, reported) and a gated ramped sweep of 18 loads, 30-65 mA: every load runs; none to 50 mA, recover at 55 mA, collapse from 59 mA with the cue shed at the blanking's end |
+| The idd view assumes DC/DC; the firmware runs on the LDO | D-close 3: LDO currents, a mode matched to the firmware | `[power] modes`, `nordic/nrf52840-qiaa` 0.6.0 (LDO default), `power_mode`, the DCDCEN check in the CPU engine with its negative control; `pi-idd`, `pi-glue`, `dms-e1-system` and W1's co-simulation references re-recorded with per-probe differences; every gated W1 and W2 case byte-identical |
+| D-TPS's terms | D-close 6: confirmed | section 10 and ADR-009 "Approver decisions" |
+| P5's failed-reset rule not demonstrated | D-close 7: a fault knob if cheap | built: `Fault::BorReadback`, `nrf_bor_failed_reset_is_discarded` (in `cargo-test`) |
+| `[[env]]`, `[probes]`, `engine:bench@1`, `bb pkg init --from-svd/--from-ibis` | D-close 7: Phase 3 | section 3; the refusals name Phase 3; `bb pkg init` refuses |
+
+**Gates on the worktree** (before the merge): `make check` green but for
+one step, `dms-vsense-test`, which found the E2 variant projects stale
+(they copy the project's `bb.toml`, which gained `power_mode`): rewritten by
+`scripts/dms_e2_projects.py` and relocked, then every `make test` step
+from `dms-vsense-test` on passed. In them: `pi-idd-test` (the duty run
+1.749574 mA against the LDO hand calculation 1.748253 mA, +0.076 %; with
+the radio -0.152 %; the `dcdc` negative control fails as it must),
+`dms-w2-test` (200 ms per case), `limits-test` (the wrong order's
+`limit:main:D101.DIN:max` at `pi` 0.777449 V, 2 µV below the U10-on-DC/DC
+figure, and 0.792874 V at `fast`, unchanged), `make pi-spike` 37/37, `make
+dms-w1` with the sweep, `make nrf-power-model` with DCDCEN. The gates on
+`main` after the merge follow below.

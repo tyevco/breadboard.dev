@@ -15,6 +15,7 @@
     "sample": { "$ref": "#/$defs/value", "description": "The sampling period for crossing measurements; default the lattice." },
     "ports": { "type": "object", "description": "View port (pin name) -> circuit node.", "additionalProperties": { "type": "string", "minLength": 1 } },
     "params": { "type": "object", "additionalProperties": { "$ref": "#/$defs/value" } },
+    "mode": { "description": "A supply_load view's supply mode ([power] modes; ADR-009 Amendment 12): its currents in that mode.", "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "edge": {
       "type": "array",
       "items": {

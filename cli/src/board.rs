@@ -254,6 +254,11 @@ pub struct Board {
     /// The target's power-fail comparator at `pi` (ADR-009 D6, milestone
     /// P4; glue rule 13); `None` at `fast` or without one.
     pub pof: Option<PofGlue>,
+    /// The regulator the target's supply_load view draws at `pi` (ADR-009
+    /// Amendment 12, decision D-close 3: `Some(true)` DC/DC, `Some(false)`
+    /// the LDO), which the nRF52840's CPU engine checks against the
+    /// firmware's `POWER.DCDCEN` at the run's end; `None` without one.
+    pub regulator_dcdc: Option<bool>,
 }
 
 /// The power-fail comparator of the CPU target at `pi` (ADR-009 D6): its
@@ -831,6 +836,7 @@ pub fn parse_with(text: &str, lookup: Option<Lookup>) -> Result<Board, String> {
         pi_glue: BTreeMap::new(),
         cpu_states: Vec::new(),
         pof: None,
+        regulator_dcdc: None,
     })
 }
 

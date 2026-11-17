@@ -17,6 +17,10 @@
 //   0x510 POFCON                               POF (bit 0), THRESHOLD (4..1),
 //                                               THRESHOLDVDDH (11..8)
 //   0x51C GPREGRET, 0x520 GPREGRET2            8 bits each
+//   0x578 DCDCEN                               bit 0, the regulator (0: LDO, the
+//                                               reset value; 1: DC/DC); stored and
+//                                               reported only (no timing, ADR-009
+//                                               Amendment 12)
 //
 // The power-fail comparator is NOT here: it is the package's `pi` view
 // (nordic/nrf52840-qiaa, view `pof`, kind pof_comparator) in the analog
@@ -77,6 +81,12 @@
 //         (TranslationCPU.IsHalted): no instruction runs, the clock source
 //         and every other clock still advance with virtual time.
 //   0xF28 the number of brown-out holds (writes of 1)
+//   0xF2C DCDCEN as applied (bit 0)   0xF30 the number of firmware writes that set
+//                                           DCDCEN (kept across a machine reset)
+//   0xF34/0xF38 the first such write's time in ns (low, high). The Renode engine
+//         compares them with the supply mode the run's idd view draws at its end
+//         (ADR-009 Amendment 12, decision D-close 3: the mode must match the
+//         firmware's regulator setting)
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -141,6 +151,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             intenPofwarn = false;
             gpregret = 0;
             gpregret2 = 0;
+            dcdcen = 0;
             clockIrq = false;
             UpdateIrq();
             // RESETREAS, the host registers and the input are not reset by a
@@ -190,6 +201,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 case 0xF20: return (uint)(refusedNs >> 32);
                 case 0xF24: return held ? 1u : 0u;
                 case 0xF28: return holds;
+                case 0xF2C: return dcdcen;
+                case 0xF30: return dcdcenSets;
+                case 0xF34: return (uint)dcdcenNs;
+                case 0xF38: return (uint)(dcdcenNs >> 32);
                 default: return 0;
                 }
             }
@@ -208,6 +223,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 return gpregret;
             case Gpregret2:
                 return gpregret2;
+            case Dcdcen:
+                return dcdcen;
             default:
                 return inner.ReadDoubleWord(offset);
             }
@@ -271,6 +288,19 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 return;
             case Gpregret2:
                 gpregret2 = value & 0xFF;
+                return;
+            case Dcdcen:
+                dcdcen = value & 1;
+                if(dcdcen != 0)
+                {
+                    if(dcdcenSets == 0)
+                    {
+                        // No SyncTime(): the write must not move later event stamps
+                        // (Amendment 8 item 1); the slice's time names it in a message.
+                        dcdcenNs = Now() / FsPerNs;
+                    }
+                    dcdcenSets++;
+                }
                 return;
             default:
                 inner.WriteDoubleWord(offset, value);
@@ -447,7 +477,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private const int ClockIrqLine = 1;
         private const long TasksConstlat = 0x078, TasksLowpwr = 0x07C, EventsPofwarn = 0x108;
         private const long IntenSet = 0x304, IntenClr = 0x308, Resetreas = 0x400, Pofcon = 0x510;
-        private const long Gpregret = 0x51C, Gpregret2 = 0x520, HostBase = 0xF00;
+        private const long Gpregret = 0x51C, Gpregret2 = 0x520, Dcdcen = 0x578, HostBase = 0xF00;
         private const uint IntPofwarn = 1u << 2, PofconMask = 0xF1F;
         private const ulong FsPerNs = 1000000;
 
@@ -467,5 +497,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private ulong refusedNs;
         private bool held;
         private uint holds;
+        private uint dcdcen;
+        private uint dcdcenSets;
+        private ulong dcdcenNs;
     }
 }

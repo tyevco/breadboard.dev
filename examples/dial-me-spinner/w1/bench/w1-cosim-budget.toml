@@ -1,8 +1,10 @@
 # examples/dial-me-spinner/w1/bench/w1-cosim-budget.toml: W1 CO-SIMULATION with the budget's remainder
 # (reported, not gated; plan section 2 W1): U10's supply_load (nordic/nrf52840-qiaa:idd, the CPU
 # engine's #run, #hfxo, #saadc) plus a bench remainder load up to the suite's 50 mA +3V3 budget:
-# 46.7 mA = 50 mA - (3.1 mA run + 0.2 mA hfxo, the package's [power] idd typ of an awake CPU on
-# HFXO), the consumers no package models yet (the flash, the sensors, the OLED logic). It is a
+# 43.7 mA = 50 mA - (6.072 mA run + 0.228 mA hfxo = ICPU1 6.3 mA, the package's [power] idd typ of an
+# awake CPU on HFXO on the LDO, the regulator the firmware runs on: ADR-009 Amendment 12, decision
+# D-close 3; 46.7 mA on P4's DC/DC figures), the consumers no package models yet (the flash, the
+# sensors, the OLED logic). It is a
 # current profile (remainder.csv) that ramps in from 0.1 to 0.2 ms, after the operating point and
 # long before the cue (LED_PWR_EN rises at 1.24 ms): with 46.7 mA from t = 0 this deck's operating
 # point does not converge (gmin and source stepping fail; it converges with 30, 50 and 55 mA, so
@@ -30,7 +32,7 @@ net = "base:VBUS"
 volts = "5.0V"
 rs = "10m"
 
-# The budget's remainder: 50 mA - 3.3 mA (U10's own idd, drawn by its supply_load), from 0.2 ms.
+# The budget's remainder: 50 mA - 6.3 mA (U10's own idd on the LDO, drawn by its supply_load), from 0.2 ms.
 [[load]]
 net = "+3V3"
 profile = "remainder.csv"

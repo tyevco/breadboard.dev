@@ -19,6 +19,13 @@ ground = "GND"
 package = "none"
 reason = "NFC coil pads: no RF model in Phase 1"
 
+# ADR-009 Amendment 12 (approver decision D-close 3): U10's idd view draws the LDO's figures, the
+# regulator every committed dial-me-spinner image runs on (Zephyr v4.5.0's nrf52840.dtsi sets reg1 to
+# NRF5X_REG_MODE_LDO; firmware/ overrides no regulator). The CPU engine fails a run whose firmware
+# sets POWER.DCDCEN while this says ldo.
+[instances."main:U10"]
+power_mode = "ldo"
+
 # LED_PWR_EN: a plain GPIO output (dial-me-spinner docs/firmware.md section 1.3), so
 # PIN_CNF's reset drive, S0S1 (200 Ohm at the PS's 2 mA column).
 [[bind]]

@@ -4,6 +4,7 @@
 # V = 1 / (1 + 10 * 3.10235e-3 / 1.7) V = 0.98207794 V by hand.
 schema = "bb-pkgtest/0"
 view = "idd"
+mode = "dcdc"   # the P3 hand calculation's 3.1 mA (ADR-009 Amendment 12)
 circuit = "idd_low.cir"
 stop = "40us"
 

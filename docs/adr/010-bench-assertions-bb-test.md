@@ -6,7 +6,10 @@
   epoch (milestone S); 3, B2 as implemented; 4, the P1 bench keys
   (`fidelity`, `corner`, `[corners]`, `[[battery]]`; numbered 3 on the
   P1 branch, renumbered at the merge after B2's Amendment 3); 5, B3 as
-  implemented (`bb test`, `bb-test/0`, `test.json`, JUnit).
+  implemented (`bb test`, `bb-test/0`, `test.json`, JUnit); 6, what this
+  build left undone (the exit review); 7 (2026-11-17), the approver's
+  decisions D-close: the `event` kind's `phase`, and `[[env]]`, `[probes]`
+  and `engine:bench@1` moved to Phase 3.
 - **Part of:** the Phase 2 plan, milestones B1-B4. P1-P5 and E5 use it.
   Its schema keys (`bb-bench/1`, the `switch` view kind) land in milestone
   S, the schema epoch.
@@ -1041,3 +1044,37 @@ and keep the identity in `run.json` only, with the reason. **needs
 approval:** (a) relocks every bench-using project and is a schema-visible
 change to their locks; (b) changes an accepted decision. Neither is taken
 here.
+
+## Amendment 7 (2026-11-17): the approver's decisions D-close (the `event` kind's `phase`; Phase 3)
+
+The approver answered Amendment 6's two scope questions and W2's counting
+question (decision D-close, 2026-11-17; plan section 10, ADR-009 Amendment
+12).
+
+**A7.1 The `event` kind counts by phase (D-close 1).** D5's set is closed
+and extended by amendment; this is one. `kind = "event"` with `event =
+"reset"` takes an optional `phase = "enter" | "exit" | "stop"` and counts
+only the `reset` records of that phase. A brown-out writes two records, its
+hold (`enter`) and its release (`exit`), so `phase = "enter"` counts
+brown-outs; that is what W2's `brownout` assertion now counts (at least
+one in `tests/w2.toml`'s 200 ms). `phase` with `warn` or `error`, or an
+unknown phase, is an error. The record's `detail` names the phase ("1 reset
+records with phase enter"). Built in `bbcore::assert` (`EventWhat::
+ResetPhase`; the evaluator's reset entries carry their phase, in the run
+and in `bb assert`'s replay) and `cli/src/asserts.rs`, with the unit test
+`reset_records_count_by_phase`; `spec/project.md` section 3.4 says so. No
+file but W2's uses it, so no other committed result changes.
+
+**A7.2 `[[env]]` and `[probes]` move to Phase 3 (D-close 7).** They stay
+refused, never ignored; the refusal now names Phase 3: "env: a bb-bench/1
+key for environment signals (Phase 3, ADR-010 Amendment 7) (ADR-010 D2),
+not implemented in Phase 2; ..." (`cli/src/project.rs` `LATER_TOP`; `make
+bench-gate`'s `later-key` control matches the message's unchanged stem).
+`spec/project.md` section 3.2 says Phase 3.
+
+**A7.3 `engine:bench@1` moves to Phase 3 (D-close 7).** D4's lock entry
+for the bench engine is not built in Phase 2: no `bb.lock` has it, and
+`run.json` records the engine's identity (`bench.engine`, `bench@1`), as
+Amendment 6 A6.2 describes. Whether Phase 3 locks it with a hash scoped
+to what a bench's run can reach, or drops D4's lock, is Phase 3's
+decision; A6.2's two options stand as its starting point.

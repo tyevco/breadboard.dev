@@ -3,6 +3,7 @@
 # through 10 Ohm: V = 2 - 10 * 3.10235e-3 * 3 / V, so V = (2 + sqrt(4 - 4 * 0.0930705)) / 2 = 1.95232846 V by hand.
 schema = "bb-pkgtest/0"
 view = "idd"
+mode = "dcdc"   # the P3 hand calculation's 3.1 mA (ADR-009 Amendment 12)
 circuit = "idd_mid.cir"
 stop = "40us"
 

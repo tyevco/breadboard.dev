@@ -123,6 +123,20 @@ pub struct Document {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Idd {
     pub state: String,
+    /// The figure in the part's default supply mode (the first of
+    /// [`Power::modes`]), or the only figure when the part has no modes.
+    pub typ: String,
+    pub max: Option<String>,
+    pub reference: String,
+    /// The figures in the other supply modes (ADR-009 Amendment 12,
+    /// decision D-close 3): `[power.idd.<state>.<mode>]`, in file order.
+    pub modes: Vec<IddMode>,
+}
+
+/// One state's supply current in a supply mode other than the default.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IddMode {
+    pub mode: String,
     pub typ: String,
     pub max: Option<String>,
     pub reference: String,
@@ -136,6 +150,49 @@ pub struct Power {
     pub idd: Vec<Idd>,
     pub vdd_min: Option<String>,
     pub io_rail: Option<String>,
+    /// The supply modes the idd figures depend on (ADR-009 Amendment 12,
+    /// decision D-close 3: the nRF52840's regulator, `ldo` or `dcdc`); the
+    /// first is the part's reset mode and the default. Empty: one figure.
+    pub modes: Vec<String>,
+}
+
+impl Power {
+    /// The supply mode a run selects (`None`: the default), checked against
+    /// [`Power::modes`]; `None` back when the part has no modes.
+    pub fn mode<'a>(&'a self, selected: Option<&'a str>) -> Result<Option<&'a str>, String> {
+        match (selected, self.modes.first()) {
+            (None, None) => Ok(None),
+            (None, Some(d)) => Ok(Some(d.as_str())),
+            (Some(m), _) if self.modes.iter().any(|x| x == m) => Ok(Some(m)),
+            (Some(m), None) => Err(format!(
+                "power mode {m:?}: the part's [power] declares no modes"
+            )),
+            (Some(m), Some(_)) => Err(format!(
+                "power mode {m:?}: the part's [power] modes are {}",
+                self.modes.join(", ")
+            )),
+        }
+    }
+}
+
+impl Idd {
+    /// The state's figure (typ, reference) in `mode` (`None` or the default
+    /// mode: [`Idd::typ`]).
+    pub fn in_mode(
+        &self,
+        mode: Option<&str>,
+        default: Option<&str>,
+    ) -> Result<(&str, &str), String> {
+        match mode {
+            Some(m) if Some(m) != default => self
+                .modes
+                .iter()
+                .find(|x| x.mode == m)
+                .map(|x| (x.typ.as_str(), x.reference.as_str()))
+                .ok_or_else(|| format!("power.idd.{}: no figure in mode {m:?}", self.state)),
+            _ => Ok((self.typ.as_str(), self.reference.as_str())),
+        }
+    }
 }
 
 /// A named corner of a view (`[[analog.corners]]`, bb-part/1, ADR-009 D8):
@@ -738,9 +795,26 @@ pub const SWITCH_ROFF: &str = "100Meg";
 /// the package gives one; then the view's own `params`, which may restate or
 /// override them by name (a view, its corners or a vector can set a current
 /// the table does not give). Value-grammar strings, in that order, each name
-/// once.
-pub fn supply_load_params(pkg: &Package, view: &View) -> Result<Vec<(String, String)>, String> {
+/// once. `mode` selects the supply mode of `[power] modes` (ADR-009
+/// Amendment 12; `None`: the part's default, its first mode).
+pub fn supply_load_params(
+    pkg: &Package,
+    view: &View,
+    mode: Option<&str>,
+) -> Result<Vec<(String, String)>, String> {
     let power = pkg.part.power.as_ref();
+    let mode = match power {
+        Some(w) => w.mode(mode)?,
+        None if mode.is_some() => {
+            return Err(format!(
+                "view {}: power mode {:?}: the part has no [power]",
+                view.name,
+                mode.unwrap_or_default()
+            ))
+        }
+        None => None,
+    };
+    let default = power.and_then(|w| w.modes.first()).map(String::as_str);
     let mut out = Vec::new();
     for p in &view.ports {
         if let Port::State { state } = p {
@@ -752,7 +826,10 @@ pub fn supply_load_params(pkg: &Package, view: &View) -> Result<Vec<(String, Str
                         view.name
                     )
                 })?;
-            out.push((format!("i_{state}"), idd.typ.clone()));
+            out.push((
+                format!("i_{state}"),
+                idd.in_mode(mode, default)?.0.to_string(),
+            ));
         }
     }
     if let Some(v) = power.and_then(|w| w.vdd_min.as_ref()) {
@@ -1210,6 +1287,19 @@ pub fn parse_part(text: &str, reg: &Registry) -> Result<(Part, Option<String>), 
     let power = match o.table_opt("power")? {
         Some(mut pw) => {
             new_in_part_1(major, "power", "ADR-009 D4")?;
+            // The supply modes (ADR-009 Amendment 12, decision D-close 3).
+            let modes = pw.strs("modes")?;
+            for (k, m) in modes.iter().enumerate() {
+                if !is_state_name(m)
+                    || modes[..k].contains(m)
+                    || ["typ", "max", "ref"].contains(&m.as_str())
+                {
+                    return Err(format!(
+                        "power.modes[{k}] {m:?}: a mode name is lower case [a-z0-9_], unique, and \
+                         not typ, max or ref (ADR-009 Amendment 12)"
+                    ));
+                }
+            }
             let mut idd = Vec::new();
             if let Some(mut it) = pw.table_opt("idd")? {
                 for s in it.keys() {
@@ -1221,12 +1311,38 @@ pub fn parse_part(text: &str, reg: &Registry) -> Result<(Part, Option<String>), 
                             "power.idd.{s}: a state name is lower case [a-z0-9_] (ADR-009 D4)"
                         ));
                     }
-                    let e = Idd {
+                    let mut e = Idd {
                         state: s.clone(),
                         typ: so.str_req("typ")?,
                         max: so.str_opt("max")?,
                         reference: so.str_req("ref")?,
+                        modes: Vec::new(),
                     };
+                    // [power.idd.<state>.<mode>]: the state's figure in a mode
+                    // other than the default (the first of `modes`).
+                    for m in modes.iter().skip(1) {
+                        if let Some(mut mo) = so.table_opt(m)? {
+                            let x = IddMode {
+                                mode: m.clone(),
+                                typ: mo.str_req("typ")?,
+                                max: mo.str_opt("max")?,
+                                reference: mo.str_req("ref")?,
+                            };
+                            mo.done()?;
+                            for (k, v) in [("typ", Some(&x.typ)), ("max", x.max.as_ref())] {
+                                if let Some(v) = v {
+                                    parse_quantity(v, Dim::Current)
+                                        .map_err(|y| format!("power.idd.{s}.{m}.{k}: {y}"))?;
+                                }
+                            }
+                            e.modes.push(x);
+                        } else {
+                            return Err(format!(
+                                "power.idd.{s}: no [power.idd.{s}.{m}]: every state gives a figure \
+                                 in every mode of power.modes (ADR-009 Amendment 12)"
+                            ));
+                        }
+                    }
                     so.done()?;
                     for (k, v) in [("typ", Some(&e.typ)), ("max", e.max.as_ref())] {
                         if let Some(v) = v {
@@ -1242,6 +1358,7 @@ pub fn parse_part(text: &str, reg: &Registry) -> Result<(Part, Option<String>), 
                 idd,
                 vdd_min: pw.str_opt("vdd_min")?,
                 io_rail: pw.str_opt("io_rail")?,
+                modes,
             };
             pw.done()?;
             if let Some(v) = &r.vdd_min {

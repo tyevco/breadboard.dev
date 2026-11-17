@@ -21,6 +21,12 @@
 #   margin-off    w1-margin              w1_blank_off   GATED: the same, the comparator armed through it
 #   cosim         w1-cosim               w1_rule        reported (U10's supply_load only)
 #   cosim-budget  w1-cosim-budget        w1_rule        reported (plus the budget's remainder)
+#   collapse      w1-collapse            w1_rule        reported: 60 mA ramped in, the collapse in the
+#                                                        loop (scripts/check_dms_w1_sweep.py)
+#   sweep-<L>     w1-sweep-<L> (made     w1_rule        GATED (check_dms_w1_sweep.py): W1's ramped
+#                 from w1-collapse)                     static-load sweep, L = 30 to 65 mA with 40-48
+#                                                        and 59-62 (decision D-close 5): every load runs,
+#                                                        the classes monotone, the plan's sweep rows
 #
 #   scripts/dms_w1.sh test <bb> <out>     make dms-w1-test (in make test): tests/w1.toml through bb
 #                                         test (rule, blank4, off, margin, margin-off at bb's defaults
@@ -51,9 +57,11 @@ DET_RUNS=${DET_RUNS:-10}
 DET_JOBS=${DET_JOBS:-5}
 JOBS=${DMS_W1_JOBS:-6}
 PY=${PYTHON:-python3}
-ALL=(rule blank4 off blank5 typ min margin margin-off cosim cosim-budget)
+ALL=(rule blank4 off blank5 typ min margin margin-off cosim cosim-budget collapse)
 GATED=(rule blank4 off margin margin-off)
-EQUIV=(rule blank4 off margin margin-off cosim cosim-budget)
+EQUIV=(rule blank4 off margin margin-off cosim cosim-budget collapse)
+# W1's ramped static-load sweep (decision D-close 5; 60 mA is the case `collapse`).
+SWEEP=(30 35 40 41 42 43 44 45 46 47 48 50 55 59 61 62 65)
 TESTED=(rule blank4 off margin-off)
 status=0
 pass() { echo "dms-w1: PASS: $*"; }
@@ -61,9 +69,10 @@ fail() { echo "dms-w1: FAIL: $*"; status=1; }
 
 bench_of() { case $1 in
   rule|blank4|off|blank5) echo w1-stress ;; typ) echo w1-stress-typ ;; min) echo w1-stress-min ;;
-  margin|margin-off) echo w1-margin ;; cosim) echo w1-cosim ;; cosim-budget) echo w1-cosim-budget ;; esac; }
+  margin|margin-off) echo w1-margin ;; cosim) echo w1-cosim ;; cosim-budget) echo w1-cosim-budget ;;
+  collapse) echo w1-collapse ;; sweep-*) echo "w1-$1" ;; esac; }
 image_of() { case $1 in
-  rule|typ|min|margin|cosim|cosim-budget) echo w1_rule ;; blank4) echo w1_blank4 ;;
+  rule|typ|min|margin|cosim|cosim-budget|collapse|sweep-*) echo w1_rule ;; blank4) echo w1_blank4 ;;
   blank5) echo w1_blank5 ;; off|margin-off) echo w1_blank_off ;; esac; }
 asserts_of() { case $1 in
   rule|blank4|off|blank5|typ|min) echo "--assert $WORK/dms/asserts/w1.toml" ;;
@@ -92,10 +101,24 @@ prepare() { # <bb>: $WORK/dms with one project copy per case, its image recorded
     [[ $(image_of "$c") == w1_rule ]] || \
       "$bb" flash --project "$d/w1-$c" --target main:U10 "$d/firmware/prebuilt/$(image_of "$c").elf" > /dev/null
   done
+  # The sweep's copy: bench/w1-collapse.toml with its ramp to L mA (ramp-<L>mA.csv, the form of
+  # ramp-60mA.csv) as bench/w1-sweep-<L>.toml, one per load (bb run is read-only on the project).
+  local ma
+  mkdir -p "$d/w1-sweep"
+  cp "$DMS/w1/bb.toml" "$DMS/w1/board.bbm" "$DMS/w1/bb.lock" "$d/w1-sweep/"
+  cp -r "$DMS/w1/bench" "$d/w1-sweep/bench"
+  "$bb" open --check "$d/w1-sweep" > "$d/open-sweep.log" 2>&1 || { cat "$d/open-sweep.log"; exit 1; }
+  for ma in "${SWEEP[@]}"; do
+    sed "s/^0\.0002,0\.06\$/0.0002,$(awk -v a="$ma" 'BEGIN { printf "%g", a / 1000 }')/" \
+      "$DMS/w1/bench/ramp-60mA.csv" > "$d/w1-sweep/bench/ramp-${ma}mA.csv"
+    sed "s/ramp-60mA\.csv/ramp-${ma}mA.csv/" "$DMS/w1/bench/w1-collapse.toml" > "$d/w1-sweep/bench/w1-sweep-$ma.toml"
+  done
 }
 
 args_of() { # <case>: bb run arguments
-  echo "--project $WORK/dms/w1-$1 --bench $WORK/dms/w1-$1/bench/$(bench_of "$1").toml --for $FOR $(asserts_of "$1")"
+  local p=$WORK/dms/w1-$1
+  [[ $1 == sweep-* ]] && p=$WORK/dms/w1-sweep
+  echo "--project $p --bench $p/bench/$(bench_of "$1").toml --for $FOR $(asserts_of "$1")"
 }
 
 run_case() { # <bb> <dir> <case> [extra bb run args]
@@ -229,6 +252,20 @@ gate)
   par "$BB" "$OUT" "" "" "${ALL[@]}"
   for c in rule blank4 off blank5 typ min margin margin-off cosim cosim-budget; do checks "$OUT" "$c"; done
   corner_control "$OUT"
+  # W1's ramped static-load sweep with the firmware in the loop (decision D-close 5): every load from
+  # 30 to 65 mA runs (40-48 and 59-62 mA among them), 60 mA being the reported case `collapse`.
+  sweep_cases=()
+  for ma in "${SWEEP[@]}"; do sweep_cases+=("sweep-$ma"); done
+  par "$BB" "$OUT" "" "" "${sweep_cases[@]}"
+  sweep_args=("60=$OUT/collapse")
+  for ma in "${SWEEP[@]}"; do sweep_args+=("$ma=$OUT/sweep-$ma"); done
+  if "$PY" "$ROOT/scripts/check_dms_w1_sweep.py" --bench-dir "$WORK/dms/w1-sweep/bench" \
+      --gated-50 "$OUT/margin" --gated-55 "$OUT/rule" --json "$OUT/sweep.json" "${sweep_args[@]}" > "$OUT/sweep.txt"; then
+    pass "W1's ramped static-load sweep: check_dms_w1_sweep.py (${#sweep_args[@]} loads)"
+  else
+    fail "W1's ramped static-load sweep: check_dms_w1_sweep.py"
+  fi
+  sed 's/^/    /' "$OUT/sweep.txt"
   # Partition independence (ADR-009 G5): 1 ms grants and the one-cell references.
   par "$BB" "$OUT" -1ms "--max-quantum 1ms" "${EQUIV[@]}"
   refs "$BB" "$OUT"

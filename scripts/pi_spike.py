@@ -82,7 +82,9 @@ PROBES = {"cue": ["n_vsys", "n_p3v3", "n_vled", "n_oled_vin", "n_iu2", "n_vsys_b
 RT_CORNERS = {"worst": "rdrop=0.883333 gm=18.18", "typ": "rdrop=0.516667 gm=36.36"}
 # variant: (power views, TPS22917 view, RT9080 corner). suite = the suite's models; pi = the spike's
 # views; ti = the suite's TI-derived TPS22917, tifix = it with the S1 fix (ADR-006 Amendment 2; the
-# local-only package of `make dms-local-packages`), fit = the committed ti/tps22917 view. The mixed
+# local-only package of `make dms-local-packages`), fit = the ti/tps22917 view P0 was measured with
+# (pinned: pi-spike/tps22917_lsw_fit_p0.lib, git 0883d7b; decision D-close 4, ADR-009 Amendment 12),
+# now = the committed ti/tps22917 view as restated by P1 (D-TPS; its convergence is REPORTED). The mixed
 # variants attribute the model difference to the power views and to the load switch; the fourth
 # field scales the board's +3V3 capacitors (0: left out, as the suite's ideal +3V3 source has none;
 # 0.5: a DC-bias stand-in, report only).
@@ -95,6 +97,7 @@ VARIANTS = {
     "pi_lswfix": ("pi", "tifix", "worst", 1),
     "pi_no3v3c": ("pi", "fit", "worst", 0),
     "pi_c3half": ("pi", "fit", "worst", 0.5),
+    "pi_lswnow": ("pi", "now", "worst", 1),
 }
 
 # Thresholds on +3V3 (ADR-009 D6, plan section 2): POFWARN V28 at VPOFTOL +5 %, 0, -5 %, and the
@@ -212,7 +215,10 @@ def cmd_decks(a):
     os.makedirs(a.out, exist_ok=True)
     views = {k: os.path.abspath(os.path.join(a.views, f)) for k, f in
              (("rt", "rt9080_ldo_pi.lib"), ("bq", "bq25180_pp_pi.lib"), ("bst", "tps61040_boost_pi.lib"))}
-    lsw_fit = os.path.abspath(os.path.join(a.packages, "ti", "tps22917", "analog", "lsw_fit.lib"))
+    # P0's spike runs the TPS22917 view it was measured with (decision D-close 4): the pinned copy of
+    # the view at git 0883d7b; the committed (restated) view is the variant pi_lswnow, reported.
+    lsw_fit = os.path.abspath(a.lsw_p0)
+    lsw_now = os.path.abspath(os.path.join(a.packages, "ti", "tps22917", "analog", "lsw_fit.lib"))
     ws_pkg = os.path.abspath(os.path.join(a.packages, "worldsemi", "ws2812c-2020", "analog",
                                           "load_switches__ws2812c.lib"))
     captured = {}
@@ -283,7 +289,8 @@ def cmd_decks(a):
             tls.LIB_WS = ws_pkg
         elif c["i3v3"] != tls.I_3V3:
             tls.vsys_network = functools.partial(orig["vsys_network"], i3v3=c["i3v3"])
-        tls.LIB_SW = {"ti": orig["LIB_SW"], "tifix": os.path.abspath(a.lib_fixed), "fit": lsw_fit}[lsw]
+        tls.LIB_SW = {"ti": orig["LIB_SW"], "tifix": os.path.abspath(a.lib_fixed), "fit": lsw_fit,
+                      "now": lsw_now}[lsw]
         try:
             if c["kind"] == "cue":
                 tls.usb_100ma_charging_cue(main, base, c["ilim"], c["vsysreg"])
@@ -295,7 +302,7 @@ def cmd_decks(a):
             for k, v in orig.items():
                 setattr(tls, k, v)
         text = captured.pop("text")
-        if lsw == "fit":
+        if lsw in ("fit", "now"):
             text = text.replace(" LSW_TPS22917 params:", " TI_TPS22917_LSW_FIT params:")
         if power == "pi":
             # The package's pixel view (renamed to its package prefix in the schema epoch, ADR-011 D11):
@@ -565,6 +572,29 @@ def cmd_gate(a):
             out["option_set"].setdefault("others", {})[f"{case}.{other}"] = rep
             print(f"pi-spike: report: {case} pi at {other}: {json.dumps(rep)}")
 
+    # The committed (restated, D-TPS) TPS22917 view on the same decks: its convergence at the 10 us
+    # lattice against TMAX 1 us, REPORTED, not gated (decision D-close 4, ADR-009 Amendment 12; the gate
+    # above runs the view P0 was measured with, pi-spike/tps22917_lsw_fit_p0.lib).
+    import numpy as np
+    for case in ("w1", "w2rule", "w2old"):
+        base, ref = rid(case, "pi_lswnow", q), rid(case, "pi_lswnow", q, "tmax1us")
+        r1, r2 = runs.get(base), runs.get(ref)
+        if r1 is None or r2 is None or r1.get("status") != "ok" or r2.get("status") != "ok":
+            print(f"pi-spike: report: {case} pi_lswnow (the restated TPS22917 view): no convergence figure "
+                  f"({r1 and r1.get('status')}, {r2 and r2.get('status')})")
+            continue
+        t1, v1 = _load(os.path.join(d, "runs", base + ".csv"))
+        t2, v2 = _load(os.path.join(d, "runs", ref + ".csv"))
+        dw = {p: float(np.abs(v1[p] - v2[p]).max()) for p in ("n_vsys", "n_p3v3")}
+        kw = {p: int(np.abs(v1[p] - v2[p]).argmax()) for p in dw}
+        out["option_set"].setdefault("restated_view", {})[case] = {
+            "max_dV_waveform_mV": {p: x * 1e3 for p, x in dw.items()},
+            "max_dV_waveform_at_ms": {p: int(t1[k]) / 1e12 for p, k in kw.items()},
+            "gated": False}
+        print(f"pi-spike: report: {case} pi_lswnow at {q} (the committed, restated TPS22917 view; not gated): "
+              "VSYS and +3V3 at every 10 us against the converged run (TMAX 1 us): "
+              + ", ".join(f"{p} {x * 1e3:.4f} mV at {int(t1[kw[p]]) / 1e12:g} ms" for p, x in dw.items()))
+
     # ---- 3. the model difference (pi views vs the replica) and the static-load tolerances ------------
     out["model_difference"] = {}
     fixed = tol["static_load"]
@@ -783,6 +813,7 @@ def main():
     d.add_argument("--views", required=True)
     d.add_argument("--packages", required=True)
     d.add_argument("--lib-fixed", required=True)
+    d.add_argument("--lsw-p0", required=True)
     d.add_argument("--out", required=True)
     d.set_defaults(fn=cmd_decks)
     g = sp.add_parser("gate")

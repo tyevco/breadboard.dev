@@ -1285,8 +1285,10 @@ dms-wfw-test:
 # defaults with scripts/check_dms_w1.py and the committed one-cell hashes, and the rule
 # analog-first byte-identical (scripts/dms_w1.sh test). dms-w1: every case of scripts/dms_w1.sh
 # (the 5 ms report, the nominal and -5 % comparator corners, the margin check, the two
-# co-simulations), partition independence at 10 us, 1 ms and 10 ms grants, the references against
-# tests/golden/dms-w1, analog-first, 10-run determinism, dms-wfw-test and nrf-power-model.
+# co-simulations, the 60 mA collapse with the static load ramped in), W1's ramped load sweep (30-65 mA,
+# scripts/check_dms_w1_sweep.py; decision D-close 5, ADR-009 Amendment 12), partition independence
+# at 10 us, 1 ms and 10 ms grants, the references against tests/golden/dms-w1, analog-first, 10-run
+# determinism, dms-wfw-test and nrf-power-model.
 # dms-w1-update rewrites tests/golden/dms-w1 from fresh one-cell references (review the diff).
 .PHONY: nrf-power-model dms-w1 dms-w1-test pooled-dms-w1 pooled-dms-w1-test dms-w1-ref dms-w1-update \
         dms-w1-prepare
@@ -1315,8 +1317,9 @@ dms-w1-prepare: bb
 	bash scripts/dms_w1.sh prepare $(BB)
 
 # --- Phase 2 P5: W2, the S4 brown-out reboot loop on a dead battery (plan section 2 W2; ADR-009 D7) --
-# dms-w2-test (in make test): the old-rule firmware (20 ms: the brown-out's hold and release, the reboot
-# reading RESETREAS 0 and enabling the OLED again) and the rule firmware (20 ms) on
+# dms-w2-test (in make test): the old-rule firmware (200 ms, decision D-close 1: at least one brown-out,
+# its hold and release, the reboot reading RESETREAS 0 and enabling the OLED again) and the rule
+# firmware (200 ms) on
 # examples/dial-me-spinner/w2 in static-load mode, at bb's defaults, with scripts/check_dms_w2.py and
 # the committed one-cell hashes, and the rule analog-first byte-identical (scripts/dms_w2.sh test).
 # dms-w2: every case of scripts/dms_w2.sh (the VBOR corners min and max, the plan's 200 ms of each

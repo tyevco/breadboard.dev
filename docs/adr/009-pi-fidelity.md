@@ -46,16 +46,27 @@
   assertions, `bb run --limits`, `make limits-test`); `check_dms_w1.py`
   reads the corner from `run.json`; W1's operating-point failures
   re-measured; the idd view's DC/DC against the firmware's LDO; D-TPS
-  recorded; P5's untested failed-reset rule recorded.
+  recorded; P5's untested failed-reset rule recorded. 12 (2026-11-17), the
+  approver's decisions D-close: W2 counts brown-outs over 200 ms; W1's
+  `pof-dip` anti-vacuity accepted; the nRF52840's idd per regulator (LDO
+  the default, checked against the firmware's DCDCEN), the affected `pi`
+  references re-recorded; `make pi-spike` pinned to P0's TPS22917 view
+  (37/37) with the restated view's figure reported; W1's ramped static-load
+  sweep (30-65 mA) and the 60 mA collapse in the loop; D-TPS confirmed;
+  `[[env]]`, `[probes]`, `engine:bench@1` and `bb pkg init` to Phase 3; the
+  failed-reset pool rule demonstrated.
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
 - **Normative changes when implemented:** `spec/package.md`,
   `spec/pin-model.md`, `spec/event-stream.md` (joint version 2 with
   ADR-010), `spec/project.md` (bench keys, with ADR-010; the limit
-  assertions and `run.json` `limits`, Amendment 11),
-  `spec/schema/part.schema.json` and `spec/schema/pins.schema.json` (the
-  `power` model, Amendment 11). `spec/time-grant.md` does not change.
+  assertions and `run.json` `limits`, Amendment 11; `power_mode`,
+  Amendment 12), `spec/schema/part.schema.json` and
+  `spec/schema/pins.schema.json` (the `power` model, Amendment 11; `[power]
+  modes`, Amendment 12), `spec/schema/project.schema.json` and
+  `spec/schema/pkgtest.schema.json` (Amendment 12). `spec/time-grant.md`
+  does not change.
 - **Evidence:**
   - the `pi` research pass (`~/bbscratch-p2-pi`): E1's elaborated deck
     with a prototype RT9080 view, a battery, an nRF52840 idd load and a
@@ -598,8 +609,35 @@ closes P0 with "the committed `ti/tps22917` view is restated to D2's rules
 
 The approver's own wording was not written down at the time; these terms
 are collected from Amendment 2, Amendment 4 and the view's header.
-**needs approval:** the approver confirms them (the plan's section 10
-carries the same entry).
+**Confirmed** by the approver as recorded (decision D-close 6,
+2026-11-17; Amendment 12 item 6; the plan's section 10 carries the same
+entry).
+
+**D-close (2026-11-17), on the exit review's "needs approval" items**
+(Amendment 12 is the implementation):
+
+1. W2 counts brown-outs (`reset` records with phase `enter`), at least one
+   in a 200 ms run; the old rule causes a brown-out but, on these models,
+   not a repeating loop (the plan's section 2 W2 and section 5 item 2
+   amended). W2's rule-run and negative checks are kept.
+2. W1's anti-vacuity: the `pof-dip` crossing assertion with the paired
+   blanking-off control is accepted as the evidence the mechanism acted
+   (the plan's section 2 W1 and section 5 item 1 amended).
+3. The nRF52840's idd gets the LDO currents (PS v1.1), selected by a mode
+   that must match the firmware's regulator; the dial-me-spinner projects
+   run on the LDO; the idd view re-qualified in both modes; every affected
+   `pi` reference re-recorded with the reason and per-probe differences;
+   W1 and W2's verdicts re-run.
+4. `make pi-spike` runs P0's spike on the TPS22917 view it was measured
+   with (37/37), and reports the restated view's convergence figure.
+5. W1's static load is ramped in before LED_PWR_EN (no spec change), so the
+   deck solves at every load from 30 to 65 mA; the 60 mA collapse is shown
+   with the firmware in the loop (reported); the sweep covers 40-48 and
+   59-62 mA.
+6. D-TPS's terms as recorded are confirmed.
+7. `[[env]]`, `[probes]`, `engine:bench@1` and `bb pkg init
+   --from-svd/--from-ibis` move to Phase 3 (refusals name it); P5's
+   failed-reset pool rule is demonstrated with a fault knob if cheap.
 
 ## Review notes (design review round 1, 2026-11-14)
 
@@ -2235,3 +2273,216 @@ docs-sync` and `scripts/validate_packages_test.sh` (in `make packages`)
 under 1 s each. In `make check` on the main checkout: `limits-test` 47.2 s
 pooled and 50.7 s with `POOL=0`, `docs-sync` 3.6 s and 1.9 s (the plan's
 "Review notes: exit review").
+
+## Amendment 12 (2026-11-17): the approver's decisions D-close (W2 counts brown-outs; the nRF52840's LDO idd; P0's spike pinned; W1's ramped sweep; Phase 3)
+
+The approver answered Amendment 11's "needs approval" items (decision
+D-close, 2026-11-17; "Approver decisions" above, the plan's section 10).
+Each item below is the decision as built.
+
+**1. W2 counts brown-outs (D-close 1).** `asserts/w2-old.toml`'s
+`brownout` is now `kind = "event"`, `event = "reset"`, `phase = "enter"`,
+`min = 1`: the `event` kind takes a `phase` (ADR-010 Amendment 7 A7.1,
+`spec/project.md` section 3.4), and one brown-out writes one `enter` (its
+hold) and one `exit` (its release). `tests/w2.toml` runs the plan's 200 ms
+(was 20 ms); `scripts/dms_w2.sh test` checks its cases against
+`tests/golden/dms-w2/old-200` and `rule-200`. `check_dms_w2.py` gates at
+least one brown-out (the `enter` records, one per `#bor` rise) and still
+reports whether the loop repeats. Why it does not, on these models: the
+first OLED attempt charges the TPS61040's output to 9.4 V before the reset
+cuts its input (`+13V_OLED` holds it: 14.8 µF into 551.3 kΩ), so the
+attempt after the release has 3.6 V left to boost and completes with +3V3
+at 1.890 V, 290 mV above VBOR (Amendment 9 item 5). W2's rule-run checks
+(`no-reset`, `vcc`, `oled-off`) and every old-rule check but the count are
+unchanged. Re-recorded, with this reason: `tests/golden/dms-w2/old` and
+`old-200`. Against `main`'s (b2e3839) one-cell references, `nets.csv`,
+`nets.vcd` and every record but one are byte-identical; the `brownout`
+record is now `value 1, limit 1, "1 reset records with phase enter"`
+(was `2`, `2`, "2 reset records"). `rule` and `rule-200` are unchanged.
+
+**2. W1's anti-vacuity check (D-close 2).** The `pof-dip` crossing
+assertion with the paired blanking-off control (Amendment 8 item 4) is
+accepted as the evidence that the blanking acted; the plan's section 2 W1
+check table and section 5 item 1 now say so. Nothing in the build changes.
+
+**3. The nRF52840's idd per regulator (D-close 3).**
+
+- **The schema (additive, `bb-part/1`).** `[power] modes = ["<m0>",
+  "<m1>", ...]` names the supply modes the idd figures depend on; the first
+  is the part's reset mode and the default. Each `[power.idd.<state>]`'s
+  `typ`/`max`/`ref` are the first mode's figure, and
+  `[power.idd.<state>.<mode>]` gives each other mode's; every state gives
+  every mode (`bbpkg::package`, `spec/package.md` section 2,
+  `part.schema.json`). A test vector's `mode` selects one
+  (`bb-pkgtest/0`, `pkgtest.schema.json`). A project selects one per
+  instance with `[instances."<ref>"] power_mode` (`bb-project/1`,
+  `spec/project.md` section 1, `project.schema.json`); a mode the package
+  does not declare is an error at every rung. `run.json`'s `supply_load`
+  records the instance's `mode` and the figures in it.
+- **`nordic/nrf52840-qiaa` 0.6.0**, `modes = ["ldo", "dcdc"]`: the LDO
+  first, since it is the part's reset state (`POWER.DCDCEN` = 0) and what
+  every committed firmware runs on (Amendment 11 item 4). The PS's
+  scenario table is at the LDO unless a row says "Regulator = DC/DC"
+  (section 5.2, common conditions). Figures (LDO / DC/DC): run 6.072 mA
+  (ICPU1 6.3 mA less hfxo's 0.228 mA: the PS gives no LDO figure on HFINT,
+  and run + hfxo = ICPU1 for an awake CPU on HFXO) / 3.1 mA (ICPU4); hfxo
+  0.228 mA (ITIMER2 - ITIMER0) / 0.2 mA (ICPU0 - ICPU4); saadc 1.24 mA /
+  1.24 mA (ISAADC,RUN is DC/DC; the PS gives no LDO figure, so it stands
+  in, a recorded deviation); radio_tx 10.8 mA (IRADIO_TX3) / 6.4 mA
+  (IRADIO_TX1); radio_rx 10.1 mA (IRADIO_RX1) / 6.26 mA (IRADIO_RX0).
+- **The mode must match the firmware.** `BbNrf52Power` decodes `DCDCEN`
+  (0x578, bit 0, reset 0, stored only: no timing, no `SyncTime()`) and
+  keeps, across a machine reset, the number of writes that set it and the
+  first one's time (host registers 0xF2C-0xF38). The CPU engine
+  (`RenodeConfig::regulator_dcdc`, from the target's idd mode at `pi` when
+  its view is in the deck) reads them after the last grant and fails the
+  run when they disagree: mode `ldo` and DCDCEN ever set, or mode `dcdc`
+  and DCDCEN 0 at the end, naming both. `make nrf-power-model`'s `regs`
+  group: DCDCEN (register, host, sets) reset (0, 0, 0), after 0x3 (1, 1,
+  1), after 0 (0, 0, 1). `make pi-idd-test` gains the negative control:
+  `nrf_duty.elf` with `power_mode = "dcdc"` fails ("... the firmware never
+  enabled it (POWER.DCDCEN = 0 at the run's end): it runs on the LDO ...").
+  No committed image writes DCDCEN, so the model moves no committed result;
+  the nRF platform's content hash changes, and `make locks` relocked the
+  15 nRF52840 projects and boards (their `board.bbm` files name the
+  package's new version and tree).
+- **The dial-me-spinner projects** that run at `pi` (`bb.toml`,
+  `e1-system`, `w1`, `w2`) state `[instances."main:U10"] power_mode =
+  "ldo"`, the default, with the reason.
+- **Re-qualified** (`bb pkg test`, both modes, (10 µs, `phase0`)):
+  `idd_states.toml` at the LDO, by hand 3 V - 20 Ω × (2.35 µA + the states
+  so far): 2.999953, 2.878513, 2.873953, 2.849153, 2.633153, 2.431153 V,
+  each within 1 µV; `idd_states_dcdc.toml` (`mode = "dcdc"`) P3's values,
+  unchanged; `idd_collapse` and `idd_pscale` keep P3's hand calculations
+  at `mode = "dcdc"`.
+- **Re-recorded references, reason: the LDO figures.** Per probe, the
+  largest per-sample difference of the one-cell reference against `main`'s
+  (b2e3839), and the records:
+
+  | Reference | Largest differences | Records |
+  | --- | --- | --- |
+  | `pi-idd/duty` | VDD 29.867 mV (10.01 ms: R1 10 Ω × the awake CPU's 3 mA more), VSUP 30 µV | identical |
+  | `pi-idd/radio` | VDD 73.785 mV (18.79 ms: radio_tx 10.8 against 6.4 mA), VSUP 74 µV | identical |
+  | `pi-idd/feedback` | VDD 29.749 mV, COPY 148 µV, DRV 145 µV, SENSE 9 µV | 9 `pin_edge` of U1.P0.11 (the `digital_in` on SENSE): rises 2.9 ns later, falls 1.8 ps earlier, each in its lattice cell (nothing downstream moves) |
+  | `pi-glue/ok-cold`, `wrong-cold`, `ioh-cold` | at most 30 µV (+3V3 and the outputs that drive from it), VLED 1 µV | identical |
+  | `dms-e1-system/ok-cold`, `ok-nominal` | at most 30 µV, VLED 1 µV | identical |
+  | `dms-w1/cosim` | main:VSYS 0.943 mV (the operating point), +3V3 0.164 mV | identical |
+  | `dms-w1/cosim-budget` | main:VSYS 273.9 mV at 15.18 ms (VSYS's charger-limited recovery toward SYS_REG is faster with less load), +3V3 78.2 mV at 7.51 ms | identical |
+
+  `make limits-test`'s `pi` runs (E1 cold-pi, U10's idd in the deck) are
+  not hashed; the wrong order's `limit:main:D101.DIN:max` moves from
+  0.777451 to 0.777449 V and still fails exactly.
+
+  `cosim-budget`'s remainder is the 50 mA budget less U10's own awake idd
+  on the LDO, 43.7 mA (was 46.7 mA on P4's DC/DC figures;
+  `bench/remainder.csv`). The static-load mode's `pi-idd` bench
+  (`pi-static.toml`) is the LDO's hand calculation, 1.7483 mA (was 0.9773
+  mA). G6 on the LDO (`make pi-idd-test`): `nrf_duty.elf` measured
+  1.749574 mA against the hand 2.35 µA + 0.249984 × 6.072 mA + 0.228 mA =
+  1.748253 mA, **+0.076 %** (P3 on the DC/DC: +0.069 %); with the
+  bench-scheduled radio 4.987822 against 4.995427 mA, -0.152 % (limit 1 %).
+- **The E2 variant projects** (`e2/none`, `e2/c5`, `e2/c5-none`) are
+  `scripts/dms_e2_projects.py`'s copies of the project's `bb.toml`, so they
+  gain the same `power_mode` entry (rewritten and relocked; E2 runs at
+  `fast`, so no result moves).
+- **W1 and W2 re-run.** Every gated case (W1 `rule`, `blank4`, `off`,
+  `margin`, `margin-off`; W2 `old`, `rule` at 20 and 200 ms) replaces
+  U10's view with the static load, so its outputs are byte-identical to
+  `main`'s and no verdict or margin moves: the margin check's +3V3 min at
+  50 mA is 2.962615 V (+22.6 mV), as before. The reported co-simulations:
+  `cosim` +3V3 min 3.299826 → 3.299662 V, VSYS min 3.566549 → 3.566558
+  V; `cosim-budget` +3V3 min 2.992838 → 3.020778 V (margin to 2.94 V +52.8
+  → +80.8 mV: the CPU sleeps through the dip, so the remainder's 3 mA less
+  counts there), VSYS min 3.023837 → 3.049404 V; no crossing, POFWARN 0,
+  in both.
+
+**4. `make pi-spike` pinned to P0's view (D-close 4).**
+`examples/dial-me-spinner/pi-spike/tps22917_lsw_fit_p0.lib` is
+`packages/ti/tps22917/analog/lsw_fit.lib` at 0883d7b (the view P0 measured
+with, before D-TPS) byte for byte under a header: the first-party
+datasheet-fitted view, so it is not local-only (the TI-derived view stays
+in `local-packages/`). `scripts/pi_spike.py` builds every P0 variant
+(`fit`) with it, and a new variant `pi_lswnow` with the committed
+(restated) view, run on w1, w2rule and w2old at 1 ms grants and TMAX 1 µs,
+REPORTED. On this tree: **37/37 gates pass** (91 runs); w2old's numerics
+gate 1.0272 mV (VSYS, 4.32 ms) and 0.9645 mV (+3V3, 3.38 ms), P0's
+figures. Reported for the restated view (not gated), at every 10 µs
+against TMAX 1 µs: w1 0.1839 / 0.3402 mV, w2rule 1.0406 / 0.1350 mV,
+**w2old 14.7612 mV (VSYS, 4.73 ms) / 10.7256 mV (+3V3, 4.69 ms)**, the
+figure Amendments 10 and 11 recorded.
+
+**5. W1's ramped static-load sweep (D-close 5).** No spec change:
+`spec/project.md` section 3.2 lets a `profile` load `replace` a
+`supply_load` ("the load (`amps` or `profile`) stands in for it"). The
+ramp is `bench/w1-collapse.toml`'s `[[load]] profile = "ramp-60mA.csv",
+replace = "main:U10"`: 0 A until 0.1 ms, linear to the load at 0.2 ms,
+then held, after the operating point (solved without the load) and 1 ms
+before LED_PWR_EN (1.24 ms). A profile load is a pure sink, not P1's knee
+(Amendment 8 item 6); the two are equal while +3V3 stays above 0.5 V,
+which the sweep gates. `make dms-w1` adds:
+
+- the case `collapse` (60 mA, the rule firmware; REPORTED), with partition
+  independence and a new golden `tests/golden/dms-w1/collapse`;
+- the sweep, `bench/w1-collapse.toml` with `ramp-<L>mA.csv` for L = 30, 35,
+  40-48, 50, 55, 59, 61, 62 and 65 mA (60 is `collapse`), each 20 ms with
+  `w1_rule.elf`, checked by `scripts/check_dms_w1_sweep.py`, which reads
+  each run's corner from its `run.json` (the bench, the profile and its
+  sha256, the load it ramps to, main:U1's and the comparator's corners).
+
+| Load | Class | +3V3 min | Below 2.94 V (after LED_PWR_EN) | POFWARN, cue |
+| --- | --- | --- | --- | --- |
+| 30, 35 mA | none | 3.154822, 3.104558 V | never | 0, held |
+| 40-48 mA | none | 3.055992 (40) to 2.980896 V (48) | never | 0, held |
+| 50 mA | none | 2.962566 V | never | 0, held |
+| 55 mA | recover | 2.917392 V | 3.2518-4.1423 ms | 0, held |
+| 59 mA | collapse | 2.881476 V | 3.2010-10.1553 ms | 1, shed at 10.0074 ms |
+| **60 mA** (`collapse`) | collapse | 2.869931 V | 3.1891-10.4520 ms | 1, shed at 10.0074 ms |
+| 61, 62 mA | collapse | 2.821596, 2.773229 V | from 3.1773, 3.1657 ms | 1, shed at 10.0074 ms |
+| 65 mA | collapse | 2.627994 V | 3.1321-12.5294 ms | 1, shed at 10.0074 ms |
+
+Gated: every load runs (the operating point solves at 40-48 and 59-62 mA,
+where the `amps` form from t = 0 fails, Amendment 11 item 2); +3V3 above
+0.5 V in every run (lowest 2.627994 V at 65 mA); the classes monotone;
+the plan's rows (none at 30 and 50 mA and at 40-48 mA, cross and recover
+at 55 mA, collapse at 60, 61, 62 and 65 mA; 59 mA reported, the cliff's
+edge); a collapse sheds the cue at the blanking's end (the re-enable
+raises POFWARN), a recovery keeps it. The 60 mA collapse with the firmware
+in the loop: +3V3 below 2.94 V from 3.19 ms after LED_PWR_EN and not
+recovering inside the blanking; the re-enable at 10.007 ms raises POFWARN
+and the firmware sheds the cue, after which the rail recovers. Ramped
+against the gated `amps` runs: 50 mA +3V3 min 2.962566 against 2.962615 V
+(-0.049 mV), 55 mA 2.917392 against 2.917427 V (-0.035 mV). The gated
+benches keep their `amps` form: they converge, and the ramp would move
+every gated golden for no verdict.
+
+**6. D-TPS confirmed (D-close 6).** The terms in "Approver decisions" are
+confirmed as recorded; the plan's section 10 says so.
+
+**7. Phase 3, and P5's failed-reset rule (D-close 7).**
+
+- `[[env]]`, `[probes]` and `engine:bench@1`: Phase 3 (ADR-010 Amendment
+  7); the refusal of the two bench keys names Phase 3.
+- `bb pkg init --from-svd/--from-ibis`: Phase 3 (ADR-011 Amendment 5);
+  `bb pkg init` refuses, naming it.
+- **"A pool process is never reused after a reset that failed",
+  demonstrated** (Amendment 11 item 6's deviation closed). The engine's
+  fault knob `Fault::BorReadback` (`RenodeEngine::inject_fault`, tests
+  only) makes the next brown-out's read-back disagree with the hold the
+  engine wrote. `nrf_bor_failed_reset_is_discarded`
+  (`engines/cpu-renode/tests/nrf52840.rs`, in `cargo-test`, 6.7 s): on a
+  private 1-slot pool, `nrf_bor.elf` with a brown-out at 10.0034 ms and
+  the fault, leased, fails with the engine's "the POWER model did not hold
+  the machine" protocol error; the pool discards that process (`discarded
+  = 1`); the same run without the fault leases a new process (another pid)
+  and equals a fresh Renode's edges and `reset` records (one brown-out:
+  `enter`, `exit`).
+
+**Deviations, recorded.**
+
+- The SAADC's LDO current is its DC/DC figure (the PS gives none); run on
+  the LDO is ICPU1 less the LDO's HFXO difference (no LDO figure on
+  HFINT).
+- The mode holds from t = 0: a DC/DC firmware runs on the LDO until it
+  sets DCDCEN, a few microseconds into its boot.
+- The sweep's ramp is a pure-sink profile, not the knee form; equal above
+  0.5 V, which every sweep run stays above.

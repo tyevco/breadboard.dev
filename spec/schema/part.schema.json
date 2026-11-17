@@ -101,14 +101,28 @@
           "type": "object",
           "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
           "additionalProperties": {
+            "description": "typ/max/ref: the figure in the part's default supply mode (the first of modes); a table named after another mode of modes: the figure in that mode (ADR-009 Amendment 12).",
             "type": "object",
-            "additionalProperties": false,
             "required": ["typ", "ref"],
-            "properties": { "typ": { "$ref": "#/$defs/value" }, "max": { "$ref": "#/$defs/value" }, "ref": { "type": "string", "minLength": 1 } }
+            "properties": { "typ": { "$ref": "#/$defs/value" }, "max": { "$ref": "#/$defs/value" }, "ref": { "type": "string", "minLength": 1 } },
+            "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["typ", "ref"],
+              "properties": { "typ": { "$ref": "#/$defs/value" }, "max": { "$ref": "#/$defs/value" }, "ref": { "type": "string", "minLength": 1 } }
+            }
           }
         },
         "vdd_min": { "$ref": "#/$defs/value" },
-        "io_rail": { "type": "string", "minLength": 1 }
+        "io_rail": { "type": "string", "minLength": 1 },
+        "modes": {
+          "description": "ADR-009 Amendment 12 (decision D-close 3): the supply modes the idd figures depend on (the nRF52840's regulator: ldo, dcdc); the first is the part's reset mode and the default. Every idd state gives a figure in every mode.",
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "not": { "enum": ["typ", "max", "ref"] } }
+        }
       }
     },
     "document": {

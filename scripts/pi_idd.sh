@@ -4,14 +4,18 @@
 #
 #   scripts/pi_idd.sh test <bb> <out>   the part in `make test` (pi-idd-test):
 #     idd       nrf_duty.elf at bench/pi.toml (50 ms): the total VDD current, (V(VSUP) - V(VDD)) / R1,
-#               against the hand calculation of the duty-weighted average (2.35 uA + 0.249984 x
-#               3.1 mA + 0.2 mA HFXO), within 1 % (scripts/pi_idd.py idd);
+#               against the hand calculation of the duty-weighted average on the LDO, the part's
+#               default supply mode, which nrf_duty.elf runs on (2.35 uA + 0.249984 x 6.072 mA +
+#               0.228 mA HFXO; ADR-009 Amendment 12), within 1 % (scripts/pi_idd.py idd);
 #     radio     the same at bench/pi-radio.toml: + #radio_tx from a bench [[activity]] (300 us every
-#               1 ms from 0.5 ms) x 6.4 mA, within 1 %; run.json labels the radio bench-scheduled;
+#               1 ms from 0.5 ms) x 10.8 mA, within 1 %; run.json labels the radio bench-scheduled;
+#     mode      the negative control of "the mode must match the firmware" (decision D-close 3): the
+#               project with [instances."U1"] power_mode = "dcdc" must fail the run, naming
+#               POWER.DCDCEN (nrf_duty.elf never enables the DC/DC);
 #     control   the negative control: nrf_duty.elf at bench/fast.toml (no supply_load at fast) must
 #               fail the same check (the gate is not vacuous);
 #     static    static-load mode (bench/pi-static.toml): [[load]] replace = "main:U1" removes the
-#               supply_load and its state outputs, and the load (the hand-calculated 0.9773 mA) is the
+#               supply_load and its state outputs, and the load (the hand-calculated 1.7483 mA) is the
 #               current through R1;
 #     lookahead examples/nrf-idd with nrf_feedback.elf (examples/nrf-feedback's loop and firmware) at
 #               pi, with its state outputs, takes at most 2x the grants of examples/nrf-feedback's board
@@ -52,6 +56,11 @@ prepare() { # <bb>: one project copy per firmware (bb flash writes bb.toml)
     "$bb" open --check "$d" > /dev/null 2>&1
     "$bb" flash --project "$d" --target U1 "$d/nrf_$fw.elf" > /dev/null
   done
+  # The supply mode's negative control (ADR-009 Amendment 12): nrf_duty.elf at power_mode = "dcdc".
+  d=$WORK/proj-mode
+  rm -rf "$d"
+  cp -r "$WORK/proj-duty" "$d"
+  printf '\n[instances."U1"]\npower_mode = "dcdc"\n' >> "$d/bb.toml"
 }
 
 args_of() { # <case>
@@ -60,6 +69,7 @@ args_of() { # <case>
     radio) echo "--project $WORK/proj-duty --bench $WORK/proj-duty/bench/pi-radio.toml --for 50ms" ;;
     control) echo "--project $WORK/proj-duty --bench $WORK/proj-duty/bench/fast.toml --for 50ms" ;;
     static) echo "--project $WORK/proj-duty --bench $WORK/proj-duty/bench/pi-static.toml --for 50ms" ;;
+    mode) echo "--project $WORK/proj-mode --bench $WORK/proj-mode/bench/pi.toml --for 5ms" ;;
     feedback) echo "--project $WORK/proj-feedback --bench $WORK/proj-feedback/bench/pi.toml --for 500ms" ;;
     feedback-fast) echo "--project $WORK/proj-feedback --bench $WORK/proj-feedback/bench/fast.toml --for 500ms" ;;
     board) echo "--netlist $ROOT/examples/nrf-feedback/board.cir --firmware $NRF_FW/nrf_feedback.elf --target U1 --probe net:SENSE --for 500ms" ;;
@@ -108,6 +118,22 @@ do_test() { # <bb> <out>
   for c in duty radio control static feedback feedback-fast board; do
     [[ -f $out/$c/non-grant-records ]] || fail "$c: no run"
   done
+  # The supply mode must match the firmware's regulator (approver decision D-close 3, ADR-009
+  # Amendment 12): nrf_duty.elf never sets POWER.DCDCEN, so the run at mode dcdc must fail, naming it;
+  # the duty run (mode ldo, the default) passed the same check.
+  # shellcheck disable=SC2046
+  if "$bb" run $(args_of mode) --out "$out/mode" > "$out/mode.log" 2>&1; then
+    fail "supply mode: nrf_duty.elf at power_mode = \"dcdc\" ran (the firmware never enables the DC/DC)"
+  elif grep -q 'DCDCEN = 0 at the run.s end' "$out/mode.log" && grep -q '"ldo"' "$out/mode.log"; then
+    pass "supply mode: nrf_duty.elf at power_mode = \"dcdc\" fails: $(grep -o 'the run.s idd view draws the DC/DC[^(]*' "$out/mode.log" | head -1)"
+  else
+    fail "supply mode: the dcdc run failed for another reason"; tail -5 "$out/mode.log"
+  fi
+  if "$PY" -c 'import json,sys; s=json.load(open(sys.argv[1]))["supply_load"][0]; sys.exit(0 if s.get("mode") == "ldo" else 1)' "$out/duty/run.json"; then
+    pass "supply mode: run.json records the duty run's idd at mode ldo (the part's default)"
+  else
+    fail "supply mode: run.json's supply_load has no mode ldo"
+  fi
   # G6, idd: the hand calculation.
   if "$PY" "$ROOT/scripts/pi_idd.py" idd "$out/duty" > "$out/duty/idd.txt"; then
     pass "idd: nrf_duty.elf's total VDD current equals the hand calculation of the duty-weighted average within 1 %"
@@ -141,7 +167,7 @@ EOF
   fi
   sed 's/^/    /' "$out/control/idd.txt"
   # Static-load mode: the bench load stands in for U1's supply_load.
-  if "$PY" "$ROOT/scripts/pi_idd.py" static "$out/static" 0.9773mA > "$out/static/static.txt"; then
+  if "$PY" "$ROOT/scripts/pi_idd.py" static "$out/static" 1.7483mA > "$out/static/static.txt"; then
     pass "static-load mode: [[load]] replace = \"main:U1\" removed the supply_load and its state outputs; the load is the current"
   else
     fail "static-load mode (bench/pi-static.toml)"

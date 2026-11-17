@@ -16,6 +16,8 @@
 //! - `bb pkg tree <dir>`: a package's tree hash (D8).
 //! - `bb pkg value [--kicad R|C|L] <text>...`: parse values (D5) and print
 //!   them in integer sub-units, one JSON object per line.
+//! - `bb pkg init --from-svd|--from-ibis`: refused, Phase 3 (ADR-011
+//!   Amendment 5, approver decision D-close 7).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -42,7 +44,8 @@ usage: bb pkg lint [--publish] [<dir>...]     lint packages (default: first-part
        bb pkg tree <package dir>              print a package's tree hash
        bb pkg pack <package dir> [-o <file>]  write its deterministic archive (ADR-011 D6)
        bb pkg unpack <archive> <dir>          extract an archive (strictly) and print its tree hash
-       bb pkg value [--kicad R|C|L] [--dim voltage|time|resistance|capacitance|inductance|current|temperature|count|percent] <text>...";
+       bb pkg value [--kicad R|C|L] [--dim voltage|time|resistance|capacitance|inductance|current|temperature|count|percent] <text>...
+       bb pkg init --from-svd|--from-ibis ... refused: Phase 3 (ADR-011 Amendment 5)";
 
 pub fn main(args: &[String]) -> ExitCode {
     let r = match args.first().map(String::as_str) {
@@ -53,6 +56,14 @@ pub fn main(args: &[String]) -> ExitCode {
         Some("pack") => pack_cmd(&args[1..]),
         Some("unpack") => unpack_cmd(&args[1..]),
         Some("value") => value_cmd(&args[1..]),
+        // ADR-011: the package scaffolding from an SVD or an IBIS file (D4):
+        // Phase 3 (approver decision D-close 7, ADR-011 Amendment 5).
+        Some("init") => Err(
+            "init: `bb pkg init --from-svd/--from-ibis` (ADR-011) is Phase 3, not \
+                             built in Phase 2 (ADR-011 Amendment 5); write the package's \
+                             part.toml and pins.toml by hand (spec/package.md)"
+                .to_string(),
+        ),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;

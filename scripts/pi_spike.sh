@@ -65,7 +65,8 @@ RUN=$WORK/run
 DECKS=$RUN/decks
 if [[ $MODE == gate ]]; then rm -rf "$RUN"; fi
 mkdir -p "$RUN/runs" "$DECKS"
-"$PY" -I "$P0" decks --src "$SRC" --views "$VIEWS" --packages "$ROOT/packages" --lib-fixed "$FIXED" --out "$DECKS"
+"$PY" -I "$P0" decks --src "$SRC" --views "$VIEWS" --packages "$ROOT/packages" --lib-fixed "$FIXED" \
+  --lsw-p0 "$ROOT/examples/dial-me-spinner/pi-spike/tps22917_lsw_fit_p0.lib" --out "$DECKS"
 
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/bb-target}
 (cd "$ROOT" && cargo build --release -q -p bb-analog-ngspice --example deck_run)
@@ -125,6 +126,8 @@ if [[ $MODE == gate ]]; then
     # variants, the other option sets, and the suite's unfixed view on the suite's fallback ladder
     ids+=("$c.$RV.$ROS.g1ms" "$c.pi.$Q.g1ms" "$c.pi.$Q.g10us" "$c.pi.$Q.g10ms" "$c.pi.$Q.tmax1us")
     for v in pi_typ pi_no3v3c pi_c3half suite_lswfit pi_lswfix; do ids+=("$c.$v.$Q.g1ms"); done
+    # the committed (restated, D-TPS) TPS22917 view's convergence, REPORTED (decision D-close 4)
+    ids+=("$c.pi_lswnow.$Q.g1ms" "$c.pi_lswnow.$Q.tmax1us")
     for os in phase0 phase0_gear suite_fallback suite_l1; do
       [[ $os == "$Q" ]] || ids+=("$c.pi.$os.g1ms")
     done

@@ -1,6 +1,7 @@
 # examples/nrf-idd at pi with a bench-scheduled radio (ADR-009 D4: no firmware drives the radio
 # states, so the bench schedules them and the report labels them): bench/pi.toml plus #radio_tx
-# for 300 us every 1 ms from 0.5 ms (a 30 % TX duty; IRADIO_TX1, 6.4 mA).
+# for 300 us every 1 ms from 0.5 ms (a 30 % TX duty; on the LDO IRADIO_TX3, 10.8 mA; ADR-009
+# Amendment 12).
 schema = "bb-bench/1"
 fidelity = "pi"
 

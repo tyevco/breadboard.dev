@@ -55,7 +55,8 @@
         "properties": {
           "package": { "type": "string", "pattern": "^(none|[a-z0-9._-]+/[a-z0-9._-]+(@[0-9]+\\.[0-9]+\\.[0-9]+)?)$" },
           "reason": { "type": "string" },
-          "analog": { "type": "string" }
+          "analog": { "type": "string" },
+          "power_mode": { "description": "ADR-009 Amendment 12 (decision D-close 3): the supply mode of the part's [power] modes its supply_load view draws at pi; it must match the firmware's (the nRF52840: ldo or dcdc, checked against POWER.DCDCEN).", "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
         },
         "if": { "properties": { "package": { "const": "none" } }, "required": ["package"] },
         "then": { "required": ["reason"] }

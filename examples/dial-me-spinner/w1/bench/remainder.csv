@@ -1,6 +1,7 @@
-# W1 co-simulation: the 50 mA +3V3 budget less U10's own idd (3.3 mA), ramped in from 0.1 to
-# 0.2 ms, after the operating point and before the cue (bench/w1-cosim-budget.toml).
+# W1 co-simulation: the 50 mA +3V3 budget less U10's own idd on the LDO (6.3 mA: 6.072 mA run +
+# 0.228 mA hfxo, ICPU1; ADR-009 Amendment 12, decision D-close 3), ramped in from 0.1 to 0.2 ms, after
+# the operating point and before the cue (bench/w1-cosim-budget.toml).
 t,I
 0,0
 0.0001,0
-0.0002,0.0467
+0.0002,0.0437

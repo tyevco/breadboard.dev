@@ -35,6 +35,11 @@ pub struct InstanceOverride {
     pub reason: Option<String>,
     /// The analog view to use (ADR-006 D3 selection step 1).
     pub analog: Option<String>,
+    /// The supply mode of the part's `[power] modes` its `supply_load` view
+    /// draws at `pi` (ADR-009 Amendment 12, decision D-close 3: the
+    /// nRF52840's regulator, `ldo` or `dcdc`, which must match the
+    /// firmware's); `None`, the part's default (its first mode).
+    pub power_mode: Option<String>,
 }
 
 /// One firmware image of a target (ADR-008 D5).
@@ -355,6 +360,7 @@ impl Project {
                     package: io.str_opt("package")?,
                     reason: io.str_opt("reason")?,
                     analog: io.str_opt("analog")?,
+                    power_mode: io.str_opt("power_mode")?,
                 };
                 if ov.package.as_deref() == Some("none") && ov.reason.is_none() {
                     return Err(format!(
@@ -946,19 +952,13 @@ fn q(text: &str, dim: bbpkg::value::Dim, at: &str) -> Result<i128, String> {
     bbpkg::value::parse_quantity(text, dim).map_err(|e| format!("{at}: {e}"))
 }
 
-/// The `bb-bench/1` keys of ADR-010 D2 that no milestone of this build
-/// implements (no row of the plan's section 4 carries them; ADR-010
-/// Amendment 6): refused, never ignored (a bench that names one would not
+/// The `bb-bench/1` keys of ADR-010 D2 that Phase 2 does not implement:
+/// moved to Phase 3 by the approver (decision D-close 7, 2026-11-17; ADR-010
+/// Amendment 7). Refused, never ignored (a bench that names one would not
 /// run as written).
 const LATER_TOP: &[(&str, &str)] = &[
-    (
-        "env",
-        "environment signals (in no milestone of this build, ADR-010 Amendment 6)",
-    ),
-    (
-        "probes",
-        "per-probe rates (in no milestone of this build, ADR-010 Amendment 6)",
-    ),
+    ("env", "environment signals (Phase 3, ADR-010 Amendment 7)"),
+    ("probes", "per-probe rates (Phase 3, ADR-010 Amendment 7)"),
 ];
 
 impl Bench {
@@ -1030,8 +1030,8 @@ impl Bench {
             for (k, what) in LATER_TOP {
                 if o.has(k) {
                     return Err(format!(
-                        "{k}: a bb-bench/1 key for {what} (ADR-010 D2), not implemented in this \
-                         build; a bench that names it would not run as written"
+                        "{k}: a bb-bench/1 key for {what} (ADR-010 D2), not implemented in \
+                         Phase 2; a bench that names it would not run as written"
                     ));
                 }
             }

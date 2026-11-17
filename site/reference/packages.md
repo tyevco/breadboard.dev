@@ -58,7 +58,9 @@ refused with a message saying so. `bb-part/1` (the Phase 2 schema epoch) also
 accepts `[power]`, a view's `rails` and `[[analog.corners]]`, the `switch`
 and `supply_load` view kinds, `[[document]]`, `[claims]` and
 `upstream_license`; most of them take effect in later milestones (see the
-spec). Every top-level name a view defines starts with the package prefix
+spec). `[power] modes` gives supply currents per mode (the nRF52840's
+regulator: `ldo`, the default, and `dcdc`), each state's figure in every
+mode; a test vector's `mode` picks one. Every top-level name a view defines starts with the package prefix
 (`TI_TPS22917_LSW_FIT` in `ti/tps22917`): `bb pkg lint` warns otherwise, and
 `bb pkg lint --publish` refuses it.
 

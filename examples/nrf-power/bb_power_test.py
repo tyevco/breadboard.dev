@@ -28,7 +28,8 @@ Groups (every case starts from a fresh Renode; each case runs twice, byte-identi
             lattice point (the write is on one here: at once), a THRESHOLD change while enabled with
             #pofwarn high raises, a rewrite of the same value does not, a write that clears POF
             raises nothing
-  regs      RESETREAS (the host preset, write 1 to clear), GPREGRET/GPREGRET2 (8 bits), TASKS_CONSTLAT
+  regs      RESETREAS (the host preset, write 1 to clear), GPREGRET/GPREGRET2 (8 bits), DCDCEN (bit 0,
+            stored, and its host record 0xF2C/0xF30: ADR-009 Amendment 12), TASKS_CONSTLAT
             and TASKS_LOWPWR (no-ops), the wrapped CLOCK (TASKS_HFCLKSTART -> EVENTS_HFCLKSTARTED,
             its INTENSET bit 0 pends IRQ 0 through the shared line)
   nvmc      POF blocks NVMC erases (ADR-009 D6): ERASEPAGE with POF = 1 and #pofwarn high is refused
@@ -71,7 +72,8 @@ P = 0x40000000
 TASKS_HFCLKSTART, TASKS_CONSTLAT, TASKS_LOWPWR = P + 0x000, P + 0x078, P + 0x07C
 EV_HFCLKSTARTED, EV_POFWARN = P + 0x100, P + 0x108
 INTENSET, INTENCLR, RESETREAS, POFCON = P + 0x304, P + 0x308, P + 0x400, P + 0x510
-GPREGRET, GPREGRET2 = P + 0x51C, P + 0x520
+GPREGRET, GPREGRET2, DCDCEN = P + 0x51C, P + 0x520, P + 0x578
+HOST_DCDCEN, HOST_DCDCEN_SETS = P + 0xF2C, P + 0xF30
 HOST_ID, HOST_RESETREAS, HOST_RAISES, HOST_ERROR, HOST_INPUT, HOST_POFCON = (
     P + 0xF00, P + 0xF04, P + 0xF08, P + 0xF0C, P + 0xF10, P + 0xF14)
 NVIC_ISPR0 = 0xE000E200
@@ -350,6 +352,14 @@ def run_group(renode, dll, group, keep):
             s.w(GPREGRET, 0x1A5)
             s.w(GPREGRET2, 0xFFFF)
             g1, g2 = s.r(GPREGRET), s.r(GPREGRET2)
+            # DCDCEN (ADR-009 Amendment 12): bit 0 stored; the host record counts the writes that set it.
+            d0 = (s.r(DCDCEN), s.r(HOST_DCDCEN), s.r(HOST_DCDCEN_SETS))
+            s.w(DCDCEN, 0x3)
+            d1 = (s.r(DCDCEN), s.r(HOST_DCDCEN), s.r(HOST_DCDCEN_SETS))
+            s.w(DCDCEN, 0x0)
+            d2 = (s.r(DCDCEN), s.r(HOST_DCDCEN), s.r(HOST_DCDCEN_SETS))
+            note(f"DCDCEN (reg, host, sets): reset {d0}, after 0x3 {d1}, after 0 {d2}")
+            check(d0 == (0, 0, 0) and d1 == (1, 1, 1) and d2 == (0, 0, 1), f"DCDCEN {d0} {d1} {d2}")
             s.w(TASKS_CONSTLAT, 1)
             s.w(TASKS_LOWPWR, 1)
             s.w(INTENSET, 0x1)

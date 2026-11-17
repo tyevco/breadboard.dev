@@ -35,7 +35,7 @@
 use std::collections::BTreeMap;
 
 use crate::engine::SolverPoint;
-use crate::event::{AssertOutcome, Event, LogLevel};
+use crate::event::{AssertOutcome, Event, LogLevel, ResetPhase};
 use crate::signal::{volts_to_microvolts, NetValues, PinSignal};
 use crate::time::Time;
 
@@ -275,6 +275,10 @@ pub enum Pair {
 pub enum EventWhat {
     /// `reset` records.
     Reset,
+    /// `reset` records of one `phase` (ADR-010 D5 extended by ADR-009
+    /// Amendment 12, decision D-close 1): `enter` counts brown-outs, since
+    /// one brown-out writes its hold (`enter`) and its release (`exit`).
+    ResetPhase(ResetPhase),
     /// `log` records of level `warn`.
     Warn,
     /// `log` records of level `error`.
@@ -1311,6 +1315,7 @@ fn update(
                 .filter(|l| c.inside(ivs, l.t))
                 .filter(|l| match what {
                     EventWhat::Reset => l.level.is_none(),
+                    EventWhat::ResetPhase(p) => l.level.is_none() && l.msg == p.as_str(),
                     EventWhat::Warn => l.level == Some(LogLevel::Warn),
                     EventWhat::Error => l.level == Some(LogLevel::Error),
                 })
@@ -1636,9 +1641,10 @@ fn verdict(spec: &Spec, st: &mut State, close: Time, replay_na: bool, t_end: Tim
         Kind::Event { what, lim } => {
             let n = st.n;
             let w = match what {
-                EventWhat::Reset => "reset records",
-                EventWhat::Warn => "warn log records",
-                EventWhat::Error => "error log records",
+                EventWhat::Reset => "reset records".to_string(),
+                EventWhat::ResetPhase(p) => format!("reset records with phase {}", p.as_str()),
+                EventWhat::Warn => "warn log records".to_string(),
+                EventWhat::Error => "error log records".to_string(),
             };
             Verdict {
                 outcome: if lim.holds(n) {
@@ -1693,11 +1699,16 @@ pub fn replay(
                     level: Some(*level),
                     msg,
                 }),
-                Event::Reset { t_fs, source, .. } if pred(*t_fs) => logs.push(LogRec {
+                Event::Reset {
+                    t_fs,
+                    source,
+                    phase,
+                    ..
+                } if pred(*t_fs) => logs.push(LogRec {
                     t: *t_fs,
                     source,
                     level: None,
-                    msg: "",
+                    msg: phase.as_str(),
                 }),
                 _ => {}
             }
@@ -2280,6 +2291,75 @@ mod tests {
         q.requires = Some("pi".into());
         let r = run(vec![q], &[350], EDGES, LOGS);
         assert_eq!(get(&r, "rung").0, AssertOutcome::NotEvaluable);
+    }
+
+    #[test]
+    fn reset_records_count_by_phase() {
+        // One brown-out writes two records, its hold and its release (ADR-009
+        // D7): `event = "reset"` counts 2, with `phase = "enter"` 1 (ADR-009
+        // Amendment 12, decision D-close 1).
+        let mut events = vec![Event::Grant {
+            t_fs: Time::ZERO,
+            until_fs: Time::from_us(600),
+            limited_by: "t_end".into(),
+        }];
+        for (t, phase) in [
+            (100, crate::event::ResetPhase::Enter),
+            (200, crate::event::ResetPhase::Exit),
+        ] {
+            events.push(Event::Reset {
+                t_fs: Time::from_us(t),
+                source: "cpu".into(),
+                cause: "bor".into(),
+                phase,
+                ram: None,
+            });
+        }
+        let lim = |min| Limits {
+            min: Some(min),
+            max: None,
+        };
+        let specs = vec![
+            spec(
+                "all",
+                Kind::Event {
+                    what: EventWhat::Reset,
+                    lim: lim(2),
+                },
+            ),
+            spec(
+                "enter1",
+                Kind::Event {
+                    what: EventWhat::ResetPhase(ResetPhase::Enter),
+                    lim: lim(1),
+                },
+            ),
+            spec(
+                "enter2",
+                Kind::Event {
+                    what: EventWhat::ResetPhase(ResetPhase::Enter),
+                    lim: lim(2),
+                },
+            ),
+            spec(
+                "stop",
+                Kind::Event {
+                    what: EventWhat::ResetPhase(ResetPhase::Stop),
+                    lim: Limits {
+                        min: None,
+                        max: Some(0),
+                    },
+                },
+            ),
+        ];
+        let r = replay(specs, &events, Time::from_us(600), "pi").unwrap();
+        assert_eq!(get(&r, "all").0, AssertOutcome::Pass);
+        assert_eq!(get(&r, "all").1, Some(2));
+        assert_eq!(get(&r, "enter1").0, AssertOutcome::Pass);
+        assert_eq!(get(&r, "enter1").1, Some(1));
+        assert_eq!(get(&r, "enter2").0, AssertOutcome::Fail);
+        assert_eq!(get(&r, "stop").0, AssertOutcome::Pass);
+        assert_eq!(get(&r, "stop").1, Some(0));
     }
 
     #[test]
