@@ -603,7 +603,10 @@ awake.
   point's time, the same in every run; the outputs of every completed grant
   stay written. The limits are run options (`bb run --ngspice-watchdog`,
   recorded in `run.json`).
-- Depend on wall-clock time, thread timing or unseeded randomness.
+- Depend on wall-clock time, thread timing or unseeded randomness. A debug
+  run (`bb run --gdb`) whose outputs carry the debug mark (ADR-008 D10,
+  Amendment 7) is exempt: it may depend on when a debugger acts, and it is
+  never compared against a reference (ADR-015 D10).
 - Change anything that affects results in `end_of_run`: it is for pure
   self-checks (e.g. the Renode cross-check), and a later `run` may resume.
 - Change state in `quiet_until` (it may be skipped by the back-off), promise

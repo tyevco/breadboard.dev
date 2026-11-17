@@ -91,7 +91,7 @@ name = "PA1"                  # KiCad libpart pin names must match
 role = "io"                   # power_in | power_out | ground | io | input | output | analog | nc | passive
 supply = "VDD"                # optional: the supply pin its thresholds refer to
 alt = ["ADC_IN1"]             # informative alternate functions
-models = ["digital_out", "digital_in", "adc_in"]   # the pin models a binding may choose
+models = ["digital_out", "digital_in", "adc_in"]   # the pin models a binding may choose (a supply pin: power)
 adc = { channel = "IN1" }     # with adc_in, and only with it: the converter channel
 
 [defaults.digital_out.default]   # named parameter sets: [defaults.<model>.<set>]
@@ -111,6 +111,36 @@ parameters of each model.
 On Breadboard's nRF52840, a `digital_out` set's name begins with the
 `PIN_CNF` drive it stands for (`S0S1`, `H0H1`, ...), and `bb run`'s `PIN_CNF`
 audit checks the firmware's drive against it.
+
+### Limits and supply ratings (ADR-009 D3)
+
+`bb-pins/1` carries a part's ratings, which become assertions at the `pi`
+rung, and at `fast` with `bb run --limits`:
+
+```toml
+[[limits]]                    # an absolute maximum rating
+pin = "DIN"
+max = "VDD + 0.7V"            # <value>, <pin> + <value> or <pin> - <value>
+source = "datasheet p. 3, absolute maximum ratings"
+
+[[pin]]
+number = "4"
+name = "VDD"
+role = "power_in"
+models = ["power"]            # a supply pin's ratings: power{vmin, vmax, imax}
+
+[defaults.power.default]      # or [defaults.power.VDD] for this pin alone
+vmax = "5.3V"
+imax = "20mA"
+```
+
+Each bound and rating of an instance in the deck is a `range` assertion over
+the whole run named `limit:<board>:<ref>.<pin>:<key>` (`min`, `max`, `vmin`,
+`vmax`, `imax`), with the package and the bound's `source` in its message:
+`V(DIN) - V(VDD) <= 0.7 V` above, the supply pin against the part's ground
+pin for `vmin` and `vmax`. `imax` is reported `not_evaluable` (no view
+senses a supply pin's current). No first-party package declares a limit
+yet; `make limits-test` runs a fixture that writes E1's LSW-3 this way.
 
 ## Values
 
@@ -217,8 +247,11 @@ E3's lead screw, carriage, magnet and DRV5032 home switch:
   parameters.
 - The lock records a device as `device:<id>@<major>` with its content
   hash.
-- A device part exists only in a board file. A `[[device]]` entry for
-  projects (`bb.toml`) is a Phase 2 item.
+- A device part is placed in a board file (`*bb part`), or, since Phase 2
+  (R1, ADR-013 D1), as a `[[device]]` of a project's `bb.toml`, a
+  `virtual` one when it has no schematic symbol (see
+  [Projects](./project); `examples/dial-me-spinner/e3/home` and
+  `e3/step`).
 
 The normative text is `spec/package.md` section 12 (ADR-006 D7 and
 Amendment 6).

@@ -30,6 +30,12 @@ Cases (--case):
             EVENTS_POFWARN); +3V3 min and its margin to 2.94 V reported
   cosim     the co-simulation (REPORTED: +3V3 and VSYS minima, the window if any, POFWARN count)
 
+Every case first checks (GATED) that the run is at the case's corner, read from its run.json: the
+bench file, the static +3V3 [[load]] that replaces U10's supply_load (55 mA for the stress cases,
+50 mA for margin, none for cosim), main:U1's corner (worst_dropout) and the POWER comparator's
+corner (max, i.e. +5 %; typ or min for `corner`). The label on every line is built from what it
+read, so a run at another load cannot pass, or print, as the stress corner.
+
 Usage: check_dms_w1.py <run dir> --case <case> [--window-end-ms X] [--json FILE]
 Exit status 0 when every gated check of the case passes.
 """
@@ -41,13 +47,52 @@ from pathlib import Path
 L_FS = 10_000_000_000          # the lattice, 10 us
 MS = 1_000_000_000_000
 THR = 2.94                     # V28 x (1 + 5 %)
-STRESS = "W1 stress corner: 55 mA static +3V3 load (suite budget 50 mA), RT9080 worst_dropout"
-MARGIN = "W1 margin check: the suite's 50 mA static +3V3 budget, RT9080 worst_dropout"
 # ADR-009 Amendment 2, table 1: the suite's replica at 55 mA (P0's measurements) and the stress
 # corner's tolerances.
 REPLICA = {"vsys_min": 2.8564, "p3v3_min": 2.8078, "start_ms": 3.2341, "end_ms": 6.9472}
 TOL = {"vsys_min": 0.200, "p3v3_min": 0.200, "start_ms": 0.050, "end_ms": 5.0}
 BLANK_MS = {"rule": 10, "blank4": 4, "blank5": 5, "off": 0, "corner": 10, "margin": 10, "cosim": 10}
+# The corner each case must have run at, read back from the run's run.json (bench file, the static
+# +3V3 [[load]] that replaces U10's supply_load, the RT9080's corner, the POWER comparator's corner),
+# so the label is the run's, not the caller's: (bench files, static load, RT9080 corner, POF corners).
+STRESS_AT = (("w1-stress.toml",), "55mA", "worst_dropout", ("max",))
+EXPECT = {
+    "rule": STRESS_AT, "blank4": STRESS_AT, "off": STRESS_AT, "blank5": STRESS_AT,
+    "corner": (("w1-stress-typ.toml", "w1-stress-min.toml"), "55mA", "worst_dropout", ("typ", "min")),
+    "margin": (("w1-margin.toml",), "50mA", "worst_dropout", ("max",)),
+    "cosim": (("w1-cosim.toml", "w1-cosim-budget.toml"), None, "worst_dropout", ("max",)),
+}
+POF_TEXT = {"max": "V28 +5 % (2.94 V)", "typ": "V28 nominal (2.80 V)", "min": "V28 -5 % (2.66 V)"}
+
+
+def run_corner(d):
+    """The corner a run ran at, from its run.json: bench file name, the static +3V3 load (the amps of
+    a [[load]] on +3V3 that replaces main:U10), its profile if it is one, main:U1's and main:U10's
+    corners."""
+    import tomllib
+    rj = json.load(open(d / "run.json"))
+    bench = rj.get("bench") or {}
+    text = tomllib.loads(bench.get("text") or "")
+    static, profile = None, None
+    for ld in text.get("load", []):
+        if ld.get("net") in ("+3V3", "main:+3V3"):
+            if ld.get("replace") == "main:U10" and "amps" in ld:
+                static = ld["amps"]
+            elif "profile" in ld:
+                profile = ld["profile"]
+    corners = text.get("corners", {})
+    return {"file": bench.get("file"), "static": static, "profile": profile,
+            "u1": corners.get("main:U1"), "pof": (rj.get("pof") or {}).get("corner")}
+
+
+def corner_label(c):
+    pof = POF_TEXT.get(c["pof"], f"corner {c['pof']}")
+    if c["static"] is None:
+        load = "U10's supply_load" + (f" and the bench [[load]] profile {c['profile']}" if c["profile"] else " only")
+        return f"W1 co-simulation: {load}, RT9080 {c['u1']}, POFWARN at {pof}; bench {c['file']}"
+    kind = "W1 margin check" if c["static"] == "50mA" else "W1 stress corner"
+    return (f"{kind}: {c['static']} static +3V3 load (suite budget 50 mA), RT9080 {c['u1']}, "
+            f"POFWARN at {pof}; bench {c['file']}")
 
 
 def ceil_l(t):
@@ -84,15 +129,17 @@ def main():
     ap.add_argument("--case", required=True, choices=sorted(BLANK_MS))
     ap.add_argument("--blank-ms", type=int, help="the image's blanking (default: by case)")
     ap.add_argument("--window-end-ms", type=float, help="blank4: the rule run's window end after LED_PWR_EN")
-    ap.add_argument("--label", help="the corner label (default: by case)")
     ap.add_argument("--json")
     a = ap.parse_args()
     d = Path(a.run)
     ev, head, rows = load(d)
     case = a.case
-    label = a.label or (MARGIN if case == "margin" else STRESS if case != "cosim" else "W1 co-simulation")
+    # The label is read from the run (run.json), never given by the caller, and the run must be at
+    # the case's corner: a run at another load or corner is not this case.
+    rc = run_corner(d)
+    label = corner_label(rc)
     blank = (a.blank_ms if a.blank_ms is not None else BLANK_MS[case]) * MS
-    out = {"case": case, "label": label, "checks": [], "report": {}}
+    out = {"case": case, "label": label, "corner": rc, "checks": [], "report": {}}
     ok = True
 
     def check(name, cond, text, gated=True):
@@ -106,6 +153,12 @@ def main():
     def report(name, text, value=None):
         print(f"check_dms_w1: report: {name}: {text} [{label}]")
         out["report"][name] = value if value is not None else text
+
+    files, static, u1, pofs = EXPECT[case]
+    check("corner", rc["file"] in files and rc["static"] == static and rc["u1"] == u1 and rc["pof"] in pofs,
+          f"run.json: bench {rc['file']}, static +3V3 load {rc['static']}, RT9080 {rc['u1']}, POF corner "
+          f"{rc['pof']} (case {case} expects bench {' or '.join(files)}, static load {static}, RT9080 {u1}, "
+          f"POF corner {' or '.join(pofs)})")
 
     edges = {}
     for r in ev:

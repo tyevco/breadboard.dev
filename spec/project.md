@@ -507,6 +507,22 @@ a pattern means.
   the `pin_edge` stream; `log` and `event` checks the `log` and `reset`
   records. Values and limits are integers in base units: a voltage is
   rounded half away from zero to whole µV before it is compared.
+- **Package limits** (ADR-009 D3, Amendment 11). At `pi`, and at `fast`
+  with `bb run --limits` (a project only), every `pins.toml` `[[limits]]`
+  bound and every `power{vmin, vmax, imax}` rating of an instance on a
+  simulated board is an automatic `range` assertion over the whole run,
+  after the bench's and the files', named `limit:<board>:<ref>.<pin>:<key>`
+  (`key` `min`, `max`, `vmin`, `vmax` or `imax`); its `msg` starts with the
+  package, the bound as written, its `source` and the package's
+  provenance. A bound `<pin> ± <V>` reads `V(pin) - V(<pin>)`; a plain
+  voltage, `vmin` and `vmax` read the pin against the part's first ground
+  pin (node 0 when that is the simulated board's ground). `imax` is
+  `not_evaluable`. A limit whose nets have nothing in the deck, or of an
+  instance the bench excludes, is not asserted (`run.json` `limits` says
+  why). The tautology rule (D6) does not apply to them: a rating on a
+  bench-forced rail checks the bench against the part. A file's assertion
+  may not be named `limit:...`. At `fast` without `--limits` there are none,
+  so no `fast` event stream changes.
 - **Instances.** `at`, `settle`, `edge_timing`, `frequency` and a `log`
   `field` check every instance in the window and report the worst (one past
   a limit, else the one nearest a limit). A kind with no instance in its
@@ -727,6 +743,11 @@ rule 12), `ref`, `package`, `version`, `view`, provenance `source` and
 and `states` (each state port's driver: `"cpu"`, `"bench [[activity]]
 (bench-scheduled)"` or `"0"`); an instance whose view a `[[load]] replace`
 removed is listed with `ref`, `package`, `view` and `replaced_by` only;
+`limits`, only when limits are on (`pi`, or `bb run --limits`) and an
+instance in scope has one (ADR-009 D3, Amendment 11): per limit, in
+instance order, `name`, `package` (`<id>@<version>`), `limit` (the bound as
+written, with its `source`), `asserted` and, when not, `reason`;
+`limits_flag`, `true` only for a run with `bb run --limits`;
 `assert_files`, only when `bb run --assert`
 names any (each file's name and text, in order; ADR-010 Amendment 3);
 `packages` (each one's id, version, `source`: `path` for a local package,

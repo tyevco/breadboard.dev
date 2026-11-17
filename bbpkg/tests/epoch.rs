@@ -254,12 +254,96 @@ fn reserved_keys_stay_reserved() {
         let e = parse_part(&PART.replacen(from, to, 1), &reg).unwrap_err();
         assert!(e.contains(what), "{e}");
     }
+}
+
+/// ADR-009 D3 (Amendment 11): the `power{vmin, vmax, imax}` pin model is
+/// defined in bb-pins/1: a supply pin's set (named after the pin, else
+/// `default`), never on another role, never in a bb-pins/0 file.
+#[test]
+fn the_power_pin_model() {
+    let reg = Registry::current();
+    let powered = PINS.replacen(
+        "name = \"VDD\"\nrole = \"power_in\"\n",
+        "name = \"VDD\"\nrole = \"power_in\"\nmodels = [\"power\"]\n",
+        1,
+    )
+        + "[defaults.power.default]\nvmin = \"1.7V\"\nvmax = \"3.6V\"\nimax = \"25mA\"\n";
+    // Clean, and the pin's own set wins over `default`.
+    let named = powered.clone() + "[defaults.power.VDD]\nvmax = \"3.9V\"\n";
+    for (n, text) in [("pwr-default", &powered), ("pwr-named", &named)] {
+        let t = write_pkg(n, &files(PART, text));
+        assert!(clean(findings(&t.0, false)).is_empty(), "{n}");
+        let pkg = package::load(&t.0, &reg).unwrap();
+        let (set, p) = package::power_params(&pkg, "VDD").unwrap().unwrap();
+        let want_set = if n == "pwr-named" { "VDD" } else { "default" };
+        assert_eq!(set, want_set);
+        let vmax = if n == "pwr-named" {
+            3_900_000
+        } else {
+            3_600_000
+        };
+        assert_eq!(p.get("vmax"), Some(&package::Param::Quantity(vmax)));
+        assert!(package::power_params(&pkg, "P0").unwrap().is_none());
+    }
+    // A bb-pins/0 file has no power model.
     let e = parse_pins(
-        &PINS.replacen("models = [\"digital_out\"]", "models = [\"power\"]", 1),
+        &powered
+            .replacen("bb-pins/1", "bb-pins/0", 1)
+            .replace("rail = \"VDD\"\nrhiz = \"100Meg\"\n", "")
+            .replace(
+                "[[limits]]\npin = \"P0\"\nmax = \"VDD + 0.3V\"\nmin = \"-0.3V\"\nsource = \"PS v1.1, absolute maximum ratings\"\n",
+                "",
+            ),
         &reg,
     )
     .unwrap_err();
-    assert!(e.contains("power pin model is reserved"), "{e}");
+    assert!(e.contains("power pin model is new in bb-pins/1"), "{e}");
+    for (n, text, want) in [
+        (
+            "pwr-io",
+            PINS.replacen(
+                "models = [\"digital_out\"]",
+                "models = [\"digital_out\", \"power\"]",
+                1,
+            ) + "[defaults.power.default]\nvmax = \"3.6V\"\n",
+            "role io cannot take model power",
+        ),
+        (
+            "pwr-empty",
+            powered.replace(
+                "[defaults.power.default]\nvmin = \"1.7V\"\nvmax = \"3.6V\"\nimax = \"25mA\"\n",
+                "[defaults.power.default]\n",
+            ),
+            "defaults.power.default: give vmin, vmax or imax",
+        ),
+        (
+            "pwr-set",
+            powered.clone() + "[defaults.power.P0]\nvmax = \"3.9V\"\n",
+            "defaults.power.P0: not `default` and not a pin that takes the power model",
+        ),
+        (
+            "pwr-noset",
+            powered.replace(
+                "[defaults.power.default]\nvmin = \"1.7V\"\nvmax = \"3.6V\"\nimax = \"25mA\"\n",
+                "",
+            ),
+            "no parameter set defaults.power.default",
+        ),
+        (
+            "pwr-unit",
+            powered.replace("imax = \"25mA\"", "imax = \"25mV\""),
+            "defaults.power.default.imax",
+        ),
+        (
+            "limit-twice",
+            PINS.to_string() + "[[limits]]\npin = \"P0\"\nmax = \"3.9V\"\nsource = \"again\"\n",
+            "limits: pin P0 has two max limits",
+        ),
+    ] {
+        let t = write_pkg(n, &files(PART, &text));
+        let e = errors(&t.0);
+        assert!(e.iter().any(|m| m.contains(want)), "{n}: {e:?}");
+    }
 }
 
 #[test]

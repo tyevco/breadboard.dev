@@ -366,8 +366,19 @@ fn lint_epoch(pkg: &Package, o: &mut Out) {
             }
         }
     }
-    // limits (bb-pins/1, ADR-009 D3): the pin and a reference pin exist.
+    // limits (bb-pins/1, ADR-009 D3): the pin and a reference pin exist, and
+    // a pin has one min and one max at most (each is an assertion named
+    // limit:<ref>.<pin>:<min|max>).
+    let mut bounds_seen: BTreeSet<(&str, &str)> = BTreeSet::new();
     for l in &pkg.pins.limits {
+        for (k, b) in [("min", &l.min), ("max", &l.max)] {
+            if b.is_some() && !bounds_seen.insert((l.pin.as_str(), k)) {
+                o.e(format!(
+                    "pins.toml: limits: pin {} has two {k} limits",
+                    l.pin
+                ));
+            }
+        }
         if pkg.pins.by_name(&l.pin).is_none() {
             o.e(format!(
                 "pins.toml: limits: pin {} is not in pins.toml",
@@ -382,6 +393,35 @@ fn lint_epoch(pkg: &Package, o: &mut Out) {
                         l.pin
                     ));
                 }
+            }
+        }
+    }
+    // power (bb-pins/1, ADR-009 D3): every set gives at least one rating,
+    // a set named after a pin names a pin that takes the model, and every
+    // pin that takes it has its set (its own, or `default`).
+    if let Some(sets) = pkg.pins.defaults.get(crate::package::POWER_MODEL) {
+        for (set, kv) in sets {
+            if kv.is_empty() {
+                o.e(format!(
+                    "pins.toml: defaults.power.{set}: give vmin, vmax or imax"
+                ));
+            }
+            if set != "default"
+                && !pkg.pins.pins.iter().any(|p| {
+                    p.name == *set && p.models.iter().any(|m| m == crate::package::POWER_MODEL)
+                })
+            {
+                o.e(format!(
+                    "pins.toml: defaults.power.{set}: not `default` and not a pin that takes \
+                     the power model"
+                ));
+            }
+        }
+    }
+    for p in &pkg.pins.pins {
+        if p.models.iter().any(|m| m == crate::package::POWER_MODEL) {
+            if let Err(e) = crate::package::power_params(pkg, &p.name) {
+                o.e(format!("pins.toml: pin {} ({}): {e}", p.number, p.name));
             }
         }
     }
@@ -534,7 +574,10 @@ fn lint_pins(pkg: &Package, o: &mut Out) {
         }
         // Models allowed per role.
         for m in &pin.models {
+            // `power` (ADR-009 D3) is a supply pin's model, and only theirs.
             let ok = match pin.role.as_str() {
+                "power_in" | "power_out" => m == "power",
+                _ if m == "power" => false,
                 "io" => true,
                 "input" => m != "digital_out",
                 "output" => m == "digital_out",

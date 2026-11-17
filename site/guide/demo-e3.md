@@ -36,9 +36,13 @@ it when the carriage's magnet is near the park end.
   costs about 0.4 s of wall time per simulated millisecond while the PWM
   runs.
 
-E3 runs on hand-written board files in `examples/dial-me-spinner/e3`,
-because the mechanism is not on the schematic. A device in an imported
-project (`[[device]]` in `bb.toml`) is a Phase 2 item.
+E3's gates run on hand-written board files in
+`examples/dial-me-spinner/e3`, because the mechanism is not on the
+schematic. Since Phase 2 (R1, ADR-013 D1) a device can also be a
+`[[device]]` of an imported project (`bb.toml`; a `virtual` one has no
+schematic symbol): `examples/dial-me-spinner/e3/home` and `e3/step` are
+E3's homing and its step case as projects of the imported main board
+(`make dms-home-project`; see [Projects](../reference/project)).
 
 ## Run it
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://breadboard.dev/spec/schema/pins.schema.json",
   "title": "bb-pins/0 and bb-pins/1: a component package's pins.toml (spec/package.md, ADR-006 D4, ADR-009 D3, D5)",
-  "description": "bb-pins/1 (the Phase 2 schema epoch, milestone S) keeps every bb-pins/0 key and its meaning and adds limits (ADR-009 D3) and the digital_out parameters rail and rhiz (ADR-009 D5), accepted and inert until milestones P1 and P2 use them. The pin model name power is reserved (ADR-009 D3). A bb-pins/0 file has none of the bb-pins/1 keys.",
+  "description": "bb-pins/1 (the Phase 2 schema epoch, milestone S) keeps every bb-pins/0 key and its meaning and adds limits (ADR-009 D3) and the digital_out parameters rail and rhiz (ADR-009 D5), accepted and inert until milestones P1 and P2 use them, and the supply pin model power{vmin, vmax, imax} (ADR-009 D3, Amendment 11: a power_in or power_out pin's ratings, from [defaults.power.<pin>] or [defaults.power.default]). Limits and power ratings become automatic range assertions at pi and with bb run --limits. A bb-pins/0 file has none of the bb-pins/1 keys.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "pin"],
@@ -21,7 +21,7 @@
           "role": { "enum": ["power_in", "power_out", "ground", "io", "input", "output", "analog", "nc", "passive"] },
           "supply": { "type": "string" },
           "alt": { "type": "array", "items": { "type": "string" } },
-          "models": { "type": "array", "uniqueItems": true, "items": { "enum": ["digital_out", "digital_in", "adc_in"] } },
+          "models": { "type": "array", "uniqueItems": true, "items": { "enum": ["digital_out", "digital_in", "adc_in", "power"] } },
           "adc": {
             "type": "object",
             "additionalProperties": false,
@@ -37,7 +37,8 @@
       "properties": {
         "digital_out": { "type": "object", "additionalProperties": { "$ref": "#/$defs/digital_out" } },
         "digital_in": { "type": "object", "additionalProperties": { "$ref": "#/$defs/digital_in" } },
-        "adc_in": { "type": "object", "additionalProperties": { "$ref": "#/$defs/adc_in" } }
+        "adc_in": { "type": "object", "additionalProperties": { "$ref": "#/$defs/adc_in" } },
+        "power": { "type": "object", "additionalProperties": { "$ref": "#/$defs/power" } }
       }
     },
     "limits": {
@@ -64,7 +65,9 @@
       "then": {
         "not": { "required": ["limits"] },
         "properties": {
+          "pin": { "items": { "properties": { "models": { "not": { "contains": { "const": "power" } } } } } },
           "defaults": {
+            "not": { "required": ["power"] },
             "properties": {
               "digital_out": { "additionalProperties": { "not": { "anyOf": [{ "required": ["rail"] }, { "required": ["rhiz"] }] } } }
             }
@@ -117,6 +120,17 @@
         "bits": { "$ref": "#/$defs/value" },
         "model": { "type": "string", "pattern": "^[A-Za-z0-9_]+$" },
         "load": { "type": "string", "pattern": "^[A-Za-z0-9_]+$" }
+      }
+    },
+    "power": {
+      "description": "bb-pins/1 (ADR-009 D3, Amendment 11): a supply pin's ratings; vmin and vmax voltages against the part's ground pin, imax a current (not evaluable unless a view senses it from node voltages).",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "vmin": { "$ref": "#/$defs/value" },
+        "vmax": { "$ref": "#/$defs/value" },
+        "imax": { "$ref": "#/$defs/value" }
       }
     }
   }

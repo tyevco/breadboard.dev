@@ -2,7 +2,8 @@
 
 This runs the reference demo: the LED rail power sequencing (E1) of
 dial-me-spinner rev A, with the correct firmware and then with firmware that
-switches off in the wrong order.
+switches off in the wrong order; then Phase 2's W1, POF blanking on a dead
+battery at the `pi` rung, through `bb test`.
 
 ## What you need
 
@@ -30,9 +31,11 @@ python3 ../../scripts/check_dms_rail.py out/rail                 # PASS: LED-DAT
 bb flash --target U10 firmware/prebuilt/led_rail_wrong_order.elf
 bb run --for 120ms --bench bench/cold.toml --probe net:VLED --probe net:LED_DIN --out out/rail-wrong
 python3 ../../scripts/check_dms_rail.py out/rail-wrong           # expected to FAIL: LSW-3
+bb test tests/w1.toml --out out/w1                               # W1 at --fidelity pi: PASS (6 cases; the two controls fail exactly cue-held, as expected)
 ```
 
-This is the README's quickstart block, copied verbatim. The README's copy is
+This is the README's quickstart block, copied verbatim (`make docs-sync`,
+part of `make test`, checks that it still is). The README's copy is
 the one the timed stranger test runs (`make stranger-test-container`,
 `make stranger-test-wsl`).
 
@@ -48,16 +51,20 @@ Rust 1.99.1, Renode 1.17.0 and ngspice 42, then builds `bb`. Each run then
 takes a few seconds.
 
 The README records these timings, measured from a local clone on a 24-CPU
-host with a working Ubuntu mirror (Phase 1 plan, "Review notes: M7"):
+host with a working Ubuntu mirror:
 
-| Environment | Whole block |
-| --- | --- |
-| clean `ubuntu:24.04` container | 1 min 54 s |
-| fresh WSL distro | 1 min 47 s |
+| When | Environment | Whole block |
+| --- | --- | --- |
+| Phase 1's exit (without the W1 line; Phase 1 plan, "Review notes: M7") | clean `ubuntu:24.04` container | 1 min 54 s |
+| Phase 1's exit | fresh WSL distro | 1 min 47 s |
+| Phase 2's technical exit, with the W1 line (Phase 2 plan, "Review notes: technical exit") | clean `ubuntu:24.04` container | 8 min 25 s (504.6 s) |
 
-Of that, `make setup` took about 50 s, the local clone 25–45 s, and each run
-under 4 s. Almost all of the time is apt and the downloads; Breadboard's own
-steps take seconds.
+At Phase 1's exit `make setup` took about 50 s, the local clone 25–45 s,
+and each run under 4 s. At Phase 2's technical exit the clone from the
+Windows-mounted checkout took 404.5 s, `make setup` 64.6 s and the W1 line
+5.9 s. Almost all of the time is apt, the downloads and the clone;
+Breadboard's own steps take seconds. The stranger test's budget is 15
+minutes.
 
 ## If apt is slow
 
@@ -93,6 +100,34 @@ If `apt-get` fails with "Mirror sync in progress?", run the line again;
   ideal R and C, and the TPS22917's datasheet-fitted view).
 - The two runs' `nets.csv`, `nets.vcd` and non-grant records are
   byte-identical to the committed hashes in `tests/golden/dms-rail/`.
+
+## The last line: W1 at `pi`
+
+The last line is Phase 2's power-integrity check, W1, at the `pi` rung
+(`--fidelity pi`, ADR-009): POF blanking on a dead battery, from
+dial-me-spinner's `docs/firmware.md` R8, on the main and base boards
+together (`examples/dial-me-spinner/w1`, a system run). The firmware enables
+POFWARN at V28; when the LED ring's inrush dips +3V3, it must not take that
+dip for a dying battery and shed the LED charging cue. `bb test` runs the
+six cases of `tests/w1.toml` and writes `out/w1/test.json` and
+`out/w1/junit.xml`:
+
+- **rule:** the firmware with its 10 ms blanking keeps the cue
+  (`cue-held`), +3V3 does dip through the 2.94 V trip level inside the
+  blanking (`pof-dip`), and no reset occurs.
+- **blank4** and **off:** the 4 ms blanking and no blanking, the negative
+  controls. Each fails exactly `cue-held`, which `bb test` expects.
+- **margin** and **margin-off:** the suite's 50 mA +3V3 budget, where no
+  POFWARN may fire at all.
+- **rule-order:** the rule case with the analog engine registered first,
+  byte-identical.
+
+W1 runs at a **labelled stress corner**: a 55 mA static +3V3 load against
+the suite's 50 mA budget, the RT9080 at its worst dropout and POFWARN at
+V28 + 5 % (2.94 V), the approver's decision D-W1 (ADR-009 Amendment 2). At
+50 mA the dip stays 22.6 mV above the trip level, which the margin cases
+check. Every report and `run.json` names the corner, and
+`scripts/check_dms_w1.py` reads it back from each run's `run.json`.
 
 ## One command: `make demo`
 

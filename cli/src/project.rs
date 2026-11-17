@@ -946,11 +946,19 @@ fn q(text: &str, dim: bbpkg::value::Dim, at: &str) -> Result<i128, String> {
     bbpkg::value::parse_quantity(text, dim).map_err(|e| format!("{at}: {e}"))
 }
 
-/// The `bb-bench/1` keys of ADR-010 D2 that another milestone implements:
-/// refused, never ignored (a bench that names one would not run as written).
+/// The `bb-bench/1` keys of ADR-010 D2 that no milestone of this build
+/// implements (no row of the plan's section 4 carries them; ADR-010
+/// Amendment 6): refused, never ignored (a bench that names one would not
+/// run as written).
 const LATER_TOP: &[(&str, &str)] = &[
-    ("env", "environment signals (a later milestone)"),
-    ("probes", "per-probe rates (a later milestone)"),
+    (
+        "env",
+        "environment signals (in no milestone of this build, ADR-010 Amendment 6)",
+    ),
+    (
+        "probes",
+        "per-probe rates (in no milestone of this build, ADR-010 Amendment 6)",
+    ),
 ];
 
 impl Bench {

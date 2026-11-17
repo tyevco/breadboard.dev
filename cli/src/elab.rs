@@ -484,6 +484,9 @@ pub struct PlanArgs<'a> {
     /// `bb run --pi-oe fixed` (ADR-009 D5): every pi digital_out drives with
     /// `oe = 1` (the fallback) even where the platform reports `PIN_CNF.DIR`.
     pub pi_oe_fixed: bool,
+    /// `bb run --limits` (ADR-009 D3): the package limits as assertions at
+    /// fast too (at pi they always are).
+    pub limits: bool,
     /// The run's end (`--for`), to which a periodic bench `[[activity]]`
     /// is tabulated (ADR-009 D4); `None` (an elaboration only): none.
     pub run_end: Option<Time>,
@@ -3194,6 +3197,14 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
             }
         }
     })?;
+    // ADR-009 D3 (Amendment 11): package limits as automatic assertions, at
+    // pi and with `bb run --limits`; never at fast by default, so no fast
+    // event stream changes.
+    let (limit_specs, limit_nodes, limit_json) = if a.fidelity == "pi" || a.limits {
+        limit_assertions(board, simset, &excluded, a.imp, &nodes_used)?
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
     // D6: a net an ideal bench source forces is a tautology to check.
     let mut forced: Vec<(String, String)> = Vec::new();
     for s in a.bench.supplies.iter().filter(|s| s.rs_uohm == 0) {
@@ -3214,6 +3225,18 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
         }
     }
     crate::asserts::check_forced(&asserts, &forced)?;
+    // The limit assertions come after the bench's and the files' (their
+    // records sort by time, then assertion order). D6's tautology rule does
+    // not apply to them: a rating checked on a bench-forced rail checks the
+    // bench against the part, which is the point.
+    let mut asserts = asserts;
+    asserts.extend(limit_specs);
+    let mut assert_nodes = assert_nodes;
+    for (k, n) in limit_nodes {
+        if !assert_nodes.iter().any(|(x, _)| *x == k) {
+            assert_nodes.push((k, n));
+        }
+    }
 
     // --- run.json (static part).
     let not_simulated: Vec<Json> = board
@@ -3386,6 +3409,15 @@ pub fn plan(a: &PlanArgs) -> Result<RunPlan, String> {
     if let Some(pj) = pof_json {
         run_json.push(("pof".to_string(), pj));
     }
+    // ADR-009 D3 (Amendment 11): the package limits, asserted or not, only
+    // when limits are on and a package in scope declares one (so no run.json
+    // of a board without limits changes); `--limits` itself is recorded.
+    if a.limits {
+        run_json.push(("limits_flag".to_string(), Json::Bool(true)));
+    }
+    if !limit_json.is_empty() {
+        run_json.push(("limits".to_string(), Json::Arr(limit_json)));
+    }
     let mut parts = vec![part];
     let mut packages = vec![chip.clone()];
     for d in &devs {
@@ -3494,6 +3526,269 @@ fn port_nodes(
         out.push(node.expect("at least one"));
     }
     Ok(Some(out))
+}
+
+/// The limit assertions of a run, their analog nets and run.json's
+/// `limits` entries.
+type LimitAssertions = (Vec<bbcore::assert::Spec>, Vec<(String, String)>, Vec<Json>);
+
+/// ADR-009 D3 (Amendment 11): every package limit of an instance on a
+/// simulated board as an automatic `range` assertion over the whole run,
+/// named `limit:<board>:<ref>.<pin>:<key>`:
+///
+/// - each `pins.toml` `[[limits]]` bound (`key` `min` or `max`): `V(pin) -
+///   V(reference pin)` against the offset, or, for a plain voltage, `V(pin)`
+///   against the part's ground pin;
+/// - each supply pin that takes the `power` model (`key` `vmin`, `vmax`):
+///   `V(pin)` against the part's ground pin; `imax` is `not_evaluable` (no
+///   view senses a pin's current from node voltages in this build).
+///
+/// A part's ground pin on node 0 reads as node 0. A limit whose net has
+/// nothing in the analog deck (outside the scope, or only unmodelled parts
+/// on it) is not asserted; run.json lists it with the reason. Instances a
+/// bench excludes are skipped the same way. Each record's `msg` carries the
+/// package, the bound as written, its `source` and the package's provenance.
+fn limit_assertions(
+    board: &Board,
+    simset: &[String],
+    excluded: &BTreeSet<(String, String)>,
+    imp: &Imported,
+    nodes_used: &BTreeSet<String>,
+) -> Result<LimitAssertions, String> {
+    use bbcore::assert::{EventWhat, Kind, Limits, Signal, Spec, Window};
+    let mut specs: Vec<Spec> = Vec::new();
+    let mut nodes: Vec<(String, String)> = Vec::new();
+    let mut json: Vec<Json> = Vec::new();
+    let clean = |s: &str| -> String {
+        s.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || "_.-".contains(c) {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    };
+    for i in board
+        .instances
+        .iter()
+        .filter(|i| simset.contains(&i.board) && i.status == "ok" && !i.is_virtual)
+    {
+        let Some(pr) = i.package.as_ref() else {
+            continue;
+        };
+        let Some(pkg) = imp.packages.get(&pr.id) else {
+            continue;
+        };
+        let powered: Vec<&bbpkg::package::Pin> = {
+            let mut seen: BTreeSet<&str> = BTreeSet::new();
+            pkg.pins
+                .pins
+                .iter()
+                .filter(|p| {
+                    p.models.iter().any(|m| m == bbpkg::package::POWER_MODEL)
+                        && seen.insert(p.name.as_str())
+                })
+                .collect()
+        };
+        if pkg.pins.limits.is_empty() && powered.is_empty() {
+            continue;
+        }
+        let q = format!("{}:{}", i.board, i.reference);
+        let ex = excluded.contains(&(i.board.clone(), i.reference.clone()));
+        // The net of a package pin (by name, through its numbers), if
+        // connected.
+        let net_of = |name: &str| -> Option<String> {
+            pkg.pins
+                .pins
+                .iter()
+                .filter(|p| p.name == name)
+                .find_map(|p| {
+                    i.pins
+                        .iter()
+                        .find(|x| x.number == p.number)
+                        .and_then(|x| x.net.clone())
+                        .filter(|n| board.net(n).is_some_and(|nn| !nn.unconnected))
+                })
+        };
+        // The part's ground: its first ground pin's net, None on node 0.
+        let ground = pkg
+            .pins
+            .pins
+            .iter()
+            .filter(|p| p.role == "ground")
+            .find_map(|p| net_of(&p.name))
+            .filter(|n| node_of_net(board, n) != "0");
+        let prov = pkg
+            .part
+            .provenance
+            .as_ref()
+            .map(|p| format!("; provenance {}, {}", p.source, p.confidence))
+            .unwrap_or_default();
+        let pkg_at = format!("{}@{}", pkg.part.id, pkg.part.version);
+        // One entry: assert it, or record why not.
+        let mut one = |pin: &str,
+                       key: &str,
+                       minus: Option<String>,
+                       lim: Option<Limits>,
+                       text: String|
+         -> Result<(), String> {
+            let name = format!("limit:{q}.{}:{key}", clean(pin));
+            let mut o = vec![
+                ("name".to_string(), Json::str(&name)),
+                ("package".to_string(), Json::str(&pkg_at)),
+                ("limit".to_string(), Json::str(&text)),
+            ];
+            let skip = |why: &str| -> Option<String> { Some(why.to_string()) };
+            let net = net_of(pin);
+            let why: Option<String> = if ex {
+                skip("excluded by the bench ([analog] exclude)")
+            } else if net.is_none() {
+                skip("the pin is on no connected net")
+            } else if lim.is_none() {
+                None // imax: a not_evaluable record
+            } else {
+                let n = net.as_deref().expect("checked");
+                let node = node_of_net(board, n);
+                if node == "0" {
+                    skip("the pin is on node 0")
+                } else if !nodes_used.contains(&node)
+                    || minus
+                        .as_deref()
+                        .is_some_and(|m| !nodes_used.contains(&node_of_net(board, m)))
+                {
+                    skip("a net it reads has nothing in the analog deck")
+                } else {
+                    None
+                }
+            };
+            if let Some(w) = why {
+                o.push(("asserted".to_string(), Json::Bool(false)));
+                o.push(("reason".to_string(), Json::str(w)));
+                json.push(Json::Obj(o));
+                return Ok(());
+            }
+            o.push(("asserted".to_string(), Json::Bool(true)));
+            json.push(Json::Obj(o));
+            if specs.iter().any(|s| s.name == name) {
+                return Err(format!(
+                    "{q} ({pkg_at}): two limits named {name} (`bb pkg lint` refuses them)"
+                ));
+            }
+            let msg = Some(format!("{pkg_at} {text}{prov}"));
+            let (kind, not_evaluable) = match lim {
+                Some(lim) => {
+                    let n = net.expect("checked");
+                    for x in std::iter::once(&n).chain(minus.iter()) {
+                        if !nodes.iter().any(|(k, _)| k == x) {
+                            nodes.push((x.clone(), node_of_net(board, x)));
+                        }
+                    }
+                    (
+                        Kind::Range {
+                            sig: Signal { net: n, minus },
+                            lim,
+                        },
+                        None,
+                    )
+                }
+                None => (
+                    Kind::Event {
+                        what: EventWhat::Error,
+                        lim: Limits {
+                            min: None,
+                            max: Some(i64::MAX),
+                        },
+                    },
+                    Some(
+                        "not_evaluable: no view senses this pin's current from node voltages \
+                         (ADR-009 D3)"
+                            .to_string(),
+                    ),
+                ),
+            };
+            specs.push(Spec {
+                name,
+                kind,
+                window: Window::default(),
+                requires: None,
+                msg,
+                not_evaluable,
+            });
+            Ok(())
+        };
+        for l in &pkg.pins.limits {
+            for (key, b) in [("min", &l.min), ("max", &l.max)] {
+                let Some(b) = b else { continue };
+                let bound = bbpkg::package::parse_bound(b)
+                    .map_err(|e| format!("{q} ({pkg_at}): pins.toml limits {}: {e}", l.pin))?;
+                let off = i64::try_from(bound.offset_uv)
+                    .map_err(|_| format!("{q} ({pkg_at}): limit {b:?} too large"))?;
+                let minus = match &bound.pin {
+                    Some(r) => net_of(r).filter(|n| node_of_net(board, n) != "0"),
+                    None => ground.clone(),
+                };
+                let lim = if key == "min" {
+                    Limits {
+                        min: Some(off),
+                        max: None,
+                    }
+                } else {
+                    Limits {
+                        min: None,
+                        max: Some(off),
+                    }
+                };
+                one(
+                    &l.pin,
+                    key,
+                    minus,
+                    Some(lim),
+                    format!("pins.toml limits: {} {key} {b} ({})", l.pin, l.source),
+                )?;
+            }
+        }
+        for p in powered {
+            let Some((set, params)) = bbpkg::package::power_params(pkg, &p.name)
+                .map_err(|e| format!("{q} ({pkg_at}): {e}"))?
+            else {
+                continue;
+            };
+            for key in ["vmin", "vmax", "imax"] {
+                let Some(v) = params.get(key) else { continue };
+                let bbpkg::package::Param::Quantity(x) = v else {
+                    continue;
+                };
+                let raw = pkg.pins.defaults[bbpkg::package::POWER_MODEL][&set]
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .map(|(_, t)| t.clone())
+                    .unwrap_or_default();
+                let text = format!("pins.toml defaults.power.{set}: {} {key} {raw}", p.name);
+                let lim = match key {
+                    "imax" => None,
+                    _ => {
+                        let x = i64::try_from(*x)
+                            .map_err(|_| format!("{q} ({pkg_at}): {key} too large"))?;
+                        Some(if key == "vmin" {
+                            Limits {
+                                min: Some(x),
+                                max: None,
+                            }
+                        } else {
+                            Limits {
+                                min: None,
+                                max: Some(x),
+                            }
+                        })
+                    }
+                };
+                one(&p.name, key, ground.clone(), lim, text)?;
+            }
+        }
+    }
+    Ok((specs, nodes, json))
 }
 
 /// The SPICE node of a net (its display name).

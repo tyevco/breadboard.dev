@@ -53,7 +53,7 @@ enum PinSignal {
 | `digital_in` | `vih` V, `vil` V, `cin` F | **yes** (STM32 PB0 in `examples/feedback`) |
 | `adc_in` | `vref` V, `bits`; `model`, `load` (ADR-008 D7) | **yes** (STM32F072 PA1, ADC channel 1, in `examples/adc`; nRF52840 AIN0 in `examples/nrf-saadc`) |
 | `analog` | none; bidirectional node, exchanged as volts | not yet (as a probe target only) |
-| `power` | `vmin` V, `vmax` V, `imax` A | not yet: the name is reserved in `bb-pins/1` (refused as a model until milestone P1 defines it, ADR-009 D3) |
+| `power` | `vmin` V, `vmax` V, `imax` A, each optional (`bb-pins/1`, ADR-009 D3, Amendment 11) | since Phase 2: a supply pin's ratings, as automatic assertions at `pi` and with `bb run --limits` (no glue; the pin never crosses an engine boundary) |
 | `passive` | none; exists only inside the analog engine (R, C, LED...) | **yes** (330 Ω, LED) |
 
 ### `digital_out{voh, vol, rise, fall, zout}`
@@ -248,8 +248,19 @@ ADC inputs use `adc_in`.
 
 ### `power{vmin, vmax, imax}`
 
-A supply pin. Later phases check rail voltage and current against these limits
-and emit `assert` records (the kinds of `spec/project.md` section 3.4).
+A supply pin's ratings (ADR-009 D3, Amendment 11). Only a `power_in` or
+`power_out` pin takes the model; its parameters are the package's
+`[defaults.power.<pin name>]`, else `[defaults.power.default]`
+(`spec/package.md` section 4), and no binding chooses them. It generates no
+glue and nothing crosses an engine boundary. At `pi`, and at `fast` with
+`bb run --limits`, each given parameter of a pin whose net is in the analog
+deck is an automatic assertion over the whole run, named
+`limit:<board>:<ref>.<pin>:<key>` (`spec/project.md` section 3.4):
+
+- `vmin`, `vmax`: a `range` check of the pin's voltage against the part's
+  ground pin (node 0 when that pin is on the simulated board's ground);
+- `imax`: `not_evaluable`. A current is computable only where a view senses
+  it from node voltages, and no view does so for a supply pin in this build.
 
 ### `passive`
 

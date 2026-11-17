@@ -69,13 +69,6 @@ asserts_of() { case $1 in
   rule|blank4|off|blank5|typ|min) echo "--assert $WORK/dms/asserts/w1.toml" ;;
   margin|margin-off) echo "--assert $WORK/dms/asserts/w1-margin.toml" ;; *) echo "" ;; esac; }
 blank_of() { case $(image_of "$1") in w1_rule) echo 10 ;; w1_blank4) echo 4 ;; w1_blank5) echo 5 ;; *) echo 0 ;; esac; }
-label_of() { case $1 in
-  rule|blank4|off|blank5) echo "W1 stress corner: 55 mA static +3V3 load (suite budget 50 mA), RT9080 worst_dropout, POFWARN at V28 +5 % (2.94 V)" ;;
-  typ) echo "W1 stress corner: 55 mA static +3V3 load (suite budget 50 mA), RT9080 worst_dropout, POFWARN at V28 nominal (2.80 V)" ;;
-  min) echo "W1 stress corner: 55 mA static +3V3 load (suite budget 50 mA), RT9080 worst_dropout, POFWARN at V28 -5 % (2.66 V)" ;;
-  margin|margin-off) echo "W1 margin check: the suite's 50 mA static +3V3 budget, RT9080 worst_dropout, POFWARN at V28 +5 % (2.94 V)" ;;
-  cosim) echo "W1 co-simulation: U10's supply_load only (no static load), RT9080 worst_dropout, POFWARN at V28 +5 % (2.94 V)" ;;
-  cosim-budget) echo "W1 co-simulation: U10's supply_load and the budget's 46.7 mA remainder, RT9080 worst_dropout, POFWARN at V28 +5 % (2.94 V)" ;; esac; }
 check_case() { case $1 in
   rule|blank4|off|blank5|margin) echo "$1" ;; margin-off) echo margin ;; typ|min) echo corner ;;
   cosim|cosim-budget) echo cosim ;; esac; }
@@ -133,12 +126,28 @@ checks() { # <out> <case>
   local c=$2 extra=()
   [[ $c == blank4 && -f $1/rule.json ]] && extra=(--window-end-ms "$(window_end "$1/rule.json")")
   if "$PY" "$ROOT/scripts/check_dms_w1.py" "$1/$c" --case "$(check_case "$c")" --blank-ms "$(blank_of "$c")" \
-      --label "$(label_of "$c")" --json "$1/$c.json" "${extra[@]}" > "$1/$c.txt"; then
+      --json "$1/$c.json" "${extra[@]}" > "$1/$c.txt"; then
     pass "$c: check_dms_w1.py"
   else
     fail "$c: check_dms_w1.py"
   fi
   sed 's/^/    /' "$1/$c.txt"
+}
+
+corner_control() { # <out>: check_dms_w1.py reads the corner from run.json, not from its caller
+  # The negative control: rule's own outputs with run.json's bench text at 56 mA instead of 55 mA
+  # (the waveform still passes every rule check, as a 56 mA run did) must fail exactly `corner`.
+  local d=$1/corner-control f
+  rm -rf "$d"; mkdir -p "$d"
+  for f in events.jsonl nets.csv; do cp "$1/rule/$f" "$d/$f"; done
+  sed 's/amps = \\"55mA\\"/amps = \\"56mA\\"/' "$1/rule/run.json" > "$d/run.json"
+  if cmp -s "$1/rule/run.json" "$d/run.json"; then fail "corner control: run.json has no 55 mA load to change"; return; fi
+  "$PY" "$ROOT/scripts/check_dms_w1.py" "$d" --case rule --json "$d.json" > "$d.txt" || true
+  if "$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); f=[c['name'] for c in d['checks'] if c['gated'] and not c['pass']]; print(f); sys.exit(0 if f == ['corner'] and not d['pass'] and '56mA' in d['label'] else 1)" "$d.json" > "$d.failed"; then
+    pass "corner control: rule's outputs with run.json at 56 mA fail exactly the corner check ($(grep -o 'W1 stress corner: 56mA[^]]*' "$d.txt" | head -1))"
+  else
+    fail "corner control: expected exactly [corner] to fail, got $(cat "$d.failed")"
+  fi
 }
 
 hashes() { # <dir> <case> <all|nongrant>
@@ -195,6 +204,7 @@ test)
     checks "$OUT" "$c"
     hashes "$OUT/$c" "$c" nongrant
   done
+  corner_control "$OUT"
   echo "dms-w1: test wall $(echo "$(date +%s.%N) - $t0" | bc) s"
   ;;
 ref)
@@ -218,6 +228,7 @@ gate)
   prepare "$BB"
   par "$BB" "$OUT" "" "" "${ALL[@]}"
   for c in rule blank4 off blank5 typ min margin margin-off cosim cosim-budget; do checks "$OUT" "$c"; done
+  corner_control "$OUT"
   # Partition independence (ADR-009 G5): 1 ms grants and the one-cell references.
   par "$BB" "$OUT" -1ms "--max-quantum 1ms" "${EQUIV[@]}"
   refs "$BB" "$OUT"

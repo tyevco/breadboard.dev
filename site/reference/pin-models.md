@@ -30,7 +30,7 @@ enum PinSignal {
 | `digital_in` | `vih` V, `vil` V, `cin` F | yes (the circuit read by an MCU input) |
 | `adc_in` | `vref` V, `bits` | yes (an MCU ADC channel) |
 | `analog` | none; a bidirectional node, exchanged as volts | not yet (as a probe target only) |
-| `power` | `vmin` V, `vmax` V, `imax` A | not yet |
+| `power` | `vmin` V, `vmax` V, `imax` A, each optional | yes, as ratings: a supply pin's limits become assertions at `pi` and with `bb run --limits` (ADR-009 D3; see [Packages](./packages#limits-and-supply-ratings-adr-009-d3)) |
 | `passive` | none; exists only inside the analog engine | yes (R, C, LED, ...) |
 
 ### `digital_out`

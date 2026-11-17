@@ -426,12 +426,21 @@ pub fn parse_tables(o: &mut Obj) -> Result<Vec<Spec>, String> {
             }
         };
         a.done()?;
+        // `limit:` names Breadboard's own package-limit assertions (ADR-009
+        // D3); a file cannot take one.
+        if name.starts_with("limit:") {
+            return Err(format!(
+                "{at}.name {name:?}: limit:<ref>.<pin>:<key> names the automatic package-limit \
+                 assertions (ADR-009 D3); choose another name"
+            ));
+        }
         out.push(Spec {
             name,
             kind,
             window: w,
             requires,
             msg,
+            not_evaluable: None,
         });
     }
     Ok(out)

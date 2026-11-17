@@ -140,7 +140,8 @@ TEST_STEPS := measure-lock-test cargo-test spike determinism golden feedback fee
               nrf-feedback adc adc-order adc-model nrf-saadc-model nrf-power-model nrf-pwm-model \
               device-smoke multi-producer adc-kicad dms-rail-test dms-vsense-test dms-home-test \
               bench-test assert-test ec-reconnect packages pi-static-test pi-glue-test pi-idd-test \
-              gdb-test vscode-templates dms-system dms-e1-system-test dms-w1-test dms-w2-test registry-test
+              gdb-test vscode-templates dms-system dms-e1-system-test dms-w1-test dms-w2-test registry-test \
+              limits-test docs-sync
 TEST_SKIP ?=
 pooled-test:
 	@mkdir -p $(dir $(TEST_TIMING)) && : > $(TEST_TIMING)
@@ -904,6 +905,26 @@ pi-glue-test: firmware bb
 pi-glue-update: firmware bb
 	bash scripts/pi_glue.sh update $(BB) $(PI_GLUE_OUT)-update
 
+# ADR-009 D3 (Amendment 11): package limits as automatic range assertions (limit:<ref>.<pin>:<key>),
+# at pi and with bb run --limits at fast (scripts/limits_gate.sh; in make test). E1's project with a
+# local fixture copy of worldsemi/ws2812c-2020 that writes LSW-3 as a package limit (DIN max = VDD +
+# 0.7 V) and gives VDD the power model (vmax, imax): the correct order passes all 144 limit records
+# at pi and at fast --limits, the wrong order (the negative control) fails exactly
+# limit:main:D101.DIN:max as check_dms_rail.py fails exactly LSW-3, imax is not_evaluable, --limits
+# changes no output but its records, and the committed packages give no limit record at pi.
+LIMITS_OUT  ?= out/limits
+LIMITS_WORK ?= $(BB_SCRATCH)/bb-limits
+export LIMITS_WORK
+.PHONY: limits-test docs-sync
+limits-test: bb
+	bash scripts/limits_gate.sh $(BB) $(LIMITS_OUT)
+
+# The docs that copy the code (scripts/check_docs_sync.py; in make test, under a second): the site's
+# quickstart is the README's block verbatim, site/guide/testing.md and the README name every
+# TEST_STEPS step, and site/reference/cli.md has every subcommand and bb run option of `bb --help`.
+docs-sync: bb
+	$(PYTHON) scripts/check_docs_sync.py $(BB)
+
 # Phase 2 plan P3 (ADR-009 D4, gate G6, Amendment 6): the nRF52840's supply_load view at pi, its CPU
 # state outputs #run, #hfxo, #nvmc, #saadc (bb_nrf52_state.cs) and a bench [[activity]], on
 # examples/nrf-idd (scripts/pi_idd.sh, pi_idd.py; project copies in $(PI_IDD_WORK)). pi-idd-test (in
@@ -1123,6 +1144,7 @@ measured-bb-test-cost: firmware bb
 # (`bb open --check`).
 packages: bb
 	$(PYTHON) scripts/validate_packages.py
+	bash scripts/validate_packages_test.sh
 	$(BB) pkg lint --publish packages
 	$(BB) pkg lint $(PKG_LOCAL)
 	$(BB) pkg test packages $(PKG_LOCAL)

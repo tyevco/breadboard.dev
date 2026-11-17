@@ -84,9 +84,16 @@ A project with more than one `[[board]]` is a system (Phase 1 M11). The
 example is `examples/dial-me-spinner/system`: the main board and the base
 board, with a 12-wire harness from main J1 to base J3.
 
+`simulate` names the board, or the boards, that are simulated: one board
+id (`simulate = "main"`), or a list of them. A list of several is a
+**single-MCU system run** (Phase 2 R2, ADR-013 D2; below):
+`examples/dial-me-spinner/e1-system` (E1) and `examples/dial-me-spinner/w1`
+(W1) run the main and base boards in one deck with
+`simulate = ["main", "base"]`.
+
 ```toml
 [project]
-simulate = "main"                    # required with more than one board
+simulate = "main"                    # one board; or a list: ["main", "base"]
 
 [[board]]
 id = "main"
@@ -106,8 +113,9 @@ model = "dial-me-spinner/link-harness:wires"   # optional: the harness view
   `<board>:<name>` (`main:U1`, `base:TP1`, `main:VSYS`). The two
   dial-me-spinner boards share 15 references, so a bare `U1` is an error
   that lists `main:U1 (RT9080-33GJ5)` and `base:U1 (BQ25180YBGR)`. Each
-  board keeps its own ground, and only the simulated board's ground is
-  SPICE node `0`.
+  board keeps its own ground: the primary simulated board's ground is
+  SPICE node `0`, and another board's ground is its net's SPICE name
+  (`base_GND`).
 - **The harness view** is `<package>[@<version>][:<view>]`. It is a
   `circuit` view of a `connector` package, and its ports are `A<pin>` (the
   end on `a`'s pin) and `B<pin>` (the end on `b`'s). It is locked in
@@ -116,9 +124,40 @@ model = "dial-me-spinner/link-harness:wires"   # optional: the harness view
   with `B<n>`); else pin n to pin n, when both ends have the same pin
   numbers. `bb open` prints every pair with its two nets and warns when
   their leaf names differ. `board.bbm` records the complete list.
-- **Only `simulate` is simulated** in Phase 1. A bench net on another board
-  is an error. At a simulated connector, nets that no bench `[[supply]]` or
-  `[[pwl]]` drives are left open, with a warning.
+- **Only the boards of `simulate` are simulated.** A bench net on another
+  board is an error. At a connector to a board that is not simulated, nets
+  that no bench `[[supply]]` or `[[pwl]]` drives are left open, with a
+  warning.
+
+### System runs (`simulate` as a list)
+
+A single-MCU system run (ADR-013 D2, Amendment 3; `spec/project.md`
+sections 1 and 4) builds one analog deck from every listed board:
+
+- **One MCU.** The **primary board** is the target's: the board a
+  `[targets]` key names, else the first listed. Exactly one target across
+  the listed boards; a second is refused (multi-MCU simulation is Phase 3).
+  A `[[device]]` of a system run is on the primary board.
+- **Grounds.** The primary board's ground is node `0`; every other board
+  keeps its own ground node (`base_GND`). A bench element returns to its
+  net's board's ground, and a B-source term reads its net against it.
+- **Connections.** A `[[connection]]` between two simulated boards with a
+  harness view is one instance line in the deck (`X_conn1_main_J1_base_J3`,
+  its `A<pin>` ports on `a`'s nets and `B<pin>` on `b`'s). Without a
+  harness, each mated pair's nets are tied into one node. In the
+  dial-me-spinner system the harness's three GND wires join `base_GND` to
+  node `0` through the wires' resistance.
+- **Names.** "The simulated board" in the name rules is every listed board,
+  so a leaf name on two of them is ambiguous: a bench, a binding or a probe
+  qualifies it (`main:VSYS`, `base:VBAT`).
+- **`run.json`** records `simulated` (the boards of `simulate`, as listed)
+  only in a system run, and each harness in the deck in `analog` with
+  `kind = "harness"`.
+
+The examples: `examples/dial-me-spinner/e1-system` (E1 with the base
+board's own power path: a bench `[[battery]]`, the BQ25180 and the harness
+in place of E1's bench supplies; `make dms-e1-system-test`) and
+`examples/dial-me-spinner/w1` (W1 at `pi`; `make dms-w1-test`).
 
 ## Names
 

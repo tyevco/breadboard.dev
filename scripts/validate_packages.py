@@ -7,8 +7,9 @@ Default roots: packages/ (first-party), spec/examples/packages/ (the
 spec's example packages), examples/ (the bb.lock files and the projects)
 and tests/fixtures/kicad/ (the import fixtures). Every part.toml, the
 pins.toml it names, every test vector in its [tests] dir, every bb.lock,
-every project file bb.toml, bench file (bench/*.toml) and bb test file (a
-.toml whose schema is bb-test/0) are converted from
+every project file bb.toml, bench file (bench/*.toml, asserts/**/*.toml and
+any other .toml whose schema is bb-bench/...) and bb test file (a .toml
+whose schema is bb-test/0) are converted from
 TOML to JSON (tomllib), and every board.bbm is read as JSON with integers
 only (a float is an error, spec/canonical-json.md); all are validated
 against spec/schema/*.schema.json (JSON Schema 2020-12, python3-jsonschema).
@@ -80,7 +81,11 @@ def self_test():
                   "document": [{"id": "ds", "sha256": "abc"}]}),
         ("pins", {"schema": "bb-pins/0", "pin": [{"number": "1", "name": "A", "role": "io"}], "limits": [{"pin": "A", "max": "3.6V", "source": "s"}]}),
         ("pins", {"schema": "bb-pins/1", "pin": [{"number": "1", "name": "A", "role": "io"}], "limits": [{"pin": "A", "source": "s"}]}),
-        ("pins", {"schema": "bb-pins/1", "pin": [{"number": "1", "name": "A", "role": "io", "models": ["power"]}]}),
+        # The power pin model (ADR-009 D3, Amendment 11): bb-pins/1 only, and a set gives a rating.
+        ("pins", {"schema": "bb-pins/0", "pin": [{"number": "1", "name": "VDD", "role": "power_in", "models": ["power"]}]}),
+        ("pins", {"schema": "bb-pins/0", "pin": [{"number": "1", "name": "VDD", "role": "power_in"}], "defaults": {"power": {"default": {"vmax": "3.6V"}}}}),
+        ("pins", {"schema": "bb-pins/1", "pin": [{"number": "1", "name": "VDD", "role": "power_in", "models": ["power"]}], "defaults": {"power": {"default": {}}}}),
+        ("pins", {"schema": "bb-pins/1", "pin": [{"number": "1", "name": "VDD", "role": "power_in", "models": ["power"]}], "defaults": {"power": {"default": {"vnom": "3V"}}}}),
         # bb-lock/1 (ADR-011 D5): source and engine/engine_version, not path and renode.
         ("lock", {"schema": "bb-lock/1", "package": [{"id": "x/y", "version": "1.0.0", "path": ".", "tree": "sha256:" + "0" * 64}]}),
         ("lock", {"schema": "bb-lock/1", "platform": [{"id": "renode:x@1", "content": "sha256:" + "0" * 64, "engine": "renode"}]}),
@@ -117,6 +122,8 @@ def self_test():
                               "provenance": {"source": "datasheet", "confidence": "unchecked", "upstream_license": "MIT"}}]}),
         ("pins", {"schema": "bb-pins/1", "pin": [{"number": "1", "name": "A", "role": "io"}], "limits": [{"pin": "A", "max": "VDD + 0.3V", "source": "s"}],
                   "defaults": {"digital_out": {"default": {"voh": "VDD", "vol": "0V", "rise": "5ns", "fall": "5ns", "zout": "25", "rail": "VDD", "rhiz": "100Meg"}}}}),
+        ("pins", {"schema": "bb-pins/1", "pin": [{"number": "1", "name": "VDD", "role": "power_in", "models": ["power"]}],
+                  "defaults": {"power": {"default": {"vmin": "1.7V", "vmax": "3.6V", "imax": "25mA"}, "VDD": {"vmax": "3.9V"}}}}),
         ("lock", {"schema": "bb-lock/1", "package": [{"id": "x/y", "version": "1.0.0", "source": "path+../x/y", "tree": "sha256:" + "0" * 64}],
                   "vendor_file": [{"url": "https://e.invalid/a.svd", "sha256": "0" * 64, "license": "LicenseRef-ST-EULA", "used_by": "x/y"}],
                   "platform": [{"id": "renode:x@1", "content": "sha256:" + "0" * 64, "engine": "renode", "engine_version": "1.17.0"},
@@ -196,14 +203,18 @@ def main(argv):
             check("lock", lock)
         for proj in sorted(root.rglob("bb.toml")):
             check("project", proj)
+        benches = set()
         for bench in sorted(root.rglob("bench/*.toml")):
             if bench.name == "bb.toml":
                 continue  # a project named bench (examples/bench), checked above
+            benches.add(bench)
             check("bench", bench)
         # Assertion files (bb run --assert; ADR-010 Amendment 3): bb-bench/1 files of [[assert]].
         for af in sorted(root.rglob("asserts/**/*.toml")):
+            benches.add(af)
             check("bench", af)
-        # bb test files (ADR-010 D8, milestone B3): every .toml whose schema is bb-test/... (a
+        # bb test files (ADR-010 D8, milestone B3), and every other bench file wherever it lives
+        # (e3/home/bench.toml): every .toml whose schema is bb-test/... or bb-bench/... (a
         # package's tests/ dir holds bb-pkgtest vectors, checked above).
         for tf in sorted(root.rglob("*.toml")):
             try:
@@ -212,6 +223,8 @@ def main(argv):
                 schema = "bb-test/?"
             if schema.startswith("bb-test/"):
                 check("test", tf)
+            elif schema.startswith("bb-bench/") and tf not in benches:
+                check("bench", tf)
         for bbm in sorted(root.rglob("board.bbm")):
             checked += 1
             try:

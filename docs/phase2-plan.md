@@ -14,6 +14,12 @@
   one-brown-out loop left to the approver (ADR-009 Amendment 9), as is one
   P0 spike gate broken by D-TPS (ADR-009 Amendment 10). The adoption exit
   is not attempted in this build (section 10).
+- **Exit review (2026-11-17):** twenty-one findings on the technical exit,
+  each re-verified ("Review notes: exit review", at the end): ADR-009 D3
+  built (package limits as assertions), the W1 corner read back from
+  `run.json`, the docs brought to Phase 2 and checked by `make docs-sync`;
+  the scope gaps and results changes it found are recorded for the
+  approver (each marked "needs approval").
 - **Decisions it depends on (all Accepted 2026-11-15, ADR-014 behind its
   gate G0; written with this plan):**
   - ADR-009, `pi` fidelity;
@@ -769,6 +775,17 @@ check added:
 This is ADR-009 Amendment 2, and it is in section 2 (W1), section 4 (P0)
 and section 5 (item 1).
 
+**Round 2b (2026-11-15), with D-W1: D-TPS** (entered at the exit review,
+2026-11-17, as the repository records it). P0's remaining finding went to
+P1 as an approver decision: the committed `ti/tps22917` view is restated
+to ADR-009 D2's rules (valid and the default at `fast` and `pi`), and
+E1's `fast` results stay within their recorded tolerances (1 mV / 1
+sample), so the `fast` goldens it moves are re-recorded with that reason
+(`tests/golden/dms-rail`, E2's `sag` and `rec`, the `e1-rail` plots;
+ADR-009 Amendment 4). The approver's own wording was not written down at
+the time; ADR-009's "Approver decisions" gives the sources. **needs
+approval:** the approver confirms these terms.
+
 **Round 3 (2026-11-16), on H2's report: D-SNAP.** H2's spike found the
 SAADC stall's cause in `NgspiceEngine`'s lattice clamp (a sub-femtosecond
 step after TMAX steps drift off the lattice, then a trapezoidal Newton
@@ -914,3 +931,44 @@ was pushed or published.
 **Not shown here, by decision:** GitHub runs (the CI jobs, the JUnit
 reporter step, `nightly.yml`), the public registry and its Pages site;
 the adoption exit (B4, R3, P6, E2, E3, E5 not started).
+
+## Review notes: exit review (2026-11-17)
+
+A review of the technical exit on `main` (697c1d1) raised twenty-one findings.
+Each was re-verified before anything changed; the fixes are one commit,
+with ADR-009 Amendment 11, ADR-010 Amendment 6, ADR-011 Amendment 4 and
+ADR-015 Amendment 6. No committed hash, golden or prebuilt image changed.
+
+| Finding | Status | Where |
+| --- | --- | --- |
+| ADR-009 D3 (the `power` pin model, package limits as assertions) not implemented and not deferred | **fixed**: `power{vmin, vmax, imax}` defined in `bb-pins/1`; limits and ratings are automatic `range` assertions at `pi` and with `bb run --limits`; `make limits-test` (in `make test`) with its negative control. No first-party package declares a limit yet (a package change that moves committed `pi` records; needs a decision) | ADR-009 Amendment 11 item 1 |
+| `make pi-spike` red since P1 (D-TPS) | **needs approval** (re-verified: 36/37 at 697c1d1, 14.7612 mV / 10.7256 mV against 2 mV) | Amendment 11 item 7 |
+| W2's `brownout` passes with one brown-out; 20 ms, not 200 ms | **needs approval** (re-verified) | Amendment 11 item 7 |
+| W1's anti-vacuity check is `pof-dip`, not "`pofwarn` fired" | **needs approval** (re-verified) | Amendment 11 item 7 |
+| `check_dms_w1.py`'s corner label not read from `run.json`; a 56 mA run passed as 55 mA | **fixed**: a gated `corner` check from `run.json`, the label built from it, a negative control (56 mA fails exactly `corner`) in `make dms-w1-test` and `make dms-w1` | Amendment 11 item 3 |
+| W1's operating point fails at 40-48 and 59-62 mA (the 60 mA collapse never in the loop) | **recorded; needs approval** for the `.nodeset` key or a ramped static load (re-measured: 9 of 21 loads fail) | Amendment 11 item 2 |
+| The idd view assumes DC/DC; the firmware runs on the LDO | **recorded; needs approval** ((a) a W-fw dts change or (b) an LDO idd corner; each changes committed results) | Amendment 11 item 4 |
+| D-TPS's terms not in section 10 or ADR-009's decisions | **recorded** in section 10 and ADR-009 "Approver decisions" from the repository's own sources; **needs approval:** confirm the terms | Amendment 11 item 5 |
+| P5's "no reuse after a failed reset" not demonstrated, not listed as a deviation | **recorded** as P5's deviation (a test needs a fault-injection hook this build lacks) | Amendment 11 item 6 |
+| ADR-015 D10's sentence missing from `spec/time-grant.md` | **fixed**: the sentence, verbatim | ADR-015 Amendment 6 |
+| `[[env]]` and `[probes]` in no milestone row | **recorded; needs approval** (assign or name as out); the refusal now says "in no milestone of this build" | ADR-010 Amendment 6 A6.1 |
+| `engine:bench@1` never locked, never decided | **recorded; needs approval** ((a) lock with a scoped hash, or (b) drop D4's lock) | ADR-010 Amendment 6 A6.2 |
+| `bb pkg init --from-svd/--from-ibis` in no milestone row | **recorded; needs approval** (assign or name as out) | ADR-011 Amendment 4 |
+| Two `bb-bench/1` files outside `make packages`' schema validation | **fixed**: every `.toml` whose schema is `bb-bench/...` is validated; regression test `scripts/validate_packages_test.sh` (in `make packages`) | `scripts/validate_packages.py` |
+| The site's quickstart missing the W1 line and the Phase 2 timing | **fixed**, and `make docs-sync` (in `make test`) checks the copy | `site/guide/quickstart.md` |
+| The CLI reference still at Phase 1 | **fixed**: `bb run`'s Phase 2 options, `--fidelity pi`, `bb test`, `bb assert`, `bb registry`, `bb pkg` pack/unpack/migrate/`lint --publish`; `bb open --help` no longer says "Phase 1 M4"; `bb run --help` and `bb assert --help` print the usage; `make docs-sync` checks it | `site/reference/cli.md`, `cli/src/open.rs`, `cli/src/main.rs` |
+| The project reference's Systems section at Phase 1 | **fixed**: `simulate` as a list, system runs, grounds, `run.json` `simulated`, e1-system and w1 | `site/reference/project.md` |
+| README's Systems section and the roadmap say both boards together is Phase 3 | **fixed** | `README.md`, `site/guide/roadmap.md` |
+| Three places say devices in projects are a Phase 2 item | **fixed** (R1 built them; e3/home and e3/step) | `README.md`, `site/guide/demo-e3.md`, `site/reference/packages.md` |
+| The "What `make test` runs" lists stop at Phase 1 | **fixed**: every `TEST_STEPS` step, checked by `make docs-sync` | `README.md`, `site/guide/testing.md` |
+| AGENTS.md says Phase 0 and lists only Phase 1 steps | **not a bug** on the committed file: its intro says Phase 2 and its `make test` row lists every Phase 2 step (the reviewer read an older copy); the row now adds `limits-test` and `docs-sync` | `AGENTS.md` |
+
+**Gates on the result** (the main checkout on `/mnt/c`, not an idle ext4
+worktree, so the times are not comparable with `make baseline`): `make
+check` green pooled (1650 s wall; it shared the host with `make dms-w1`
+and the docs build) and with `POOL=0` (1619 s, alone); in it
+`limits-test` took 47.2 s pooled and 50.7 s fresh, `docs-sync` 3.6 s and
+1.9 s. `make dms-w1` PASS pooled (167 s) and with `POOL=0` (247 s): 38
+checks, 0 failures (the 37 before plus the corner control). `make
+pi-spike` 36/37 as before (finding A). The docs site builds (`npm run
+docs:build`). Nothing was pushed or published.

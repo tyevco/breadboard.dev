@@ -85,8 +85,9 @@ target (R3), W3 (P6), the package pipeline and the first 200 packages
 
 Several of these rows were Phase 2 work and are now done (above): the
 registry and signing (against local fixtures), the `pi` rung with
-rail-tracking pins and brown-out reset, devices in imported projects, and
-bench files, `bb test` and JUnit.
+rail-tracking pins and brown-out reset, devices in imported projects,
+bench files, `bb test` and JUnit, and several boards with one MCU in one
+deck.
 
 The plan names these as decisions, not gaps ("Scope", `docs/phase1-plan.md`):
 
@@ -99,7 +100,7 @@ The plan names these as decisions, not gaps ("Scope", `docs/phase1-plan.md`):
 | An averaged DRV8837 view, and a lookahead for a CPU fed by two engines | Not needed for E3's gates; the homing runs take one-cell grants and leave the bridges' power stage out of ngspice (ADR-008 Amendment 11). |
 | BLE/RADIO, USBD, NFCT, QSPI, TWIM, SPIM3, I2S-to-pin, PWM (unless E3) | Absent or not faithful in Renode 1.17.0; each is its own model and gate. |
 | Bench files with CSV playback, `bb test`, JUnit | Phase 2. Phase 1 checks are scripts over the outputs. |
-| Multi-MCU and multi-board simulation | Phase 3. |
+| Multi-MCU and multi-board simulation | Multi-MCU: Phase 3. Several boards with one MCU in one deck: done in Phase 2 (R2, a single-MCU system run; `examples/dial-me-spinner/e1-system` and `w1`). |
 | Firmware images other than ELF | The schema already takes a list of typed images; only `elf` is implemented. |
 | PCB geometry, parasitics, gerbers | Nothing at `fast` fidelity consumes geometry. |
 | RP2040 package | Deferred; the Renode RP2040 platform was not evaluated. |

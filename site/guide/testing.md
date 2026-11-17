@@ -66,6 +66,53 @@ make test        # the exit gate alone
     and the link harness): the committed `board.bbm` from a fresh import,
     the mated pins, and E1's deck from the system equal to E1's own.
 
+Phase 2 added these steps (the `TEST_STEPS` list in the `Makefile` is the
+order they run in):
+
+19. **`measure-lock-test`**: the host measurement lock that timed gates take:
+    while one measurement holds it, every measurement target refuses to
+    start.
+20. **`nrf-power-model`**: the Renode-only register and timing tests of
+    Breadboard's nRF52840 POWER model (POFWARN and brown-out, ADR-009 D6,
+    D7).
+21. **`multi-producer`**: quiet grants with several producers (ADR-014) on
+    a synthetic board (an nRF52840 running E3's homing firmware and the
+    mechanism device on digital-only nets): bb's defaults equal the one-cell
+    reference except grant records, within a grant budget, with the scope
+    control.
+22. **`bench-test`**: `bb-bench/1` benches (timed actions, playback,
+    profiles, faults, the switch view) on `examples/bench`, against their
+    one-cell references, with the refusals.
+23. **`assert-test`**: the assertion kinds on E1's four cases, `bb assert`'s
+    replay, the FW-6.4 negative controls and the refusals (ADR-010).
+24. **`pi-static-test`**: the W1 and W2 static-load decks from the `pi`
+    package views against the suite, at their tolerances (ADR-009 P1).
+25. **`pi-glue-test`**: rail-tracking, tristate `digital_out` at `pi`: every
+    Phase 1 board's operating point with every output high-Z, E1 cold at
+    `pi`, and LED_PWR_EN's high level under load (ADR-009 D5).
+26. **`pi-idd-test`**: the nRF52840's `supply_load` view and CPU state
+    outputs against a hand calculation of the duty-weighted current
+    (ADR-009 D4).
+27. **`dms-e1-system-test`**: E1 on both dial-me-spinner boards in one deck
+    (a system run, ADR-013 D2), with E1's checks and its references.
+28. **`dms-w1-test`**: W1, POF blanking on a dead battery at `pi`, as
+    `tests/w1.toml` through `bb test` (see the README's quickstart), with
+    `scripts/check_dms_w1.py` (which reads each run's corner from its
+    `run.json`) and the committed hashes.
+29. **`dms-w2-test`**: W2, the brown-out reboot loop, as `tests/w2.toml`
+    through `bb test`, with `scripts/check_dms_w2.py` and the committed
+    hashes.
+30. **`registry-test`**: the package registry against local fixtures
+    (signed snapshots, tampering, rollback, yanking, routed namespaces;
+    ADR-011).
+31. **`limits-test`**: package limits as automatic assertions at `pi` and
+    with `bb run --limits` (ADR-009 D3): a fixture package that writes E1's
+    LSW-3 as a limit fails exactly on the wrong-order firmware.
+32. **`docs-sync`**: the docs that copy the code stay in step with it: the
+    quickstart page against the README's block, every `bb` subcommand in
+    the CLI reference, every `make test` step in this list and in the
+    README.
+
 ## Pooled or fresh: `POOL=0`
 
 `make test` and the gate targets run on a **warm Renode pool** by default

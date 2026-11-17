@@ -96,7 +96,7 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
               [--renode-pool env|off] [--uart-log on|off] [--gdb <port> [--gdb-wait on|off]]
               [--ngspice-watchdog 200000,10000] [--ngspice-lattice-snap on|off]
               [--assert <file.toml> ...] [--image <instance>=<file.elf> ...]
-              [--pi-oe pin-cnf|fixed] [--operating-point]
+              [--pi-oe pin-cnf|fixed] [--operating-point] [--limits]
        bb test <file.toml> --out <dir> [--jobs N] [--pool auto|env|off]   (bb test --help)
        bb assert <run-dir> --assert <file.toml> [--assert ...] [--bench <bench.toml>]
               [--out <file>]
@@ -141,6 +141,12 @@ usage: bb run --netlist <board.cir> --firmware <elf> --target <ref> --for <time>
                  write hook, so a pin is high-Z until firmware makes it an
                  output; fixed (and every other platform): oe = 1. Changes
                  results; recorded in run.json pi_glue
+  --limits     a project at fast: assert the package limits too (ADR-009 D3),
+                 as they are at pi always: each pins.toml [[limits]] bound
+                 and each supply pin's power{vmin, vmax} becomes a range
+                 assertion limit:<board>:<ref>.<pin>:<key> over the run
+                 (imax: not_evaluable). Reads only; recorded in run.json
+                 (limits, limits_flag)
   --operating-point
                  build the run's analog deck and glue, solve its DC operating
                  point (ADR-015 D4: no transient-op fallback), report, and
@@ -293,6 +299,9 @@ struct RunArgs {
     /// `--operating-point` (ADR-009 G9): solve the deck's DC operating
     /// point, every pi digital_out high-Z, and stop.
     operating_point: bool,
+    /// `--limits` (ADR-009 D3): a project's package limits as assertions at
+    /// fast too.
+    limits: bool,
 }
 
 /// `--ngspice-watchdog <points per cell>,<points without progress>`.
@@ -458,6 +467,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let mut images: Vec<(String, PathBuf)> = Vec::new();
     let mut pi_oe_fixed = false;
     let mut operating_point = false;
+    let mut limits = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |name: &str| {
@@ -487,6 +497,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
             "--allow-unqualified" => allow_unqualified.push(val(a)?),
             "--elaborate-only" => elaborate_only = true,
             "--operating-point" => operating_point = true,
+            "--limits" => limits = true,
             "--pi-oe" => {
                 pi_oe_fixed = match val(a)?.as_str() {
                     "pin-cnf" => false,
@@ -638,6 +649,11 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     if gdb.is_none() && gdb_wait.is_some() {
         return Err("--gdb-wait needs --gdb".into());
     }
+    if limits && netlist.is_some() {
+        return Err(
+            "--limits: a project's package limits (ADR-009 D3); a board file has none".into(),
+        );
+    }
     Ok(RunArgs {
         netlist,
         firmware,
@@ -670,6 +686,7 @@ fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         images,
         pi_oe_fixed,
         operating_point,
+        limits,
     })
 }
 
@@ -2456,6 +2473,7 @@ fn front_end(a: &RunArgs) -> Result<FrontEnd, String> {
         cli_probes: &a.probes,
         extra_asserts: &extra,
         pi_oe_fixed: a.pi_oe_fixed,
+        limits: a.limits,
         run_end: Some(a.duration),
     })?;
     for w in &plan.warnings {
@@ -2590,6 +2608,11 @@ fn assert_summary(recs: &[bbcore::Event]) -> String {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        // `bb run --help` and `bb assert --help`: their usage is bb's own.
+        Some("run" | "assert") if args[1..].iter().any(|a| a == "-h" || a == "--help") => {
+            println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
         Some("run") => match parse_args(&args[1..]) {
             Err(e) => {
                 eprintln!("bb: {e}");

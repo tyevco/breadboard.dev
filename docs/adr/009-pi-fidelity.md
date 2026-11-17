@@ -39,14 +39,23 @@
   `pof` view's `bor` output), the hold and release, the `reset` record,
   RESETREAS 0, every output high-Z in reset; W2 on the system (`make
   dms-w2`); the TPS61040 view damped; finding: the loop does not repeat
-  (one brown-out in 200 ms), which needs the approver.
+  (one brown-out in 200 ms), which needs the approver. 10 (2026-11-17),
+  the technical exit: W1 and W2 through `bb test`; `make pi-spike` red
+  since D-TPS; W2 old's collapse at the 10 µs lattice. 11 (2026-11-17),
+  the exit review: D3 built (the `power` pin model, limits as automatic
+  assertions, `bb run --limits`, `make limits-test`); `check_dms_w1.py`
+  reads the corner from `run.json`; W1's operating-point failures
+  re-measured; the idd view's DC/DC against the firmware's LDO; D-TPS
+  recorded; P5's untested failed-reset rule recorded.
 - **Part of:** the Phase 2 plan (`docs/phase2-plan.md`), milestones P0-P6
   and W-fw; worked examples W1 and W2. Its schema keys land in milestone S
   (the schema epoch).
 - **Normative changes when implemented:** `spec/package.md`,
   `spec/pin-model.md`, `spec/event-stream.md` (joint version 2 with
-  ADR-010), `spec/project.md` (bench keys, with ADR-010) and
-  `spec/schema/part.schema.json`. `spec/time-grant.md` does not change.
+  ADR-010), `spec/project.md` (bench keys, with ADR-010; the limit
+  assertions and `run.json` `limits`, Amendment 11),
+  `spec/schema/part.schema.json` and `spec/schema/pins.schema.json` (the
+  `power` model, Amendment 11). `spec/time-grant.md` does not change.
 - **Evidence:**
   - the `pi` research pass (`~/bbscratch-p2-pi`): E1's elaborated deck
     with a prototype RT9080 view, a battery, an nRF52840 idd load and a
@@ -571,6 +580,26 @@ recommended answers (plan section 10). For this ADR:
 
 **Defaults.** No objection was made to the defaults listed under
 "Questions for the approver", so they apply as written.
+
+**Round 2b (2026-11-15), with D-W1: D-TPS, as the repository records it**
+(entered at the exit review, 2026-11-17, Amendment 11 item 5). Amendment 2
+closes P0 with "the committed `ti/tps22917` view is restated to D2's rules
+(approver decision D-TPS)". What was approved, as recorded:
+
+- the TPS22917 `lsw` view is restated to D2's rules (no branch-current
+  unknown, a plain resistor on every node), valid and the default at
+  `fast` and `pi` (Amendment 4, "The TPS22917 restated");
+- E1's `fast` results stay within their recorded tolerances (the 1 mV / 1
+  sample snapshot; `packages/ti/tps22917/analog/lsw_fit.lib`), so the
+  `fast` goldens the restatement moves are re-recorded with that reason:
+  `tests/golden/dms-rail/*/outputs.sha256`, E2's `sag` and `rec`, and the
+  `e1-rail` plots (Amendment 4; the plan's "Review notes: technical exit",
+  item 3).
+
+The approver's own wording was not written down at the time; these terms
+are collected from Amendment 2, Amendment 4 and the view's header.
+**needs approval:** the approver confirms them (the plan's section 10
+carries the same entry).
 
 ## Review notes (design review round 1, 2026-11-14)
 
@@ -2029,3 +2058,180 @@ not a W1 or W2 verdict; it is reported, not gated.
 (Amendment 9, item 5): the plan's "at least 2 `reset` records" passes
 literally (`brownout`, min 2) with one brown-out's hold and release, and
 `check_dms_w2.py` reports "loop: does not repeat" over the plan's 200 ms.
+
+## Amendment 11 (2026-11-17): the exit review's findings (D3 built; the corner read back; W1's operating point; the idd regulator; D-TPS recorded)
+
+A review of the technical exit (plan "Review notes: technical exit")
+found the items below. Each was re-verified on `main` at 697c1d1 first.
+
+**1. D3 was not implemented; it is now.** Amendment 4 deferred the `power`
+pin model "until B2's assertion engine exists"; B2 and every later
+milestone merged without it and no amendment moved it, so `limits` were
+parsed and linted but inert, `power` was still refused as reserved, and
+D7's "the `power{vmin}` assertion (D3) reports it" and D3's "turns E1's
+LSW-3 into a package fact" did not hold. Built, as D3 states:
+
+- **The `power` pin model is defined in `bb-pins/1`** (the choice D3 left
+  to P1, Amendment 3): `power{vmin, vmax, imax}`, each optional and at
+  least one per set, taken only by a `power_in`/`power_out` pin
+  (`models = ["power"]`) and only by those; its parameters are
+  `[defaults.power.<pin name>]` if the package has that set, else
+  `[defaults.power.default]`. No binding chooses a set (a supply pin never
+  crosses an engine boundary; a `[[bind]]` with `model = "power"` stays
+  refused). A `bb-pins/0` file has no `power` model (`bb pkg migrate`).
+  Lint: the role rule, a set with no rating, a set named after a pin that
+  does not take the model, a power pin without a set, and a pin with two
+  `min` or two `max` limits are errors (`bbpkg/tests/epoch.rs`
+  `the_power_pin_model`). `spec/package.md` section 4 (the stale "until
+  milestone P1" sentence replaced), `spec/pin-model.md` (the table row and
+  the section) and `spec/schema/pins.schema.json` (with
+  `validate_packages.py`'s self-test cases) say so.
+- **Automatic assertions** (`cli/src/elab.rs` `limit_assertions`): at
+  `pi`, and at `fast` with the new `bb run --limits` (a project only; a
+  board file is refused), every `[[limits]]` bound and every `vmin`/`vmax`
+  of an instance on a simulated board is a `range` assertion over the
+  whole run named `limit:<board>:<ref>.<pin>:<key>`. D3 writes
+  `limit:<ref>.<pin>:<key>`; the reference is board-qualified, as every
+  instance is in `run.json` (`main:U10`), so the same name holds in a
+  system run. A bound `<pin> ± <V>` reads `V(pin) - V(<pin>)`; a plain
+  voltage, `vmin` and `vmax` read the pin against the part's first ground
+  pin (node 0 when that is the primary ground, so `base_GND` in a system
+  run). `imax` is an `assert` record with outcome `not_evaluable` (a new
+  `Spec::not_evaluable` reason in `bbcore::assert`, which no file can
+  set): no view senses a supply pin's current from node voltages in this
+  build. The record's `msg` starts with `<id>@<version>`, the bound as
+  written, its `source` and the package's provenance. A limit whose nets
+  have nothing in the deck, or of an excluded instance, is not asserted,
+  and `run.json` `limits` lists every limit with `asserted` and the
+  reason; `limits_flag` records `--limits`. The tautology rule (ADR-010
+  D6) does not apply to them (a rating on a bench-forced rail checks the
+  bench against the part), and a file's assertion may not be named
+  `limit:...`. `spec/project.md` sections 3.4 and 6 say so.
+- **`fast` is unchanged (G1):** no limit is generated at `fast` without
+  `--limits`, and no first-party package declares a limit or a `power`
+  model, so no committed result moves at either rung (`make test`'s
+  hashes, among them `pi-glue-test`, `dms-w1-test` and `dms-w2-test`).
+- **The gate, `make limits-test`** (in `make test`;
+  `scripts/limits_gate.sh`): E1's project with a local fixture copy of
+  `worldsemi/ws2812c-2020` that shadows the first-party one and writes
+  LSW-3 as `DIN max = "VDD + 0.7V"`, with VDD's `power` model at `vmax =
+  5.3V`, `imax = 20mA` (fixture values). At `pi` (`bench/cold-pi.toml`,
+  60 ms) and at `fast --limits` (`bench/cold.toml`): 144 limit records per
+  run (48 pixels × `DIN:max`, `VDD:vmax`, `VDD:imax`), every one at the
+  run's rung; the correct order passes every range limit; the wrong order
+  (the negative control) fails exactly `limit:main:D101.DIN:max`, the
+  first pixel, at 0.777451 V (`pi`) and 0.792874 V (`fast`; LSW-3's
+  0.792868 V from the 10 µs samples), as `check_dms_rail.py` fails exactly
+  LSW-3 (0.777443 V at `pi`); every `imax` is `not_evaluable`; the `fast`
+  run with `--limits` has `nets.csv`, `nets.vcd` and every non-`assert`
+  record byte-identical to the run without (limits are reads); the
+  committed packages at `pi` give no limit record.
+- **Not done, and why:** no first-party package declares a limit or a
+  `power` rating yet. Writing LSW-3 into `worldsemi/ws2812c-2020`, or
+  VDD's operating range into `nordic/nrf52840-qiaa` (D7's `power{vmin}`),
+  is a package change: a version bump (registry immutability, ADR-011
+  Amendment 3), a relock, and new `assert` records in every committed `pi`
+  result that includes the part (W1's and W2's goldens hash their records
+  with the assert records). That is a change to committed results, so it
+  waits for a decision. A `bb test` case whose run has an `imax` must
+  expect it (`expect = { "limit:...:imax" = "not_evaluable" }`), as any
+  `not_evaluable` outcome.
+
+**2. W1's operating point fails on a wider set of loads than Amendment 8
+records.** Re-measured: `bb run` of `w1-rule` at `bench/w1-stress.toml`
+with only the static `amps` changed, 20 ms, `asserts/w1.toml` (a project
+copy from `scripts/dms_w1.sh prepare`): 30, 35, 49, 50, 51, 52, 55, 56,
+58, 63, 64 and 65 mA run; 40, 45, 46, 47, 48, 59, 60, 61 and 62 mA fail
+with "ngspice did not reach t = 0" (gmin stepping, then source stepping:
+"singular matrix: check node base_vbus"). So the 55 mA stress corner sits
+on a convergence island (failing loads at 48 and 59 mA, 7 and 4 mA away),
+and the plan's 60 mA "collapse" sweep row is shown only on P1's static
+deck (`make pi-static`, `deck_run` with its `.nodeset`), never with the
+firmware in the loop. No gated verdict moves: every gated case runs at 55
+or 50 mA. The remedy is an operating-point guide on the bench (a
+`.nodeset`, a `spec/project.md` key, so ADR-gated) or the ramped load
+`w1-cosim-budget.toml` already uses; with it a 60 mA case could show the
+collapse in the loop. **needs approval:** whether to add that key (or a
+ramped static load) and the 60 mA case.
+
+**3. `check_dms_w1.py` now reads the corner from the run.** Its "corner
+label" was the caller's string, never checked against `run.json`, and the
+static-load tolerances do not pin the load: a 56 mA run passed every gated
+`rule` check under the 55 mA label (re-verified). Every case now first
+checks, gated, that `run.json` says the case's corner: the bench file, the
+static +3V3 `[[load]]` that replaces `main:U10` (55 mA for the stress
+cases, 50 mA for `margin`, none for `cosim`), `main:U1` at
+`worst_dropout`, and the POWER comparator's corner (`max`; `typ` or `min`
+for `corner`). The label on every line is built from what it read
+(`--label` is gone; `scripts/dms_w1.sh` passed it). The negative control
+(`make dms-w1-test` and `make dms-w1`): `rule`'s own outputs with
+`run.json`'s bench text at 56 mA fail exactly the `corner` check. Every
+committed hash is unchanged (the script reads; it writes no output that is
+hashed).
+
+**4. The idd view assumes the DC/DC regulator; the firmware runs on the
+LDO.** Verified: Zephyr v4.5.0's `nrf52840.dtsi` sets `reg1`'s
+`regulator-initial-mode` to `NRF5X_REG_MODE_LDO` (0),
+`soc/nordic/nrf52/soc.c` enables the DC/DC only when that mode is DCDC,
+the board's dts does not override it, and every built image's
+`zephyr.dts` shows `< 0x0 >`. The PS (v1.1, section 5.2.1.3) gives ICPU1 =
+6.3 mA (CoreMark from flash, HFXO, LDO) against the view's 3.1 + 0.2 mA
+(ICPU4 plus the HFXO difference, DC/DC; Amendment 6), so the
+co-simulations (`cosim`, reported) under-draw the awake MCU by about
+3.0 mA, and `w1-cosim-budget`'s remainder (46.7 mA = 50 - 3.3) would be
+43.7 mA on the LDO (the budget's total while awake is the same 50 mA
+either way). No gated case reads the view: every gated W1 and W2 case
+replaces U10's `supply_load` with the static load. The fix is either (a)
+the board dts sets `&reg1 { regulator-initial-mode =
+<NRF5X_REG_MODE_DCDC>; }` (a W-fw change: rebuilt images and their
+prebuilt hashes, and the goldens of every case that runs them), or (b) an
+LDO corner of the idd view (ICPU1, ICPU3) used for this board (a package
+change: version, relock, the co-simulation goldens). Plan risk R2's
+"Regulator = DC/DC" assumption is contradicted by the committed firmware
+either way. **needs approval:** (a) or (b); each changes committed
+results.
+
+**5. D-TPS recorded.** It was cited as the authority for re-recording
+E1's `fast` goldens, E2's `sag` and `rec` and the `e1-rail` plots, but its
+terms were recorded only in Amendment 2's sentence and the view's header.
+This ADR's "Approver decisions" and the plan's section 10 now carry an
+entry with the terms as the repository records them and their sources.
+**needs approval:** the approver confirms them.
+
+**6. A deviation of P5, recorded (Amendment 9 item 6).** "A pool process
+is never reused after a reset that failed" was not demonstrated: no
+failing reset was injected, and Amendment 9's "Deviations, recorded" list
+omits it. The rule rests on the pool's general one (a failed lease's
+process is discarded, ADR-004 Part B), which
+`engines/cpu-renode/tests/pool.rs` shows for a killed Renode, a protocol
+error and a broken promise, not for a BOR read-back mismatch or a failed
+External Control write. A pool test that forces the hold or release to
+fail needs a fault-injection hook in the POWER model's host port, which
+this build does not have, so it is recorded here as P5's deviation.
+
+**7. Still the approver's, re-verified:**
+
+- `make pi-spike` on 697c1d1: **36/37**, the one failure Amendment 10
+  item 2 records (W2-old `pi` at `phase0`, 10 µs against TMAX 1 µs: VSYS
+  14.7612 mV at 4.73 ms, +3V3 10.7256 mV at 4.69 ms, against 2 mV).
+  Nothing changed. **needs approval:** re-base P0's 2 mV with the
+  measured reason, or pin the spike's `pi` variant to the pre-D-TPS view.
+- W2's loop (Amendment 9 item 5, Amendment 10 item 4):
+  `asserts/w2-old.toml`'s `brownout` counts `reset` records (`min = 2`),
+  which one brown-out's hold and release satisfy, and `tests/w2.toml`
+  runs 20 ms, not the plan's 200 ms. **needs approval:** accept one
+  brown-out and amend the plan's section 5 item 2, or count brown-outs
+  (`reset` records with `phase = "enter"`, at least 2 over 200 ms) and
+  treat these views' single brown-out as a W2 failure or its fallback.
+- W1's anti-vacuity check (Amendment 8 item 4): `pof-dip` with the paired
+  control stands in for the plan's "`pofwarn` fired", which the plan's
+  section 2 table and section 5 item 1 still state. **needs approval:**
+  accept `pof-dip` and amend those two places, or change W-fw's blanking
+  to ignore POFWARN in its handler so the original check can be gated.
+
+**8. Budget.** `make limits-test` (in `make test`) about 50 s standalone
+(two `pi` and four `fast` runs of 60 ms, three at a time); `make
+docs-sync` and `scripts/validate_packages_test.sh` (in `make packages`)
+under 1 s each. In `make check` on the main checkout: `limits-test` 47.2 s
+pooled and 50.7 s with `POOL=0`, `docs-sync` 3.6 s and 1.9 s (the plan's
+"Review notes: exit review").

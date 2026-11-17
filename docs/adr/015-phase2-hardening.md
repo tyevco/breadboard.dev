@@ -1345,3 +1345,18 @@ H6's `make test` budget is none ("—"; it removes). Measured: `make test`
 loses `adc-stock` (5.5 s at the baseline). H6 adds no step;
 `make workflows-check`, `make ci-jobs-local`, `make setup-cache-cost` and
 `make nightly` are outside `make test`.
+
+## Amendment 6 (2026-11-17): D10 landed in `spec/time-grant.md`
+
+The technical exit's review found that D10's approved sentence (approver
+default 4, "with this text") was never applied: no H-track milestone row
+carried it, so `spec/time-grant.md`'s wall-clock rule still read only
+"Depend on wall-clock time, thread timing or unseeded randomness", and
+only `spec/project.md` (section 6, `debug`) said that a debug run is never
+compared against a reference.
+
+The rule now carries D10's sentence verbatim, after the rule it qualifies
+("What engines MUST NOT do"), with this ADR's decision named. No engine,
+gate or output changes: `bb run --gdb` already marks its run (a `warn`
+log record and `run.json` `debug: true`, ADR-008 Amendment 7), and no gate
+compares a marked run against a reference.

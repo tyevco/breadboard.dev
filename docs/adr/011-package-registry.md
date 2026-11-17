@@ -776,3 +776,20 @@ repository at serial 2 with every first-party package (15), E1 ok-cold
 from the registry with a cold cache and offline with a warm one, equal to
 `tests/golden/dms-rail/ok-cold`, and `ci/pr-check.sh` passing for an owner
 and refused for a non-owner. Nothing was pushed or published.
+
+## Amendment 4 (2026-11-17): `bb pkg init --from-svd/--from-ibis` is in no milestone of this build
+
+The technical exit's review found that the plan's section 3 puts `bb pkg
+init --from-svd/--from-ibis` in Phase 2's scope (the "Registry" row, and
+the IBIS scaffolding in the "Out of Phase 2" table's first row), but no
+row of section 4 carries it, and section 10's "Out of this build" list
+does not name it. It is not built: `cli/src` has no `init` subcommand of
+`bb pkg`, and Amendment 2 item 2.1 says only that it is "not in E1's row".
+The vendor-file machinery it would read (D4's `vendor_file` and the
+fetched SVD, Amendment 2) is built and unchanged.
+
+Nothing changes in the build. **needs approval:** assign it to a
+milestone, or name it in the plan's section 10 as out of this build (with
+the IBIS scaffolding of section 3's "Out of Phase 2" table), so the scope
+table matches the build. The plan's "Review notes: technical exit" lists
+it with the other scope gaps the review found.

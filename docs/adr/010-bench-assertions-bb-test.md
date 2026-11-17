@@ -1008,3 +1008,36 @@ run` changes; the Phase 1 scripts' scratch-copy runs stay in `make
 dms-rail`, `make dms-vsense` and `make dms-home` (and as `scripts/dms_<x>.sh
 test-scripted`). The ported scripts stay one milestone as the cross-check
 (D10), so B3 deletes none of them.
+
+## Amendment 6 (2026-11-17): what this build leaves undone (the exit review)
+
+The technical exit's review found two parts of this ADR that no milestone
+of this build carried. Neither is built here, and neither is dropped:
+deciding either way is a scope decision, so it is the approver's.
+
+**A6.1 `[[env]]` and `[probes]` (D2).** Environment signals and per-probe
+rates are in the plan's section 3 ("Benches and tests") and in D2, but no
+row of the plan's section 4 carries them (B1's row has actions, playback,
+profiles, faults and the switch), and section 10's "Out of this build"
+list (B4, R3, P6, E2, E3, E5) does not name them. Amendment 4 kept them
+"refused, naming their milestones", but there is no such milestone. They
+stay refused, never ignored, and the refusal now says so: "environment
+signals (in no milestone of this build, ADR-010 Amendment 6)" and the same
+for per-probe rates (`cli/src/project.rs` `LATER_TOP`; `make bench-gate`'s
+`later-key` control matches the message's stem, unchanged). **needs
+approval:** assign them to a milestone, or name them in the plan's section
+10 as out of this build (or of Phase 2).
+
+**A6.2 `engine:bench@1` (D4).** The bench engine's lock entry was deferred
+by A1.7 to S, by S (Amendment 2) to track B, left "not changed" by B2
+(A3.11) and not mentioned by B3 (Amendment 5); ADR-011 Amendment 1 lists
+it as "not done". So no `bb.lock` has it, and `run.json` records the
+identity only (`bench.engine`). The churn concern stands: locking the
+content hash of `bbbench`'s sources in every project that uses a bench
+would relock them all on every `bbbench` edit, which H4 removed for
+plugins. The two ways out are (a) lock it in projects that use a bench,
+with a hash scoped to what a bench's run can reach, or (b) drop D4's lock
+and keep the identity in `run.json` only, with the reason. **needs
+approval:** (a) relocks every bench-using project and is a schema-visible
+change to their locks; (b) changes an accepted decision. Neither is taken
+here.

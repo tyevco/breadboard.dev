@@ -473,7 +473,63 @@ pub const PIN_MODELS: &[(&str, &[ParamSpec])] = &[
             ("load", ParamKind::Name, false),
         ],
     ),
+    // bb-pins/1 (ADR-009 D3, Amendment 11): a supply pin's ratings, each
+    // optional (lint wants at least one). A `power_in`/`power_out` pin
+    // takes the set named after it, else `default`; no binding chooses one,
+    // since a supply pin never crosses an engine boundary.
+    (
+        "power",
+        &[
+            (
+                "vmin",
+                ParamKind::Q {
+                    dim: Dim::Voltage,
+                    supply_ok: false,
+                },
+                false,
+            ),
+            (
+                "vmax",
+                ParamKind::Q {
+                    dim: Dim::Voltage,
+                    supply_ok: false,
+                },
+                false,
+            ),
+            (
+                "imax",
+                ParamKind::Q {
+                    dim: Dim::Current,
+                    supply_ok: false,
+                },
+                false,
+            ),
+        ],
+    ),
 ];
+
+/// The `power` pin model (ADR-009 D3): the parameter set of the supply pin
+/// `pin`, the set named after the pin if there is one, else `default`.
+/// `Ok(None)` when the pin does not take the model.
+#[allow(clippy::type_complexity)]
+pub fn power_params(
+    pkg: &Package,
+    pin: &str,
+) -> Result<Option<(String, BTreeMap<String, Param>)>, String> {
+    let Some(p) = pkg.pins.by_name(pin) else {
+        return Ok(None);
+    };
+    if !p.models.iter().any(|m| m == POWER_MODEL) {
+        return Ok(None);
+    }
+    let named = pkg
+        .pins
+        .defaults
+        .get(POWER_MODEL)
+        .is_some_and(|s| s.contains_key(pin));
+    let set = if named { pin } else { "default" };
+    param_set(pkg, POWER_MODEL, Some(set)).map(|m| Some((set.to_string(), m)))
+}
 
 pub fn pin_model_params(model: &str) -> Option<&'static [ParamSpec]> {
     PIN_MODELS
@@ -1366,12 +1422,13 @@ pub fn parse_pins(text: &str, reg: &Registry) -> Result<(Pins, Option<String>), 
         p.done()?;
         one_of(&format!("{path}.role"), &pin.role, ROLES)?;
         for m in &pin.models {
-            if m == RESERVED_PIN_MODEL {
-                return Err(format!("{path}.models: {RESERVED_PIN_MODEL_MSG}"));
+            if m == POWER_MODEL && major < 1 {
+                return Err(format!("{path}.models: {POWER_MODEL_NEW}"));
             }
             if pin_model_params(m).is_none() {
                 return Err(format!(
-                    "{path}.models: {m:?} is not a pin model (digital_out, digital_in, adc_in)"
+                    "{path}.models: {m:?} is not a pin model (digital_out, digital_in, adc_in, \
+                     power)"
                 ));
             }
         }
@@ -1383,8 +1440,8 @@ pub fn parse_pins(text: &str, reg: &Registry) -> Result<(Pins, Option<String>), 
             .as_table()
             .ok_or_else(|| "defaults: expected a table".to_string())?;
         for (model, sets) in d {
-            if model == RESERVED_PIN_MODEL {
-                return Err(format!("defaults.{model}: {RESERVED_PIN_MODEL_MSG}"));
+            if model == POWER_MODEL && major < 1 {
+                return Err(format!("defaults.{model}: {POWER_MODEL_NEW}"));
             }
             if pin_model_params(model).is_none() {
                 return Err(format!("defaults.{model}: not a pin model"));
@@ -1432,11 +1489,11 @@ pub fn parse_pins(text: &str, reg: &Registry) -> Result<(Pins, Option<String>), 
     ))
 }
 
-/// The pin model name `bb-pins/1` reserves (ADR-009 D3: `power{vmin, vmax,
-/// imax}`; its parameters and their source are milestone P1's).
-pub const RESERVED_PIN_MODEL: &str = "power";
-const RESERVED_PIN_MODEL_MSG: &str = "the power pin model is reserved (ADR-009 D3, milestone P1); \
-                                      bb-pins/1 does not define its parameters yet";
+/// The supply pin model of `bb-pins/1` (ADR-009 D3, Amendment 11:
+/// `power{vmin, vmax, imax}`, from `[defaults.power.<pin or default>]`).
+pub const POWER_MODEL: &str = "power";
+const POWER_MODEL_NEW: &str = "the power pin model is new in bb-pins/1 (ADR-009 D3); run `bb pkg \
+                               migrate`";
 
 /// The `digital_out` parameters new in `bb-pins/1` (ADR-009 D5).
 pub const PINS_1_PARAMS: &[&str] = &["rail", "rhiz"];

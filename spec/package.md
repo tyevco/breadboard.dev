@@ -286,28 +286,53 @@ source = "DS p. 34, Table 7"
 meaning, and adds two things, accepted, checked and inert until their
 milestones use them (a `bb-pins/0` file, the previous major, has neither):
 
-- **`limits`** (ADR-009 D3; assertions from milestone P1): relational limits
+- **`limits`** (ADR-009 D3, Amendment 11): relational limits
   for absolute maximum ratings, each a `pin` of the package, `min` and/or
   `max`, and `source`. A bound is one supply-plus-offset term: a voltage
   (`3.6V`), or a pin of the package plus or minus a voltage (`VDD + 0.7V`,
   `VSS - 0.3V`; the spaces around the sign are part of the grammar). No
-  general expressions.
+  general expressions. A pin has at most one `min` and one `max`. At `pi`,
+  and at `fast` with `bb run --limits`, each bound is an automatic `range`
+  assertion (`spec/project.md` section 3.4): `V(pin) - V(reference pin)`
+  against the offset, or for a plain voltage `V(pin)` against the part's
+  ground pin.
 - **the `digital_out` parameters `rail` and `rhiz`** (ADR-009 D5; the `pi`
   glue of milestone P2), both optional: `rail`, a `power_in`/`power_out`
   pin of the package (the default is `[power] io_rail`), and `rhiz`, the
   high-Z leakage resistance (default 100 MΩ). At `fast` they are unused.
   A binding may set them too.
 
-The pin model name `power` (`power{vmin, vmax, imax}`, ADR-009 D3) is
-reserved: refused as a pin's model or a `[defaults]` table until milestone
-P1 defines its parameters.
+**The `power` pin model** (`power{vmin, vmax, imax}`, `bb-pins/1`, ADR-009
+D3, Amendment 11) is a supply pin's ratings: only a `power_in` or
+`power_out` pin takes it (`models = ["power"]`), and only it. Its
+parameters come from `[defaults.power.<pin name>]` when the package has
+that set, else from `[defaults.power.default]`; no binding chooses a set,
+since a supply pin never crosses an engine boundary. Each parameter is
+optional and a set gives at least one: `vmin` and `vmax` (voltages, against
+the part's ground pin) and `imax` (a current). Like `limits`, they become
+automatic `range` assertions at `pi` and with `bb run --limits`; `imax` is
+`not_evaluable`, since no view senses a pin's current from node voltages
+in this build. A `bb-pins/0` file has no `power` model.
+
+```toml
+[[pin]]
+number = "4"
+name = "VDD"
+role = "power_in"
+models = ["power"]
+
+[defaults.power.default]
+vmin = "3.7V"
+vmax = "5.3V"
+imax = "20mA"
+```
 
 - **Pins.** Every pin number of the footprint (or module pinmap) is listed
   exactly once. Pin names are unique, except that supply, ground and `nc`
   pins of one role may share a name (`VDD`, `VSS`). A role limits the
-  models: `io` any; `input` `digital_in` or `adc_in`; `output`
-  `digital_out`; `analog` `adc_in`; supply, ground, `nc` and `passive` pins
-  none. One binding is not a pin model of `pins.toml`: on a part whose
+  models: `io` any but `power`; `input` `digital_in` or `adc_in`; `output`
+  `digital_out`; `analog` `adc_in`; supply pins `power` (`bb-pins/1`);
+  ground, `nc` and `passive` pins none. One binding is not a pin model of `pins.toml`: on a part whose
   platform is Breadboard's nRF52840, an `adc_in` binding on the supply pin
   `VDD` is the SAADC's VDD input (ADR-008 D7), with the binding's own
   parameters (`vref`).

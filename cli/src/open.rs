@@ -43,9 +43,18 @@ use crate::project::{Project, Source, PROJECT_FILE};
 use crate::registry;
 
 const USAGE: &str = "\
-usage: bb open <board.cir> [--check] [--update-lock] [--offline]
+usage: bb open [<dir>|<bb.toml>|<.kicad_pro>|<.net>] [--check] [--update-lock] [--offline]
+       bb open <board.cir> [--check] [--update-lock] [--offline]
 
-  Resolves the board file's package= parts (ADR-006) on the package search
+  A project (a directory or its bb.toml, default the current directory;
+  ADR-007, spec/project.md section 5): imports every board, resolves each
+  part to a package, prints the stage and status counts and the
+  unresolved instances, and writes board.bbm, bb.lock and .bb/ (a file
+  whose content does not change is not rewritten). Given a .kicad_pro or a
+  .net in a directory without bb.toml, it first writes a minimal one.
+  kicad-cli always runs on a temporary copy, never in the project.
+
+  A board file: resolves its package= parts (ADR-006) on the package search
   path (the directories of its `*bb packages path=<dir>` lines, relative to
   the board file, then breadboard.dev's packages/, or
   $BB_FIRST_PARTY_PACKAGES), then, for an id none of them provides, on the
@@ -58,7 +67,7 @@ usage: bb open <board.cir> [--check] [--update-lock] [--offline]
                  refused)
   --offline      fetch nothing: registry packages and vendor files from the
                  cache only (bb run never fetches)
-  KiCad projects (.kicad_pro, .net) and bb.toml are Phase 1 M4.";
+  The same three options apply to a project (--check: also board.bbm).";
 
 /// The package search path for a board file (ADR-006 D1, ADR-015 D7): the
 /// directories its `*bb packages path=` lines name, relative to the board

@@ -370,6 +370,11 @@ pub struct Spec {
     pub requires: Option<String>,
     /// A description, the start of the record's `msg`.
     pub msg: Option<String>,
+    /// Why the check cannot be evaluated in this run, whatever the rung: its
+    /// verdict is `not_evaluable` with this reason (ADR-009 D3: a package's
+    /// `imax` where no view senses the pin's current from node voltages).
+    /// Only Breadboard's own limit assertions set it; no file can.
+    pub not_evaluable: Option<String>,
 }
 
 impl Spec {
@@ -810,7 +815,14 @@ impl Assertions {
         st.done = true;
         let rung = self.rung.clone();
         let mut rec = verdict(&spec, st, close, replay_na, self.t_end);
-        if let Some(req) = &spec.requires {
+        if let Some(why) = &spec.not_evaluable {
+            rec = Verdict {
+                outcome: AssertOutcome::NotEvaluable,
+                value: None,
+                limit: None,
+                detail: why.clone(),
+            };
+        } else if let Some(req) = &spec.requires {
             let need = LADDER.iter().position(|r| r == req).unwrap_or(0);
             let have = LADDER.iter().position(|r| *r == rung).unwrap_or(0);
             if have < need {
@@ -1852,6 +1864,7 @@ mod tests {
             window: Window::default(),
             requires: None,
             msg: None,
+            not_evaluable: None,
         }
     }
 

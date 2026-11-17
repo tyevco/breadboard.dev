@@ -274,10 +274,14 @@ Three new pieces carry it:
 - **`ti/drv8837`'s ideal-switch bridge view** with the stepper's coils in
   ngspice.
 
-The mechanism is not on the schematic, so E3 runs on hand-written board
-files in `examples/dial-me-spinner/e3/` that carry the main board's detent
-sheet, with the suite's own power path as the bench (devices in imported
-projects are a Phase 2 item).
+The mechanism is not on the schematic, so in Phase 1 E3 ran on
+hand-written board files in `examples/dial-me-spinner/e3/` that carry the
+main board's detent sheet, with the suite's own power path as the bench;
+the gates below still run them. Since Phase 2 (R1, ADR-013 D1) a device can
+also be a `[[device]]` of an imported project (`bb.toml`), a `virtual`
+one when it has no schematic symbol: `examples/dial-me-spinner/e3/home`
+and `e3/step` run E3's homing and its step case as projects of the
+imported main board (`make dms-home-project`).
 
 ```sh
 make dms-home        # the M10 gate, about 45 min; make dms-home-test (in make test) is the one-step case
@@ -393,14 +397,24 @@ name resolves on the simulated board first. Each board keeps its own
 ground. The harness view is one resistor per wire (80 mm; 28 AWG power
 wires and 32 AWG signal wires, plus contacts), qualified by `bb pkg test`.
 
-Phase 1 still simulates one board (`[project] simulate = "main"`). E1 and
-E2 run in `examples/dial-me-spinner/bb.toml`, whose names are unqualified.
-A run of the system would elaborate E1's deck unchanged except for its
-names. The base side of J1 is a bench port, and `bb run` warns about the
-nets left open there. Simulating both boards together is Phase 3.
+Phase 1 simulated one board (`[project] simulate = "main"`). E1 and E2
+still run that way in `examples/dial-me-spinner/bb.toml`, whose names are
+unqualified: the base side of J1 is a bench port, and `bb run` warns about
+the nets left open there.
+
+Since Phase 2 (R2, ADR-013 D2) `simulate` may list several boards: a
+**single-MCU system run** puts every listed board in one deck, the target's
+board's ground on node 0 and every other board on its own ground node
+(`base_GND`), mated through the harness view. Two projects run the main and
+base boards together that way: `examples/dial-me-spinner/e1-system` (E1
+with the base board's own power path, the battery, the BQ25180 and the
+harness, in place of E1's bench supplies) and
+`examples/dial-me-spinner/w1` (W1, above). Simulating more than one MCU is
+Phase 3.
 
 ```sh
-make dms-system  # in make test: base 21 parts and 17 nets, the committed board.bbm, the kicad route
+make dms-system          # in make test: base 21 parts and 17 nets, the committed board.bbm, the kicad route
+make dms-e1-system-test  # in make test: E1 on both boards in one deck, its checks and references
 ```
 
 ## Phase 0
@@ -531,6 +545,26 @@ The run writes these files to `out/spike/`:
     the 12 pins mated through the harness view; and E1's deck from the
     system equal to E1's own. `cargo test` covers the qualified names of
     the shared U1, U2, J1 and TP1 and the errors for the bare ones.
+11. Phase 2's steps, in `TEST_STEPS` order: `make measure-lock-test` (the
+    host measurement lock refuses a second measurement), `make
+    nrf-power-model` (the Renode-only tests of the nRF52840 POWER model:
+    POFWARN and brown-out), `make multi-producer` (quiet grants with
+    several producers, ADR-014, against the one-cell reference), `make
+    bench-test` (`bb-bench/1` benches against their references), `make
+    assert-test` (the assertion kinds on E1, `bb assert`'s replay and the
+    negative controls), `make pi-static-test` (the W1 and W2 static-load
+    decks from the `pi` views against the suite), `make pi-glue-test`
+    (rail-tracking, tristate outputs at `pi`, and every Phase 1 board's
+    operating point with every output high-Z), `make pi-idd-test` (the
+    nRF52840's supply current against a hand calculation), `make
+    vscode-templates` (the VS Code templates' settings for cortex-debug
+    against `bb run --gdb`, ADR-016), `make
+    dms-e1-system-test` (E1 on both boards in one deck), `make
+    dms-w1-test` and `make dms-w2-test` (W1 and W2 through `bb test`, with
+    their scripts' checks and hashes), `make registry-test` (the registry
+    against local fixtures), `make limits-test` (package limits as
+    automatic assertions, ADR-009 D3) and `make docs-sync` (the quickstart
+    page, the CLI reference and these lists in step with the code).
 
 The example boards take their MCU and its pin models from component
 packages (`packages/`, `spec/package.md`): `*bb part U1
