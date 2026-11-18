@@ -2486,3 +2486,12 @@ confirmed as recorded; the plan's section 10 says so.
   sets DCDCEN, a few microseconds into its boot.
 - The sweep's ramp is a pure-sink profile, not the knee form; equal above
   0.5 V, which every sweep run stays above.
+
+**Gates on `main`** (6f276a7, after the merge; the plan's "Review notes:
+D-close"): `make check` green pooled (1 584 s) and `make test POOL=0` green
+(1 807 s), on the main checkout (`/mnt/c`); `make dms-w1` PASS (42 checks),
+`make dms-w2` PASS (23 checks), `make pi-spike` 37/37, `make
+docs-plots-check` PASS, the docs site builds. Budget: `dms-w2-test` runs
+200 ms per case (20.9 s with `POOL=0` on `/mnt/c`), `pi-idd-test` one
+more 5 ms run, `nrf_bor_failed_reset_is_discarded` 6.7 s in `cargo-test`;
+`make dms-w1` gains the sweep (18 runs of 20 ms, about 40 s on 6 jobs).

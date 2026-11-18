@@ -1054,5 +1054,18 @@ the radio -0.152 %; the `dcdc` negative control fails as it must),
 `dms-w2-test` (200 ms per case), `limits-test` (the wrong order's
 `limit:main:D101.DIN:max` at `pi` 0.777449 V, 2 µV below the U10-on-DC/DC
 figure, and 0.792874 V at `fast`, unchanged), `make pi-spike` 37/37, `make
-dms-w1` with the sweep, `make nrf-power-model` with DCDCEN. The gates on
-`main` after the merge follow below.
+dms-w1` with the sweep, `make nrf-power-model` with DCDCEN.
+
+**Gates on `main`** after the merge (6f276a7, the main checkout on `/mnt/c`,
+not an idle ext4 worktree, so the times are not comparable with `make
+baseline`; one gate at a time, host load 1.3-4.7): `make check` green
+pooled (1 584 s); `make test POOL=0` green (1 807 s; in it `cargo-test`
+310.8 s with `nrf_bor_failed_reset_is_discarded`, `pi-idd-test` 33.7 s,
+`dms-w1-test` 29.2 s, `dms-w2-test` 20.9 s at 200 ms per case,
+`limits-test` 54.2 s, `nrf-power-model` 13.4 s); `make dms-w1` PASS (42
+checks, 0 failures, 268 s: the gated cases, `collapse` equal to its
+one-cell reference and to `tests/golden/dms-w1/collapse`, the 18-load
+ramped sweep); `make dms-w2` PASS (23 checks, 136 s); `make pi-spike`
+**37/37** (103 s; the restated view's w2old figure 14.7612 / 10.7256 mV
+reported); `make docs-plots-check` PASS (96 s); the docs site builds (`npm
+run docs:build`). Nothing was pushed or published.
