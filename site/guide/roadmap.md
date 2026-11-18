@@ -85,8 +85,9 @@ target (R3), W3 (P6), the package pipeline and the first 200 packages
 
 Moved to Phase 3 by the approver (2026-11-17): bench environment signals
 (`[[env]]`) and per-probe rates (`[probes]`), the bench engine's lockfile
-entry, and `bb pkg init --from-svd/--from-ibis`. `bb` refuses each of them
-with a message that says Phase 3.
+entry, and `bb pkg init --from-svd/--from-ibis`. `bb` refuses `[[env]]`,
+`[probes]` and `bb pkg init` with a message that says Phase 3. The bench
+engine's lock entry is not written (`run.json` records `bench@1`).
 
 ## Out of Phase 1
 

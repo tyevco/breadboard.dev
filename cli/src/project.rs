@@ -1881,6 +1881,18 @@ for = "1ms"
             err(BENCH0.replacen("\n[[supply]]", "\nfidelity = \"pi\"\n[[supply]]", 1))
                 .contains("fidelity: unknown key")
         );
+        // The bb-bench/1 keys moved to Phase 3 (decision D-close 7, ADR-010
+        // Amendment 7) are refused, naming Phase 3, never ignored. The
+        // bench engine's lock entry is not refused but not written (run.json
+        // records bench@1; scripts/check_docs_sync.py checks the docs say so).
+        for (keys, name) in [
+            ("[[env]]\nnet = \"T\"\n", "env"),
+            ("[probes]\nrate = \"1us\"\n", "probes"),
+        ] {
+            let e = err(format!("{V1}{keys}"));
+            assert!(e.starts_with(&format!("{name}: ")), "{e}");
+            assert!(e.contains("Phase 3"), "{e}");
+        }
         // The OCV table: linear between rows, ends held, rounded half away.
         let t = ocv_table("# cell\nsoc,volts\n0,3.0V\n0.5,3.7\n1,4.2V\n", "t").unwrap();
         assert_eq!(
